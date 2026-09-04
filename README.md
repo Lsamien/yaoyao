@@ -1,6 +1,6 @@
 # 夭夭 Web
 
-当前发布版本：**v0.3.24**，配套 iOS **1.3（181）**。详见 [发布说明](docs/releases/v0.3.24.md)。
+当前发布版本：**v0.3.25**，配套 iOS **1.3（181）**。详见 [发布说明](docs/releases/v0.3.25.md)。
 
 夭夭 Web 为网页和 iOS 提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务；无需安装 Yaoyao 插件。
 

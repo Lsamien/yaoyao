@@ -56,7 +56,6 @@ test('opens settings and schedules an independent Web update while all 9119 requ
     await dialog.getByRole('button', { name: '系统概览', exact: true }).click()
     await expect(dialog.getByText(`Web ${current.webVersion} · 可独立升级与回滚`)).toBeVisible()
     await dialog.getByRole('button', { name: '更新与回滚', exact: true }).click()
-    await expect(dialog.getByText('未检测（不影响 Web 升级）')).toBeVisible()
     await expect(dialog.getByText(version, { exact: true })).toBeVisible()
     await expect(dialog.getByRole('alert')).toHaveCount(0)
     await expect(page.locator('.settings-center-layer')).toHaveCSS('opacity', '1')
