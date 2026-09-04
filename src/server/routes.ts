@@ -46,6 +46,7 @@ import {
   canonicalAllowedHosts,
   normalizeAllowedHost,
 } from './allowedHostsConfiguration.js'
+import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -65,6 +66,7 @@ export interface RouteDependencies {
   apnsConfiguration: APNsConfigurationManager
   fcmConfiguration: FCMConfigurationManager
   allowedHostsConfiguration: AllowedHostsConfigurationManager
+  chatCache?: ChatCacheCoordinator
 }
 
 function body(ctx: Koa.Context): JsonObject {
@@ -634,6 +636,54 @@ async function proxyOptionalUnread(
   })
 }
 
+async function cachedChatRead(
+  ctx: Koa.Context,
+  dependencies: RouteDependencies,
+  options: {
+    key: string
+    kind: 'list' | 'detail' | 'messages'
+    profile: string
+    sessionID?: string
+    offset?: number
+    limit?: number
+    knownWeb?: boolean
+    load: (jar: CookieJar) => Promise<UpstreamResponse>
+  },
+): Promise<void> {
+  const user = dependencies.auth.require(ctx)
+  const load = async () => {
+    await dependencies.upstreamSession.ensure()
+    return options.load(dependencies.upstreamSession.jar)
+  }
+  if (!dependencies.chatCache) {
+    sendUpstreamResponse(ctx, await load(), dependencies.upstreamSession.jar)
+    return
+  }
+  if (ctx.get('x-yaoyao-cache').toLowerCase() === 'bypass') {
+    const response = await load()
+    dependencies.chatCache.store.putSnapshot(
+      user.id, options.key, options.kind, options.profile,
+      options.sessionID, response, options.knownWeb,
+    )
+    ctx.set('X-Yaoyao-Data-Source', 'upstream')
+    ctx.set('X-Yaoyao-Sync-State', 'current')
+    sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
+    return
+  }
+  const result = options.kind === 'messages' && options.sessionID
+    ? await dependencies.chatCache.messages(
+      user.id, options.key, options.profile, options.sessionID,
+      options.offset ?? 0, options.limit ?? 100, load,
+    )
+    : await dependencies.chatCache.read(
+      user.id, options.key, options.kind, options.profile,
+      options.sessionID, load, options.knownWeb,
+    )
+  ctx.set('X-Yaoyao-Data-Source', result.source)
+  ctx.set('X-Yaoyao-Sync-State', result.state)
+  sendUpstreamResponse(ctx, result.response, dependencies.upstreamSession.jar)
+}
+
 async function bootstrap(
   ctx: Koa.Context,
   dependencies: RouteDependencies,
@@ -850,10 +900,10 @@ function localMediaPath(root: string, relativePath: string): string {
   return resolvedFile
 }
 
-function sendLocalMedia(ctx: Koa.Context, path: string): void {
+function sendLocalMedia(ctx: Koa.Context, path: string, contentType?: string, displayName?: string): void {
   const size = statSync(path).size
-  const type = mimeLookup(path) || 'application/octet-stream'
-  const fileName = basename(path)
+  const type = contentType || mimeLookup(path) || 'application/octet-stream'
+  const fileName = displayName || basename(path)
   const range = ctx.get('range').match(/^bytes=(\d*)-(\d*)$/)
   ctx.set('Accept-Ranges', 'bytes')
   ctx.set('Cache-Control', 'private, no-store')
@@ -911,8 +961,14 @@ function hermesMediaPath(ctx: Koa.Context): string {
 }
 
 async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencies): Promise<void> {
-  dependencies.auth.require(ctx)
+  const user = dependencies.auth.require(ctx)
   const path = hermesMediaPath(ctx)
+  const cached = dependencies.chatCache?.store.attachment(user.id, path)
+  if (cached) {
+    ctx.set('X-Yaoyao-Data-Source', 'local')
+    sendLocalMedia(ctx, cached.localPath, cached.mimeType, basename(path))
+    return
+  }
   // Generated media belongs to Hermes, which may run on a different machine
   // or inside a container. Let its file API enforce the managed-root policy.
   const response = await dependencies.upstreamSession.request('/api/files/download', {
@@ -920,6 +976,12 @@ async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencie
     headers: ctx.get('range') ? { range: ctx.get('range') } : undefined,
     maxResponseBytes: 100 * 1_024 * 1_024,
   })
+  ctx.set('X-Yaoyao-Data-Source', 'upstream')
+  if (!ctx.get('range') && dependencies.chatCache?.store.knowsAttachment(user.id, path)) {
+    dependencies.chatCache.store.storeAttachment(user.id, path, response)
+  } else if (ctx.get('range')) {
+    void dependencies.chatCache?.cacheAttachment(user.id, path)
+  }
   sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
   ctx.set('Cache-Control', 'private, no-store')
   if (response.status >= 200 && response.status < 300) prepareFilePreview(ctx, basename(path))
@@ -950,7 +1012,12 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
 
   router.get('/healthz', (ctx) => {
     ctx.set('Cache-Control', 'no-store')
-    json(ctx, 200, { ok: true })
+    json(ctx, 200, {
+      ok: true,
+      chatCache: dependencies.chatCache
+        ? { available: true, mode: dependencies.chatCache.mode, ...dependencies.chatCache.store.stats() }
+        : { available: false, mode: dependencies.config.chatCacheMode ?? 'upstream-only' },
+    })
   })
 
   // Hermes Gateway-compatible authentication surface for native clients.
@@ -1817,7 +1884,16 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     if (view === 'chat') search.set('source', 'web')
     else search.set('exclude_sources', view === 'history' ? 'cron,ios_group,yaoyao_workspace,web' : 'cron,ios_group,yaoyao_workspace')
     const path = search.get('profile') ? '/api/sessions' : '/api/profiles/sessions'
-    await proxy(ctx, dependencies.upstream, path, { search })
+    if (view !== 'chat') {
+      await proxy(ctx, dependencies.upstream, path, { search })
+      return
+    }
+    const profile = search.get('profile') || ''
+    await cachedChatRead(ctx, dependencies, {
+      key: chatCacheKey('list', profile, undefined, search),
+      kind: 'list', profile, knownWeb: true,
+      load: jar => dependencies.upstream.request(path, jar, { search }),
+    })
   })
   router.get('/api/app/sessions/:sessionID/messages', async (ctx) => {
     const id = safeIdentifier(ctx.params.sessionID, 'session ID')
@@ -1828,14 +1904,21 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     incoming.set('limit', String(limit))
     incoming.set('order', 'latest')
     incoming.set('include_compacted', 'true')
-    await proxy(ctx, dependencies.upstream, `/api/sessions/${encodeURIComponent(id)}/messages`, {
-      search: incoming,
+    const profile = incoming.get('profile') || 'default'
+    await cachedChatRead(ctx, dependencies, {
+      key: chatCacheKey('messages', profile, id, incoming),
+      kind: 'messages', profile, sessionID: id, offset, limit,
+      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}/messages`, jar, { search: incoming }),
     })
   })
   router.get('/api/app/sessions/:sessionID', async (ctx) => {
     const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    await proxy(ctx, dependencies.upstream, `/api/sessions/${encodeURIComponent(id)}`, {
-      search: searchFrom(ctx, ['profile']),
+    const search = searchFrom(ctx, ['profile'])
+    const profile = search.get('profile') || 'default'
+    await cachedChatRead(ctx, dependencies, {
+      key: chatCacheKey('detail', profile, id, search),
+      kind: 'detail', profile, sessionID: id,
+      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
     })
   })
   router.patch('/api/app/sessions/:sessionID', async (ctx) => {
@@ -1847,6 +1930,11 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       const profile = search.get('profile')
       if (profile) request.profile = profile
       const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'PATCH', search, body: request })
+      if (response.status >= 200 && response.status < 300) {
+        const user = dependencies.auth.require(ctx)
+        dependencies.chatCache?.store.markListsStale(user.id)
+        void dependencies.chatCache?.reconcile(user.id, search.get('profile') || 'default', id)
+      }
       sendUpstreamResponse(ctx, response, jar)
     })
   })
@@ -1856,8 +1944,81 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async jar => {
       requireWritableWebSession(await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }))
       const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'DELETE', search })
+      if (response.status >= 200 && response.status < 300) {
+        dependencies.chatCache?.store.deleteSession(
+          dependencies.auth.require(ctx).id,
+          search.get('profile') || 'default',
+          id,
+        )
+      }
       sendUpstreamResponse(ctx, response, jar)
     })
+  })
+
+  for (const listPath of ['/api/sessions', '/api/profiles/sessions']) {
+    router.get(listPath, async ctx => {
+      const search = new URLSearchParams(ctx.querystring)
+      const profile = search.get('profile') || ''
+      const knownWeb = search.get('source') === 'web'
+      if (!knownWeb) {
+        await withJar(ctx, async jar => sendUpstreamResponse(
+          ctx,
+          await dependencies.upstream.request(listPath, jar, { search }),
+          jar,
+        ))
+        return
+      }
+      await cachedChatRead(ctx, dependencies, {
+        key: chatCacheKey('list', profile, undefined, search),
+        kind: 'list', profile, knownWeb: true,
+        load: jar => dependencies.upstream.request(listPath, jar, { search }),
+      })
+    })
+  }
+  router.get('/api/sessions/:sessionID/messages', async ctx => {
+    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
+    const search = new URLSearchParams(ctx.querystring)
+    const profile = search.get('profile') || 'default'
+    const offset = Math.max(0, Number(search.get('offset') ?? 0) || 0)
+    const limit = Math.max(1, Math.min(500, Number(search.get('limit') ?? 100) || 100))
+    await cachedChatRead(ctx, dependencies, {
+      key: chatCacheKey('messages', profile, id, search),
+      kind: 'messages', profile, sessionID: id, offset, limit,
+      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}/messages`, jar, { search }),
+    })
+  })
+  router.get('/api/sessions/:sessionID', async ctx => {
+    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
+    const search = new URLSearchParams(ctx.querystring)
+    const profile = search.get('profile') || 'default'
+    await cachedChatRead(ctx, dependencies, {
+      key: chatCacheKey('detail', profile, id, search),
+      kind: 'detail', profile, sessionID: id,
+      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
+    })
+  })
+  router.get('/api/files/download', async ctx => {
+    const user = dependencies.auth.require(ctx)
+    const path = typeof ctx.query.path === 'string' ? ctx.query.path : ''
+    if (!path) throw new HttpError(400, 'path is required', 'missing_path')
+    const cached = dependencies.chatCache?.store.attachment(user.id, path)
+    if (cached) {
+      ctx.set('X-Yaoyao-Data-Source', 'local')
+      sendLocalMedia(ctx, cached.localPath, cached.mimeType, basename(path))
+      return
+    }
+    const response = await dependencies.upstreamSession.request('/api/files/download', {
+      search: new URLSearchParams({ path }),
+      headers: ctx.get('range') ? { range: ctx.get('range') } : undefined,
+      maxResponseBytes: 100 * 1_024 * 1_024,
+    })
+    ctx.set('X-Yaoyao-Data-Source', 'upstream')
+    if (!ctx.get('range') && dependencies.chatCache?.store.knowsAttachment(user.id, path)) {
+      dependencies.chatCache.store.storeAttachment(user.id, path, response)
+    } else if (ctx.get('range')) {
+      void dependencies.chatCache?.cacheAttachment(user.id, path)
+    }
+    sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
   })
 
   router.all('/api/*gatewayPath', async (ctx) => {

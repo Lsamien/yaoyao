@@ -42,6 +42,9 @@ interface Upstream {
 export class RealtimeBroker {
   protectedSession: (id: string) => boolean = () => false
   onNativeEvent: (owner: string, profile: string, storedId: string, frame: Frame) => void = () => {}
+  onNativeGlobalEvent: (owner: string, type: string) => void = () => {}
+  onNativeCommand: (owner: string, profile: string, storedId: string, method: string, params: Frame) => void = () => {}
+  onNativeRoute: (owner: string, profile: string, storedId: string, runtimeId: string) => void = () => {}
   readonly epoch = randomUUID()
   readonly channels = new Map<string, RealtimeChannel>()
   private upstreams = new Map<string, Upstream>()
@@ -207,6 +210,10 @@ export class RealtimeBroker {
       if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
       const previouslyActive = route?.active ?? false
       if (route && (method === 'prompt.submit' || method === 'session.steer')) route.active = true
+      const nativeOwner = this.nativeOwner(c.principal)
+      if (nativeOwner && route && ['prompt.submit', 'session.steer'].includes(method)) {
+        this.onNativeCommand(nativeOwner, route.profile, route.stored, method, p)
+      }
       const activity: RealtimeActivity = { kind: 'command', name: method, sessionId: route?.stored }
       this.onActivity(activity)
       const response = await this.rpc(u, method, p, f => c.principal.observeEvent?.(JSON.stringify(f)), f => c.principal.observeCommand?.(JSON.stringify(f)))
@@ -228,6 +235,10 @@ export class RealtimeBroker {
         r.active = result.running === true || info.running === true
         u.routes.set(key, r); u.byRuntime.set(runtime, r); c.routes.add(key)
         r.observers.set(c.principal.key, c.principal)
+        if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime)
+        if (nativeOwner && method === 'session.create') {
+          this.onNativeCommand(nativeOwner, profile, stored, method, p)
+        }
         for (const pending of [result.pending_approval, result.pending_clarify, result.inflight?.pending_approval, result.inflight?.pending_clarify]) {
           if (pending?.request_id) this.interactions.set(`${u.principal.upstreamKey}:${pending.request_id}`, runtime)
         }
@@ -357,8 +368,16 @@ export class RealtimeBroker {
     if (r) for (const principal of r.observers.values()) {
       if (principal.valid()) {
         principal.observeEvent?.(JSON.stringify(f))
-        if (principal.key.startsWith('user:')) this.onNativeEvent(principal.key.split(':')[1]!, r.profile, r.stored, p)
+        const owner = this.nativeOwner(principal)
+        if (owner) this.onNativeEvent(owner, r.profile, r.stored, p)
       }
+    }
+    if (!r && p.type === 'sessions.changed') {
+      const owners = new Set([...this.channels.values()].flatMap(channel => {
+        const owner = this.nativeOwner(channel.principal)
+        return owner && channel.principal.valid() ? [owner] : []
+      }))
+      for (const owner of owners) this.onNativeGlobalEvent(owner, p.type)
     }
     for (const c of this.channels.values()) {
       if (c.kind !== 'chat' || c.principal.upstreamKey !== u.principal.upstreamKey || !c.principal.valid()) continue
@@ -366,6 +385,10 @@ export class RealtimeBroker {
       if (!r && !['profiles.changed', 'sessions.changed', 'models.changed', 'pet.changed'].includes(p.type)) continue
       this.emit(c, 'frame', f)
     }
+  }
+  private nativeOwner(principal: RealtimePrincipal): string | undefined {
+    const match = /^(?:user|push):([^:]+)/.exec(principal.key)
+    return match?.[1]
   }
   private async recover(u: Upstream, changed: boolean): Promise<void> {
     if (u.recovering) return
@@ -392,6 +415,16 @@ export class RealtimeBroker {
   }
   private reset(u: Upstream, reason: string): void {
     this.onActivity({ kind: 'reset', name: reason })
+    for (const route of u.routes.values()) {
+      for (const principal of route.observers.values()) {
+        const owner = this.nativeOwner(principal)
+        if (owner && principal.valid()) {
+          this.onNativeEvent(owner, route.profile, route.stored, {
+            type: 'gateway.reset', payload: { reason }, seq: route.seq,
+          })
+        }
+      }
+    }
     for (const c of this.channels.values()) if (c.kind === 'chat' && c.principal.upstreamKey === u.principal.upstreamKey) this.emit(c, 'reset', { reason })
   }
   private emit(c: RealtimeChannel, event: StreamEntry['event'], value: Frame): void {

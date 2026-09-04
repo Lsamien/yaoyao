@@ -9,6 +9,7 @@ import {
   loadAllowedHostsConfiguration,
   type AllowedHostsConfigurationSnapshot,
 } from './allowedHostsConfiguration.js'
+import type { ChatCacheMode } from './chatCache.js'
 export { DEFAULT_APNS_TOPIC } from './apnsConfiguration.js'
 
 export interface APNsProviderConfig {
@@ -53,6 +54,7 @@ export interface ServerConfig {
   fcmConfigurationError?: string
   fcmSettings?: FCMConfigurationSnapshot
   allowedHostsSettings?: AllowedHostsConfigurationSnapshot
+  chatCacheMode?: ChatCacheMode
 }
 
 export const DEFAULT_YAOYAO_RELEASE_SOURCE = 'https://git.samien.cn/samien/hermes-yaoyao.git'
@@ -67,6 +69,14 @@ function parsePort(value: string | undefined): number {
     throw new Error('HERMES_YAOYAO_PORT must be an integer between 1 and 65535')
   }
   return port
+}
+
+function parseChatCacheMode(value: string | undefined): ChatCacheMode {
+  const mode = value?.trim() || 'prefer-local'
+  if (!['upstream-only', 'shadow', 'prefer-local'].includes(mode)) {
+    throw new Error('HERMES_YAOYAO_CHAT_CACHE_MODE must be upstream-only, shadow, or prefer-local')
+  }
+  return mode as ChatCacheMode
 }
 
 function parseUpstream(value: string | undefined): URL {
@@ -152,6 +162,7 @@ export function loadServerConfig(
   const allowInsecureLan = flag(env.HERMES_YAOYAO_ALLOW_INSECURE_LAN)
   const production = env.NODE_ENV === 'production'
   const superviseDashboard = flag(env.HERMES_YAOYAO_SUPERVISE_DASHBOARD)
+  const chatCacheMode = parseChatCacheMode(env.HERMES_YAOYAO_CHAT_CACHE_MODE)
   const releaseSource = parseReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE)
   const releaseRoot = resolve(env.HERMES_YAOYAO_RELEASE_ROOT?.trim() || `${homedir()}/.local/share/hermes-yaoyao`)
   const allowRemoteUpdate = flag(env.HERMES_YAOYAO_ALLOW_REMOTE_UPDATE)
@@ -189,6 +200,7 @@ export function loadServerConfig(
     insecureLan,
     production,
     superviseDashboard,
+    chatCacheMode,
     releaseSource,
     releaseRoot,
     allowRemoteUpdate,

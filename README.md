@@ -1,6 +1,6 @@
 # 夭夭 Web
 
-当前发布版本：**v0.3.21**，配套 iOS **1.3（177）**。详见 [发布说明](docs/releases/v0.3.21.md)。
+当前发布版本：**v0.3.23**，配套 iOS **1.3（181）**。详见 [发布说明](docs/releases/v0.3.23.md)。
 
 夭夭 Web 为网页和 iOS 提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务；无需安装 Yaoyao 插件。
 
@@ -32,9 +32,11 @@ HERMES_YAOYAO_UPSTREAM=http://服务器:9119 npm start
 
 Web 数据默认保存在 `~/.hermes-yaoyao`，可用 `HERMES_YAOYAO_HOME` 指定。备份应包含整个数据目录及加密密钥。Docker 使用 `/var/lib/hermes-yaoyao` 持久化卷，不需要 Python、Hermes 文件系统挂载或插件安装载荷。
 
+由 Web 或 iOS 创建的 `source=web` 普通聊天会持久化到 `chat-cache.sqlite3`，完成同步后由 15300 直接提供列表、消息和已缓存附件。Web 的只读历史记录不进入该数据库，继续按需读取 9119。可通过 `HERMES_YAOYAO_CHAT_CACHE_MODE=upstream-only|shadow|prefer-local` 切换策略，默认 `prefer-local`。
+
 ## iOS
 
-iOS 统一连接 Web 地址，通过设置中的手机登录二维码或账号密码登录。不能再直接填写 9119 地址。原有直连账号需要重新配置为 Web 地址；不会自动改端口或删除旧缓存。
+iOS 统一连接 Web 地址，通过设置中的手机登录二维码或账号密码登录。不能再直接填写 9119 地址；旧 15300 Web 账号和本机聊天缓存继续保留。
 
 ## 数据与升级
 

@@ -46,6 +46,7 @@ import {
   ChatPushJobManager,
   HermesChatNotificationResolver,
 } from './pushEvents.js'
+import { ChatCacheCoordinator, ChatCacheStore } from './chatCache.js'
 
 export interface ApplicationOptions {
   config?: ServerConfig
@@ -62,6 +63,7 @@ export interface ApplicationOptions {
   apnsConfiguration?: APNsConfigurationManager
   fcmConfiguration?: FCMConfigurationManager
   allowedHostsConfiguration?: AllowedHostsConfigurationManager
+  chatCache?: ChatCacheCoordinator
 }
 
 export interface ApplicationRuntime {
@@ -85,6 +87,7 @@ export interface ApplicationRuntime {
   allowedHostsConfiguration: AllowedHostsConfigurationManager
   pushEventCoordinator: PushCoordinatorEventAdapter
   chatPushJobs: ChatPushJobManager
+  chatCache?: ChatCacheCoordinator
   close(): void
 }
 
@@ -134,6 +137,18 @@ export function createApplication(options: ApplicationOptions = {}): Application
     upstream,
     () => auth.upstreamCredentials(configuredUpstreamCredentials),
   )
+  let chatCache = options.chatCache
+  if (!chatCache && config.chatCacheMode !== 'upstream-only') {
+    try {
+      chatCache = new ChatCacheCoordinator(
+        new ChatCacheStore(config.home),
+        upstreamSession,
+        config.chatCacheMode ?? 'prefer-local',
+      )
+    } catch {
+      chatCache = undefined
+    }
+  }
   const accountPairings = options.accountPairings ?? new AccountLoginPairingStore()
   const profileIdentities = options.profileIdentities
     ?? new UpstreamProfileIdentityService(config, upstreamSession)
@@ -201,10 +216,18 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
+    chatCache?.observe(owner, profile, storedId, frame)
     if (!['message.complete', 'tool.complete', 'tool.completed', 'attachment.staged'].includes(frame.type)) return
     const data = frame.payload ?? {}, text = JSON.stringify(data)
     const messageId = String(data.row_id ?? data.message_id ?? data.id ?? createHash('sha256').update(text).digest('hex'))
     void workspaceAssets.archiveText(owner, text, 'local', profile, storedId, messageId, frame.type === 'attachment.staged' ? 'user' : 'agent').catch(() => {})
+  }
+  realtime.broker.onNativeGlobalEvent = (owner, type) => chatCache?.observeGlobal(owner, type)
+  realtime.broker.onNativeCommand = (owner, profile, storedId, method, params) => {
+    chatCache?.command(owner, profile, storedId, method, params)
+  }
+  realtime.broker.onNativeRoute = (owner, profile, storedId, runtimeId) => {
+    chatCache?.route(owner, profile, storedId, runtimeId)
   }
   chatPushJobs.setTransportFactory(realtime.recoveryTransport, job => realtime.ownsPushJob(job.id))
   try {
@@ -353,6 +376,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     apnsConfiguration,
     fcmConfiguration,
     allowedHostsConfiguration,
+    chatCache,
   })
   app.use(router.routes())
   app.use(router.allowedMethods({ throw: false }))
@@ -387,6 +411,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     allowedHostsConfiguration,
     pushEventCoordinator,
     chatPushJobs,
+    chatCache,
     close: () => {
       workspaceAssets.close()
       workspaceRuntime.close()
@@ -397,6 +422,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       push.close()
       uploads.close()
       workspace.close()
+      chatCache?.store.close()
     },
   }
 }
