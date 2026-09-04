@@ -11,6 +11,7 @@ export interface Work {
   id: string
   runId: string
   conversationId: string
+  conversationTaskId?: string
   agentId: string
   messageId: string
   triggerSeq: number
@@ -64,7 +65,7 @@ export abstract class WorkspaceScheduler {
           if (index === 0 && root.currentMessageId) {
             Object.assign(work, { currentMessageId: root.currentMessageId, submitted: true, status: 'uncertain', turnConfiguration: root.turnConfiguration })
             store.put(owner, 'turn', work.id, work)
-            const key = `${c.id}:${id}`
+            const key = this.bindingKey(c.id, root.conversationTaskId, id)
             const binding = store.get<{ runId: string; messageId: string; taskId?: string }>(owner, 'binding', key)
             if (binding?.runId === root.id && binding.messageId === root.currentMessageId) {
               binding.taskId = work.id; store.put(owner, 'binding', key, binding)
@@ -86,6 +87,9 @@ export abstract class WorkspaceScheduler {
   }
   protected abstract performTurn(owner: string, c: Conversation, agent: Agent, work: Work, recovering: boolean): Promise<Message>
   protected abstract interruptTurn(owner: string, work: Work): Promise<void>
+  protected bindingKey(conversationId: string, conversationTaskId: string | undefined, agentId: string): string {
+    return conversationTaskId ? `${conversationId}:${conversationTaskId}:${agentId}` : `${conversationId}:${agentId}`
+  }
   protected works(owner: string, runId?: string): Work[] {
     return this.store.db.prepare(`SELECT data FROM workspace_entities WHERE owner=? AND kind='turn' ${runId ? "AND json_extract(data,'$.runId')=?" : ''}`).all(...(runId ? [owner, runId] : [owner]))
       .map(row => JSON.parse(String(row.data)) as Work)
@@ -101,7 +105,7 @@ export abstract class WorkspaceScheduler {
   protected enqueue(owner: string, root: Run, agentId: string, depth: number, batchId: string, triggerSeq: number, replyMode: Work['replyMode'], requiredReply: boolean, reviewOf?: string): Work {
     const existing = this.works(owner, root.id).find(w => reviewOf ? w.reviewOf === reviewOf : w.agentId === agentId && w.depth === depth && !w.reviewOf)
     if (existing) return existing
-    const work: Work = { id: randomUUID(), runId: root.id, conversationId: root.conversationId, agentId, messageId: root.messageId, depth, batchId, triggerSeq, replyMode, requiredReply, reviewOf, status: 'queued', createdAt: Date.now() }
+    const work: Work = { id: randomUUID(), runId: root.id, conversationId: root.conversationId, conversationTaskId: root.conversationTaskId, agentId, messageId: root.messageId, depth, batchId, triggerSeq, replyMode, requiredReply, reviewOf, status: 'queued', createdAt: Date.now() }
     this.store.put(owner, 'turn', work.id, work)
     return work
   }
@@ -142,8 +146,8 @@ export abstract class WorkspaceScheduler {
     this.store.saveRun(owner, root)
     if (done && !wasTerminal && root.status !== 'interrupted') {
       const c = this.store.require<Conversation>(owner, 'conversation', root.conversationId)
-      if (root.status === 'failed' && c.kind === 'direct') this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, seq: 0, role: 'system', content: `执行失败：${root.error ?? '运行失败'}`, reasoning: '', status: 'failed', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
-      this.notify(owner, c, root, this.store.messages(owner, c.id).filter(m => m.runId === id && m.visible !== false).at(-1))
+      if (root.status === 'failed' && c.kind === 'direct') this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, conversationTaskId: root.conversationTaskId, seq: 0, role: 'system', content: `执行失败：${root.error ?? '运行失败'}`, reasoning: '', status: 'failed', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
+      this.notify(owner, c, root, this.store.messages(owner, c.id, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, false, root.conversationTaskId).filter(m => m.runId === id && m.visible !== false).at(-1))
     }
   }
   private plan(owner: string, id: string): void {
@@ -170,7 +174,7 @@ export abstract class WorkspaceScheduler {
           for (const target of targets) this.enqueue(owner, root, target, nextDepth, work.id, message.seq, mentions.includes(target) ? 'mentioned' : 'automatic', false)
         } else if (targets.length && !this.store.get(owner, 'limit-notice', root.id)) {
           this.store.put(owner, 'limit-notice', root.id, { id: root.id })
-          this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, seq: 0, role: 'system', content: '已达到自动协作轮数上限，本轮不再自动分派。', reasoning: '', status: 'complete', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
+          this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, conversationTaskId: root.conversationTaskId, seq: 0, role: 'system', content: '已达到自动协作轮数上限，本轮不再自动分派。', reasoning: '', status: 'complete', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
         }
       }
       this.updateRoot(owner, root.id)
@@ -191,7 +195,7 @@ export abstract class WorkspaceScheduler {
       all = this.store.owners().flatMap(owner => this.pendingWorks(owner).map(work => ({ owner, work })))
       all.sort((a, b) => {
         const am = this.store.require<Message>(a.owner, 'message', a.work.messageId), bm = this.store.require<Message>(b.owner, 'message', b.work.messageId)
-        return am.createdAt - bm.createdAt || (a.work.conversationId === b.work.conversationId ? am.seq - bm.seq : 0) || a.work.createdAt - b.work.createdAt || a.work.id.localeCompare(b.work.id)
+        return am.createdAt - bm.createdAt || (a.work.conversationId === b.work.conversationId && a.work.conversationTaskId === b.work.conversationTaskId ? am.seq - bm.seq : 0) || a.work.createdAt - b.work.createdAt || a.work.id.localeCompare(b.work.id)
       })
       for (const { owner, work: candidate } of all) {
         const work = this.getWork(owner, candidate.id)
@@ -223,12 +227,12 @@ export abstract class WorkspaceScheduler {
           work.status = 'interrupted'; work.error = '执行前成员已移除或聊天已停止'; this.saveWork(owner, work); this.wake(); continue
         }
         const occupied = all.map(entry => this.getWork(entry.owner, entry.work.id)).filter(t => (['running', 'waiting', 'uncertain'].includes(t.status) || this.executing.has(t.id)) && t.id !== work.id)
-        if (occupied.some(t => t.conversationId === c.id && t.agentId === work.agentId)) continue
-        const inRoom = occupied.filter(t => t.conversationId === c.id)
-        if (work.status === 'queued' && (occupied.length >= 4 || inRoom.length >= 3)) continue
+        if (occupied.some(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId && t.agentId === work.agentId)) continue
+        const inTask = occupied.filter(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId)
+        if (work.status === 'queued' && (occupied.length >= 4 || inTask.length >= 3)) continue
         if (work.status === 'uncertain' && (this.recoverAfter.get(work.id) ?? 0) > Date.now()) { this.retrySoon(); continue }
         if (c.mode === 'host' || c.kind === 'direct') {
-          if (inRoom.some(t => c.kind === 'direct' || t.runId !== work.runId || t.batchId !== work.batchId || t.agentId === c.administratorId || work.agentId === c.administratorId)) continue
+          if (inTask.some(t => c.kind === 'direct' || t.runId !== work.runId || t.batchId !== work.batchId || t.agentId === c.administratorId || work.agentId === c.administratorId)) continue
         }
         this.executing.add(work.id)
         const recovering = work.status === 'uncertain'
@@ -261,7 +265,7 @@ export abstract class WorkspaceScheduler {
       }
       if (current.status === 'failed' && !current.currentMessageId) {
         current.currentMessageId = randomUUID()
-        this.store.saveMessage(owner, { id: current.currentMessageId, conversationId: current.conversationId, seq: 0, role: 'assistant', agentId: current.agentId, agentName: this.store.get<Agent>(owner, 'agent', current.agentId)?.name, content: `执行失败：${current.error}`, reasoning: '', status: 'failed', error: current.error, taskId: current.id, runId: current.runId, attachments: [], tools: [], createdAt: Date.now() })
+        this.store.saveMessage(owner, { id: current.currentMessageId, conversationId: current.conversationId, conversationTaskId: current.conversationTaskId, seq: 0, role: 'assistant', agentId: current.agentId, agentName: this.store.get<Agent>(owner, 'agent', current.agentId)?.name, content: `执行失败：${current.error}`, reasoning: '', status: 'failed', error: current.error, taskId: current.id, runId: current.runId, attachments: [], tools: [], createdAt: Date.now() })
         this.saveWork(owner, current)
       }
     } finally {
@@ -290,10 +294,17 @@ export abstract class WorkspaceScheduler {
     this.store.saveRun(owner, root)
     await this.cancelWorks(owner, this.works(owner, id))
   }
-  async stopAgent(owner: string, conversationId: string, agentId: string): Promise<void> {
+  async stopAgent(owner: string, conversationId: string, agentId: string, conversationTaskId?: string): Promise<void> {
     const c = this.store.require<Conversation>(owner, 'conversation', conversationId)
     if (!c.memberIds.includes(agentId)) throw new HttpError(400, '只能停止群内成员', 'invalid_members')
-    await this.cancelWorks(owner, this.works(owner).filter(w => w.conversationId === conversationId && w.agentId === agentId))
+    const scopedTaskId = c.kind === 'group' ? this.store.resolveTask(owner, conversationId, conversationTaskId)!.id : undefined
+    await this.cancelWorks(owner, this.works(owner).filter(w => w.conversationId === conversationId && w.agentId === agentId && w.conversationTaskId === scopedTaskId))
+  }
+  async stopTask(owner: string, conversationId: string, conversationTaskId: string): Promise<void> {
+    this.store.requireTask(owner, conversationId, conversationTaskId)
+    const roots = this.store.list<Run>(owner, 'run').filter(r => r.conversationId === conversationId && r.conversationTaskId === conversationTaskId && !terminal(r.status))
+    this.store.atomic(() => { for (const root of roots) { root.stopRequested = true; this.store.saveRun(owner, root) } })
+    await this.cancelWorks(owner, this.works(owner).filter(w => w.conversationId === conversationId && w.conversationTaskId === conversationTaskId))
   }
   async stopConversation(owner: string, id: string): Promise<void> {
     this.store.require<Conversation>(owner, 'conversation', id)

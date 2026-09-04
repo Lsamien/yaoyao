@@ -143,6 +143,56 @@ describe('application workspace HTTP contract', () => {
     expect((await req('get', '/api/app/events', 'second')).body.events).toEqual([])
     expect(upstream.some((p) => p.includes('sessions'))).toBe(false)
   })
+  it('creates, lists, renames, selects, and deletes group tasks without changing remote members', async () => {
+    const a = (
+      await req('post', '/api/app/agents').send({ name: '本机管理员', profile: 'default' }).expect(201)
+    ).body.agent
+    const b = (
+      await req('post', '/api/app/agents').send({ name: '远程成员', nodeId: 'local', profile: 'default' }).expect(201)
+    ).body.agent
+    const conversation = (
+      await req('post', '/api/app/conversations')
+        .send({ name: '多任务团队', memberIds: [a.id, b.id], administratorId: a.id })
+        .expect(201)
+    ).body.conversation
+    const initial = (await req('get', `/api/app/conversations/${conversation.id}/tasks`).expect(200)).body.tasks
+    expect(initial).toHaveLength(1)
+    expect(initial[0]).toMatchObject({
+      conversationId: conversation.id,
+      title: '新任务',
+      titleSource: 'automatic',
+      messageCount: 0,
+    })
+    const task = (
+      await req('post', `/api/app/conversations/${conversation.id}/tasks`)
+        .send({ title: '远程 Agent 调研' })
+        .expect(201)
+    ).body.task
+    expect(task).toMatchObject({ title: '远程 Agent 调研', titleSource: 'user' })
+    const renamed = (
+      await req('patch', `/api/app/conversations/${conversation.id}/tasks/${task.id}`)
+        .send({ title: '远程 Agent 复核' })
+        .expect(200)
+    ).body.task
+    expect(renamed).toMatchObject({ title: '远程 Agent 复核', titleSource: 'user' })
+    const detail = (await req('get', `/api/app/conversations/${conversation.id}?taskId=${task.id}`).expect(200)).body
+    expect(detail.task.id).toBe(task.id)
+    expect(detail.tasks.map((row: { id: string }) => row.id)).toContain(task.id)
+    expect(detail.messages).toEqual([])
+    expect(detail.conversation).toMatchObject({ memberIds: [a.id, b.id], administratorId: a.id })
+    expect((await req('put', `/api/app/conversations/${conversation.id}/tasks/${task.id}/read`).send({ seq: 100 }).expect(200)).body.task)
+      .toMatchObject({ readSeq: 0, lastSeq: 0, unreadCount: 0 })
+    await req('get', `/api/app/conversations/${conversation.id}/tasks`, 'second').expect(404)
+    await req('delete', `/api/app/conversations/${conversation.id}/tasks/${task.id}`).expect(200)
+    const remaining = (await req('get', `/api/app/conversations/${conversation.id}/tasks`).expect(200)).body.tasks
+    expect(remaining.map((row: { id: string }) => row.id)).not.toContain(task.id)
+    expect((await req('get', `/api/app/conversations/${conversation.id}`)).body.conversation)
+      .toMatchObject({ memberIds: [a.id, b.id], administratorId: a.id })
+    await req('delete', `/api/app/conversations/${conversation.id}/tasks/${initial[0].id}`).expect(200)
+    const replacement = (await req('get', `/api/app/conversations/${conversation.id}/tasks`).expect(200)).body.tasks
+    expect(replacement).toHaveLength(1)
+    expect(replacement[0].id).not.toBe(initial[0].id)
+  })
   it('archives files on the Web server, preserves native library fields, and blocks cross-user downloads', async () => {
     const f = (
       await req('post', '/api/app/uploads')

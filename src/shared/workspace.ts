@@ -44,6 +44,21 @@ export interface WorkspaceConversation {
   createdAt: number
   updatedAt: number
 }
+export interface WorkspaceTask {
+  id: string
+  conversationId: string
+  title: string
+  titleSource: 'automatic' | 'user'
+  messageCount: number
+  readSeq: number
+  lastSeq: number
+  unreadCount: number
+  activeRunId?: string
+  activeRunStatus?: WorkspaceRun['status']
+  lastMessageAt?: number
+  createdAt: number
+  updatedAt: number
+}
 export interface WorkspaceFile {
   id: string
   name: string
@@ -59,6 +74,8 @@ export interface WorkspaceFile {
 export interface WorkspaceMessage {
   id: string
   conversationId: string
+  /** User-visible task scope. `taskId` below remains the scheduler turn ID. */
+  conversationTaskId?: string
   seq: number
   role: 'user' | 'assistant' | 'system'
   agentId?: string
@@ -77,6 +94,7 @@ export interface WorkspaceMessage {
 export interface WorkspaceRun {
   id: string
   conversationId: string
+  conversationTaskId?: string
   messageId: string
   mentionIds: string[]
   activeAgentId?: string
@@ -90,6 +108,7 @@ export interface WorkspaceRun {
 export interface WorkspaceInteraction {
   id: string
   conversationId: string
+  conversationTaskId?: string
   runId: string
   agentId: string
   kind: 'approval' | 'clarification'

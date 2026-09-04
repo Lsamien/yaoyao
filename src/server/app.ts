@@ -208,7 +208,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   workspaceRuntime.onMessage = (owner, message) => workspaceAssets.archive(owner, message)
   workspaceRuntime.onNotify = (owner, c, run, message, interaction) => {
     if (c.kind === 'group' && !push.isGroupSubscribed(owner,c.id)) return
-    push.enqueueNotification({ kind: interaction ? interaction.kind === 'approval' ? 'chat.approval.requested' : 'chat.clarification.requested' : run.status === 'failed' ? 'chat.failed' : 'chat.completed', eventID: `workspace:${interaction?.id ?? run.id}`, localUserID: owner, title: c.name, body: (interaction?.message || message?.content || run.error || '回复完成').slice(0,180), collapseID: `workspace:${c.id}`, data: { conversationId:c.id, workspace:'1' }, ...(c.kind === 'group' ? {roomID:c.id} : {}) })
+    push.enqueueNotification({ kind: interaction ? interaction.kind === 'approval' ? 'chat.approval.requested' : 'chat.clarification.requested' : run.status === 'failed' ? 'chat.failed' : 'chat.completed', eventID: `workspace:${interaction?.id ?? run.id}`, localUserID: owner, title: c.name, body: (interaction?.message || message?.content || run.error || '回复完成').slice(0,180), collapseID: `workspace:${c.id}:${run.conversationTaskId ?? 'direct'}`, data: { conversationId:c.id, ...(run.conversationTaskId ? { conversationTaskId: run.conversationTaskId } : {}), workspace:'1' }, ...(c.kind === 'group' ? {roomID:c.id} : {}) })
   }
   const realtime = new RealtimeAPI(config, auth, csrf, pairings, upstream, upstreamSession, {
     coordinator: pushEventCoordinator,

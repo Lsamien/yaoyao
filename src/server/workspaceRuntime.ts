@@ -27,6 +27,7 @@ export interface WorkspaceBinding {
   aliases: string[]
   runId: string
   messageId: string
+  conversationTaskId?: string
   taskId?: string
   contextSeq?: number
 }
@@ -35,6 +36,7 @@ interface LiveTurn {
   runtimeId: string
   runId: string
   agentId: string
+  conversationTaskId?: string
   taskId: string
   done(error?: Error): void
 }
@@ -42,6 +44,7 @@ export const sendInput = z
   .object({
     requestId: z.string().uuid(),
     content: z.string().max(65_536).default(''),
+    taskId: z.string().uuid().optional(),
     mentionIds: z.array(z.string().uuid()).max(8).default([]),
     fileIds: z.array(z.string().uuid()).max(8).default([]),
   })
@@ -55,6 +58,13 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const result = this.store.command(owner, body.requestId, { conversationId, ...body }, () => {
       const c = this.store.require<Conversation>(owner, 'conversation', conversationId)
       if (c.archived) throw new HttpError(409, '聊天已归档', 'conversation_archived')
+      const conversationTask = this.store.resolveTask(owner, conversationId, body.taskId),
+        conversationTaskId = conversationTask?.id
+      if (conversationTaskId) {
+        const alreadyActive = this.store.list<Run>(owner, 'run').some(run => run.conversationTaskId === conversationTaskId && !['complete', 'failed', 'interrupted'].includes(run.status))
+        if (!alreadyActive && this.store.activeTaskCount(owner, conversationId) >= 4)
+          throw new HttpError(409, '最多同时运行 4 个任务', 'workspace_task_concurrency_limit')
+      }
       if (body.mentionIds.some((a) => !c.memberIds.includes(a)))
         throw new HttpError(400, '只能 @ 群内成员', 'invalid_mentions')
       const records = this.uploads.records(body.fileIds, owner)
@@ -69,6 +79,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       const message: Message = {
         id: randomUUID(),
         conversationId,
+        conversationTaskId,
         seq: 0,
         role: 'user',
         content: body.content.trim(),
@@ -99,6 +110,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       const run: Run = {
         id: runId,
         conversationId,
+        conversationTaskId,
         messageId: message.id,
         mentionIds: mentions,
         activeAgentId: c.administratorId,
@@ -121,7 +133,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     run: Work,
     recovering = false,
   ): Promise<Message> {
-    const key = `${c.id}:${agent.id}`,
+    const key = this.bindingKey(c.id, run.conversationTaskId, agent.id),
       target = this.nodes.target(owner, agent.nodeId)
     const gateway = new WorkspaceGateway(target)
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
@@ -133,6 +145,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       message = {
         id: randomUUID(),
         conversationId: c.id,
+        conversationTaskId: run.conversationTaskId,
         seq: 0,
         role: 'assistant',
         agentId: agent.id,
@@ -247,6 +260,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const interaction: WorkspaceInteraction = previous ?? {
           id: randomUUID(),
           conversationId: c.id,
+          conversationTaskId: run.conversationTaskId,
           runId: run.runId,
           agentId: agent.id,
           kind: type.startsWith('approval') ? 'approval' : 'clarification',
@@ -255,7 +269,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           resolved: false,
         }
         this.store.put(owner, 'interaction', interaction.id, interaction)
-        this.store.put(owner, 'interaction-binding', interaction.id, { key, upstreamId, taskId: run.id })
+        this.store.put(owner, 'interaction-binding', interaction.id, { key, upstreamId, taskId: run.id, conversationTaskId: run.conversationTaskId })
         this.store.event(owner, 'interaction.changed', interaction, c.id)
         const current = this.getWork(owner, run.id)
         current.hadInteraction = true
@@ -287,19 +301,22 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
               if (usage && !this.closing) {
                 const used = usage.context_used ?? usage.used_tokens,
                   limit = usage.context_max ?? usage.context_limit
-                this.store.put(owner, 'context', c.id, {
+                const contextKey = run.conversationTaskId ?? c.id,
+                  context = {
                   ...usage,
+                  conversationTaskId: run.conversationTaskId,
                   usedTokens: used,
                   limitTokens: limit,
                   percent:
                     typeof used === 'number' && typeof limit === 'number' && limit > 0
                       ? Math.round((used / limit) * 1000) / 10
                       : undefined,
-                })
+                  }
+                this.store.put(owner, 'context', contextKey, context)
                 this.store.event(
                   owner,
                   'context.changed',
-                  this.store.get(owner, 'context', c.id),
+                  context,
                   c.id,
                 )
               }
@@ -316,8 +333,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         finish(new HttpError(502, String(p.message ?? p.error ?? '运行失败'), 'run_failed'))
         return
       } else if (['session.usage', 'usage.update', 'context.update'].includes(type)) {
-        this.store.put(owner, 'context', c.id, p)
-        this.store.event(owner, 'context.changed', p, c.id)
+        const context = { ...p, conversationTaskId: run.conversationTaskId }
+        this.store.put(owner, 'context', run.conversationTaskId ?? c.id, context)
+        this.store.event(owner, 'context.changed', context, c.id)
       } else if (type === 'session.info' && binding) {
         const storedId = p.stored_session_id ?? p.session_key
         if (typeof storedId === 'string' && storedId && storedId !== binding.storedId) {
@@ -342,7 +360,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           })
         : await gateway.rpc('session.create', {
             profile: agent.profile,
-            title: `Yaoyao ${c.id}`,
+            title: `Yaoyao ${c.id}${run.conversationTaskId ? ` / ${run.conversationTaskId}` : ''}`,
             source: 'yaoyao_workspace',
             hidden: true,
             room_plumbing: true,
@@ -372,12 +390,13 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           ]),
         ],
         runId: run.runId,
+        conversationTaskId: run.conversationTaskId,
         taskId: run.id,
         contextSeq: binding?.contextSeq ?? 0,
         messageId: resultMessage.id,
       }
       this.store.put(owner, 'binding', key, binding)
-      this.live.set(key, { gateway, runtimeId, runId: run.runId, taskId: run.id, agentId: agent.id, done: finish })
+      this.live.set(key, { gateway, runtimeId, runId: run.runId, conversationTaskId: run.conversationTaskId, taskId: run.id, agentId: agent.id, done: finish })
       if (this.closing || this.getWork(owner, run.id).cancelRequested || this.getWork(owner, run.id).status === 'interrupted')
         throw new Error('运行已停止')
       if (recovering) {
@@ -487,8 +506,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   }
   private contextText(owner: string, c: Conversation, agent: Agent, work: Work, after: number): string {
     const rootTrigger = this.store.require<Message>(owner, 'message', work.messageId)
-    const roots = new Map(this.store.list<Run>(owner, 'run').filter(r => r.conversationId === c.id).map(r => [r.id, this.store.get<Message>(owner, 'message', r.messageId)?.seq ?? 0]))
-    const history = this.store.messages(owner, c.id, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true)
+    const roots = new Map(this.store.list<Run>(owner, 'run').filter(r => r.conversationId === c.id && r.conversationTaskId === work.conversationTaskId).map(r => [r.id, this.store.get<Message>(owner, 'message', r.messageId)?.seq ?? 0]))
+    const history = this.store.messages(owner, c.id, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true, work.conversationTaskId)
     const unfinished = history.find(m => m.seq > after && m.seq <= work.triggerSeq && (['queued', 'streaming', 'uncertain'].includes(m.status) || (m.runId && (roots.get(m.runId) ?? 0) > rootTrigger.seq)))
     work.contextThroughSeq = unfinished ? unfinished.seq - 1 : work.triggerSeq
     const eligible = history
@@ -554,7 +573,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     if (current.status === 'waiting') { current.status = 'running'; this.saveWork(owner, current) }
   }
   protected async interruptTurn(owner: string, work: Work): Promise<void> {
-    const key = `${work.conversationId}:${work.agentId}`
+    const key = this.bindingKey(work.conversationId, work.conversationTaskId, work.agentId)
     const live = this.live.get(key)
     if (live?.taskId === work.id) {
       await live.gateway.rpc('session.interrupt', { session_id: live.runtimeId })

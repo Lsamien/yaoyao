@@ -109,6 +109,9 @@ function direct(id: string, user = owner) {
     .list<WorkspaceConversation>(user, 'conversation')
     .find((c) => c.kind === 'direct' && c.memberIds[0] === id)!
 }
+function defaultTask(conversationId: string, user = owner) {
+  return store.tasks(user, conversationId)[0]!
+}
 async function finished(id: string) {
   await vi.waitFor(() =>
     expect(store.require<WorkspaceRun>(owner, 'run', id).status).toBe('complete'),
@@ -116,6 +119,108 @@ async function finished(id: string) {
   return store.require<WorkspaceRun>(owner, 'run', id)
 }
 describe('Web-owned workspace', () => {
+  it('isolates messages, Hermes sessions, bindings, and context between concurrent group tasks', async () => {
+    const administrator = store.createAgent(owner, { name: '多任务远程管理员', profile: 'remote-profile', nodeId: 'remote-node' }),
+      member = agent('多任务成员'),
+      conversation = store.createGroup(owner, {
+        name: '多任务群聊',
+        memberIds: [administrator.id, member.id],
+        administratorId: administrator.id,
+      }),
+      firstTask = defaultTask(conversation.id),
+      secondTask = store.createTask(owner, conversation.id, { title: '显式标题' })
+    const pending: Array<{ socket: WebSocket; params: Record<string, any> }> = []
+    reply = (socket, params) => {
+      pending.push({ socket, params })
+      if (pending.length !== 2) return
+      for (const item of pending) {
+        const text = item.params.text.includes('第一项工作') ? '第一项结果' : '第二项结果'
+        setTimeout(() => item.socket.send(JSON.stringify({
+          method: 'event',
+          params: { type: 'message.complete', session_id: item.params.session_id, payload: { text, status: 'complete' } },
+        })), 5)
+      }
+    }
+    const firstRun = runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '第一项工作' }),
+      secondRun = runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '第二项工作' })
+    await Promise.all([finished(firstRun.id), finished(secondRun.id)])
+    const firstMessages = store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, firstTask.id),
+      secondMessages = store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, secondTask.id)
+    expect(firstMessages.map(message => message.content)).toEqual(['第一项工作', '第一项结果'])
+    expect(secondMessages.map(message => message.content)).toEqual(['第二项工作', '第二项结果'])
+    expect(firstMessages.every(message => message.conversationTaskId === firstTask.id)).toBe(true)
+    expect(secondMessages.every(message => message.conversationTaskId === secondTask.id)).toBe(true)
+    const prompts = requests.filter(request => request.method === 'prompt.submit').map(request => String(request.params.text))
+    expect(prompts.find(prompt => prompt.includes('第一项工作'))).not.toContain('第二项工作')
+    expect(prompts.find(prompt => prompt.includes('第二项工作'))).not.toContain('第一项工作')
+    const bindings = store.list<any>(owner, 'binding')
+    expect(bindings.map(binding => binding.conversationTaskId).sort()).toEqual([firstTask.id, secondTask.id].sort())
+    expect(bindings.every(binding => binding.nodeId === 'remote-node' && binding.profile === 'remote-profile')).toBe(true)
+    expect(new Set(bindings.map(binding => binding.storedId)).size).toBe(2)
+    expect(store.get<any>(owner, 'context', firstTask.id)).toMatchObject({ conversationTaskId: firstTask.id, percent: 40 })
+    expect(store.get<any>(owner, 'context', secondTask.id)).toMatchObject({ conversationTaskId: secondTask.id, percent: 40 })
+    const firstSummary = store.require<any>(owner, 'conversation-task', firstTask.id)
+    expect(firstSummary).toMatchObject({ title: '第一项工作', titleSource: 'automatic', messageCount: 2, unreadCount: 2 })
+    expect(store.require<any>(owner, 'conversation-task', secondTask.id)).toMatchObject({ title: '显式标题', titleSource: 'user', messageCount: 2 })
+    expect(store.markTaskRead(owner, conversation.id, firstTask.id, firstSummary.lastSeq).unreadCount).toBe(0)
+    store.deleteTask(owner, conversation.id, firstTask.id)
+    expect(store.list<WorkspaceMessage>(owner, 'message').some(message => message.conversationTaskId === firstTask.id)).toBe(false)
+    expect(store.list<any>(owner, 'binding').some(binding => binding.conversationTaskId === firstTask.id)).toBe(false)
+    expect(store.get(owner, 'context', firstTask.id)).toBeUndefined()
+    expect(store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, secondTask.id).map(message => message.content))
+      .toEqual(['第二项工作', '第二项结果'])
+  })
+
+  it('limits a group to four active conversation tasks while retaining the global scheduler limit', async () => {
+    const administrator = agent('并发任务管理员'),
+      member = agent('并发任务成员'),
+      conversation = store.createGroup(owner, {
+        name: '并发任务群聊',
+        memberIds: [administrator.id, member.id],
+        administratorId: administrator.id,
+      }),
+      tasks = [defaultTask(conversation.id), ...Array.from({ length: 4 }, (_, index) => store.createTask(owner, conversation.id, { title: `任务 ${index + 2}` }))]
+    reply = () => {}
+    for (const [index, task] of tasks.slice(0, 4).entries())
+      runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: task.id, content: `执行 ${index + 1}` })
+    expect(store.activeTaskCount(owner, conversation.id)).toBe(4)
+    expect(() => runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: tasks[4]!.id, content: '第五项' }))
+      .toThrow('最多同时运行 4 个任务')
+    await Promise.all(tasks.slice(0, 4).map(task => runtime.stopTask(owner, conversation.id, task.id)))
+  })
+
+  it('keeps same-named upstream interactions scoped to their conversation task', async () => {
+    const administrator = agent('交互隔离管理员'),
+      member = agent('交互隔离成员'),
+      conversation = store.createGroup(owner, {
+        name: '交互隔离群聊',
+        memberIds: [administrator.id, member.id],
+        administratorId: administrator.id,
+      }),
+      firstTask = defaultTask(conversation.id),
+      secondTask = store.createTask(owner, conversation.id, {})
+    reply = (socket, params) => setTimeout(() => socket.send(JSON.stringify({
+      method: 'event',
+      params: {
+        type: 'approval.request',
+        session_id: params.session_id,
+        payload: { request_id: 'same-upstream-id', message: '允许执行吗？' },
+      },
+    })), 5)
+    runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '任务甲' })
+    runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '任务乙' })
+    await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction').filter(interaction => !interaction.resolved)).toHaveLength(2))
+    const interactions = store.list<WorkspaceInteraction>(owner, 'interaction'),
+      first = interactions.find(interaction => interaction.conversationTaskId === firstTask.id)!,
+      second = interactions.find(interaction => interaction.conversationTaskId === secondTask.id)!
+    expect(store.require<any>(owner, 'conversation-task', firstTask.id).activeRunStatus).toBe('waiting')
+    expect(store.require<any>(owner, 'conversation-task', secondTask.id).activeRunStatus).toBe('waiting')
+    await runtime.respond(owner, first.id, 'once')
+    expect(store.require<WorkspaceInteraction>(owner, 'interaction', first.id).resolved).toBe(true)
+    expect(store.require<WorkspaceInteraction>(owner, 'interaction', second.id).resolved).toBe(false)
+    await Promise.all([runtime.stopTask(owner, conversation.id, firstTask.id), runtime.stopTask(owner, conversation.id, secondTask.id)])
+  })
+
   it('persists a visible failure when a fixed member loses its source node',async()=>{
     const a=agent('不可用成员'),c=direct(a.id)
     runtime.close()
