@@ -119,6 +119,108 @@ async function finished(id: string) {
   return store.require<WorkspaceRun>(owner, 'run', id)
 }
 describe('Web-owned workspace', () => {
+  it('backfills legacy group history into the initial task instead of leaving a new empty task', () => {
+    const legacyHome = mkdtempSync(join(tmpdir(), 'yaoyao-workspace-task-migration-'))
+    let seededStore: WorkspaceStore | undefined = new WorkspaceStore(legacyHome)
+    let migratedStore: WorkspaceStore | undefined
+    try {
+      const administrator = seededStore.createAgent(owner, { name: '历史管理员', profile: 'default' }),
+        member = seededStore.createAgent(owner, { name: '历史成员', profile: 'default' }),
+        conversation = seededStore.createGroup(owner, {
+          name: '公众号文案团队',
+          memberIds: [administrator.id, member.id],
+          administratorId: administrator.id,
+        }),
+        initialTask = seededStore.tasks(owner, conversation.id)[0]!,
+        userAt = 1_788_000_000_000,
+        assistantAt = userAt + 60_000
+      seededStore.put(owner, 'message', 'legacy-user', {
+        id: 'legacy-user', conversationId: conversation.id, seq: 1, role: 'user',
+        content: '请继续完成公众号文案', reasoning: '', status: 'complete',
+        attachments: [], tools: [], createdAt: userAt,
+      } satisfies WorkspaceMessage)
+      seededStore.put(owner, 'message', 'legacy-assistant', {
+        id: 'legacy-assistant', conversationId: conversation.id, seq: 2, role: 'assistant',
+        agentId: administrator.id, agentName: '历史管理员', content: '旧内容已经完成。',
+        reasoning: '', status: 'complete', attachments: [], tools: [], createdAt: assistantAt,
+      } satisfies WorkspaceMessage)
+      seededStore.put(owner, 'conversation', conversation.id, {
+        ...conversation,
+        readSeq: 1,
+        lastSeq: 2,
+        preview: '旧内容已经完成。',
+        lastMessageAt: assistantAt,
+        updatedAt: assistantAt,
+      })
+      seededStore.put(owner, 'run', 'legacy-run', {
+        id: 'legacy-run', conversationId: conversation.id, messageId: 'legacy-user',
+        mentionIds: [], status: 'complete', round: 1, createdAt: userAt, updatedAt: assistantAt,
+      } satisfies WorkspaceRun)
+      seededStore.put(owner, 'turn', 'legacy-turn', {
+        id: 'legacy-turn', runId: 'legacy-run', conversationId: conversation.id,
+        agentId: administrator.id, messageId: 'legacy-user', status: 'complete', createdAt: userAt,
+      })
+      seededStore.put(owner, 'interaction', 'legacy-interaction', {
+        id: 'legacy-interaction', conversationId: conversation.id, runId: 'legacy-run',
+        agentId: administrator.id, kind: 'clarification', message: '补充说明',
+        choices: [], resolved: true,
+      } satisfies WorkspaceInteraction)
+      seededStore.put(owner, 'interaction-binding', 'legacy-interaction', {
+        key: `${conversation.id}:${administrator.id}`,
+        upstreamId: 'upstream-interaction', taskId: 'legacy-turn',
+      })
+      seededStore.put(owner, 'binding', `${conversation.id}:${administrator.id}`, {
+        nodeId: 'local', profile: 'default', storedId: 'stored-legacy',
+        runtimeId: 'runtime-legacy', aliases: [], runId: 'legacy-run',
+        messageId: 'legacy-user', taskId: 'legacy-turn',
+      })
+      seededStore.put(owner, 'context', conversation.id, {
+        usedTokens: 100, limitTokens: 1_000, observedAt: assistantAt,
+      })
+      seededStore.db.prepare('DELETE FROM workspace_migrations WHERE id=?')
+        .run('conversation-task-history-v1')
+      seededStore.close()
+      seededStore = undefined
+
+      migratedStore = new WorkspaceStore(legacyHome)
+      const tasks = migratedStore.tasks(owner, conversation.id)
+      expect(tasks).toHaveLength(1)
+      expect(tasks[0]).toMatchObject({
+        id: initialTask.id,
+        title: '请继续完成公众号文案',
+        titleSource: 'automatic',
+        messageCount: 2,
+        readSeq: 1,
+        lastSeq: 2,
+        unreadCount: 1,
+        lastMessageAt: assistantAt,
+        createdAt: userAt,
+        updatedAt: assistantAt,
+      })
+      expect(
+        migratedStore.messages(
+          owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, initialTask.id,
+        ).map(message => message.id),
+      ).toEqual(['legacy-user', 'legacy-assistant'])
+      expect(migratedStore.require<WorkspaceRun>(owner, 'run', 'legacy-run').conversationTaskId)
+        .toBe(initialTask.id)
+      expect(migratedStore.require<{ conversationTaskId: string }>(owner, 'turn', 'legacy-turn').conversationTaskId)
+        .toBe(initialTask.id)
+      expect(migratedStore.require<WorkspaceInteraction>(owner, 'interaction', 'legacy-interaction').conversationTaskId)
+        .toBe(initialTask.id)
+      expect(migratedStore.get(owner, 'binding', `${conversation.id}:${administrator.id}`)).toBeUndefined()
+      expect(migratedStore.get(owner, 'binding', `${conversation.id}:${initialTask.id}:${administrator.id}`))
+        .toMatchObject({ conversationTaskId: initialTask.id })
+      expect(migratedStore.get(owner, 'context', conversation.id)).toBeUndefined()
+      expect(migratedStore.get(owner, 'context', initialTask.id))
+        .toMatchObject({ conversationTaskId: initialTask.id })
+    } finally {
+      seededStore?.close()
+      migratedStore?.close()
+      rmSync(legacyHome, { recursive: true, force: true })
+    }
+  })
+
   it('isolates messages, Hermes sessions, bindings, and context between concurrent group tasks', async () => {
     const administrator = store.createAgent(owner, { name: '多任务远程管理员', profile: 'remote-profile', nodeId: 'remote-node' }),
       member = agent('多任务成员'),

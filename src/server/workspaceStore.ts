@@ -150,6 +150,16 @@ export class WorkspaceStore {
       }
       this.db.prepare('INSERT INTO workspace_migrations VALUES(?)').run('avatar-random-default-v1')
     })
+    this.atomic(() => {
+      const migration = 'conversation-task-history-v1'
+      if (this.db.prepare('SELECT id FROM workspace_migrations WHERE id=?').get(migration)) return
+      for (const owner of this.owners()) {
+        for (const conversation of this.list<Conversation>(owner, 'conversation')) {
+          if (conversation.kind === 'group') this.backfillConversationTask(owner, conversation)
+        }
+      }
+      this.db.prepare('INSERT INTO workspace_migrations VALUES(?)').run(migration)
+    })
   }
   get<T>(owner: string, kind: string, id: string): T | undefined {
     const row = this.db
@@ -354,6 +364,129 @@ export class WorkspaceStore {
       this.createTask(owner, c.id, {})
     })
     return c
+  }
+  private backfillConversationTask(owner: string, conversation: Conversation): void {
+    const legacyMessages = this.list<Message>(owner, 'message')
+      .filter(message => message.conversationId === conversation.id && !message.conversationTaskId)
+      .sort((a, b) => a.seq - b.seq || a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    if (!legacyMessages.length) return
+
+    const existingTasks = this.tasks(owner, conversation.id)
+    const assignedTaskIds = new Set(
+      this.list<Message>(owner, 'message')
+        .filter(message => message.conversationId === conversation.id && message.conversationTaskId)
+        .map(message => message.conversationTaskId!),
+    )
+    const reusable = existingTasks.length === 1
+      && existingTasks[0]!.titleSource === 'automatic'
+      && existingTasks[0]!.title === '新任务'
+      && existingTasks[0]!.messageCount === 0
+      && !assignedTaskIds.has(existingTasks[0]!.id)
+      ? existingTasks[0]
+      : undefined
+    const visibleMessages = legacyMessages.filter(message => message.visible !== false)
+    const meaningfulMessages = visibleMessages.filter(
+      message => message.content.trim() || message.attachments.length,
+    )
+    const firstMessage = legacyMessages[0]!,
+      lastMessage = meaningfulMessages.at(-1) ?? visibleMessages.at(-1) ?? legacyMessages.at(-1)!,
+      firstUserMessage = visibleMessages.find(
+        message => message.role === 'user' && (message.content.trim() || message.attachments.length),
+      ),
+      title = notificationPlainText(firstUserMessage?.content ?? '', {
+        maximum: 48,
+        fallback: firstUserMessage?.attachments[0]?.name ?? '',
+      }).trim()
+        || notificationPlainText(conversation.preview, { maximum: 48, fallback: '' }).trim()
+        || '历史任务',
+      lastSeq = legacyMessages.reduce((value, message) => Math.max(value, message.seq), 0),
+      readSeq = Math.min(conversation.readSeq, lastSeq),
+      task: Task = {
+        ...(reusable ?? {
+          id: randomUUID(),
+          conversationId: conversation.id,
+          title: '历史任务',
+          titleSource: 'automatic' as const,
+          messageCount: 0,
+          readSeq: 0,
+          lastSeq: 0,
+          unreadCount: 0,
+          createdAt: firstMessage.createdAt,
+          updatedAt: lastMessage.createdAt,
+        }),
+        title,
+        titleSource: 'automatic',
+        messageCount: visibleMessages.length,
+        readSeq,
+        lastSeq,
+        unreadCount: visibleMessages.filter(message => message.seq > readSeq).length,
+        lastMessageAt: lastMessage.createdAt,
+        createdAt: firstMessage.createdAt,
+        updatedAt: lastMessage.createdAt,
+      }
+
+    for (const message of legacyMessages) {
+      this.put(owner, 'message', message.id, {
+        ...message,
+        conversationTaskId: task.id,
+      })
+    }
+    const migratedInteractions = new Map<string, string>()
+    for (const kind of ['run', 'turn', 'interaction'] as const) {
+      for (const entity of this.list<Record<string, unknown> & {
+        id: string
+        conversationId?: string
+        conversationTaskId?: string
+        agentId?: string
+      }>(owner, kind)) {
+        if (entity.conversationId !== conversation.id || entity.conversationTaskId) continue
+        this.put(owner, kind, entity.id, { ...entity, conversationTaskId: task.id })
+        if (kind === 'interaction' && entity.agentId) {
+          migratedInteractions.set(entity.id, entity.agentId)
+        }
+      }
+    }
+    for (const [interactionId, agentId] of migratedInteractions) {
+      const binding = this.get<Record<string, unknown> & {
+        conversationTaskId?: string
+      }>(owner, 'interaction-binding', interactionId)
+      if (!binding || binding.conversationTaskId) continue
+      this.put(owner, 'interaction-binding', interactionId, {
+        ...binding,
+        key: `${conversation.id}:${task.id}:${agentId}`,
+        conversationTaskId: task.id,
+      })
+    }
+    for (const agentId of conversation.memberIds) {
+      const legacyKey = `${conversation.id}:${agentId}`,
+        taskKey = `${conversation.id}:${task.id}:${agentId}`,
+        binding = this.get<Record<string, unknown> & {
+          conversationTaskId?: string
+        }>(owner, 'binding', legacyKey)
+      if (!binding || binding.conversationTaskId) continue
+      this.put(owner, 'binding', taskKey, { ...binding, conversationTaskId: task.id })
+      this.remove(owner, 'binding', legacyKey)
+    }
+    const context = this.get<Record<string, unknown> & {
+      conversationTaskId?: string
+    }>(owner, 'context', conversation.id)
+    if (context && !context.conversationTaskId) {
+      this.put(owner, 'context', task.id, { ...context, conversationTaskId: task.id })
+      this.remove(owner, 'context', conversation.id)
+    }
+    this.db.prepare(
+      `UPDATE workspace_commands
+       SET result=json_set(result,'$.conversationTaskId',?)
+       WHERE owner=? AND json_extract(result,'$.conversationId')=?
+         AND json_extract(result,'$.conversationTaskId') IS NULL`,
+    ).run(task.id, owner, conversation.id)
+
+    const activeRuns = this.list<Run>(owner, 'run')
+      .filter(run => run.conversationTaskId === task.id && !['complete', 'failed', 'interrupted'].includes(run.status))
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    task.activeRunId = activeRuns[0]?.id
+    task.activeRunStatus = activeRuns[0]?.status
+    this.put(owner, 'conversation-task', task.id, task)
   }
   tasks(owner: string, conversationId: string): Task[] {
     const conversation = this.require<Conversation>(owner, 'conversation', conversationId)
