@@ -177,8 +177,16 @@ export class ChatCacheStore {
       AND position>=? AND position<? ORDER BY position`).all(owner, profile, sessionID, start, end) as Array<{ data: string }>
     const messages = rows.map(row => JSON.parse(row.data))
     const body = Buffer.from(JSON.stringify({
-      session: JSON.parse(String(session.data)), messages,
-      pagination: { total, returned: messages.length, offset, limit, hasMore: start > 0 },
+      session_id: sessionID,
+      session: JSON.parse(String(session.data)),
+      messages,
+      pagination: {
+        total,
+        returned: messages.length,
+        offset,
+        limit,
+        has_more: start > 0,
+      },
     }))
     return {
       response: { status: 200, headers: new Headers({ 'content-type': 'application/json; charset=utf-8' }), body },

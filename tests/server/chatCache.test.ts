@@ -62,7 +62,10 @@ describe('durable source=web chat cache', () => {
     }))
 
     const page = f.store.messagePage(owner, profile, sessionID, 0, 100)
-    expect(JSON.parse(page!.response.body.toString()).messages.map((item: { id: string }) => item.id)).toEqual(['m1', 'm2'])
+    const payload = JSON.parse(page!.response.body.toString())
+    expect(payload.session_id).toBe(sessionID)
+    expect(payload.pagination).toMatchObject({ total: 2, returned: 2, offset: 0, limit: 100, has_more: false })
+    expect(payload.messages.map((item: { id: string }) => item.id)).toEqual(['m1', 'm2'])
     expect(f.store.messagePage('another-owner', profile, sessionID, 0, 100)).toBeUndefined()
     f.store.close()
   })
