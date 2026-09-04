@@ -89,6 +89,8 @@ describe('durable source=web chat cache', () => {
     const count = f.store.db.prepare('SELECT COUNT(*) count FROM chat_events').get() as { count: number }
     expect(count.count).toBe(1)
     f.store.recordRoute(owner, profile, sessionID, 'runtime-1')
+    expect(f.store.ownsSession(owner, profile, sessionID)).toBe(true)
+    expect(f.store.ownsSession('another-owner', profile, sessionID)).toBe(false)
     const route = f.store.db.prepare('SELECT runtime_id FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
       .get(owner, profile, sessionID) as { runtime_id: string }
     expect(route.runtime_id).toBe('runtime-1')

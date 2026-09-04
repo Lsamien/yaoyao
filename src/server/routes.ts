@@ -328,11 +328,11 @@ function nativeSessionsReadOnly(): never {
   )
 }
 
-function requireWritableWebSession(response: UpstreamResponse): void {
+function requireWritableWebSession(response: UpstreamResponse, locallyOwned = false): void {
   const payload = requireSuccess(response)
   const session = payload.session && typeof payload.session === 'object' && !Array.isArray(payload.session)
     ? payload.session as JsonObject : payload
-  if (session.source !== 'web') nativeSessionsReadOnly()
+  if (!locallyOwned && session.source !== 'web') nativeSessionsReadOnly()
 }
 
 function pairedProxyPath(rawPath: string): string {
@@ -1925,15 +1925,19 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const id = safeIdentifier(ctx.params.sessionID, 'session ID')
     const search = searchFrom(ctx, ['profile'])
     await withJar(ctx, async jar => {
-      requireWritableWebSession(await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }))
+      const profile = search.get('profile') || 'default'
+      const owner = dependencies.auth.require(ctx).id
+      requireWritableWebSession(
+        await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
+        dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
+      )
       const request = body(ctx)
-      const profile = search.get('profile')
-      if (profile) request.profile = profile
+      const requestedProfile = search.get('profile')
+      if (requestedProfile) request.profile = requestedProfile
       const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'PATCH', search, body: request })
       if (response.status >= 200 && response.status < 300) {
-        const user = dependencies.auth.require(ctx)
-        dependencies.chatCache?.store.markListsStale(user.id)
-        void dependencies.chatCache?.reconcile(user.id, search.get('profile') || 'default', id)
+        dependencies.chatCache?.store.markListsStale(owner)
+        void dependencies.chatCache?.reconcile(owner, profile, id)
       }
       sendUpstreamResponse(ctx, response, jar)
     })
@@ -1942,12 +1946,17 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const id = safeIdentifier(ctx.params.sessionID, 'session ID')
     const search = searchFrom(ctx, ['profile'])
     await withJar(ctx, async jar => {
-      requireWritableWebSession(await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }))
+      const profile = search.get('profile') || 'default'
+      const owner = dependencies.auth.require(ctx).id
+      requireWritableWebSession(
+        await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
+        dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
+      )
       const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'DELETE', search })
       if (response.status >= 200 && response.status < 300) {
         dependencies.chatCache?.store.deleteSession(
-          dependencies.auth.require(ctx).id,
-          search.get('profile') || 'default',
+          owner,
+          profile,
           id,
         )
       }

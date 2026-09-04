@@ -213,7 +213,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const realtime = new RealtimeAPI(config, auth, csrf, pairings, upstream, upstreamSession, {
     coordinator: pushEventCoordinator,
     resolver: new HermesChatNotificationResolver(upstreamSession, (user, prompt) => push.promptDigest(user, prompt)),
-  })
+  }, (owner, profile, sessionID) =>
+    chatCache?.store.ownsSession(owner, profile, sessionID) ?? false)
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)

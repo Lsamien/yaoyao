@@ -32,6 +32,78 @@ afterEach(() => {
 })
 
 describe('source=web chat cache routes', () => {
+  it('uses the Web-owned session registry when Hermes source metadata is stale', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'yaoyao-owned-chat-routes-'))
+    homes.push(home)
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input))
+      const headers = new Headers(init?.headers)
+      if (url.pathname === '/api/status') return Response.json({ auth_required: false })
+      if (url.pathname === '/') {
+        return new Response(
+          '<script>window.__HERMES_SESSION_TOKEN__="cache-token-1234567890123456";</script>',
+        )
+      }
+      if (headers.get('x-hermes-session-token') !== 'cache-token-1234567890123456') {
+        return Response.json({}, { status: 401 })
+      }
+      if (url.pathname === '/api/profiles') {
+        return Response.json({ profiles: [{ name: 'default', is_default: true }] })
+      }
+      if (url.pathname === '/api/sessions') {
+        return Response.json({
+          sessions: [{
+            id: 'owned-session',
+            profile: 'default',
+            source: 'ios',
+            title: 'Hermes 仍标记为 iOS',
+          }],
+          total: 1,
+        })
+      }
+      if (url.pathname === '/api/sessions/owned-session') {
+        if (init?.method === 'PATCH') return Response.json({ ok: true })
+        return Response.json({
+          id: 'owned-session',
+          profile: 'default',
+          source: 'ios',
+          title: 'Hermes 仍标记为 iOS',
+        })
+      }
+      return Response.json({ error: 'missing fixture' }, { status: 404 })
+    })
+    const runtime = createApplication({ config: config(home), fetchImpl })
+    runtimes.push(runtime)
+    const agent = request.agent(runtime.app.callback())
+    const boot = await agent.get('/api/app/bootstrap').set('Host', host).expect(200)
+    const setup = await agent.post('/api/app/setup').set('Host', host)
+      .set('Origin', origin).set('X-CSRF-Token', boot.body.csrfToken)
+      .send({ username: 'owner', password: 'fixture-password' }).expect(200)
+    const owner = String(setup.body.user.id)
+    runtime.chatCache!.store.recordRoute(
+      owner,
+      'default',
+      'owned-session',
+      'runtime-owned',
+    )
+
+    const list = await agent
+      .get('/api/app/sessions?view=chat&profile=default&limit=100')
+      .set('Host', host)
+      .expect(200)
+    expect(list.body.sessions).toContainEqual(expect.objectContaining({
+      id: 'owned-session',
+      source: 'web',
+      title: 'Hermes 仍标记为 iOS',
+    }))
+
+    await agent.patch('/api/app/sessions/owned-session?profile=default')
+      .set('Host', host).set('Origin', origin)
+      .set('X-CSRF-Token', setup.body.csrfToken)
+      .send({ title: 'Web 可继续管理' })
+      .expect(200)
+  })
+
   it('serves warm and restarted chat reads locally while history stays upstream-only', async () => {
     const home = mkdtempSync(join(tmpdir(), 'yaoyao-chat-cache-routes-')); homes.push(home)
     const counts = { list: 0, detail: 0, messages: 0, history: 0, media: 0 }

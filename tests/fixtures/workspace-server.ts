@@ -18,6 +18,7 @@ const sessions = new Map<
   {
     id: string
     profile: string
+    source: string
     messages: Array<{ role: string; content: string; id: string; timestamp: number }>
     running: boolean
   }
@@ -69,14 +70,37 @@ const upstream = createServer((req, res) => {
     return
   }
   if (url.pathname === '/api/sessions') {
+    const requestedSource = url.searchParams.get('source')
+    const visible = [...sessions.values()].filter(session =>
+      !requestedSource || session.source === requestedSource)
     send({
-      sessions: [...sessions.values()].map((s) => ({
+      sessions: visible.map((s) => ({
         id: s.id,
         title: 'Internal',
-        source: 'yaoyao_workspace',
+        source: s.source,
         profile: s.profile,
       })),
-      total: sessions.size,
+      total: visible.length,
+      hasMore: false,
+      offset: Number(url.searchParams.get('offset') ?? 0),
+      limit: Number(url.searchParams.get('limit') ?? 100),
+    })
+    return
+  }
+  const detail = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname)
+  if (detail) {
+    const session = sessions.get(detail[1]!)
+    if (!session) {
+      res.statusCode = 404
+      send({ error: 'session not found' })
+      return
+    }
+    send({
+      id: session.id,
+      profile: session.profile,
+      source: session.source,
+      title: 'Internal',
+      message_count: session.messages.length,
     })
     return
   }
@@ -131,7 +155,13 @@ wss.on('connection', (socket) => {
     if (f.method === 'session.create' || f.method === 'session.resume') {
       let stored = f.method === 'session.resume' ? sessions.get(f.params.session_id) : undefined
       if (!stored) {
-        stored = { id: randomUUID(), profile: f.params.profile, messages: [], running: false }
+        stored = {
+          id: randomUUID(),
+          profile: f.params.profile,
+          source: String(f.params.source ?? 'web'),
+          messages: [],
+          running: false,
+        }
         sessions.set(stored.id, stored)
       }
       const runtimeId = randomUUID()

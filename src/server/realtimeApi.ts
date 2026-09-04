@@ -18,13 +18,15 @@ export class RealtimeAPI {
   private observers = new Map<string, ChatPushRelayObserver>()
   constructor(readonly config: ServerConfig, readonly auth: LocalAuthStore, readonly csrf: CsrfProtection,
     readonly pairings: NodePairingStore, readonly upstream: UpstreamClient, readonly session: UpstreamServiceSession,
-    readonly push?: { coordinator: PushEventCoordinator; resolver: ChatNotificationResolver }) {
+    readonly push?: { coordinator: PushEventCoordinator; resolver: ChatNotificationResolver },
+    readonly ownsSession?: (owner: string, profile: string, sessionId: string) => boolean) {
     this.broker = new RealtimeBroker(config.home, Date.now, change => {
       upstream.observeRealtime(change)
       if (change.kind === 'reset') session.invalidateAuthentication()
     })
   }
-  private async canResume(profile: string, sessionId: string, jar?: CookieJar): Promise<boolean> {
+  private async canResume(profile: string, sessionId: string, jar?: CookieJar, owner?: string): Promise<boolean> {
+    if (owner && this.ownsSession?.(owner, profile, sessionId)) return true
     const search = new URLSearchParams({ profile })
     const path = `/api/sessions/${encodeURIComponent(sessionId)}`
     const response = jar
@@ -45,6 +47,7 @@ export class RealtimeAPI {
     let valid: () => boolean
     let authorize: RealtimePrincipal['authorize']
     let jar: CookieJar | undefined
+    let owner: string | undefined
     let observer: ChatPushRelayObserver | undefined
     if (device) {
       const bearer = ctx.get('authorization').match(/^Bearer\s+(.+)$/i)?.[1] ?? ''
@@ -57,6 +60,7 @@ export class RealtimeAPI {
       }
     } else {
       const user = this.auth.require(ctx)
+      owner = user.id
       const cookie = ctx.get('cookie')
       key = `user:${user.id}:${this.auth.pushAuthorizationVersion(user.id)}`
       valid = () => { try { return this.auth.currentFromCookieHeader(cookie)?.id === user.id } catch { return false } }
@@ -70,7 +74,7 @@ export class RealtimeAPI {
     }
     return {
       key, instanceKey: this.config.upstream.href, upstreamKey: `${this.config.upstream.href}:${device ? `device:${device}` : 'service'}`, paired: Boolean(device), valid, authorize,
-      canResume: (profile, sessionId) => this.canResume(profile, sessionId, jar),
+      canResume: (profile, sessionId) => this.canResume(profile, sessionId, jar, owner),
       agent: this.upstream.directAgent,
       observeCommand: f => observer?.observeClientFrame(f),
       observeEvent: f => observer?.observeUpstreamFrame(Buffer.from(f), false),

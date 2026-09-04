@@ -281,6 +281,80 @@ export class ChatCacheStore {
       .get(owner, profile, sessionID))
   }
 
+  ownsSession(owner: string, profile: string, sessionID: string): boolean {
+    return Boolean(this.db.prepare(
+      'SELECT 1 ok FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?',
+    ).get(owner, profile, sessionID))
+  }
+
+  mergeOwnedSessionsIntoList(
+    owner: string,
+    fallbackProfile: string,
+    response: UpstreamResponse,
+  ): UpstreamResponse {
+    const payload = parseResponse(response)
+    if (!payload) return response
+    const collectionKey = Array.isArray(payload.items)
+      ? 'items'
+      : Array.isArray(payload.sessions) ? 'sessions' : undefined
+    if (!collectionKey) return response
+
+    const rows = (fallbackProfile
+      ? this.db.prepare(`SELECT profile,session_id,data FROM chat_sessions
+          WHERE owner=? AND profile=? ORDER BY last_synced_at DESC LIMIT 1000`)
+          .all(owner, fallbackProfile)
+      : this.db.prepare(`SELECT profile,session_id,data FROM chat_sessions
+          WHERE owner=? ORDER BY last_synced_at DESC LIMIT 1000`).all(owner)) as Array<{
+            profile: string
+            session_id: string
+            data: string
+          }>
+    const owned = new Map(rows.map(row => [
+      `${row.profile}\u0000${row.session_id}`,
+      row,
+    ]))
+    const merged = new Map<string, Record<string, unknown>>()
+    for (const value of payload[collectionKey] as unknown[]) {
+      const session = object(value)
+      if (!session) continue
+      const id = sessionIDOf(session)
+      const profile = profileOf(session, fallbackProfile) || 'default'
+      if (!id) continue
+      const key = `${profile}\u0000${id}`
+      if (sessionSource(session) === 'web' || owned.has(key)) {
+        merged.set(key, { ...session, source: 'web' })
+      }
+    }
+    for (const [key, row] of owned) {
+      if (merged.has(key)) continue
+      let stored: Record<string, unknown> = {}
+      try { stored = object(JSON.parse(row.data)) ?? {} } catch { /* Ignore damaged display metadata. */ }
+      merged.set(key, {
+        ...stored,
+        id: row.session_id,
+        profile: row.profile,
+        source: 'web',
+      })
+    }
+    const activity = (session: Record<string, unknown>): number => Number(
+      session.last_active_at
+        ?? session.last_active
+        ?? session.updated_at
+        ?? session.started_at
+        ?? 0,
+    ) || 0
+    const sessions = [...merged.values()].sort((left, right) =>
+      activity(right) - activity(left))
+    const body = Buffer.from(JSON.stringify({
+      ...payload,
+      [collectionKey]: sessions,
+      total: Math.max(Number(payload.total) || 0, sessions.length),
+    }))
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return { ...response, headers, body }
+  }
+
   storeAttachment(owner: string, sourcePath: string, response: UpstreamResponse): string | undefined {
     if (response.status !== 200 || !response.body.length) return undefined
     const sha256 = createHash('sha256').update(response.body).digest('hex')
@@ -370,10 +444,17 @@ export class ChatCacheCoordinator {
       return { response: local.response, source: 'local', state: local.state }
     }
     try {
-      const response = await load()
-      if (this.mode === 'prefer-local' && local && response.status >= 500) {
+      const upstreamResponse = await load()
+      if (this.mode === 'prefer-local' && local && upstreamResponse.status >= 500) {
         return { response: local.response, source: 'local', state: 'stale' }
       }
+      const response = kind === 'list' && knownWeb
+        ? this.store.mergeOwnedSessionsIntoList(
+            owner,
+            profile,
+            upstreamResponse,
+          )
+        : upstreamResponse
       this.store.putSnapshot(owner, key, kind, profile, sessionID, response, knownWeb)
       return { response, source: 'upstream', state: 'current' }
     } catch (error) {
