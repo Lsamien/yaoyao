@@ -123,6 +123,11 @@ export class LocalAuthStore {
     return this.#users.length === 0
   }
 
+  /** Exact persisted user identity used only to validate a legacy registry migration. */
+  soleUserIDForLegacyMigration(): string | undefined {
+    return this.#users.length === 1 ? this.#users[0]!.id : undefined
+  }
+
   setupAdmin(
     ctx: Koa.Context,
     usernameValue: string,

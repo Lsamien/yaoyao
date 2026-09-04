@@ -19,16 +19,38 @@ const sessions = new Map<
     id: string
     profile: string
     source: string
+    title: string
     messages: Array<{ role: string; content: string; id: string; timestamp: number }>
     running: boolean
   }
 >()
+const latestRuntimeBySession = new Map<string, string>()
 const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 const heldReplies: Array<() => void> = []
 const profileState = new Map([
   ['default', { name: 'default', display_name: '通用助手', is_default: true, gateway_running: true, ui_meta: {} as Record<string, unknown>, ui_meta_revisions: {} as Record<string, number> }],
   ['server', { name: 'server', display_name: '开发助手', is_default: false, gateway_running: true, ui_meta: {} as Record<string, unknown>, ui_meta_revisions: {} as Record<string, number> }],
 ])
+
+function broadcastUpstreamEvent(
+  type: string,
+  payload: Record<string, unknown>,
+  sessionId?: string,
+  profile = 'default',
+) {
+  const frame = JSON.stringify({
+    method: 'event',
+    params: {
+      type,
+      payload,
+      ...(sessionId ? { session_id: sessionId, profile } : {}),
+    },
+  })
+  for (const socket of wss.clients) {
+    if (socket.readyState === 1) socket.send(frame)
+  }
+}
+
 const upstream = createServer((req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${upstreamPort}`)
   res.setHeader('content-type', 'application/json')
@@ -46,6 +68,26 @@ const upstream = createServer((req, res) => {
   }
   if (url.pathname === '/__calls') {
     send({ calls })
+    return
+  }
+  if (url.pathname === '/__test/sessions/title' && req.method === 'POST') {
+    const id = url.searchParams.get('id')?.trim() || ''
+    const title = url.searchParams.get('title')?.trim() || ''
+    const session = sessions.get(id)
+    const runtimeId = latestRuntimeBySession.get(id)
+    if (!session || !runtimeId || !title) {
+      res.statusCode = 409
+      send({ error: 'session route is not active' })
+      return
+    }
+    session.title = title
+    broadcastUpstreamEvent(
+      'session.title',
+      { session_id: id, title },
+      runtimeId,
+      session.profile,
+    )
+    send({ id, title })
     return
   }
   if (url.pathname === '/api/status') {
@@ -76,7 +118,7 @@ const upstream = createServer((req, res) => {
     send({
       sessions: visible.map((s) => ({
         id: s.id,
-        title: 'Internal',
+        title: s.title,
         source: s.source,
         profile: s.profile,
       })),
@@ -99,7 +141,7 @@ const upstream = createServer((req, res) => {
       id: session.id,
       profile: session.profile,
       source: session.source,
-      title: 'Internal',
+      title: session.title,
       message_count: session.messages.length,
     })
     return
@@ -159,6 +201,7 @@ wss.on('connection', (socket) => {
           id: randomUUID(),
           profile: f.params.profile,
           source: String(f.params.source ?? 'web'),
+          title: String(f.params.title ?? '新对话'),
           messages: [],
           running: false,
         }
@@ -166,6 +209,7 @@ wss.on('connection', (socket) => {
       }
       const runtimeId = randomUUID()
       runtimes.set(runtimeId, stored.id)
+      latestRuntimeBySession.set(stored.id, runtimeId)
       respond({
         session_id: runtimeId,
         stored_session_id: stored.id,
@@ -178,6 +222,12 @@ wss.on('connection', (socket) => {
     const stored = sessions.get(runtimes.get(f.params.session_id) ?? '')
     if (f.method === 'prompt.submit' && stored) {
       stored.running = true
+      const requestedTitle = /^\[cross-client-title:([^\]\r\n]+)\]/
+        .exec(String(f.params.text))?.[1]?.trim()
+      if (requestedTitle) {
+        stored.title = requestedTitle
+        setTimeout(() => broadcastUpstreamEvent('sessions.changed', {}), 0)
+      }
       stored.messages.push({
         id: randomUUID(),
         role: 'user',

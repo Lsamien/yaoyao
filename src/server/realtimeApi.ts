@@ -25,22 +25,8 @@ export class RealtimeAPI {
       if (change.kind === 'reset') session.invalidateAuthentication()
     })
   }
-  private async canResume(profile: string, sessionId: string, jar?: CookieJar, owner?: string): Promise<boolean> {
-    if (owner && this.ownsSession?.(owner, profile, sessionId)) return true
-    const search = new URLSearchParams({ profile })
-    const path = `/api/sessions/${encodeURIComponent(sessionId)}`
-    const response = jar
-      ? await this.upstream.request(path, jar, { search })
-      : await this.session.request(path, { search })
-    if (response.status < 200 || response.status >= 300) return false
-    try {
-      const payload = JSON.parse(response.body.toString()) as Record<string, unknown>
-      const session = payload.session && typeof payload.session === 'object'
-        ? payload.session as Record<string, unknown> : payload
-      return session.source === 'web'
-    } catch {
-      return false
-    }
+  private async canResume(profile: string, sessionId: string, _jar?: CookieJar, owner?: string): Promise<boolean> {
+    return owner ? this.ownsSession?.(owner, profile, sessionId) ?? false : false
   }
   private principal(ctx: Koa.Context, device?: string): RealtimePrincipal {
     let key: string
@@ -53,6 +39,7 @@ export class RealtimeAPI {
       const bearer = ctx.get('authorization').match(/^Bearer\s+(.+)$/i)?.[1] ?? ''
       jar = new CookieJar(this.pairings.authorize(device, bearer))
       key = `device:${device}`
+      owner = key
       valid = () => this.pairings.hasDevice(device)
       authorize = (kind, method) => {
         this.pairings.authorize(device, bearer, kind === 'groups' ? 'groups.read'

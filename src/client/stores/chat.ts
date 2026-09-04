@@ -22,6 +22,7 @@ import { useAuthStore } from './auth'
 interface CachedHistory { messages: ChatMessage[]; total: number; savedAt: number }
 const historyCache = new ScopedCache<CachedHistory>('chat-history-v1')
 const INFLIGHT_SESSION_STORAGE_PREFIX = 'hermes-yaoyao:inflight-chat-sessions:'
+const SESSION_LIST_REFRESH_DEBOUNCE_MS = 200
 
 interface InflightSessionMarker {
   profile: string
@@ -104,6 +105,8 @@ export const useChatStore = defineStore('chat', () => {
   let reconnectTimer: number | undefined
   let reconnectAttempt = 0
   let sessionLoadGeneration = 0
+  let sessionListProfile: string | undefined
+  let sessionListRefreshTimer: number | undefined
   let nextSessionCursor: string | undefined
   let modelLoadGeneration = 0
   let unreadLoadGeneration = 0
@@ -164,6 +167,30 @@ export const useChatStore = defineStore('chat', () => {
       ? routeKey(activeProfileName.value, activeSessionId.value)
       : undefined
     if (key === activeKey && !desiredModelRoutes.has(key)) syncSelectedModel(model, provider)
+  }
+
+  function reconcileSessionTitle(profile: string | undefined, sessionId: string, title: string): void {
+    const normalized = title.trim()
+    if (!sessionId || !normalized) return
+    const index = sessions.value.findIndex(session => session.id === sessionId
+      && (!profile || !session.profile || session.profile === profile))
+    if (index < 0 || sessions.value[index].title === normalized) return
+    sessions.value.splice(index, 1, { ...sessions.value[index], title: normalized })
+  }
+
+  function cancelSessionListRefresh(): void {
+    if (sessionListRefreshTimer === undefined) return
+    window.clearTimeout(sessionListRefreshTimer)
+    sessionListRefreshTimer = undefined
+  }
+
+  function scheduleSessionListRefresh(): void {
+    if (auth.status !== 'authenticated') return
+    cancelSessionListRefresh()
+    sessionListRefreshTimer = window.setTimeout(() => {
+      sessionListRefreshTimer = undefined
+      void loadSessions(sessionListProfile ?? auth.activeProfile?.name, sessionView).catch(() => undefined)
+    }, SESSION_LIST_REFRESH_DEBOUNCE_MS)
   }
 
   function cacheScope(profile: string): string {
@@ -266,8 +293,8 @@ export const useChatStore = defineStore('chat', () => {
     const draftIndex = sessions.value.findIndex(session => session.id === oldState.route.sessionId && session.profile === oldState.route.profile)
     const now = Date.now() / 1000
     const summary: SessionSummary = draftIndex >= 0
-      ? { ...sessions.value[draftIndex], id: storedSessionId, updatedAt: now }
-      : { id: storedSessionId, profile: oldState.route.profile, source: 'web', title: '新会话', messageCount: 0, toolCallCount: 0, startedAt: now, updatedAt: now }
+      ? { ...sessions.value[draftIndex], id: storedSessionId, owned: true, updatedAt: now }
+      : { id: storedSessionId, profile: oldState.route.profile, source: 'web', owned: true, title: '新会话', messageCount: 0, toolCallCount: 0, startedAt: now, updatedAt: now }
     if (draftIndex >= 0) sessions.value.splice(draftIndex, 1, summary)
     else sessions.value.unshift(summary)
     return routes[newKey]
@@ -276,10 +303,24 @@ export const useChatStore = defineStore('chat', () => {
   socket.onEvent(event => {
     if (event.type === 'gateway.ready') return
     const payload = record(event.payload)
+    if (event.type === 'sessions.changed') {
+      scheduleSessionListRefresh()
+      return
+    }
     const runtimeId = string(event.session_id ?? payload.session_id ?? payload.sessionId)
     let key = runtimeRoutes.get(runtimeId)
     if (!key) key = Object.keys(routes).find(candidate => routes[candidate].runtimeSessionId === runtimeId
       || routes[candidate].route.sessionId === runtimeId)
+    if (event.type === 'session.title' || event.type === 'session.title.updated') {
+      const state = key ? routes[key] : undefined
+      const storedSessionId = state?.route.sessionId
+        || string(payload.stored_session_id ?? payload.storedSessionId ?? payload.session_key
+          ?? payload.session_id ?? payload.sessionId)
+      const profile = state?.route.profile || string(event.profile ?? payload.profile) || undefined
+      reconcileSessionTitle(profile, storedSessionId, string(payload.title))
+      scheduleSessionListRefresh()
+      if (!key) return
+    }
     if (!key) return
     let state = routes[key]
     if (event.type === 'session.info') {
@@ -335,6 +376,7 @@ export const useChatStore = defineStore('chat', () => {
     runtimePromises.clear()
     desiredModelRoutes.clear()
     pendingModelConfirmations.clear()
+    cancelSessionListRefresh()
     for (const state of Object.values(routes)) {
       state.runtimeSessionId = undefined
       state.serverFastMode = undefined
@@ -361,6 +403,8 @@ export const useChatStore = defineStore('chat', () => {
     isLoadingMoreSessions.value = false
     activeSessionId.value = undefined
     activeProfileName.value = undefined
+    sessionListProfile = undefined
+    cancelSessionListRefresh()
     runtimeRoutes.clear()
     for (const key of Object.keys(routes)) delete routes[key]
     unreadCounts.value = {}
@@ -378,6 +422,7 @@ export const useChatStore = defineStore('chat', () => {
   async function loadSessions(profile?: string, view: 'chat' | 'history' = sessionView): Promise<void> {
     sessionView = view
     const requestedProfile = profile || undefined
+    sessionListProfile = requestedProfile
     const loadGeneration = ++sessionLoadGeneration
     isLoading.value = true
     error.value = undefined

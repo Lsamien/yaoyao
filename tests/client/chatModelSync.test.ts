@@ -6,7 +6,10 @@ const realtime = vi.hoisted(() => ({
   eventHandler: undefined as ((event: unknown) => void) | undefined,
   request: vi.fn(),
 }))
-const sessionsApi = vi.hoisted(() => ({ getSession: vi.fn() }))
+const sessionsApi = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  getSessions: vi.fn(),
+}))
 
 vi.mock('@/api/realtime', () => {
   class RpcError extends Error {}
@@ -24,7 +27,7 @@ vi.mock('@/api/sessions', () => ({
   deleteSession: vi.fn(),
   getMessages: vi.fn(),
   getSession: sessionsApi.getSession,
-  getSessions: vi.fn(),
+  getSessions: sessionsApi.getSessions,
   getSessionUnread: vi.fn(),
   markSessionRead: vi.fn(),
   updateSession: vi.fn(),
@@ -45,6 +48,7 @@ describe('chat model realtime synchronization', () => {
     realtime.eventHandler = undefined
     realtime.request.mockReset().mockResolvedValue({})
     sessionsApi.getSession.mockReset()
+    sessionsApi.getSessions.mockReset().mockResolvedValue({ items: [], nextCursor: null })
     setActivePinia(createPinia())
   })
 
@@ -152,4 +156,69 @@ describe('chat model realtime synchronization', () => {
 
     expect(realtime.request).not.toHaveBeenCalled()
   })
+
+  it('debounces global session changes and reloads the visible server projection', async () => {
+    vi.useFakeTimers()
+    try {
+      const chat = useChatStore()
+      sessionsApi.getSessions.mockResolvedValue({
+        items: [{
+          id: 'ios-session', profile: 'alpha', source: 'web', title: 'iOS 新会话',
+          messageCount: 2, toolCallCount: 0, startedAt: 2, updatedAt: 2,
+        }],
+        nextCursor: null,
+      })
+
+      realtime.eventHandler?.({ type: 'sessions.changed', payload: {} })
+      realtime.eventHandler?.({ type: 'sessions.changed', payload: {} })
+      realtime.eventHandler?.({ type: 'sessions.changed', payload: {} })
+
+      expect(sessionsApi.getSessions).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+
+      expect(sessionsApi.getSessions).toHaveBeenCalledTimes(1)
+      expect(sessionsApi.getSessions).toHaveBeenCalledWith('alpha', undefined, 100, 'chat')
+      expect(chat.sessions).toEqual([
+        expect.objectContaining({ id: 'ios-session', title: 'iOS 新会话' }),
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['session.title', 'session.title.updated'])(
+    'applies %s immediately and schedules one authoritative list refresh',
+    async eventType => {
+      vi.useFakeTimers()
+      try {
+        const chat = useChatStore()
+        chat.sessions = [{
+          id: 'session-1', profile: 'alpha', source: 'web', title: '新会话',
+          messageCount: 2, toolCallCount: 0, startedAt: 1, updatedAt: 1,
+        }]
+        chat.routes[routeKey('alpha', 'session-1')] = {
+          route: { profile: 'alpha', sessionId: 'session-1' }, runtimeSessionId: 'runtime-1',
+          messages: [], historySynced: true, hasMoreBefore: false, loadedMessageCount: 0,
+          messageTotal: 0, isLoadingHistory: false, isStreaming: false, isQueued: false, generation: 1,
+        }
+        sessionsApi.getSessions.mockResolvedValue({
+          items: [{ ...chat.sessions[0], title: '服务端自动标题' }],
+          nextCursor: null,
+        })
+
+        realtime.eventHandler?.({
+          type: eventType,
+          session_id: 'runtime-1',
+          payload: { session_id: 'session-1', title: '服务端自动标题' },
+        })
+
+        expect(chat.sessions[0].title).toBe('服务端自动标题')
+        expect(sessionsApi.getSessions).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(200)
+        expect(sessionsApi.getSessions).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
 })

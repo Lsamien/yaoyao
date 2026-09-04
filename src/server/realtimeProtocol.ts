@@ -48,6 +48,14 @@ function safeString(value: unknown, label: string, required = false): string | u
   return normalized
 }
 
+function normalizedCreateSource(value: unknown, fallback = 'web'): 'web' | 'ios' {
+  const source = safeString(value, 'source') ?? fallback
+  if (source !== 'web' && source !== 'ios') {
+    throw new HttpError(400, 'source must be web or ios', 'invalid_source')
+  }
+  return source
+}
+
 function normalizedConfigParams(params: Record<string, unknown>): Record<string, unknown> {
   const sessionID = safeString(params.session_id, 'session_id', true)!
   const key = safeString(params.key, 'config key', true)
@@ -90,19 +98,19 @@ function normalizedSessionOpenParams(
     return {
       session_id: safeString(params.session_id, 'session_id', true)!,
       profile,
-      source: 'web',
       close_on_disconnect: false,
       omit_messages: params.omit_messages === true,
       cols: columns,
     }
   }
+  const source = normalizedCreateSource(params.source)
   const title = safeString(params.title, 'title')
   const reasoning = safeString(params.reasoning_effort, 'reasoning effort')
   const allowedReasoning = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
   if (reasoning && !allowedReasoning.has(reasoning)) throw new HttpError(400, 'Reasoning effort is invalid')
   return {
     profile,
-    source: 'web',
+    source,
     close_on_disconnect: false,
     cols: columns,
     ...(title ? { title } : {}),
@@ -116,7 +124,6 @@ function normalizedPairedSessionOpenParams(
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   const profile = safeString(params.profile, 'profile', true)!
-  const source = safeString(params.source, 'source') ?? 'mobile'
   const columns = typeof params.cols === 'number' && Number.isInteger(params.cols)
     ? Math.min(500, Math.max(20, params.cols))
     : 80
@@ -124,12 +131,12 @@ function normalizedPairedSessionOpenParams(
     return {
       session_id: safeString(params.session_id, 'session_id', true)!,
       profile,
-      source,
       close_on_disconnect: false,
       omit_messages: params.omit_messages === true,
       cols: columns,
     }
   }
+  const source = safeString(params.source, 'source') ?? 'mobile'
   const title = safeString(params.title, 'title')
   const cwd = typeof params.cwd === 'string' && params.cwd.length <= 4_096 ? params.cwd : ''
   const reasoning = safeString(params.reasoning_effort, 'reasoning effort')
@@ -345,4 +352,3 @@ export function groupCursor(value: unknown): number {
   }
   return cursor
 }
-

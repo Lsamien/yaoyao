@@ -328,11 +328,35 @@ function nativeSessionsReadOnly(): never {
   )
 }
 
-function requireWritableWebSession(response: UpstreamResponse, locallyOwned = false): void {
-  const payload = requireSuccess(response)
-  const session = payload.session && typeof payload.session === 'object' && !Array.isArray(payload.session)
-    ? payload.session as JsonObject : payload
-  if (!locallyOwned && session.source !== 'web') nativeSessionsReadOnly()
+function requireWritableOwnedSession(response: UpstreamResponse, locallyOwned = false): void {
+  requireSuccess(response)
+  if (!locallyOwned) nativeSessionsReadOnly()
+}
+
+function writableSessionPatch(input: JsonObject): JsonObject {
+  const allowed = new Set(['title', 'archived', 'pinned'])
+  const unknown = Object.keys(input).filter(key => !allowed.has(key))
+  if (unknown.length) {
+    throw new HttpError(400, `Session field is not writable: ${unknown[0]}`, 'invalid_session_patch')
+  }
+  const patch: JsonObject = {}
+  if (Object.hasOwn(input, 'title')) {
+    if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 500) {
+      throw new HttpError(400, 'Session title is invalid', 'invalid_session_patch')
+    }
+    patch.title = input.title.trim()
+  }
+  for (const key of ['archived', 'pinned'] as const) {
+    if (!Object.hasOwn(input, key)) continue
+    if (typeof input[key] !== 'boolean') {
+      throw new HttpError(400, `Session ${key} must be a boolean`, 'invalid_session_patch')
+    }
+    patch[key] = input[key]
+  }
+  if (!Object.keys(patch).length) {
+    throw new HttpError(400, 'Session patch is empty', 'invalid_session_patch')
+  }
+  return patch
 }
 
 function pairedProxyPath(rawPath: string): string {
@@ -377,6 +401,64 @@ async function proxy(
     })
     sendUpstreamResponse(ctx, response, jar)
   })
+}
+
+async function completeSessionList(
+  upstream: UpstreamClient,
+  path: string,
+  jar: CookieJar,
+  baseSearch: URLSearchParams,
+): Promise<UpstreamResponse> {
+  const rows = new Map<string, unknown>()
+  let firstResponse: UpstreamResponse | undefined
+  let firstPayload: JsonObject | undefined
+  let collectionKey: 'items' | 'sessions' | undefined
+  let offset = 0
+  const limit = 100
+  for (let page = 0; page < 1_000; page++) {
+    const search = new URLSearchParams(baseSearch)
+    search.set('offset', String(offset))
+    search.set('limit', String(limit))
+    const response = await upstream.request(path, jar, { search })
+    if (!firstResponse) firstResponse = response
+    if (response.status < 200 || response.status >= 300) return response
+    const payload = parseJson(response)
+    const key = Array.isArray(payload.items) ? 'items'
+      : Array.isArray(payload.sessions) ? 'sessions' : undefined
+    if (!key) return response
+    if (!firstPayload) { firstPayload = payload; collectionKey = key }
+    const values = payload[key] as unknown[]
+    values.forEach((value, index) => {
+      const item = value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined
+      const id = item ? String(item.id ?? item.session_id ?? item.sessionId ?? '') : ''
+      const profile = item ? String(item.profile ?? item.profile_name ?? '') : ''
+      rows.set(id ? `${profile}\u0000${id}` : `${offset}\u0000${index}`, value)
+    })
+    const responseOffset = Math.max(0, Number(payload.offset ?? offset) || offset)
+    const responseLimit = Math.max(1, Number(payload.limit ?? limit) || limit)
+    const total = Math.max(0, Number(payload.total ?? 0) || 0)
+    const nextOffset = responseOffset + responseLimit
+    if (!values.length || (total > 0 && nextOffset >= total)
+      || (total === 0 && values.length < responseLimit)) break
+    if (nextOffset <= offset) throw new HttpError(502, 'Hermes session pagination did not advance', 'invalid_upstream_pagination')
+    offset = nextOffset
+    if (page === 999) throw new HttpError(502, 'Hermes session list is too large to project', 'upstream_pagination_limit')
+  }
+  const response = firstResponse!
+  const payload = firstPayload!
+  const headers = new Headers(response.headers)
+  headers.delete('content-length')
+  return {
+    ...response,
+    headers,
+    body: Buffer.from(JSON.stringify({
+      ...payload,
+      [collectionKey!]: [...rows.values()],
+      total: rows.size,
+      offset: 0,
+      limit: rows.size,
+    })),
+  }
 }
 
 async function proxyAdminFeature(
@@ -646,7 +728,8 @@ async function cachedChatRead(
     sessionID?: string
     offset?: number
     limit?: number
-    knownWeb?: boolean
+    archived?: string
+    ownedList?: boolean
     load: (jar: CookieJar) => Promise<UpstreamResponse>
   },
 ): Promise<void> {
@@ -656,18 +739,37 @@ async function cachedChatRead(
     return options.load(dependencies.upstreamSession.jar)
   }
   if (!dependencies.chatCache) {
-    sendUpstreamResponse(ctx, await load(), dependencies.upstreamSession.jar)
-    return
+    throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
   }
   if (ctx.get('x-yaoyao-cache').toLowerCase() === 'bypass') {
-    const response = await load()
+    const requestStartedAt = Date.now()
+    const upstreamResponse = await load()
+    const response = options.kind === 'list' && options.ownedList
+      ? dependencies.chatCache.store.mergeOwnedSessionsIntoList(
+          user.id,
+          options.profile,
+          upstreamResponse,
+          { offset: options.offset, limit: options.limit, archived: options.archived },
+        )
+      : upstreamResponse
     dependencies.chatCache.store.putSnapshot(
       user.id, options.key, options.kind, options.profile,
-      options.sessionID, response, options.knownWeb,
+      options.sessionID, response, options.ownedList, requestStartedAt,
     )
     ctx.set('X-Yaoyao-Data-Source', 'upstream')
     ctx.set('X-Yaoyao-Sync-State', 'current')
-    sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
+    sendUpstreamResponse(
+      ctx,
+      options.sessionID
+        ? dependencies.chatCache.store.markSessionOwnership(
+            user.id,
+            options.profile,
+            options.sessionID,
+            response,
+          )
+        : response,
+      dependencies.upstreamSession.jar,
+    )
     return
   }
   const result = options.kind === 'messages' && options.sessionID
@@ -677,11 +779,23 @@ async function cachedChatRead(
     )
     : await dependencies.chatCache.read(
       user.id, options.key, options.kind, options.profile,
-      options.sessionID, load, options.knownWeb,
+      options.sessionID, load, options.ownedList,
+      { offset: options.offset, limit: options.limit, archived: options.archived },
     )
   ctx.set('X-Yaoyao-Data-Source', result.source)
   ctx.set('X-Yaoyao-Sync-State', result.state)
-  sendUpstreamResponse(ctx, result.response, dependencies.upstreamSession.jar)
+  sendUpstreamResponse(
+    ctx,
+    options.sessionID
+      ? dependencies.chatCache.store.markSessionOwnership(
+          user.id,
+          options.profile,
+          options.sessionID,
+          result.response,
+        )
+      : result.response,
+    dependencies.upstreamSession.jar,
+  )
 }
 
 async function bootstrap(
@@ -844,16 +958,34 @@ async function requireGatewayAuthentication(
 }
 
 async function searchSessions(ctx: Koa.Context, dependencies: RouteDependencies): Promise<void> {
+  const owner = dependencies.auth.require(ctx).id
+  if (!dependencies.chatCache) {
+    throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
+  }
+  const chatCache = dependencies.chatCache
   await withJar(ctx, async (jar) => {
+    const view = ctx.query.view === 'chat' || ctx.query.view === 'history'
+      ? ctx.query.view : undefined
     const query = searchFrom(ctx, ['q', 'limit', 'source', 'profile'])
     const text = query.get('q')?.trim()
     if (!text) throw new HttpError(400, 'q is required', 'missing_query')
     const limit = Math.max(1, Math.min(100, Number(query.get('limit') ?? '50') || 50))
-    query.set('limit', String(limit))
+    query.set('limit', '100')
+    if (view) query.delete('source')
     if (!query.get('source')) query.set('exclude_sources', 'cron,ios_group,yaoyao_workspace')
     if (query.get('profile')) {
       const response = await dependencies.upstream.request('/api/sessions/search', jar, { search: query })
-      sendUpstreamResponse(ctx, response, jar)
+      sendUpstreamResponse(
+        ctx,
+        chatCache.store.markOwnedSearchResults(
+          owner,
+          query.get('profile') || 'default',
+          response,
+          view,
+          limit,
+        ),
+        jar,
+      )
       return
     }
 
@@ -881,7 +1013,21 @@ async function searchSessions(ctx: Koa.Context, dependencies: RouteDependencies)
       const rightRank = Number(right.rank ?? right.last_active ?? right.started_at ?? 0)
       return rightRank - leftRank
     })
-    json(ctx, 200, { results: results.slice(0, limit) })
+    const marked = results.map((result) => {
+      const profile = typeof result.profile === 'string' ? result.profile : 'default'
+      const id = String(result.id ?? result.session_id ?? result.sessionId ?? '')
+      const metadata = id
+        ? chatCache.store.ownedSessionMetadata(owner, profile, id)
+        : { owned: false }
+      return {
+        ...result,
+        ...(metadata.authoritativeTitle ? { title: metadata.authoritativeTitle } : {}),
+        owned: metadata.owned,
+      }
+    })
+    const projected = marked.filter(result => !view
+      || (view === 'chat' ? result.owned : !result.owned))
+    json(ctx, 200, { results: projected.slice(0, limit), total: projected.length })
   })
 }
 
@@ -1881,18 +2027,49 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   router.get('/api/app/sessions', async (ctx) => {
     const view = ctx.query.view === 'history' || ctx.query.view === 'chat' ? ctx.query.view : undefined
     const search = searchFrom(ctx, ['limit', 'offset', 'order', 'archived', 'profile', 'source'])
-    if (view === 'chat') search.set('source', 'web')
-    else search.set('exclude_sources', view === 'history' ? 'cron,ios_group,yaoyao_workspace,web' : 'cron,ios_group,yaoyao_workspace')
+    const offset = Math.max(0, Number(search.get('offset') ?? '0') || 0)
+    const limit = Math.max(1, Math.min(200, Number(search.get('limit') ?? '100') || 100))
+    search.set('offset', String(offset))
+    search.set('limit', String(limit))
+    if (!search.get('order')) search.set('order', 'recent')
+    if (!search.get('archived')) search.set('archived', 'exclude')
+    if (view) search.delete('source')
+    search.set('exclude_sources', 'cron,ios_group,yaoyao_workspace')
     const path = search.get('profile') ? '/api/sessions' : '/api/profiles/sessions'
+    if (view && !dependencies.chatCache) {
+      throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
+    }
+    if (view === 'history' && dependencies.chatCache) {
+      const owner = dependencies.auth.require(ctx).id
+      const profile = search.get('profile') || ''
+      await withJar(ctx, async (jar) => {
+        const response = await completeSessionList(dependencies.upstream, path, jar, search)
+        sendUpstreamResponse(
+          ctx,
+          dependencies.chatCache!.store.excludeOwnedSessionsFromList(
+            owner,
+            profile,
+            response,
+            { offset, limit },
+          ),
+          jar,
+        )
+      })
+      return
+    }
     if (view !== 'chat') {
       await proxy(ctx, dependencies.upstream, path, { search })
       return
     }
     const profile = search.get('profile') || ''
+    const upstreamSearch = new URLSearchParams(search)
+    upstreamSearch.set('offset', '0')
+    upstreamSearch.set('limit', '100')
     await cachedChatRead(ctx, dependencies, {
       key: chatCacheKey('list', profile, undefined, search),
-      kind: 'list', profile, knownWeb: true,
-      load: jar => dependencies.upstream.request(path, jar, { search }),
+      kind: 'list', profile, ownedList: true, offset, limit,
+      archived: search.get('archived') || 'exclude',
+      load: jar => dependencies.upstream.request(path, jar, { search: upstreamSearch }),
     })
   })
   router.get('/api/app/sessions/:sessionID/messages', async (ctx) => {
@@ -1927,15 +2104,23 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async jar => {
       const profile = search.get('profile') || 'default'
       const owner = dependencies.auth.require(ctx).id
-      requireWritableWebSession(
+      requireWritableOwnedSession(
         await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
         dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
       )
-      const request = body(ctx)
+      const request = writableSessionPatch(body(ctx))
       const requestedProfile = search.get('profile')
       if (requestedProfile) request.profile = requestedProfile
       const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'PATCH', search, body: request })
       if (response.status >= 200 && response.status < 300) {
+        if (typeof request.title === 'string') {
+          dependencies.chatCache?.store.recordAuthoritativeTitle(
+            owner,
+            profile,
+            id,
+            request.title,
+          )
+        }
         dependencies.chatCache?.store.markListsStale(owner)
         void dependencies.chatCache?.reconcile(owner, profile, id)
       }
@@ -1948,7 +2133,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async jar => {
       const profile = search.get('profile') || 'default'
       const owner = dependencies.auth.require(ctx).id
-      requireWritableWebSession(
+      requireWritableOwnedSession(
         await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
         dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
       )
@@ -1967,21 +2152,11 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   for (const listPath of ['/api/sessions', '/api/profiles/sessions']) {
     router.get(listPath, async ctx => {
       const search = new URLSearchParams(ctx.querystring)
-      const profile = search.get('profile') || ''
-      const knownWeb = search.get('source') === 'web'
-      if (!knownWeb) {
-        await withJar(ctx, async jar => sendUpstreamResponse(
-          ctx,
-          await dependencies.upstream.request(listPath, jar, { search }),
-          jar,
-        ))
-        return
-      }
-      await cachedChatRead(ctx, dependencies, {
-        key: chatCacheKey('list', profile, undefined, search),
-        kind: 'list', profile, knownWeb: true,
-        load: jar => dependencies.upstream.request(listPath, jar, { search }),
-      })
+      await withJar(ctx, async jar => sendUpstreamResponse(
+        ctx,
+        await dependencies.upstream.request(listPath, jar, { search }),
+        jar,
+      ))
     })
   }
   router.get('/api/sessions/:sessionID/messages', async ctx => {

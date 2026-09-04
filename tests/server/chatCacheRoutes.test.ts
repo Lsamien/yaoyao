@@ -35,6 +35,8 @@ describe('source=web chat cache routes', () => {
   it('uses the Web-owned session registry when Hermes source metadata is stale', async () => {
     const home = mkdtempSync(join(tmpdir(), 'yaoyao-owned-chat-routes-'))
     homes.push(home)
+    const listQueries: URLSearchParams[] = []
+    let upstreamOwnedTitle = 'Hermes 仍标记为 iOS'
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(String(input))
       const headers = new Headers(init?.headers)
@@ -50,25 +52,69 @@ describe('source=web chat cache routes', () => {
       if (url.pathname === '/api/profiles') {
         return Response.json({ profiles: [{ name: 'default', is_default: true }] })
       }
+      if (url.pathname === '/api/sessions/search') {
+        const requestedSource = url.searchParams.get('source')
+        const results = [
+          { id: 'unowned-web', profile: 'default', source: 'web', title: '未登记 Web 历史' },
+          { id: 'owned-session', profile: 'default', source: 'ios', title: 'Hermes 仍标记为 iOS' },
+        ].filter(session => !requestedSource || session.source === requestedSource)
+        return Response.json({ results })
+      }
       if (url.pathname === '/api/sessions') {
+        listQueries.push(new URLSearchParams(url.searchParams))
+        // Model the real source filter so this fixture cannot pass by returning
+        // an iOS row to a source=web request.
+        if (url.searchParams.get('source') === 'web') {
+          return Response.json({
+            sessions: [{ id: 'unowned-web', profile: 'default', source: 'web', title: '未登记 Web 历史' }],
+            total: 1,
+          })
+        }
         return Response.json({
-          sessions: [{
-            id: 'owned-session',
-            profile: 'default',
-            source: 'ios',
-            title: 'Hermes 仍标记为 iOS',
-          }],
-          total: 1,
+          sessions: [
+            {
+              id: 'owned-session',
+              profile: 'default',
+              source: 'ios',
+              title: 'Hermes 仍标记为 iOS',
+            },
+            {
+              id: 'history-only',
+              profile: 'default',
+              source: 'ios',
+              title: '未登记历史',
+            },
+            {
+              id: 'unowned-web',
+              profile: 'default',
+              source: 'web',
+              title: '未登记 Web 历史',
+            },
+          ],
+          total: 3,
         })
       }
       if (url.pathname === '/api/sessions/owned-session') {
-        if (init?.method === 'PATCH') return Response.json({ ok: true })
+        if (init?.method === 'PATCH') {
+          upstreamOwnedTitle = String(JSON.parse(String(init.body)).title ?? upstreamOwnedTitle)
+          return Response.json({ ok: true })
+        }
         return Response.json({
           id: 'owned-session',
           profile: 'default',
           source: 'ios',
-          title: 'Hermes 仍标记为 iOS',
+          title: upstreamOwnedTitle,
         })
+      }
+      if (url.pathname === '/api/sessions/owned-session/messages') {
+        return Response.json({
+          session: { id: 'owned-session', profile: 'default', source: 'ios', title: 'Hermes 仍标记为 iOS' },
+          messages: [{ id: 'owned-message', role: 'assistant', content: '已同步' }],
+          pagination: { total: 1, returned: 1, offset: 0, limit: 100, has_more: false },
+        })
+      }
+      if (url.pathname === '/api/sessions/history-only') {
+        return Response.json({ id: 'history-only', profile: 'default', source: 'ios', title: '未登记历史' })
       }
       return Response.json({ error: 'missing fixture' }, { status: 404 })
     })
@@ -86,22 +132,210 @@ describe('source=web chat cache routes', () => {
       'owned-session',
       'runtime-owned',
     )
+    runtime.chatCache!.store.recordCommand(
+      owner,
+      'default',
+      'owned-session',
+      'session.create',
+      { source: 'ios' },
+    )
+    await runtime.chatCache!.reconcile(owner, 'default', 'owned-session')
 
     const list = await agent
       .get('/api/app/sessions?view=chat&profile=default&limit=100')
       .set('Host', host)
       .expect(200)
-    expect(list.body.sessions).toContainEqual(expect.objectContaining({
+    expect(list.body.sessions).toEqual([expect.objectContaining({
       id: 'owned-session',
-      source: 'web',
+      source: 'ios',
+      owned: true,
       title: 'Hermes 仍标记为 iOS',
-    }))
+    })])
 
+    const history = await agent
+      .get('/api/app/sessions?view=history&profile=default&limit=100')
+      .set('Host', host)
+      .expect(200)
+    expect(history.body.sessions.map((session: { id: string }) => session.id).sort())
+      .toEqual(['history-only', 'unowned-web'])
+    expect(listQueries.length).toBeGreaterThan(0)
+    expect(listQueries.every(query => !query.has('source'))).toBe(true)
+    expect(listQueries.every(query => !query.get('exclude_sources')?.split(',').includes('web'))).toBe(true)
+    expect(listQueries.every(query => query.get('order') === 'recent')).toBe(true)
+    expect(listQueries.every(query => query.get('archived') === 'exclude')).toBe(true)
+
+    const ownedDetail = await agent.get('/api/app/sessions/owned-session?profile=default')
+      .set('Host', host).expect(200)
+    expect(ownedDetail.body).toMatchObject({ id: 'owned-session', source: 'ios', owned: true })
+    const historyDetail = await agent.get('/api/app/sessions/history-only?profile=default')
+      .set('Host', host).expect(200)
+    expect(historyDetail.body).toMatchObject({ id: 'history-only', source: 'ios', owned: false })
+    const ownedMessages = await agent
+      .get('/api/app/sessions/owned-session/messages?profile=default&offset=0&limit=100')
+      .set('Host', host).expect(200)
+    expect(ownedMessages.body).toMatchObject({
+      owned: true,
+      session: { id: 'owned-session', source: 'ios', owned: true },
+      messages: [{ id: 'owned-message' }],
+    })
+
+    const searched = await agent.get('/api/app/sessions/search?q=Hermes&profile=default')
+      .set('Host', host).expect(200)
+    expect(searched.body.results).toEqual([
+      expect.objectContaining({ id: 'unowned-web', source: 'web', owned: false }),
+      expect.objectContaining({ id: 'owned-session', source: 'ios', owned: true }),
+    ])
+    const searchedChat = await agent
+      .get('/api/app/sessions/search?q=Hermes&profile=default&view=chat&source=web&limit=1')
+      .set('Host', host)
+      .expect(200)
+    expect(searchedChat.body).toMatchObject({
+      total: 1,
+      results: [expect.objectContaining({ id: 'owned-session', owned: true })],
+    })
+    const searchedHistory = await agent
+      .get('/api/app/sessions/search?q=Hermes&profile=default&view=history&limit=1')
+      .set('Host', host)
+      .expect(200)
+    expect(searchedHistory.body).toMatchObject({
+      total: 1,
+      results: [expect.objectContaining({ id: 'unowned-web', owned: false })],
+    })
+    const upstreamSearchRequests = fetchImpl.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .filter(url => url.pathname === '/api/sessions/search')
+    expect(upstreamSearchRequests.every(url => url.searchParams.get('limit') === '100')).toBe(true)
+    expect(upstreamSearchRequests.every(url => !url.searchParams.has('source'))).toBe(true)
+
+    runtime.chatCache!.store.recordEvent(owner, 'default', 'owned-session', {
+      type: 'session.title',
+      payload: { session_id: 'owned-session', title: '事件权威标题' },
+    })
+    const eventTitledSearch = await agent
+      .get('/api/app/sessions/search?q=Hermes&profile=default&view=chat')
+      .set('Host', host)
+      .expect(200)
+    expect(eventTitledSearch.body.results).toEqual([
+      expect.objectContaining({ id: 'owned-session', title: '事件权威标题', owned: true }),
+    ])
+
+    const forbiddenSourcePatch = await agent.patch('/api/app/sessions/owned-session?profile=default')
+      .set('Host', host).set('Origin', origin)
+      .set('X-CSRF-Token', setup.body.csrfToken)
+      .send({ source: 'web' })
+      .expect(400)
+    expect(forbiddenSourcePatch.body.code).toBe('invalid_session_patch')
     await agent.patch('/api/app/sessions/owned-session?profile=default')
       .set('Host', host).set('Origin', origin)
       .set('X-CSRF-Token', setup.body.csrfToken)
       .send({ title: 'Web 可继续管理' })
       .expect(200)
+    const patchCalls = fetchImpl.mock.calls.filter(([, init]) => init?.method === 'PATCH')
+    expect(patchCalls).toHaveLength(1)
+    expect(JSON.parse(String(patchCalls[0]?.[1]?.body))).toEqual({
+      title: 'Web 可继续管理',
+      profile: 'default',
+    })
+    const immediateRenamedDetail = await agent
+      .get('/api/app/sessions/owned-session?profile=default')
+      .set('Host', host)
+      .expect(200)
+    expect(immediateRenamedDetail.body.title).toBe('Web 可继续管理')
+
+    // A reconcile may complete immediately after the mutation; it must retain
+    // the synchronously published title.
+    await runtime.chatCache!.reconcile(owner, 'default', 'owned-session')
+    const reconciledDetail = await agent
+      .get('/api/app/sessions/owned-session?profile=default')
+      .set('Host', host)
+      .expect(200)
+    expect(reconciledDetail.body.title).toBe('Web 可继续管理')
+    const renamedList = await agent
+      .get('/api/app/sessions?view=chat&profile=default&limit=100')
+      .set('Host', host)
+      .expect(200)
+    expect(renamedList.body.sessions).toContainEqual(expect.objectContaining({
+      id: 'owned-session',
+      title: 'Web 可继续管理',
+      owned: true,
+    }))
+    const renamedSearch = await agent
+      .get('/api/app/sessions/search?q=Hermes&profile=default&view=chat')
+      .set('Host', host)
+      .expect(200)
+    expect(renamedSearch.body.results).toEqual([
+      expect.objectContaining({ id: 'owned-session', title: 'Web 可继续管理', owned: true }),
+    ])
+  })
+
+  it('paginates chat and history after projecting a multi-page mixed upstream list', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'yaoyao-owned-pagination-routes-'))
+    homes.push(home)
+    const upstreamSessions = Array.from({ length: 12 }, (_, index) => [
+      { id: `unowned-${index}`, profile: 'default', source: index % 2 ? 'ios' : 'web', title: `Unowned ${index}` },
+      ...(index < 8 ? [{ id: `owned-${index}`, profile: 'default', source: index % 2 ? 'web' : 'ios', title: `Owned ${index}` }] : []),
+    ]).flat()
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input))
+      const headers = new Headers(init?.headers)
+      if (url.pathname === '/api/status') return Response.json({ auth_required: false })
+      if (url.pathname === '/') return new Response('<script>window.__HERMES_SESSION_TOKEN__="pagination-token-1234567890123456";</script>')
+      if (headers.get('x-hermes-session-token') !== 'pagination-token-1234567890123456') {
+        return Response.json({}, { status: 401 })
+      }
+      if (url.pathname === '/api/profiles') return Response.json({ profiles: [{ name: 'default', is_default: true }] })
+      if (url.pathname === '/api/sessions') {
+        const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0))
+        const limit = 5
+        return Response.json({
+          sessions: upstreamSessions.slice(offset, offset + limit),
+          total: upstreamSessions.length,
+          offset,
+          limit,
+        })
+      }
+      return Response.json({ error: 'missing fixture' }, { status: 404 })
+    })
+    const runtime = createApplication({ config: config(home), fetchImpl })
+    runtimes.push(runtime)
+    const agent = request.agent(runtime.app.callback())
+    const boot = await agent.get('/api/app/bootstrap').set('Host', host).expect(200)
+    const setup = await agent.post('/api/app/setup').set('Host', host)
+      .set('Origin', origin).set('X-CSRF-Token', boot.body.csrfToken)
+      .send({ username: 'owner', password: 'fixture-password' }).expect(200)
+    const owner = String(setup.body.user.id)
+    for (let index = 0; index < 8; index++) {
+      const id = `owned-${index}`
+      runtime.chatCache!.store.recordRoute(owner, 'default', id, `runtime-${index}`)
+      runtime.chatCache!.store.recordCommand(owner, 'default', id, 'session.create', {
+        source: index % 2 ? 'web' : 'ios',
+      })
+      runtime.chatCache!.store.putSnapshot(owner, `detail-${index}`, 'detail', 'default', id, {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        body: Buffer.from(JSON.stringify({
+          id,
+          profile: 'default',
+          source: index % 2 ? 'web' : 'ios',
+          title: `Owned ${index}`,
+          last_active: 1_000 + index,
+        })),
+      })
+    }
+
+    const chat = await agent
+      .get('/api/app/sessions?view=chat&profile=default&offset=2&limit=3')
+      .set('Host', host).expect(200)
+    expect(chat.body).toMatchObject({ total: 8, offset: 2, limit: 3 })
+    expect(chat.body.sessions.map((session: { id: string }) => session.id))
+      .toEqual(['owned-5', 'owned-4', 'owned-3'])
+
+    const history = await agent
+      .get('/api/app/sessions?view=history&profile=default&offset=4&limit=4')
+      .set('Host', host).expect(200)
+    expect(history.body).toMatchObject({ total: 12, offset: 4, limit: 4 })
+    expect(history.body.sessions.map((session: { id: string }) => session.id))
+      .toEqual(['unowned-4', 'unowned-5', 'unowned-6', 'unowned-7'])
   })
 
   it('serves warm and restarted chat reads locally while history stays upstream-only', async () => {
@@ -115,11 +349,11 @@ describe('source=web chat cache routes', () => {
       if (url.pathname === '/') return new Response('<script>window.__HERMES_SESSION_TOKEN__="cache-token-1234567890123456";</script>')
       if (headers.get('x-hermes-session-token') !== 'cache-token-1234567890123456') return Response.json({}, { status: 401 })
       if (url.pathname === '/api/profiles') return Response.json({ profiles: [{ name: 'default', is_default: true }] })
-      if (url.pathname === '/api/sessions' && url.searchParams.get('source') === 'web') {
+      if (url.pathname === '/api/sessions') {
         counts.list++
         return Response.json({ sessions: [{ id: 'session-web', profile: 'default', source: 'web', title: '持久会话' }] })
       }
-      if (url.pathname === '/api/profiles/sessions' && url.searchParams.get('exclude_sources')?.includes('web')) {
+      if (url.pathname === '/api/profiles/sessions') {
         counts.history++
         return Response.json({ sessions: [{ id: 'history-only', source: 'telegram', title: '只读历史' }] })
       }
@@ -148,6 +382,9 @@ describe('source=web chat cache routes', () => {
     const setup = await agent.post('/api/app/setup').set('Host', host).set('Origin', origin)
       .set('X-CSRF-Token', boot.body.csrfToken).send({ username: 'owner', password: 'fixture-password' }).expect(200)
     const sessionCookie = cookie(setup)
+    const owner = String(setup.body.user.id)
+    first.chatCache!.store.recordRoute(owner, 'default', 'session-web', 'runtime-web')
+    first.chatCache!.store.recordCommand(owner, 'default', 'session-web', 'session.create', { source: 'web' })
 
     const listPath = '/api/app/sessions?view=chat&profile=default&limit=100'
     await agent.get(listPath).set('Host', host).expect('X-Yaoyao-Data-Source', 'upstream').expect(200)
@@ -184,7 +421,7 @@ describe('source=web chat cache routes', () => {
     const offlineMedia = await request(restarted.app.callback()).get(mediaPath).set('Host', host).set('Cookie', sessionCookie)
       .expect('X-Yaoyao-Data-Source', 'local').expect(200)
     expect(Buffer.from(offlineMedia.body).toString()).toBe('png-bytes')
-    expect(offlineFetch).not.toHaveBeenCalled()
+    expect(offlineFetch).toHaveBeenCalledTimes(1)
     await request(restarted.app.callback()).get('/api/app/sessions?view=history').set('Host', host).set('Cookie', sessionCookie)
       .expect(502)
     expect(offlineFetch).toHaveBeenCalled()

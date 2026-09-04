@@ -22,6 +22,67 @@ async function createAgent(page: Page, name: string) {
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
 }
+
+test('an open Web chat list receives cross-client sessions and real title events without reload', async ({
+  page,
+  context,
+}) => {
+  await login(page)
+  const pageAChannelOpened = page.waitForResponse(response =>
+    response.request().method() === 'POST'
+      && response.url().endsWith('/api/realtime/channels'))
+  await page.goto('/chat')
+  await pageAChannelOpened
+  await expect(page.getByRole('button', { name: '新建聊天', exact: true })).toBeVisible()
+
+  const marker = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const initialTitle = `跨端新会话 ${marker}`
+  const generatedTitle = `自动标题 ${marker}`
+  const sentinel = `page-a-${marker}`
+  await page.evaluate(value => {
+    ;(window as Window & { __crossClientProjectionSentinel?: string })
+      .__crossClientProjectionSentinel = value
+  }, sentinel)
+
+  const pageB = await context.newPage()
+  const pageBChannelOpened = pageB.waitForResponse(response =>
+    response.request().method() === 'POST'
+      && response.url().endsWith('/api/realtime/channels'))
+  await pageB.goto('/chat')
+  await pageBChannelOpened
+  await pageB.getByRole('button', { name: '新建聊天', exact: true }).click()
+  const pageBComposer = pageB.getByRole('textbox', {
+    name: '输入消息，Enter 发送，Shift + Enter 换行',
+  })
+  await pageBComposer.fill(`[cross-client-title:${initialTitle}] 创建跨端会话`)
+  const pageBSend = pageB.getByRole('button', { name: '发送消息', exact: true })
+  await expect(pageBSend).toBeEnabled()
+  await pageBSend.click()
+  await expect(pageB).toHaveURL(/\/chat\/[^/?]+/)
+  const sessionId = decodeURIComponent(new URL(pageB.url()).pathname.split('/').at(-1) || '')
+  expect(sessionId).not.toMatch(/^draft-/)
+  await expect(pageB.locator('.message--assistant')).toContainText('会话独立保存')
+
+  const sessionRow = page.locator(`.desktop-sidebar .sidebar-item[data-sidebar-id="${sessionId}"]`)
+  await expect(sessionRow).toContainText(initialTitle)
+  expect(await page.evaluate(() =>
+    (window as Window & { __crossClientProjectionSentinel?: string })
+      .__crossClientProjectionSentinel)).toBe(sentinel)
+  await pageB.close()
+
+  const titled = await page.request.post(
+    `http://127.0.0.1:19120/__test/sessions/title?id=${encodeURIComponent(sessionId)}`
+      + `&title=${encodeURIComponent(generatedTitle)}`,
+  )
+  expect(titled.ok(), await titled.text()).toBe(true)
+
+  await expect(sessionRow).toContainText(generatedTitle)
+  await expect(sessionRow).not.toContainText(initialTitle)
+  expect(await page.evaluate(() =>
+    (window as Window & { __crossClientProjectionSentinel?: string })
+      .__crossClientProjectionSentinel)).toBe(sentinel)
+})
+
 test('created roles and editable teams share a durable chat list without plugin calls', async ({
   page,
   context,

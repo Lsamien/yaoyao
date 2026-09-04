@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { modelForChoiceId, modelForSession, modelSelectionFromSessionInfo } from '@/utils/sessionModel'
 import { normalizeSession } from '@/utils/normalize'
+import { isOwnedChatSession } from '@/utils/sessionOwnership'
 
 const models = [
   { id: 'gpt-5.6-terra', name: 'GPT 5.6 Terra', provider: 'custom' },
@@ -31,6 +32,20 @@ describe('session model selection', () => {
       id: 'session-1', model: 'omni',
       model_config: JSON.stringify({ model: 'omni', provider: 'custom:tingly' }),
     })).toMatchObject({ model: 'omni', provider: 'custom:tingly' })
+  })
+
+  it('uses server ownership rather than source to separate chats from history', () => {
+    const ownedIOS = normalizeSession({
+      id: 'owned-ios', source: 'ios', owned: true, title: '跨端聊天',
+    })
+    const unownedWeb = normalizeSession({
+      id: 'native-web', source: 'web', owned: false, title: '原生历史',
+    })
+
+    expect(isOwnedChatSession(ownedIOS)).toBe(true)
+    expect(isOwnedChatSession(unownedWeb)).toBe(false)
+    expect(isOwnedChatSession({ id: 'draft-local', owned: undefined })).toBe(true)
+    expect(isOwnedChatSession({ id: 'draft-server-history', owned: false })).toBe(false)
   })
 
   it('finds a chosen model when its provider contains a colon', () => {

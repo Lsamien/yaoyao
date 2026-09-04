@@ -1,7 +1,56 @@
-import { rmSync } from 'node:fs'
+import { randomBytes, scryptSync } from 'node:crypto'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 
 const testHome = '/tmp/hermes-yaoyao-e2e-home'
+const testUserID = '11111111-1111-4111-8111-111111111112'
 rmSync(testHome, { recursive: true, force: true })
+mkdirSync(testHome, { recursive: true, mode: 0o700 })
+
+// The browser fixture exercises the ownership registry, not the mutable
+// upstream `source` field. Seed only the sessions that were explicitly
+// created by this local Web user; session-history-only deliberately remains
+// unowned even though fake Hermes labels it source=web.
+const salt = randomBytes(16)
+const now = Date.now()
+writeFileSync(`${testHome}/users.json`, JSON.stringify({
+  version: 1,
+  users: [{
+    id: testUserID,
+    username: 'admin',
+    normalizedUsername: 'admin',
+    role: 'admin',
+    enabled: true,
+    mustChangePassword: false,
+    salt: salt.toString('base64'),
+    passwordHash: scryptSync('e2e-password', salt, 32, {
+      N: 2 ** 14,
+      r: 8,
+      p: 1,
+      maxmem: 64 * 1024 * 1024,
+    }).toString('base64'),
+    authVersion: 1,
+    createdAt: now,
+    updatedAt: now,
+  }],
+}), { mode: 0o600 })
+
+const ownedSessions = [
+  ['session-demo', 'yaoyao'],
+  ['session-second', 'yaoyao'],
+  ['session-yaoer', 'yaoer'],
+  ['session-media', 'yaoer'],
+  ['session-user-media', 'yaoer'],
+  ...Array.from({ length: 101 }, (_, index) => [`session-page-${index + 1}`, 'yaoyao']),
+]
+const { ChatCacheStore } = await import('../../dist-server/server/chatCache.js')
+const registry = new ChatCacheStore(testHome, testUserID)
+for (const [sessionID, profile] of ownedSessions) {
+  registry.recordCommand(testUserID, profile, sessionID, 'session.create', {
+    profile,
+    source: 'web',
+  })
+}
+registry.close()
 
 Object.assign(process.env, {
   NODE_ENV: 'production',

@@ -76,6 +76,8 @@ export interface SessionSummary {
   id: string
   profile?: string
   source: string
+  /** Server-owned chat membership. `source` remains provenance only. */
+  owned?: boolean
   title: string
   preview?: string
   model?: string

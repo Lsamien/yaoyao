@@ -138,16 +138,15 @@ export function createApplication(options: ApplicationOptions = {}): Application
     () => auth.upstreamCredentials(configuredUpstreamCredentials),
   )
   let chatCache = options.chatCache
-  if (!chatCache && config.chatCacheMode !== 'upstream-only') {
-    try {
-      chatCache = new ChatCacheCoordinator(
-        new ChatCacheStore(config.home),
-        upstreamSession,
-        config.chatCacheMode ?? 'prefer-local',
-      )
-    } catch {
-      chatCache = undefined
-    }
+  if (!chatCache) {
+    chatCache = new ChatCacheCoordinator(
+      new ChatCacheStore(
+        config.home,
+        auth.soleUserIDForLegacyMigration(),
+      ),
+      upstreamSession,
+      config.chatCacheMode ?? 'prefer-local',
+    )
   }
   const accountPairings = options.accountPairings ?? new AccountLoginPairingStore()
   const profileIdentities = options.profileIdentities
@@ -218,6 +217,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
+    if (owner.startsWith('device:')) return
     if (!['message.complete', 'tool.complete', 'tool.completed', 'attachment.staged'].includes(frame.type)) return
     const data = frame.payload ?? {}, text = JSON.stringify(data)
     const messageId = String(data.row_id ?? data.message_id ?? data.id ?? createHash('sha256').update(text).digest('hex'))

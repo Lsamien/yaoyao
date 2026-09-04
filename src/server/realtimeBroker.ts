@@ -236,7 +236,7 @@ export class RealtimeBroker {
         u.routes.set(key, r); u.byRuntime.set(runtime, r); c.routes.add(key)
         r.observers.set(c.principal.key, c.principal)
         if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime)
-        if (nativeOwner && method === 'session.create') {
+        if (nativeOwner && (method === 'session.create' || method === 'session.branch')) {
           this.onNativeCommand(nativeOwner, profile, stored, method, p)
         }
         for (const pending of [result.pending_approval, result.pending_clarify, result.inflight?.pending_approval, result.inflight?.pending_clarify]) {
@@ -385,8 +385,30 @@ export class RealtimeBroker {
       if (!r && !['profiles.changed', 'sessions.changed', 'models.changed', 'pet.changed'].includes(p.type)) continue
       this.emit(c, 'frame', f)
     }
+    if (r && (p.type === 'session.title' || p.type === 'session.title.updated')) {
+      const owners = new Set([...r.observers.values()].flatMap(principal => {
+        const owner = principal.valid() ? this.nativeOwner(principal) : undefined
+        return owner ? [owner] : []
+      }))
+      for (const owner of owners) this.publishOwnerSessionsChanged(owner)
+    }
+  }
+  private publishOwnerSessionsChanged(owner: string): void {
+    this.onNativeGlobalEvent(owner, 'sessions.changed')
+    const frame = {
+      jsonrpc: '2.0',
+      method: 'event',
+      params: { type: 'sessions.changed', payload: { reason: 'session.title' } },
+    }
+    for (const channel of this.channels.values()) {
+      if (channel.kind !== 'chat' || !channel.principal.valid()
+        || this.nativeOwner(channel.principal) !== owner) continue
+      this.emit(channel, 'frame', frame)
+    }
   }
   private nativeOwner(principal: RealtimePrincipal): string | undefined {
+    const device = /^device:([^:]+)$/.exec(principal.key)
+    if (device) return `device:${device[1]}`
     const match = /^(?:user|push):([^:]+)/.exec(principal.key)
     return match?.[1]
   }

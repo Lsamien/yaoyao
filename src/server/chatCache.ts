@@ -53,6 +53,16 @@ function sessionSource(value: Record<string, unknown>): string {
   return String(value.source ?? '').trim()
 }
 
+function sessionTitle(value: Record<string, unknown>): string {
+  return String(value.title ?? '').trim()
+}
+
+function isPlaceholderTitle(value: string): boolean {
+  return new Set([
+    '', '新对话', '新会话', '未命名对话', '未命名会话', 'new conversation', 'new session', 'untitled',
+  ]).has(value.trim().toLowerCase())
+}
+
 function messageID(value: Record<string, unknown>, fallback: string): string {
   const id = String(value.id ?? value.row_id ?? value.message_id ?? value.messageId ?? '').trim()
   return id || createHash('sha256').update(JSON.stringify(value) + fallback).digest('hex')
@@ -80,7 +90,7 @@ export class ChatCacheStore {
   readonly db: DatabaseSync
   readonly assetsRoot: string
 
-  constructor(home: string) {
+  constructor(home: string, legacySingleUserID?: string) {
     mkdirSync(home, { recursive: true, mode: 0o700 })
     const path = join(home, 'chat-cache.sqlite3')
     this.db = new DatabaseSync(path)
@@ -90,7 +100,9 @@ export class ChatCacheStore {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS chat_sessions(
         owner TEXT NOT NULL, profile TEXT NOT NULL, session_id TEXT NOT NULL,
-        runtime_id TEXT, source TEXT NOT NULL, data TEXT NOT NULL,
+        runtime_id TEXT, source TEXT NOT NULL, data TEXT NOT NULL, authoritative_title TEXT,
+        authoritative_title_at INTEGER NOT NULL DEFAULT 0,
+        owned_at INTEGER, ownership_evidence TEXT,
         sync_state TEXT NOT NULL DEFAULT 'stale', complete INTEGER NOT NULL DEFAULT 0,
         last_event_seq INTEGER NOT NULL DEFAULT 0, last_synced_at INTEGER NOT NULL,
         PRIMARY KEY(owner,profile,session_id));
@@ -117,7 +129,81 @@ export class ChatCacheStore {
         owner TEXT NOT NULL, cache_key TEXT NOT NULL, kind TEXT NOT NULL,
         profile TEXT NOT NULL, session_id TEXT, status INTEGER NOT NULL,
         headers TEXT NOT NULL, body TEXT NOT NULL, sync_state TEXT NOT NULL,
-        saved_at INTEGER NOT NULL, PRIMARY KEY(owner,cache_key));`)
+        saved_at INTEGER NOT NULL, PRIMARY KEY(owner,cache_key));
+      CREATE TABLE IF NOT EXISTS chat_meta(
+        key TEXT PRIMARY KEY, value TEXT NOT NULL);`)
+    const sessionColumns = this.db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!sessionColumns.some(column => column.name === 'authoritative_title')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN authoritative_title TEXT')
+      }
+      if (!sessionColumns.some(column => column.name === 'authoritative_title_at')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN authoritative_title_at INTEGER NOT NULL DEFAULT 0')
+      }
+      if (!sessionColumns.some(column => column.name === 'owned_at')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN owned_at INTEGER')
+      }
+      if (!sessionColumns.some(column => column.name === 'ownership_evidence')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN ownership_evidence TEXT')
+      }
+      this.db.exec(`CREATE INDEX IF NOT EXISTS chat_sessions_owned
+        ON chat_sessions(owner,profile,owned_at,last_synced_at)`)
+      const ownershipMigration = this.db.prepare(
+        "SELECT value FROM chat_meta WHERE key='ownership-registry-v1'",
+      ).get() as { value?: string } | undefined
+      if (!ownershipMigration) {
+        // A single cached owner is trusted only when the persisted local user
+        // database independently confirms the same sole identity.
+        const legacyOwners = this.db.prepare(
+          'SELECT DISTINCT owner FROM chat_sessions ORDER BY owner',
+        ).all() as Array<{ owner: string }>
+        if (legacyOwners.length === 1 && legacyOwners[0]!.owner === legacySingleUserID) {
+          this.db.exec(`UPDATE chat_sessions SET
+            owned_at=COALESCE(owned_at,last_synced_at),
+            ownership_evidence=COALESCE(ownership_evidence,'legacy-single-user')`)
+        }
+      }
+      // Recover interrupted/new-schema writes only from explicit command proof.
+      this.db.exec(`UPDATE chat_sessions SET
+        owned_at=COALESCE(owned_at,(
+          SELECT MIN(chat_events.received_at) FROM chat_events
+          WHERE chat_events.owner=chat_sessions.owner
+            AND chat_events.profile=chat_sessions.profile
+            AND chat_events.session_id=chat_sessions.session_id
+            AND chat_events.event_type IN ('command:session.create','command:session.branch')
+        )),
+        ownership_evidence=COALESCE(ownership_evidence,'command-migration')
+        WHERE EXISTS (
+          SELECT 1 FROM chat_events
+          WHERE chat_events.owner=chat_sessions.owner
+            AND chat_events.profile=chat_sessions.profile
+            AND chat_events.session_id=chat_sessions.session_id
+            AND chat_events.event_type IN ('command:session.create','command:session.branch')
+        )`)
+      const legacyTitles = this.db.prepare(`SELECT owner,profile,session_id,data FROM chat_sessions
+        WHERE authoritative_title IS NULL`).all() as Array<{
+          owner: string; profile: string; session_id: string; data: string
+        }>
+      const backfillTitle = this.db.prepare(`UPDATE chat_sessions SET authoritative_title=?
+        WHERE owner=? AND profile=? AND session_id=? AND authoritative_title IS NULL`)
+      for (const row of legacyTitles) {
+        let summary: Record<string, unknown> = {}
+        try { summary = object(JSON.parse(row.data)) ?? {} } catch { continue }
+        const title = sessionTitle(summary)
+        if (!isPlaceholderTitle(title)) backfillTitle.run(title, row.owner, row.profile, row.session_id)
+      }
+      // List bodies written before ownership became an explicit projection do
+      // not carry `owned` and may have been filtered by `source`. Rebuild them on
+      // first use after every restart instead of serving a semantically old page.
+      this.db.prepare("UPDATE chat_snapshots SET sync_state='stale' WHERE kind='list'").run()
+      this.db.prepare(`INSERT INTO chat_meta(key,value) VALUES('ownership-registry-v1','complete')
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run()
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   close(): void { this.db.close() }
@@ -126,7 +212,8 @@ export class ChatCacheStore {
     const count = (table: string) => Number((this.db.prepare(`SELECT COUNT(*) count FROM ${table}`).get() as { count: number }).count)
     const bytes = Number((this.db.prepare(`SELECT COALESCE(SUM(size),0) bytes FROM chat_attachments WHERE state='cached'`).get() as { bytes: number }).bytes)
     return {
-      sessions: count('chat_sessions'),
+      sessions: Number((this.db.prepare(`SELECT COUNT(*) count FROM chat_sessions
+        WHERE owned_at IS NOT NULL`).get() as { count: number }).count),
       messages: count('chat_messages'),
       events: count('chat_events'),
       attachments: count('chat_attachments'),
@@ -141,16 +228,16 @@ export class ChatCacheStore {
   }
 
   putSnapshot(owner: string, key: string, kind: string, profile: string, sessionID: string | undefined,
-    response: UpstreamResponse, knownWeb = false): boolean {
+    response: UpstreamResponse, ownedList = false, requestStartedAt = Date.now()): boolean {
     const payload = parseResponse(response)
     if (!payload) return false
-    if (kind === 'list' && !knownWeb) return false
-    const isWeb = knownWeb || this.payloadIsWeb(owner, profile, sessionID, payload)
-    if (!isWeb) return false
+    if (kind === 'list' && !ownedList) return false
+    const isOwnedChat = ownedList || this.payloadBelongsToOwnedChat(owner, profile, sessionID, payload)
+    if (!isOwnedChat) return false
     const now = Date.now()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.ingestPayload(owner, profile, sessionID, payload, now)
+      this.ingestPayload(owner, profile, sessionID, payload, now, kind, requestStartedAt)
       this.db.prepare(`INSERT INTO chat_snapshots(owner,cache_key,kind,profile,session_id,status,headers,body,sync_state,saved_at)
         VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,cache_key) DO UPDATE SET status=excluded.status,headers=excluded.headers,
         body=excluded.body,sync_state='current',saved_at=excluded.saved_at`)
@@ -166,7 +253,7 @@ export class ChatCacheStore {
 
   messagePage(owner: string, profile: string, sessionID: string, offset: number, limit: number): MessagePage | undefined {
     const session = this.db.prepare(`SELECT data,sync_state,complete FROM chat_sessions
-      WHERE owner=? AND profile=? AND session_id=? AND source='web'`).get(owner, profile, sessionID) as Record<string, unknown> | undefined
+      WHERE owner=? AND profile=? AND session_id=?`).get(owner, profile, sessionID) as Record<string, unknown> | undefined
     if (!session || !bool(session.complete)) return undefined
     const totalRow = this.db.prepare('SELECT COUNT(*) count FROM chat_messages WHERE owner=? AND profile=? AND session_id=?')
       .get(owner, profile, sessionID) as { count: number }
@@ -211,6 +298,10 @@ export class ChatCacheStore {
       || (rawSeq > 0 && lastSeen > 0 && rawSeq > lastSeen + 1) ? 'gap' : 'stale'
     this.db.prepare(`UPDATE chat_sessions SET sync_state=?,last_event_seq=MAX(last_event_seq,?),last_synced_at=?
       WHERE owner=? AND profile=? AND session_id=?`).run(state, rawSeq > 0 ? rawSeq : lastSeen, now, owner, profile, sessionID)
+    if (type === 'session.title' || type === 'session.title.updated') {
+      const title = String(object(frame.payload)?.title ?? frame.title ?? '').trim()
+      if (title) this.updateOwnedSessionTitle(owner, profile, sessionID, title, now)
+    }
     this.db.prepare(`UPDATE chat_snapshots SET sync_state=? WHERE owner=? AND (session_id=? OR kind='list')`)
       .run(state, owner, sessionID)
     this.db.prepare(`INSERT INTO chat_sync_cursors(owner,profile,event_cursor,sync_state,last_synced_at)
@@ -221,20 +312,29 @@ export class ChatCacheStore {
 
   recordRoute(owner: string, profile: string, sessionID: string, runtimeID: string): void {
     const now = Date.now()
-    const summary = { id: sessionID, profile, source: 'web', title: '新对话', started_at: now, last_active: now }
-    this.db.prepare(`INSERT INTO chat_sessions(owner,profile,session_id,runtime_id,source,data,sync_state,complete,last_synced_at)
-      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET runtime_id=excluded.runtime_id,
-      source='web',last_synced_at=excluded.last_synced_at`)
-      .run(owner, profile, sessionID, runtimeID, 'web', JSON.stringify(summary), 'stale', 0, now)
+    const summary = { id: sessionID, profile, source: 'unknown', title: '新对话', started_at: now, last_active: now }
+    this.db.prepare(`INSERT INTO chat_sessions(owner,profile,session_id,runtime_id,source,data,sync_state,complete,last_synced_at,owned_at,ownership_evidence)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET runtime_id=excluded.runtime_id,
+      last_synced_at=excluded.last_synced_at,owned_at=COALESCE(chat_sessions.owned_at,excluded.owned_at),
+      ownership_evidence=COALESCE(chat_sessions.ownership_evidence,excluded.ownership_evidence)`)
+      .run(owner, profile, sessionID, runtimeID, 'unknown', JSON.stringify(summary), 'stale', 0, now, now, 'route-confirmed')
+    this.markListsStale(owner)
   }
 
   recordCommand(owner: string, profile: string, sessionID: string, method: string,
     params: Record<string, unknown>): void {
     const now = Date.now()
-    const summary = { id: sessionID, profile, source: 'web', title: '新对话', started_at: now, last_active: now }
-    this.db.prepare(`INSERT INTO chat_sessions(owner,profile,session_id,source,data,sync_state,complete,last_synced_at)
-      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET sync_state='stale',complete=0`)
-      .run(owner, profile, sessionID, 'web', JSON.stringify(summary), 'stale', 0, now)
+    const source = sessionSource(params) || 'unknown'
+    const establishesOwnership = method === 'session.create' || method === 'session.branch'
+    const summary = { id: sessionID, profile, source, title: '新对话', started_at: now, last_active: now }
+    this.db.prepare(`INSERT INTO chat_sessions(owner,profile,session_id,source,data,sync_state,complete,last_synced_at,owned_at,ownership_evidence)
+      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET
+      source=CASE WHEN excluded.source='unknown' THEN chat_sessions.source ELSE excluded.source END,
+      sync_state='stale',complete=0,last_synced_at=excluded.last_synced_at,
+      owned_at=COALESCE(chat_sessions.owned_at,excluded.owned_at),
+      ownership_evidence=COALESCE(chat_sessions.ownership_evidence,excluded.ownership_evidence)`)
+      .run(owner, profile, sessionID, source, JSON.stringify(summary), 'stale', 0, now,
+        establishesOwnership ? now : null, establishesOwnership ? `command:${method}` : null)
     const payload = JSON.stringify(params)
     const seq = Number.parseInt(createHash('sha256').update(`${method}:${payload}`).digest('hex').slice(0, 12), 16)
     this.db.prepare(`INSERT OR IGNORE INTO chat_events(owner,profile,session_id,event_seq,event_type,payload,received_at)
@@ -245,6 +345,14 @@ export class ChatCacheStore {
 
   markListsStale(owner: string): void {
     this.db.prepare("UPDATE chat_snapshots SET sync_state='stale' WHERE owner=? AND kind='list'").run(owner)
+  }
+
+  recordAuthoritativeTitle(owner: string, profile: string, sessionID: string, title: string): void {
+    const normalized = title.trim()
+    if (!normalized) return
+    this.updateOwnedSessionTitle(owner, profile, sessionID, normalized, Date.now())
+    this.db.prepare(`UPDATE chat_snapshots SET sync_state='stale'
+      WHERE owner=? AND (session_id=? OR kind='list')`).run(owner, sessionID)
   }
 
   deleteSession(owner: string, profile: string, sessionID: string): void {
@@ -276,21 +384,31 @@ export class ChatCacheStore {
     return Boolean(this.db.prepare('SELECT 1 ok FROM chat_attachments WHERE owner=? AND source_path=? LIMIT 1').get(owner, sourcePath))
   }
 
-  isWebSession(owner: string, profile: string, sessionID: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 ok FROM chat_sessions WHERE owner=? AND profile=? AND session_id=? AND source='web'")
-      .get(owner, profile, sessionID))
-  }
-
   ownsSession(owner: string, profile: string, sessionID: string): boolean {
     return Boolean(this.db.prepare(
-      'SELECT 1 ok FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?',
+      'SELECT 1 ok FROM chat_sessions WHERE owner=? AND profile=? AND session_id=? AND owned_at IS NOT NULL',
     ).get(owner, profile, sessionID))
+  }
+
+  ownedSessionMetadata(owner: string, profile: string, sessionID: string): {
+    owned: boolean
+    authoritativeTitle?: string
+  } {
+    const row = this.db.prepare(`SELECT authoritative_title FROM chat_sessions
+      WHERE owner=? AND profile=? AND session_id=? AND owned_at IS NOT NULL`)
+      .get(owner, profile, sessionID) as { authoritative_title?: string | null } | undefined
+    const authoritativeTitle = String(row?.authoritative_title ?? '').trim()
+    return {
+      owned: Boolean(row),
+      ...(authoritativeTitle ? { authoritativeTitle } : {}),
+    }
   }
 
   mergeOwnedSessionsIntoList(
     owner: string,
     fallbackProfile: string,
     response: UpstreamResponse,
+    page: { offset?: number; limit?: number; archived?: string } = {},
   ): UpstreamResponse {
     const payload = parseResponse(response)
     if (!payload) return response
@@ -300,20 +418,37 @@ export class ChatCacheStore {
     if (!collectionKey) return response
 
     const rows = (fallbackProfile
-      ? this.db.prepare(`SELECT profile,session_id,data FROM chat_sessions
-          WHERE owner=? AND profile=? ORDER BY last_synced_at DESC LIMIT 1000`)
+      ? this.db.prepare(`SELECT profile,session_id,source,data,authoritative_title,last_synced_at FROM chat_sessions
+          WHERE owner=? AND profile=? AND owned_at IS NOT NULL`)
           .all(owner, fallbackProfile)
-      : this.db.prepare(`SELECT profile,session_id,data FROM chat_sessions
-          WHERE owner=? ORDER BY last_synced_at DESC LIMIT 1000`).all(owner)) as Array<{
+      : this.db.prepare(`SELECT profile,session_id,source,data,authoritative_title,last_synced_at FROM chat_sessions
+          WHERE owner=? AND owned_at IS NOT NULL`).all(owner)) as Array<{
             profile: string
             session_id: string
+            source: string
             data: string
+            authoritative_title: string | null
+            last_synced_at: number
           }>
     const owned = new Map(rows.map(row => [
       `${row.profile}\u0000${row.session_id}`,
       row,
     ]))
     const merged = new Map<string, Record<string, unknown>>()
+    for (const [key, row] of owned) {
+      let stored: Record<string, unknown> = {}
+      try { stored = object(JSON.parse(row.data)) ?? {} } catch { /* Ignore damaged display metadata. */ }
+      const storedSource = sessionSource(stored)
+      merged.set(key, {
+        ...stored,
+        id: row.session_id,
+        profile: row.profile,
+        source: storedSource && storedSource !== 'unknown' ? storedSource : row.source,
+        ...(row.authoritative_title?.trim() ? { title: row.authoritative_title.trim() } : {}),
+        _yaoyao_registry_activity: row.last_synced_at,
+        owned: true,
+      })
+    }
     for (const value of payload[collectionKey] as unknown[]) {
       const session = object(value)
       if (!session) continue
@@ -321,38 +456,159 @@ export class ChatCacheStore {
       const profile = profileOf(session, fallbackProfile) || 'default'
       if (!id) continue
       const key = `${profile}\u0000${id}`
-      if (sessionSource(session) === 'web' || owned.has(key)) {
-        merged.set(key, { ...session, source: 'web' })
+      const row = owned.get(key)
+      if (row) {
+        const title = row.authoritative_title?.trim()
+        merged.set(key, {
+          ...merged.get(key),
+          ...session,
+          ...(title ? { title } : {}),
+          _yaoyao_registry_activity: row.last_synced_at,
+          owned: true,
+        })
       }
-    }
-    for (const [key, row] of owned) {
-      if (merged.has(key)) continue
-      let stored: Record<string, unknown> = {}
-      try { stored = object(JSON.parse(row.data)) ?? {} } catch { /* Ignore damaged display metadata. */ }
-      merged.set(key, {
-        ...stored,
-        id: row.session_id,
-        profile: row.profile,
-        source: 'web',
-      })
     }
     const activity = (session: Record<string, unknown>): number => Number(
       session.last_active_at
         ?? session.last_active
         ?? session.updated_at
         ?? session.started_at
+        ?? session._yaoyao_registry_activity
         ?? 0,
     ) || 0
-    const sessions = [...merged.values()].sort((left, right) =>
-      activity(right) - activity(left))
+    const archived = (session: Record<string, unknown>): boolean => bool(
+      session.is_archived ?? session.isArchived ?? session.archived,
+    )
+    const pinned = (session: Record<string, unknown>): boolean => bool(
+      session.is_pinned ?? session.isPinned ?? session.pinned,
+    )
+    const archivedMode = page.archived ?? 'exclude'
+    const allSessions = [...merged.values()]
+      .filter(session => archivedMode === 'include'
+        || (archivedMode === 'only' ? archived(session) : !archived(session)))
+      .sort((left, right) => Number(pinned(right)) - Number(pinned(left))
+        || activity(right) - activity(left))
+    const offset = Math.max(0, Math.trunc(page.offset ?? 0))
+    const limit = Math.max(1, Math.min(500, Math.trunc(page.limit ?? 100)))
+    const sessions = allSessions.slice(offset, offset + limit).map((session) => {
+      const publicSession = { ...session }
+      delete publicSession._yaoyao_registry_activity
+      return publicSession
+    })
     const body = Buffer.from(JSON.stringify({
       ...payload,
       [collectionKey]: sessions,
-      total: Math.max(Number(payload.total) || 0, sessions.length),
+      total: allSessions.length,
+      offset,
+      limit,
     }))
     const headers = new Headers(response.headers)
     headers.delete('content-length')
     return { ...response, headers, body }
+  }
+
+  excludeOwnedSessionsFromList(
+    owner: string,
+    fallbackProfile: string,
+    response: UpstreamResponse,
+    page: { offset?: number; limit?: number } = {},
+  ): UpstreamResponse {
+    const payload = parseResponse(response)
+    if (!payload) return response
+    const collectionKey = Array.isArray(payload.items)
+      ? 'items'
+      : Array.isArray(payload.sessions) ? 'sessions' : undefined
+    if (!collectionKey) return response
+    const allSessions = (payload[collectionKey] as unknown[]).filter((value) => {
+      const session = object(value)
+      if (!session) return true
+      const id = sessionIDOf(session)
+      const profile = profileOf(session, fallbackProfile) || 'default'
+      return !id || !this.ownsSession(owner, profile, id)
+    })
+    const offset = Math.max(0, Math.trunc(page.offset ?? 0))
+    const limit = Math.max(1, Math.min(500, Math.trunc(page.limit ?? 100)))
+    const sessions = allSessions.slice(offset, offset + limit)
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return {
+      ...response,
+      headers,
+      body: Buffer.from(JSON.stringify({
+        ...payload,
+        [collectionKey]: sessions,
+        total: allSessions.length,
+        offset,
+        limit,
+      })),
+    }
+  }
+
+  markSessionOwnership(
+    owner: string,
+    fallbackProfile: string,
+    sessionID: string,
+    response: UpstreamResponse,
+  ): UpstreamResponse {
+    const payload = parseResponse(response)
+    if (!payload) return response
+    const session = object(payload.session)
+    const candidate = session ?? payload
+    const id = sessionIDOf(candidate) || sessionID
+    const profile = profileOf(candidate, fallbackProfile) || fallbackProfile || 'default'
+    const row = this.db.prepare(`SELECT authoritative_title FROM chat_sessions
+      WHERE owner=? AND profile=? AND session_id=? AND owned_at IS NOT NULL`).get(owner, profile, id) as { authoritative_title?: string | null } | undefined
+    const owned = Boolean(row)
+    const title = String(row?.authoritative_title ?? '').trim()
+    const body = session
+      ? Buffer.from(JSON.stringify({
+          ...payload,
+          session: { ...session, ...(title ? { title } : {}), owned },
+          owned,
+        }))
+      : Buffer.from(JSON.stringify({ ...payload, ...(title ? { title } : {}), owned }))
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return { ...response, headers, body }
+  }
+
+  markOwnedSearchResults(
+    owner: string,
+    fallbackProfile: string,
+    response: UpstreamResponse,
+    view?: 'chat' | 'history',
+    limit = 100,
+  ): UpstreamResponse {
+    const payload = parseResponse(response)
+    if (!payload || !Array.isArray(payload.results)) return response
+    const marked = payload.results.map((value) => {
+      const session = object(value)
+      if (!session) return value
+      const id = sessionIDOf(session)
+      const profile = profileOf(session, fallbackProfile) || fallbackProfile || 'default'
+      const metadata = id
+        ? this.ownedSessionMetadata(owner, profile, id)
+        : { owned: false }
+      return {
+        ...session,
+        ...(metadata.authoritativeTitle ? { title: metadata.authoritativeTitle } : {}),
+        owned: metadata.owned,
+      }
+    })
+    const projected = marked.filter((value) => {
+      if (!view) return true
+      const session = object(value)
+      if (!session) return false
+      return view === 'chat' ? session.owned === true : session.owned !== true
+    })
+    const results = projected.slice(0, Math.max(1, Math.min(100, Math.trunc(limit))))
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return {
+      ...response,
+      headers,
+      body: Buffer.from(JSON.stringify({ ...payload, results, total: projected.length })),
+    }
   }
 
   storeAttachment(owner: string, sourcePath: string, response: UpstreamResponse): string | undefined {
@@ -376,33 +632,72 @@ export class ChatCacheStore {
     return { stream: createReadStream(path), size: statSync(path).size }
   }
 
-  private payloadIsWeb(owner: string, profile: string, sessionID: string | undefined, payload: Record<string, unknown>): boolean {
+  private payloadBelongsToOwnedChat(owner: string, profile: string, sessionID: string | undefined,
+    payload: Record<string, unknown>): boolean {
     const session = object(payload.session) ?? (sessionID ? payload : undefined)
-    if (session && sessionSource(session) === 'web') return true
+    if (session) {
+      const id = sessionIDOf(session) || sessionID || ''
+      const sessionProfile = profileOf(session, profile) || profile || 'default'
+      if (id && this.ownsSession(owner, sessionProfile, id)) return true
+    }
     const sessions = Array.isArray(payload.items) ? payload.items : Array.isArray(payload.sessions) ? payload.sessions : []
-    if (sessions.some(value => object(value) && sessionSource(object(value)!) === 'web')) return true
-    if (!sessionID) return false
-    return Boolean(this.db.prepare("SELECT 1 ok FROM chat_sessions WHERE owner=? AND profile=? AND session_id=? AND source='web'")
-      .get(owner, profile, sessionID))
+    if (sessions.some(value => {
+      const candidate = object(value)
+      if (!candidate) return false
+      const id = sessionIDOf(candidate)
+      const sessionProfile = profileOf(candidate, profile) || profile || 'default'
+      return Boolean(id && this.ownsSession(owner, sessionProfile, id))
+    })) return true
+    return Boolean(sessionID && this.ownsSession(owner, profile || 'default', sessionID))
   }
 
   private ingestPayload(owner: string, fallbackProfile: string, sessionID: string | undefined,
-    payload: Record<string, unknown>, now: number): void {
+    payload: Record<string, unknown>, now: number, kind: string, requestStartedAt: number): void {
     const candidates: Record<string, unknown>[] = []
     const direct = object(payload.session)
     if (direct) candidates.push(direct)
     const listed = Array.isArray(payload.items) ? payload.items : Array.isArray(payload.sessions) ? payload.sessions : []
     for (const value of listed) if (object(value)) candidates.push(object(value)!)
-    if (sessionID && !direct && sessionSource(payload)) candidates.push(payload)
+    if (sessionID && !direct && (sessionIDOf(payload) || sessionSource(payload) || typeof payload.title === 'string')) {
+      candidates.push(payload)
+    }
     for (const session of candidates) {
-      if (sessionSource(session) !== 'web') continue
-      const id = sessionIDOf(session)
+      const id = sessionIDOf(session) || sessionID || ''
       if (!id) continue
       const profile = profileOf(session, fallbackProfile) || fallbackProfile || 'default'
+      const registered = this.ownsSession(owner, profile, id)
+      const source = sessionSource(session)
+      if (!registered) continue
+      const titleRow = this.db.prepare(`SELECT authoritative_title,authoritative_title_at FROM chat_sessions
+        WHERE owner=? AND profile=? AND session_id=?`).get(owner, profile, id) as {
+          authoritative_title?: string | null; authoritative_title_at?: number
+        } | undefined
+      const authoritativeTitle = String(titleRow?.authoritative_title ?? '').trim()
+      const authoritativeTitleAt = Number(titleRow?.authoritative_title_at ?? 0)
+      const incomingTitle = sessionTitle(session)
+      const preservesAuthoritativeTitle = Boolean(authoritativeTitle)
+        && (kind !== 'detail' || isPlaceholderTitle(incomingTitle)
+          || requestStartedAt <= authoritativeTitleAt)
+      const storedSession = preservesAuthoritativeTitle
+        ? { ...session, title: authoritativeTitle }
+        : session
       this.db.prepare(`INSERT INTO chat_sessions(owner,profile,session_id,runtime_id,source,data,sync_state,complete,last_synced_at)
-        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET data=excluded.data,source='web',
+        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET data=excluded.data,
+        source=CASE WHEN excluded.source='unknown' THEN chat_sessions.source ELSE excluded.source END,
         sync_state='current',last_synced_at=excluded.last_synced_at`)
-        .run(owner, profile, id, null, 'web', JSON.stringify(session), 'current', 0, now)
+        .run(owner, profile, id, null, source || 'unknown', JSON.stringify(storedSession), 'current', 0, now)
+      const acceptedTitle = sessionTitle(storedSession)
+      if (acceptedTitle && !isPlaceholderTitle(acceptedTitle)
+        && (!authoritativeTitle || kind === 'detail')) {
+        this.db.prepare(`UPDATE chat_sessions SET authoritative_title=?,authoritative_title_at=?
+          WHERE owner=? AND profile=? AND session_id=?`).run(
+            acceptedTitle,
+            Math.max(requestStartedAt, authoritativeTitleAt),
+            owner,
+            profile,
+            id,
+          )
+      }
     }
     const messages = Array.isArray(payload.messages) ? payload.messages.flatMap(value => object(value) ? [object(value)!] : []) : []
     if (!messages.length || !sessionID) return
@@ -429,6 +724,26 @@ export class ChatCacheStore {
     this.db.prepare(`UPDATE chat_sessions SET complete=MAX(complete,?),sync_state='current',last_synced_at=?
       WHERE owner=? AND profile=? AND session_id=?`).run(complete ? 1 : 0, now, owner, profile, sessionID)
   }
+
+  private updateOwnedSessionTitle(owner: string, profile: string, sessionID: string, title: string, now: number): void {
+    const row = this.db.prepare(`SELECT source,data FROM chat_sessions
+      WHERE owner=? AND profile=? AND session_id=? AND owned_at IS NOT NULL`).get(owner, profile, sessionID) as Record<string, unknown> | undefined
+    if (!row) return
+    let summary: Record<string, unknown> = {}
+    try { summary = object(JSON.parse(String(row.data))) ?? {} } catch { /* Rebuild damaged display metadata below. */ }
+    const storedSource = sessionSource(summary)
+    const source = storedSource && storedSource !== 'unknown'
+      ? storedSource
+      : String(row.source || 'unknown')
+    this.db.prepare(`UPDATE chat_sessions SET data=?,authoritative_title=?,authoritative_title_at=?,sync_state='stale',last_synced_at=?
+      WHERE owner=? AND profile=? AND session_id=?`).run(JSON.stringify({
+      ...summary,
+      id: sessionID,
+      profile,
+      source,
+      title,
+    }), title, now, now, owner, profile, sessionID)
+  }
 }
 
 export class ChatCacheCoordinator {
@@ -437,28 +752,46 @@ export class ChatCacheCoordinator {
     readonly mode: ChatCacheMode = 'prefer-local') {}
 
   async read(owner: string, key: string, kind: string, profile: string, sessionID: string | undefined,
-    load: () => Promise<UpstreamResponse>, knownWeb = false): Promise<{ response: UpstreamResponse; source: ChatCacheSource; state: ChatCacheState }> {
-    if (this.mode === 'upstream-only') return { response: await load(), source: 'upstream', state: 'current' }
+    load: () => Promise<UpstreamResponse>, ownedList = false,
+    listPage: { offset?: number; limit?: number; archived?: string } = {}): Promise<{ response: UpstreamResponse; source: ChatCacheSource; state: ChatCacheState }> {
+    if (this.mode === 'upstream-only') {
+      const upstreamResponse = await load()
+      return {
+        response: kind === 'list' && ownedList
+          ? this.store.mergeOwnedSessionsIntoList(owner, profile, upstreamResponse, listPage)
+          : upstreamResponse,
+        source: 'upstream',
+        state: 'current',
+      }
+    }
     const local = this.store.snapshot(owner, key)
+    const projectedLocal = local && kind === 'list' && ownedList
+      ? {
+          ...local,
+          response: this.store.mergeOwnedSessionsIntoList(owner, profile, local.response, listPage),
+        }
+      : local
     if (this.mode === 'prefer-local' && local?.state === 'current') {
       return { response: local.response, source: 'local', state: local.state }
     }
     try {
+      const requestStartedAt = Date.now()
       const upstreamResponse = await load()
       if (this.mode === 'prefer-local' && local && upstreamResponse.status >= 500) {
-        return { response: local.response, source: 'local', state: 'stale' }
+        return { response: projectedLocal!.response, source: 'local', state: 'stale' }
       }
-      const response = kind === 'list' && knownWeb
+      const response = kind === 'list' && ownedList
         ? this.store.mergeOwnedSessionsIntoList(
             owner,
             profile,
             upstreamResponse,
+            listPage,
           )
         : upstreamResponse
-      this.store.putSnapshot(owner, key, kind, profile, sessionID, response, knownWeb)
+      this.store.putSnapshot(owner, key, kind, profile, sessionID, response, ownedList, requestStartedAt)
       return { response, source: 'upstream', state: 'current' }
     } catch (error) {
-      if (this.mode === 'prefer-local' && local) return { response: local.response, source: 'local', state: 'stale' }
+      if (this.mode === 'prefer-local' && local) return { response: projectedLocal!.response, source: 'local', state: 'stale' }
       throw error
     }
   }
@@ -471,7 +804,7 @@ export class ChatCacheCoordinator {
     }
     const result = await this.read(owner, key, 'messages', profile, sessionID, load)
     if (result.source === 'upstream'
-      && this.store.isWebSession(owner, profile, sessionID)
+      && this.store.ownsSession(owner, profile, sessionID)
       && !this.store.messagePage(owner, profile, sessionID, 0, 1)) {
       void this.reconcile(owner, profile, sessionID)
     }
@@ -479,22 +812,23 @@ export class ChatCacheCoordinator {
   }
 
   observe(owner: string, profile: string, sessionID: string, frame: Record<string, unknown>): void {
-    if (this.mode === 'upstream-only') return
     this.store.recordEvent(owner, profile, sessionID, frame)
-    if (String(frame.type) === 'message.complete') void this.reconcile(owner, profile, sessionID)
+    if (this.mode !== 'upstream-only' && String(frame.type) === 'message.complete') {
+      void this.reconcile(owner, profile, sessionID)
+    }
   }
 
   observeGlobal(owner: string, type: string): void {
-    if (this.mode !== 'upstream-only' && type === 'sessions.changed') this.store.markListsStale(owner)
+    if (type === 'sessions.changed') this.store.markListsStale(owner)
   }
 
   command(owner: string, profile: string, sessionID: string, method: string,
     params: Record<string, unknown>): void {
-    if (this.mode !== 'upstream-only') this.store.recordCommand(owner, profile, sessionID, method, params)
+    this.store.recordCommand(owner, profile, sessionID, method, params)
   }
 
   route(owner: string, profile: string, sessionID: string, runtimeID: string): void {
-    if (this.mode !== 'upstream-only') this.store.recordRoute(owner, profile, sessionID, runtimeID)
+    this.store.recordRoute(owner, profile, sessionID, runtimeID)
   }
 
   async reconcile(owner: string, profile: string, sessionID: string): Promise<void> {
@@ -504,13 +838,15 @@ export class ChatCacheCoordinator {
     const task = (async () => {
       const detailPath = `/api/sessions/${encodeURIComponent(sessionID)}`
       const detailSearch = new URLSearchParams({ profile })
+      const detailStartedAt = Date.now()
       const detail = await this.upstream.request(detailPath, { search: detailSearch })
-      this.store.putSnapshot(owner, `detail:${profile}:${sessionID}`, 'detail', profile, sessionID, detail)
+      this.store.putSnapshot(owner, `detail:${profile}:${sessionID}`, 'detail', profile, sessionID, detail, false, detailStartedAt)
       let offset = 0
       for (let page = 0; page < 200; page++) {
         const search = new URLSearchParams({ profile, offset: String(offset), limit: '500', order: 'latest', include_compacted: 'true' })
+        const messagesStartedAt = Date.now()
         const response = await this.upstream.request(`${detailPath}/messages`, { search })
-        if (!this.store.putSnapshot(owner, `messages:${profile}:${sessionID}:${offset}:500`, 'messages', profile, sessionID, response)) return
+        if (!this.store.putSnapshot(owner, `messages:${profile}:${sessionID}:${offset}:500`, 'messages', profile, sessionID, response, false, messagesStartedAt)) return
         const payload = parseResponse(response)
         const messages = Array.isArray(payload?.messages) ? payload.messages : []
         const pagination = object(payload?.pagination) ?? {}

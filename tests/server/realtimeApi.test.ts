@@ -51,6 +51,7 @@ describe('native Hermes chat and history are separated on 15300', () => {
       .set('Origin', origin).set('X-CSRF-Token', bootstrap.body.csrfToken)
       .send({ username: 'owner', password: 'fixture-password' }).expect(200)
     const csrf = setup.body.csrfToken
+    const owner = String(setup.body.user.id)
 
     const capabilities = await agent.get('/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(200)
     expect(capabilities.body.channels).toEqual(['chat'])
@@ -75,6 +76,37 @@ describe('native Hermes chat and history are separated on 15300', () => {
     expect(pairedWrite.body.code).toBe('native_sessions_read_only')
     expect(upstreamCalls).toBeGreaterThan(beforeWrites)
     expect(upstreamWrites).toBe(beforeUpstreamWrites)
+
+    const unownedWeb = await agent.patch('/api/app/sessions/session-web?profile=default')
+      .set('Host', '127.0.0.1:15300').set('Origin', origin).set('X-CSRF-Token', csrf)
+      .send({ title: '不能靠 source 修改' }).expect(410)
+    expect(unownedWeb.body.code).toBe('native_sessions_read_only')
+    const ownershipGate = runtime.realtime as unknown as {
+      canResume(profile: string, sessionID: string, jar?: unknown, owner?: string): Promise<boolean>
+    }
+    expect(await ownershipGate.canResume('default', 'session-web', undefined, owner)).toBe(false)
+    const deviceOwner = `device:${paired.device.id}`
+    expect(await ownershipGate.canResume('default', 'session-web', undefined, deviceOwner)).toBe(false)
+
+    runtime.chatCache!.store.recordRoute(deviceOwner, 'default', 'device-session', 'runtime-device')
+    expect(await ownershipGate.canResume('default', 'device-session', undefined, deviceOwner)).toBe(true)
+    expect(await ownershipGate.canResume('default', 'device-session', undefined, owner)).toBe(false)
+    const anotherPairing = runtime.pairings.create('another_device=session')
+    const anotherDevice = runtime.pairings.claim({
+      pairingID: anotherPairing.id,
+      secret: anotherPairing.secret,
+      deviceName: 'another history fixture',
+    })
+    expect(await ownershipGate.canResume(
+      'default',
+      'device-session',
+      undefined,
+      `device:${anotherDevice.device.id}`,
+    )).toBe(false)
+
+    runtime.chatCache!.store.recordRoute(owner, 'default', 'session-web', 'runtime-web')
+    runtime.chatCache!.store.recordCommand(owner, 'default', 'session-web', 'session.create', { source: 'ios' })
+    expect(await ownershipGate.canResume('default', 'session-web', undefined, owner)).toBe(true)
     await agent.patch('/api/app/sessions/session-web?profile=default').set('Host', '127.0.0.1:15300')
       .set('Origin', origin).set('X-CSRF-Token', csrf).send({ title: '可修改的聊天' }).expect(200)
     expect(upstreamWrites).toBe(beforeUpstreamWrites + 1)

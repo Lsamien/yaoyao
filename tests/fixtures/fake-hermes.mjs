@@ -103,7 +103,9 @@ const profiles = [
 // This intentionally differs from local timestamp/pin ranking. Browser tests
 // verify that the WebUI preserves the ordering returned by 9119.
 const sessions = [
-  { id: 'session-history-only', profile: 'yaoyao', source: 'cli', title: 'Hermes 外部历史', preview: '只读历史记录', message_count: 1, tool_call_count: 0, started_at: now() - 1800, last_active_at: now() - 900, model: 'gpt-5.6', provider: 'openai' },
+  // `source` is mutable display metadata, not ownership proof. This row is
+  // intentionally absent from the Web user's registry and must stay history-only.
+  { id: 'session-history-only', profile: 'yaoyao', source: 'web', title: 'Hermes 外部历史', preview: '只读历史记录', message_count: 1, tool_call_count: 0, started_at: now() - 1800, last_active_at: now() - 900, model: 'gpt-5.6', provider: 'openai' },
   { id: 'session-second', profile: 'yaoyao', source: 'web', title: '第二个会话', preview: '用于验证列表和切换', message_count: 2, tool_call_count: 0, started_at: now() - 7200, last_active_at: now() - 600, model: 'gpt-5.5', provider: 'openai' },
   { id: 'session-demo', profile: 'yaoyao', source: 'web', title: '夭夭 Web 验收会话', preview: '文件库与群聊已经就绪', message_count: 4, tool_call_count: 1, started_at: now() - 3600, last_active_at: now(), pinned: true, model: 'gpt-5.6', provider: 'openai' },
   { id: 'session-yaoer', profile: 'yaoer', source: 'web', title: '瑶儿专属会话', message_count: 1, tool_call_count: 0, started_at: now() - 3500, last_active_at: now() - 20, model: 'gpt-5.6', provider: 'openai' },

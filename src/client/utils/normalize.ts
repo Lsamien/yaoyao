@@ -113,6 +113,7 @@ export function normalizeModel(value: unknown): ModelOption {
 export function normalizeSession(value: unknown, fallbackProfile?: string): SessionSummary {
   const source = record(value)
   const modelConfig = jsonRecord(pick(source, 'model_config', 'modelConfig'))
+  const owned = pick(source, 'owned', 'is_owned', 'isOwned')
   const startedAt = number(pick(source, 'started_at', 'startedAt', 'created_at', 'createdAt'))
   const updatedAt = number(pick(source, 'last_active', 'lastActive', 'updated_at', 'updatedAt'), startedAt)
   const id = string(pick(source, 'id', 'session_id', 'sessionId', 'stored_session_id', 'storedSessionId'))
@@ -120,6 +121,7 @@ export function normalizeSession(value: unknown, fallbackProfile?: string): Sess
     id,
     profile: string(source.profile, fallbackProfile) || undefined,
     source: string(source.source, 'cli'),
+    owned: owned === undefined ? undefined : bool(owned),
     title: string(source.title, '未命名会话'),
     preview: string(source.preview) || undefined,
     model: string(source.model ?? modelConfig.model) || undefined,

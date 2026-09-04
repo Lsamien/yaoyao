@@ -25,6 +25,7 @@ import { readAgentShowThinking, writeAgentShowThinking } from '@/utils/sessionPr
 import { modelChoiceId, modelForChoiceId } from '@/utils/sessionModel'
 import { MODEL_CATALOG_CHANGED_EVENT, modelCatalogChangedProfile } from '@/utils/modelCatalogEvents'
 import { estimateConversationTokens } from '@/utils/contextUsage'
+import { isOwnedChatSession } from '@/utils/sessionOwnership'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { getSession } from '@/api/sessions'
@@ -58,7 +59,7 @@ function handleModelCatalogChanged(event: Event) {
 }
 
 const sessions = computed(() => [...chat.sessions]
-  .filter(session => session.source === 'web'))
+  .filter(isOwnedChatSession))
 const agentNames = computed(() => new Map(auth.profiles.map(profile => [
   profile.name,
   profile.agentName || profile.displayName || profile.name,
@@ -146,7 +147,7 @@ async function refreshSessions() {
   await chat.loadSessions(profile, 'chat')
   if (requestedId) {
     const target = await getSession(requestedId, profile).catch(() => undefined)
-    if (target && target.source !== 'web') {
+    if (target && !isOwnedChatSession(target)) {
       await router.replace({ path: `/history/${encodeURIComponent(requestedId)}`, query: { profile } })
       return
     }
@@ -154,7 +155,9 @@ async function refreshSessions() {
   if (requestedId && chat.activeSessionId !== requestedId) await chat.selectSession(requestedId, profile)
   if (requestedId && profile && routeProfile() !== profile) await router.replace(sessionLocation(requestedId, profile))
   void chat.loadUnread(profile).catch(() => undefined)
-  if (!requestedId && chat.activeSession?.source !== 'web') chat.clearSelection()
+  if (!requestedId && chat.activeSession && !isOwnedChatSession(chat.activeSession)) {
+    chat.clearSelection()
+  }
 }
 
 async function chooseSession(id: string) {
