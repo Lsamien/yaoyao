@@ -88,6 +88,7 @@ const emit = defineEmits<{
   saveIdentity: [input: ProfileIdentityInput]
   closeInspector: []
   createAgent: []
+  createRemoteAgent: []
   createGroup: []
 }>()
 
@@ -128,7 +129,7 @@ const navItems: NavItem[] = [
 
 // The active workspace is already represented by its main canvas and sidebar
 // context. Keep this strip focused on destinations the user can switch to.
-const featureNavItems = computed(() => navItems.filter(item => item.key !== 'groups' && item.key !== activeNav.value.key
+const featureNavItems = computed(() => !props.isAdmin ? [] : navItems.filter(item => item.key !== 'groups' && item.key !== activeNav.value.key
  ))
 
 const applicationWorkspace = computed(() => route.path.startsWith('/conversations'))
@@ -183,10 +184,11 @@ async function openCreateMenu(event: Event) {
   await nextTick()
   createMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
 }
-function chooseCreate(kind: 'agent' | 'group') {
+function chooseCreate(kind: 'agent' | 'group' | 'remote-agent') {
   closeCreateMenu()
   mobileDrawerOpen.value = false
-  if (kind === 'agent') emit('createAgent')
+  if (kind === 'remote-agent' && props.isAdmin) emit('createRemoteAgent')
+  else if (kind === 'agent') emit('createAgent')
   else emit('createGroup')
 }
 function actionMenuKeydown(event: KeyboardEvent) {
@@ -220,6 +222,7 @@ function chooseSettingsAction(action: 'settings' | 'bots') {
   openSettings(applicationWorkspace.value ? 'account-security' : 'agent-identity')
 }
 function switchInterfaceMode() {
+  if (!props.isAdmin) return
   settingsOpen.value = false
   void navigate(applicationWorkspace.value ? '/chat' : '/conversations')
 }
@@ -644,12 +647,13 @@ onBeforeUnmount(() => {
       <div v-if="settingsMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeSettingsMenu" @keydown.esc.prevent.stop="closeSettingsMenu">
         <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :style="settingsMenuPosition" role="menu" aria-label="设置与模式" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />进入设置</button>
-          <button type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
+          <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
       </div>
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>
+          <button v-if="isAdmin" type="button" role="menuitem" @click="chooseCreate('remote-agent')"><AppIcon name="users" :size="17" />添加远程 Agent</button>
           <button type="button" role="menuitem" @click="chooseCreate('group')"><AppIcon name="groups" :size="17" />新建群聊</button>
         </div>
       </div>

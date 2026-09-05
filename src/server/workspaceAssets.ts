@@ -90,6 +90,8 @@ export class WorkspaceAssets {
       agent.profile,
       message.conversationId,
       message.id,
+      'agent',
+      agent.remoteAgentId,
     )
     if (this.stopped) return
     const attachments = this.store
@@ -109,6 +111,7 @@ export class WorkspaceAssets {
     conversationId: string,
     messageId: string,
     sender: 'user' | 'agent' = 'agent',
+    remoteAgentId?: string,
   ): Promise<void> {
     if (this.stopped) return
     const paths = new Set<string>()
@@ -124,8 +127,7 @@ export class WorkspaceAssets {
         continue
       this.pending.add(`${owner}:${key}`)
       try {
-        const response = await this.nodes
-          .target(owner, nodeId)
+        const response = await (remoteAgentId ? this.nodes.targetForAgent(owner,{nodeId,remoteAgentId}) : this.nodes.target(owner,nodeId))
           .session.request('/api/files/download', {
             search: new URLSearchParams({ profile, path }),
             maxResponseBytes: 25 * 1024 * 1024,

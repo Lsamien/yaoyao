@@ -42,7 +42,7 @@ export async function createPairing(
 }
 
 export async function pairChildNode(qrPayload: string, name?: string): Promise<void> {
-  await apiRequest('/api/app/groups/nodes/pair', {
+  await apiRequest('/api/app/nodes', {
     method: 'POST', body: { qrPayload, name: name || '' } as unknown as JsonValue,
   })
 }

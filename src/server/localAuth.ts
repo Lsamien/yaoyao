@@ -35,6 +35,7 @@ interface StoredUser {
   avatar?: string
   normalizedUsername: string
   role: LocalRole
+  assignedProfiles?: string[]
   enabled: boolean
   mustChangePassword: boolean
   salt: string
@@ -58,6 +59,7 @@ export interface LocalUser {
   username: string
   avatar?: string
   role: LocalRole
+  assignedProfiles?: string[]
   enabled: boolean
   mustChangePassword: boolean
   createdAt: number
@@ -93,6 +95,7 @@ function publicUser(user: StoredUser): LocalUser {
     username: user.username,
     ...(validAvatarImage(user.avatar) ? { avatar: user.avatar } : {}),
     role: user.role,
+    assignedProfiles: [...(user.assignedProfiles ?? [])],
     enabled: user.enabled,
     mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt,
@@ -232,6 +235,18 @@ export class LocalAuthStore {
     return user
   }
 
+  validateAssignedProfiles(value: unknown): string[] {
+    if (!Array.isArray(value) || value.length > 256 || value.some(p => typeof p !== 'string' || !p.trim() || p.length > 256 || /[\/\\\u0000-\u001f]/.test(p))) {
+      throw new HttpError(400, '分配的基础 Agent 无效', 'invalid_assigned_profiles')
+    }
+    return [...new Set(value.map(p => p.trim()))]
+  }
+
+  canUseSource(userID: string, nodeId: string, profile: string): boolean {
+    const user = this.#users.find(candidate => candidate.id === userID && candidate.enabled)
+    return Boolean(user && (user.role === 'admin' || (nodeId === 'local' && user.assignedProfiles?.includes(profile))))
+  }
+
   isUserActive(userID: string): boolean {
     return this.#users.some(user => user.id === userID && user.enabled)
   }
@@ -246,7 +261,7 @@ export class LocalAuthStore {
     return this.#users.map(publicUser).sort((a, b) => a.createdAt - b.createdAt)
   }
 
-  create(admin: LocalUser, usernameValue: string, passwordValue: string): LocalUser {
+  create(admin: LocalUser, usernameValue: string, passwordValue: string, assignedProfiles: unknown = []): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const username = canonicalUsername(usernameValue)
     const normalizedUsername = username.toLocaleLowerCase('en-US')
@@ -256,16 +271,20 @@ export class LocalAuthStore {
     const password = validatePassword(passwordValue)
     const now = Date.now()
     const user = this.#newUser(username, password, 'user', true, now)
+    user.assignedProfiles = this.validateAssignedProfiles(assignedProfiles)
     this.#users.push(user)
     this.#saveUsers()
     return publicUser(user)
   }
 
-  updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string }): LocalUser {
+  updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string; assignedProfiles?: unknown }): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const user = this.#users.find(candidate => candidate.id === userID)
     if (!user) throw new HttpError(404, '用户不存在', 'user_not_found')
     if (user.role === 'admin') throw new HttpError(409, '管理员账号请在账号设置中修改', 'admin_account_protected')
+    const assigned = input.assignedProfiles === undefined ? undefined : this.validateAssignedProfiles(input.assignedProfiles)
+    if (input.password !== undefined) validatePassword(input.password)
+    if (assigned !== undefined) user.assignedProfiles = assigned
     if (typeof input.enabled === 'boolean') user.enabled = input.enabled
     if (input.password !== undefined) {
       this.#setPassword(user, validatePassword(input.password), true)

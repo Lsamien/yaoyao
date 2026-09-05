@@ -148,7 +148,9 @@ const upstream = createServer((req, res) => {
   }
   const history = /^\/api\/sessions\/([^/]+)\/messages$/.exec(url.pathname)
   if (history) {
-    send({ messages: sessions.get(history[1]!)?.messages || [] })
+    const messages = sessions.get(history[1]!)?.messages || []
+    send({ session_id: history[1], messages,
+      pagination: {offset: 0, limit: 100, returned: messages.length, total: messages.length, has_more: false} })
     return
   }
   if (url.pathname === '/api/files/download') {

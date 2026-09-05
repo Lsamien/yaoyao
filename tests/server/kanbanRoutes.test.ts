@@ -187,7 +187,7 @@ describe('Kanban proxy routes', () => {
     })
   })
 
-  it('allows authenticated users to read but rejects every user mutation alias', async () => {
+  it('rejects Bot-only users from every native Kanban read and mutation alias', async () => {
     const fixture = upstreamFixture()
     const runtime = createUserAuthenticatedApplication({ config: testConfig(), fetchImpl: fixture.fetchImpl })
     runtimes.push(runtime)
@@ -195,9 +195,9 @@ describe('Kanban proxy routes', () => {
     const csrf = await csrfToken(agent)
     fixture.calls.splice(0)
 
-    await agent.get('/api/app/kanban/board?board=main').set('Host', HOST).expect(200)
-    await agent.get('/api/kanban/v1/board?board=main').set('Host', HOST).expect(200)
-    expect(fixture.calls).toHaveLength(2)
+    await agent.get('/api/app/kanban/board?board=main').set('Host', HOST).expect(403)
+    await agent.get('/api/kanban/v1/board?board=main').set('Host', HOST).expect(403)
+    expect(fixture.calls).toHaveLength(0)
 
     const web = await agent.post('/api/app/kanban/tasks?board=main')
       .set('Host', HOST)
@@ -205,14 +205,14 @@ describe('Kanban proxy routes', () => {
       .set('X-CSRF-Token', csrf)
       .send({ title: 'forbidden' })
       .expect(403)
-    expect(web.body.code).toBe('admin_required')
+    expect(web.body.code).toBe('bot_mode_required')
 
     const native = await agent.patch('/api/kanban/v1/tasks/t_01234567?board=main')
       .set('Host', HOST)
       .send({ status: 'ready' })
       .expect(403)
-    expect(native.body.code).toBe('admin_required')
-    expect(fixture.calls).toHaveLength(2)
+    expect(native.body.code).toBe('bot_mode_required')
+    expect(fixture.calls).toHaveLength(0)
   })
 
   it('keeps CSRF on Web mutations while native admins can mutate without CSRF', async () => {

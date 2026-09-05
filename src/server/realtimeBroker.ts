@@ -11,6 +11,7 @@ export interface RealtimePrincipal {
   upstreamKey: string
   instanceKey?: string
   paired: boolean
+  nativeBot?: boolean
   agent?: WebSocket.ClientOptions['agent']
   valid(): boolean
   authorize?(kind: 'chat' | 'groups', method?: string): void
@@ -197,7 +198,16 @@ export class RealtimeBroker {
     const execute = async () => {
       if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
       if (method === 'session.resume') {
-        if (c.principal.canResume && !await c.principal.canResume(String(p.profile), String(p.session_id))) {
+        let permitted = !c.principal.canResume || await c.principal.canResume(String(p.profile), String(p.session_id))
+        if (c.principal.nativeBot) {
+          await this.connect(u)
+          const roster = await this.rpc(u, 'profiles.list', {include_sessions: false})
+          const profiles = roster.result?.profiles
+          const bot = Array.isArray(profiles) ? profiles.find((value: Frame) => value.name === p.profile) : undefined
+          permitted = !roster.error && typeof p.session_id === 'string' && p.session_id.length > 0 &&
+            bot?.ui_meta?.['hermes-bots']?.chat === p.session_id
+        }
+        if (!permitted) {
           throw new HttpError(403, '此会话属于历史记录，不能继续聊天', 'history_session_read_only')
         }
         const ownerKey = JSON.stringify([c.principal.instanceKey ?? c.principal.upstreamKey, p.profile, p.session_id])
@@ -407,8 +417,8 @@ export class RealtimeBroker {
     }
   }
   private nativeOwner(principal: RealtimePrincipal): string | undefined {
-    const device = /^device:([^:]+)$/.exec(principal.key)
-    if (device) return `device:${device[1]}`
+    const device = /^device:[^:]+(?::agent:[^:]+)?$/.test(principal.key)
+    if (device) return principal.key
     const match = /^(?:user|push):([^:]+)/.exec(principal.key)
     return match?.[1]
   }

@@ -5,6 +5,7 @@ export interface ManagedUser {
   id: string
   username: string
   role: 'admin' | 'user'
+  assignedProfiles?: string[]
   enabled: boolean
   mustChangePassword: boolean
   createdAt: number
@@ -16,13 +17,13 @@ export async function listUsers(): Promise<ManagedUser[]> {
   return response.items
 }
 
-export async function createUser(username: string, password: string): Promise<ManagedUser> {
+export async function createUser(username: string, password: string, assignedProfiles: string[] = []): Promise<ManagedUser> {
   return apiRequest('/api/app/admin/users', {
-    method: 'POST', body: { username, password } as unknown as JsonValue,
+    method: 'POST', body: { username, password, assignedProfiles } as unknown as JsonValue,
   })
 }
 
-export async function updateUser(id: string, input: { enabled?: boolean; password?: string }): Promise<ManagedUser> {
+export async function updateUser(id: string, input: { enabled?: boolean; password?: string; assignedProfiles?: string[] }): Promise<ManagedUser> {
   return apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}`, {
     method: 'PATCH', body: input as unknown as JsonValue,
   })

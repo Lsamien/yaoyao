@@ -19,6 +19,7 @@ export { mentionedAgents } from './workspaceMentions.js'
 type Run = WorkspaceRun
 
 export interface WorkspaceBinding {
+  remoteAgentId?: string
   id: string
   nodeId: string
   profile: string
@@ -55,6 +56,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   constructor(store: WorkspaceStore, readonly nodes: WorkspaceNodes, readonly uploads: UploadStore, userActive: (owner: string) => boolean = () => true) { super(store, userActive) }
   send(owner: string, conversationId: string, input: unknown): Run {
     const body = parse(sendInput, input)
+    for (const id of this.store.require<Conversation>(owner, 'conversation', conversationId).memberIds)
+      this.nodes.requireSource(owner, this.store.require<Agent>(owner, 'agent', id))
     const result = this.store.command(owner, body.requestId, { conversationId, ...body }, () => {
       const c = this.store.require<Conversation>(owner, 'conversation', conversationId)
       if (c.archived) throw new HttpError(409, '聊天已归档', 'conversation_archived')
@@ -133,8 +136,10 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     run: Work,
     recovering = false,
   ): Promise<Message> {
+    this.nodes.requireSource(owner, agent)
+    if (agent.remoteAgentId) agent = await this.nodes.refreshRemoteAgent(owner,agent)
     const key = this.bindingKey(c.id, run.conversationTaskId, agent.id),
-      target = this.nodes.target(owner, agent.nodeId)
+      target = agent.remoteAgentId ? this.nodes.targetForAgent(owner,agent) : this.nodes.target(owner, agent.nodeId)
     const gateway = new WorkspaceGateway(target)
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
     let message =
@@ -351,6 +356,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     }
     try {
       await gateway.connect()
+      this.nodes.requireSource(owner, agent)
       const opened = binding?.storedId
         ? await gateway.rpc('session.resume', {
             profile: agent.profile,
@@ -379,6 +385,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       binding = {
         id: key,
         nodeId: agent.nodeId,
+        remoteAgentId: agent.remoteAgentId,
         profile: agent.profile,
         storedId,
         runtimeId,
@@ -457,7 +464,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         }
         const members = run.turnConfiguration!.members
         const rules = [
-          `你是 ${agent.name}。以下是用户为这个独立 Agent 配置的角色与规则（版本 ${agent.revision}）：\n${agent.instructions}`,
+          `你是 ${agent.name}。以下是用户为这个独立 Agent 配置的角色与规则（版本 ${agent.revision}）：\n${agent.remoteAgentId ? '配置由远端 Agent 管理。' : agent.instructions}`,
           c.kind === 'group' && Object.keys(c.memberRoles ?? {}).length
             ? `本群角色分工（仅在本群生效）：\n${members.flatMap(member => {
                 const role = c.memberRoles?.[member.id]
@@ -480,6 +487,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           admission.status = 'interrupted'; admission.error = '执行前成员已移除'; this.saveWork(owner, admission)
           throw new Error('执行前成员已移除')
         }
+        this.nodes.requireSource(owner, agent)
         if (admission.cancelRequested || admission.status === 'interrupted') throw new Error('运行已停止')
         admission.contextThroughSeq = run.contextThroughSeq ?? run.triggerSeq
         admission.submitted = true
@@ -542,6 +550,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   async respond(owner: string, id: string, answer: string): Promise<void> {
     type Reply = WorkspaceInteraction & { answer?: string; responseState?: 'sending' | 'uncertain' | 'sent' }
     const interaction = this.store.require<Reply>(owner, 'interaction', id)
+    this.nodes.requireSource(owner, this.store.require<Agent>(owner, 'agent', interaction.agentId))
     if (interaction.resolved) {
       if (interaction.answer && interaction.answer !== answer) throw new HttpError(409, '该请求已使用其他答复完成', 'interaction_answer_conflict')
       return
@@ -586,7 +595,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       const binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
       if (work.submitted) {
         if (!binding || binding.taskId !== work.id) throw new Error('无法确认待停止成员的会话身份')
-        const gateway = new WorkspaceGateway(this.nodes.target(owner, binding.nodeId))
+        const gateway = new WorkspaceGateway(binding.remoteAgentId ? this.nodes.targetForAgent(owner,binding) : this.nodes.target(owner, binding.nodeId))
         try {
           await gateway.connect()
           const opened = await gateway.rpc('session.resume', { profile: binding.profile, session_id: binding.storedId, omit_messages: true, close_on_disconnect: false })

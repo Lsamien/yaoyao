@@ -1,3 +1,5 @@
+import { hermesBotRelay } from './hermesBotRelay.js'
+import { remoteAgentExports } from './workspaceRemoteAgents.js'
 import { randomBytes, createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
@@ -201,7 +203,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
   // The application owns group events. No Dashboard plugin is queried.
   const workspace = new WorkspaceStore(config.home)
-  const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession })
+  const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
+  workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner))
   const workspaceAssets = new WorkspaceAssets(workspace, workspaceNodes, config.home)
   workspaceRuntime.onMessage = (owner, message) => workspaceAssets.archive(owner, message)
@@ -282,6 +285,22 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
     await next()
   })
+  app.use(async (ctx, next) => {
+    const user = auth.current(ctx)
+    if (user && user.role !== 'admin' && (ctx.path.startsWith('/api/') || ctx.path.startsWith('/node/') || ctx.path.startsWith('/ws/') || ctx.path.startsWith('/Users/') || ctx.path.startsWith('/attachments/'))) {
+      const path = ctx.path
+      const publicPath = ['/api/status', '/api/auth/providers', '/api/auth/me', '/api/profiles', '/api/app/bootstrap', '/api/app/login', '/api/app/logout'].includes(path)
+      const accountPath = ['/api/account/credentials', '/api/app/account/credentials', '/api/app/account/avatar'].includes(path)
+      const workspacePath = /^\/api\/app\/(?:capabilities|agents|conversations|runs|interactions|events|uploads|files|message-files)(?:\/|$)/.test(path)
+        && path !== '/api/app/agents/remote'
+      const pushPath = /^\/api\/(?:app\/)?push\/v1\//.test(path)
+      if (!publicPath && !accountPath && !workspacePath && !pushPath)
+        throw new HttpError(403, '子账号只能使用 Bot 模式', 'bot_mode_required')
+    }
+    await next()
+  })
+  app.use(hermesBotRelay(workspaceNodes, auth, csrf))
+  app.use(remoteAgentExports(workspace,workspaceNodes,pairings,auth))
   app.use(realtime.middleware())
   const parseBody = (limit: string) => bodyParser({
     encoding: 'utf-8',
@@ -362,6 +381,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
   })
   const router = createApiRouter({
+    onUserAccessChanged: async owner => {
+      for (const c of workspace.list<{ id: string }>(owner, 'conversation')) await workspaceRuntime.stopConversation(owner, c.id)
+    },
     workspace,
     config,
     csrf,

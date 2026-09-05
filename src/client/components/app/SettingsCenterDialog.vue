@@ -94,15 +94,15 @@ const updateLocked = ref(false)
 const accountCanSave = ref(false)
 const dirtyPages = reactive<Partial<Record<SettingsPage, boolean>>>({})
 
-const agentItems = computed<NavigationItem[]>(() => [
+const agentItems = computed<NavigationItem[]>(() => !props.isAdmin ? [] : [
   { key: 'agent-identity', label: '身份与头像', icon: 'users' },
   ...(props.isAdmin ? [{ key: 'agent-models', label: '模型与 Provider', icon: 'model' } satisfies NavigationItem] : []),
 ])
-const accountItems: NavigationItem[] = [
+const accountItems = computed<NavigationItem[]>(() => [
   { key: 'account-security', label: '登录与安全', icon: 'settings' },
-  { key: 'account-mobile', label: '手机登录', icon: 'panel' },
+  ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
-]
+])
 const systemItems: NavigationItem[] = [
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
   { key: 'system-users', label: '用户与权限', icon: 'users' },
@@ -115,7 +115,7 @@ const systemItems: NavigationItem[] = [
 
 const allAllowedPages = computed(() => new Set<SettingsPage>([
   ...agentItems.value.map(item => item.key),
-  ...accountItems.map(item => item.key),
+  ...accountItems.value.map(item => item.key),
   ...(props.isAdmin ? systemItems.map(item => item.key) : []),
 ]))
 const activeDirty = computed(() => Boolean(dirtyPages[activePage.value]))
@@ -296,7 +296,7 @@ function requestModeSwitch() {
                 </div>
 
                 <nav>
-                  <section><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
+                  <section v-if="isAdmin"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
                   <section>
                     <h3>当前 Agent</h3>
                     <button v-for="item in agentItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span></button>
@@ -356,7 +356,7 @@ function requestModeSwitch() {
                   </div>
                 </section>
                 <SystemOverviewPanel v-else-if="activePage === 'system-overview' && isAdmin" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @navigate="selectPage" />
-                <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :active="true" @dirty-change="setDirty('system-users', $event)" />
+                <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :profiles="profiles" :active="true" @dirty-change="setDirty('system-users', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-push' && isAdmin" section="push" :active="true" @dirty-change="setDirty('system-push', $event)" />
                 <WorkspaceNodesPanel v-else-if="activePage === 'system-nodes' && isAdmin" />

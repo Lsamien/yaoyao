@@ -1,3 +1,4 @@
+import type { AgentExportContext } from './workspaceRemoteAgents.js'
 import { randomBytes } from 'node:crypto'
 import type { Server, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -29,6 +30,9 @@ export class RealtimeAPI {
     return owner ? this.ownsSession?.(owner, profile, sessionId) ?? false : false
   }
   private principal(ctx: Koa.Context, device?: string): RealtimePrincipal {
+    const exported=ctx.state.workspaceAgentExport as AgentExportContext | undefined
+    const upstream=exported?.target.client ?? this.upstream
+    const endpoint=exported?.target.url ?? this.config.upstream
     let key: string
     let valid: () => boolean
     let authorize: RealtimePrincipal['authorize']
@@ -38,9 +42,9 @@ export class RealtimeAPI {
     if (device) {
       const bearer = ctx.get('authorization').match(/^Bearer\s+(.+)$/i)?.[1] ?? ''
       jar = new CookieJar(this.pairings.authorize(device, bearer))
-      key = `device:${device}`
+      key = `device:${device}${exported ? ':agent:'+exported.id : ''}`
       owner = key
-      valid = () => this.pairings.hasDevice(device)
+      valid = () => this.pairings.hasDevice(device) && (!exported || exported.valid())
       authorize = (kind, method) => {
         this.pairings.authorize(device, bearer, kind === 'groups' ? 'groups.read'
           : method === 'profiles.list' || method === 'profiles.get_asset' ? 'agents.read' : 'sessions.execute')
@@ -59,10 +63,12 @@ export class RealtimeAPI {
         }
       }
     }
+    const nativeBot = ctx.state.hermesBotNative === true
+    if (nativeBot) key = `native:${key}`
     return {
-      key, instanceKey: this.config.upstream.href, upstreamKey: `${this.config.upstream.href}:${device ? `device:${device}` : 'service'}`, paired: Boolean(device), valid, authorize,
+      key, nativeBot, instanceKey: endpoint.href, upstreamKey: `${endpoint.href}:${device ? key : 'service'}`, paired: Boolean(device), valid, authorize,
       canResume: (profile, sessionId) => this.canResume(profile, sessionId, jar, owner),
-      agent: this.upstream.directAgent,
+      agent: upstream.directAgent,
       observeCommand: f => observer?.observeClientFrame(f),
       observeEvent: f => observer?.observeUpstreamFrame(Buffer.from(f), false),
       url: async (kind, anchor) => {
@@ -70,14 +76,15 @@ export class RealtimeAPI {
         // Paired devices retain their delegated identity; never upgrade a device
         // cookie into the local service's loopback authorization.
         let credential: { name: string; value: string }
-        if (jar) {
+        if (exported && endpoint.href !== this.config.upstream.href) credential = await exported.target.session.webSocketCredential()
+        else if (jar) {
           const response = await this.upstream.request('/api/auth/ws-ticket', jar, { method: 'POST' })
           if (response.status !== 200) throw new HttpError(502, 'Upstream authentication failed', 'upstream_auth_failed')
           const ticket = JSON.parse(response.body.toString()).ticket
           if (typeof ticket !== 'string' || !ticket) throw new HttpError(502, 'Invalid upstream ticket', 'invalid_ticket')
           credential = { name: 'ticket', value: ticket }
         } else credential = await this.session.webSocketCredential()
-        const url = new URL(this.config.upstream)
+        const url = new URL(endpoint)
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
         url.pathname = `${url.pathname.replace(/\/$/, '')}/api/ws`
         url.search = ''; url.searchParams.set(credential.name, credential.value)
@@ -161,6 +168,7 @@ export class RealtimeAPI {
       this.checkMutation(ctx, Boolean(device))
       if (ctx.method === 'POST' && path === '/channels') {
         const body = await this.body(ctx)
+        if (ctx.state.workspaceAgentExport && body.channel !== 'chat') throw new HttpError(403,'Agent 仅支持聊天通道','invalid_channel')
         if (body.channel !== 'chat' && body.channel !== 'groups') throw new HttpError(400, 'Invalid channel', 'invalid_channel')
         const c = await this.broker.create(principal, body.channel, body.channel === 'groups'
           ? { epoch: canonicalEpoch(body.epoch), cursor: groupCursor(body.cursor) } : undefined)
@@ -173,7 +181,9 @@ export class RealtimeAPI {
       const c = this.broker.get(principal, channel[1]!)
       if (ctx.method === 'DELETE' && !channel[2]) { this.broker.detach(principal, c.id); ctx.status = 204; return }
       if (ctx.method === 'POST' && channel[2] === 'commands') {
-        const body = await this.body(ctx, CHAT_MAX_PAYLOAD)
+        let body = await this.body(ctx, CHAT_MAX_PAYLOAD)
+        const exported=ctx.state.workspaceAgentExport as AgentExportContext | undefined
+        if (exported) body=exported.transform(body)
         ctx.body = await this.broker.command(c, ctx.get('idempotency-key'), body)
         return
       }

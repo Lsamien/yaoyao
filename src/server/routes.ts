@@ -51,6 +51,7 @@ import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
+  onUserAccessChanged?: (owner: string) => Promise<void>
   workspace: WorkspaceStore
   config: ServerConfig
   csrf: CsrfProtection
@@ -846,7 +847,7 @@ async function bootstrap(
         }),
       ])
       status = upstream.status
-      profiles = upstream.profiles
+      profiles = user.role === 'admin' ? upstream.profiles : []
       upstreamReady = true
     } catch (error) {
       upstreamError = error instanceof Error ? error.message : '9119 不可用'
@@ -1209,7 +1210,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     json(ctx, 200, { profiles: await dependencies.profileIdentities.load() })
   })
   router.get('/api/profiles', async (ctx) => {
-    dependencies.auth.require(ctx, true)
+    if (dependencies.auth.require(ctx, true).role !== 'admin') { json(ctx, 200, { profiles: [] }); return }
     const profilesResponse = await dependencies.upstreamSession.request('/api/profiles')
 
     json(ctx, profilesResponse.status, {
@@ -1387,7 +1388,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   })
 
   router.post('/api/app/pairings', async (ctx) => {
-    dependencies.auth.requireAdmin(ctx)
+    const pairingOwner = dependencies.auth.requireAdmin(ctx)
     await withJar(ctx, async (jar) => {
       await requireGatewayAuthentication(ctx, dependencies, jar)
       const request = optionalBody(ctx)
@@ -1396,6 +1397,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       const pairing = dependencies.pairings.create(
         cookieHeader,
         pairingScopes(request?.scopes),
+        pairingOwner.id,
       )
       const origin = requestOrigin(ctx, dependencies.config)
       const deepLink = new URL('yaoyao://pair')
@@ -1465,7 +1467,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const pairingID = typeof request.pairingId === 'string' ? request.pairingId : ''
     const secret = typeof request.secret === 'string' ? request.secret : ''
     const deviceName = typeof request.deviceName === 'string' ? request.deviceName : ''
-    const claimed = dependencies.pairings.claim({ pairingID, secret, deviceName })
+    const existingDeviceID = typeof request.existingDeviceId==='string' ? request.existingDeviceId : undefined
+    const claimed = dependencies.pairings.claim({ pairingID, secret, deviceName, existingDeviceID,
+      existingToken: existingDeviceID ? bearerToken(ctx.get('authorization')) : undefined })
     const origin = requestOrigin(ctx, dependencies.config)
     json(ctx, 201, {
       protocolVersion: NODE_PAIRING_PROTOCOL_VERSION,
@@ -1487,7 +1491,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       nodeId: dependencies.pairings.nodeID,
       fingerprint: dependencies.pairings.fingerprint,
       scopes: [...DEFAULT_NODE_SCOPES],
-      features: ['bots', 'history'],
+      features: ['bots', 'history', 'workspace-agents', 'pair-renewal'],
     })
   })
 
@@ -1672,25 +1676,28 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const username = typeof request.username === 'string' ? request.username : ''
     const password = typeof request.password === 'string' ? request.password : ''
-    json(ctx, 201, dependencies.auth.create(admin, username, password))
+    json(ctx, 201, dependencies.auth.create(admin, username, password, request.assignedProfiles))
   })
-  router.patch('/api/app/admin/users/:userID', (ctx) => {
+  router.patch('/api/app/admin/users/:userID', async (ctx) => {
     const admin = dependencies.auth.requireAdmin(ctx)
     const request = body(ctx)
     const userID = canonicalUUID(ctx.params.userID, 'user ID')
     const updated = dependencies.auth.updateUser(admin, userID, {
+      assignedProfiles: request.assignedProfiles,
       enabled: typeof request.enabled === 'boolean' ? request.enabled : undefined,
       password: typeof request.password === 'string' ? request.password : undefined,
     })
-    if (request.enabled === false || typeof request.password === 'string') {
+    await dependencies.onUserAccessChanged?.(userID)
+    if (request.enabled === false || typeof request.password === 'string' || request.assignedProfiles !== undefined) {
       bestEffortRemoveUserPush(ctx, dependencies, userID)
     }
     json(ctx, 200, updated)
   })
-  router.delete('/api/app/admin/users/:userID', (ctx) => {
+  router.delete('/api/app/admin/users/:userID', async (ctx) => {
     const admin = dependencies.auth.requireAdmin(ctx)
     const userID = canonicalUUID(ctx.params.userID, 'user ID')
     dependencies.auth.deleteUser(admin, userID)
+    await dependencies.onUserAccessChanged?.(userID)
     bestEffortRemoveUserPush(ctx, dependencies, userID)
     json(ctx, 200, { ok: true })
   })

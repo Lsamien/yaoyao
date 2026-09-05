@@ -30,6 +30,7 @@ class TestAuth extends LocalAuthStore {
   override requireAdmin(ctx: Koa.Context) {
     return this.require(ctx)
   }
+  override canUseSource() { return true }
   override currentFromCookieHeader() {
     return first
   }
@@ -61,11 +62,15 @@ beforeEach(async () => {
       const path = new URL(String(input)).pathname
       upstream.push(path)
       const body =
-        path === '/api/status'
+        path === '/api/pair/v1/capabilities'
+          ? {protocolVersion:1,serviceType:'yaoyao-web',nodeId:'11111111-1111-4111-8111-111111111111',fingerprint:'f'.repeat(64)}
+          : path === '/api/pair/v1/claim'
+          ? {protocolVersion:1,serviceType:'yaoyao-web',nodeId:'11111111-1111-4111-8111-111111111111',fingerprint:'f'.repeat(64),deviceId:'22222222-2222-4222-8222-222222222222',token:'delegated-token',scopes:['agents.read','sessions.execute','history.read'],serverUrl:'http://child.test:15300/node/22222222-2222-4222-8222-222222222222'}
+          : path === '/api/status'
           ? { auth_required: true }
           : path === '/api/auth/me'
             ? { user_id: 'upstream' }
-            : path === '/api/profiles'
+            : path.endsWith('/api/profiles')
               ? { profiles: [{ name: 'default', display_name: '基础 Agent' }] }
               : { ok: true }
       return new Response(JSON.stringify(body), {
@@ -86,6 +91,23 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it('accepts only child pairing, hides credentials, and scopes address edits to the owner', async () => {
+    const code = new URL('yaoyao://pair')
+    for (const [key,value] of Object.entries({v:'1',url:'http://child.test:15300',node:'11111111-1111-4111-8111-111111111111',id:'33333333-3333-4333-8333-333333333333',fingerprint:'f'.repeat(64),secret:'s'.repeat(64)})) code.searchParams.set(key,value)
+    await req('post','/api/app/nodes').send({name:'legacy',url:'http://child.test:9119',username:'user',password:'password'}).expect(400)
+    await req('post','/api/app/nodes').send({name:'child',qrPayload:code.href.replace('://pair','://login')}).expect(400)
+    await req('post','/api/app/nodes').send({name:'child',qrPayload:code.href}).expect(201)
+    const listing=await req('get','/api/app/nodes').expect(200), node=listing.body.nodes[0]
+    expect(node.transport).toBe('paired-web'); expect(JSON.stringify(listing.body)).not.toContain('delegated-token'); expect(node.secret).toBeUndefined()
+    expect((await req('get','/api/app/nodes','second').expect(200)).body.nodes).toEqual([])
+    await req('patch',`/api/app/nodes/${node.id}`,'second').send({name:'other',url:'http://new-ip.test:15300'}).expect(404)
+    await req('patch',`/api/app/nodes/${node.id}`).send({name:'new name',url:'http://new-ip.test:15300'}).expect(200)
+    const updated=(await req('get','/api/app/nodes').expect(200)).body.nodes[0]
+    expect(updated.id).toBe(node.id); expect(updated.url).toBe('http://new-ip.test:15300/')
+    const sources=(await req('get','/api/app/agents/sources').expect(200)).body.sources
+    expect(sources.some((s:any)=>s.nodeId===node.id && s.profile==='default')).toBe(true)
+  })
+
   it('archives native-chat uploads through the standard file API with user ownership', async () => {
     const assets = new WorkspaceAssets(runtime.workspace, runtime.workspaceRuntime.nodes, home)
     await assets.archiveText(

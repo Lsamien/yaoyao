@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
+import RemoteAgentPicker from '@/components/workspace/RemoteAgentPicker.vue'
 import ConversationList from '@/components/workspace/ConversationList.vue'
 import FloatingResourceSearch from '@/components/app/FloatingResourceSearch.vue'
 import type { SidebarItem } from '@/components/app/types'
@@ -116,6 +117,17 @@ const dialog = ref<'agent' | 'group' | 'editAgent' | 'editGroup' | null>(null),
   scroller = ref<HTMLElement>(),
   fileInput = ref<HTMLInputElement>(),
   dialogElement = ref<HTMLDialogElement>()
+const remotePickerOpen=ref(false)
+const isRemoteAgent=computed(()=>dialog.value==='editAgent' && !!agents.value.find(a=>a.id===editingId.value)?.remoteAgentId)
+async function remoteAdded(agent:Agent){
+  remotePickerOpen.value=false;await refresh()
+  if(dialog.value==='group'||dialog.value==='editGroup'){
+    if(!form.memberIds.includes(agent.id))form.memberIds.push(agent.id)
+  }else{
+    const conversation=conversations.value.find(c=>c.kind==='direct'&&c.memberIds[0]===agent.id)
+    if(conversation)await select(conversation.id)
+  }
+}
 const form = reactive({
   name: '',
   avatar: '',
@@ -300,6 +312,10 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
       if (!a) return
       editingId.value = a.id
       Object.assign(form, a)
+      if(a.remoteAgentId){
+        const remote=(await apiRequest<{agents:Agent[]}>(`/api/app/nodes/${a.nodeId}/agents`)).agents.find(candidate=>candidate.id===a.remoteAgentId)
+        if(remote)Object.assign(form,remote)
+      }
     }
     if (kind === 'editGroup' && active.value) {
       editingId.value = active.value.id
@@ -329,6 +345,7 @@ watch(
   },
 )
 async function save() {
+  if(isRemoteAgent.value)return
   busy.value = true
   error.value = ''
   try {
@@ -542,6 +559,7 @@ onBeforeUnmount(() => {
     @save-identity="saveProfileIdentity"
     @create-agent="openDialog('agent')"
     @create-group="openDialog('group')"
+    @create-remote-agent="remotePickerOpen = true"
   >
     <template #sidebar
       ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)"
@@ -582,6 +600,7 @@ onBeforeUnmount(() => {
     <FloatingResourceSearch section="groups" label="搜索聊天" :items="searchItems" tabbed @select="select" />
     <PreviewModal v-if="preview" :item="preview" :items="media" @close="preview = null" />
     <ImagePreviewLightbox v-model="mediaIndex" :images="lightboxMedia" />
+    <RemoteAgentPicker v-if="remotePickerOpen && !auth.isBotOnly" @close="remotePickerOpen = false" @added="remoteAdded" />
     <dialog v-if="dialog" ref="dialogElement" class="editor" @cancel.prevent="closeDialog">
       <form @submit.prevent="save">
         <header>
@@ -592,9 +611,10 @@ onBeforeUnmount(() => {
         </header>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
         <TeamPresetPicker v-if="dialog === 'group'" :selected="selectedPresetId" :available="agents.filter(a => !a.archived).length" @select="choosePreset" />
-        <label>名称<input v-model="form.name" required maxlength="100" /></label>
-        <AgentIdentityPanel v-if="isAgentDialog" :key="`${dialog}:${editingId}`" :profile="avatarProfile" embedded :show-name="false" :show-default-model="false" :show-actions="false" @avatar-change="form.avatar = $event" />
-        <div v-else class="team-avatar-settings">
+        <label>名称<input v-model="form.name" :readonly="isRemoteAgent" required maxlength="100" /></label>
+        <p v-if="isRemoteAgent">引用的 Agent 配置由远端管理，请在远端修改名称、头像和角色规则。</p>
+        <AgentIdentityPanel v-if="isAgentDialog && !isRemoteAgent" :key="`${dialog}:${editingId}`" :profile="avatarProfile" embedded :show-name="false" :show-default-model="false" :show-actions="false" @avatar-change="form.avatar = $event" />
+        <div v-else-if="!isAgentDialog" class="team-avatar-settings">
           <TeamAvatar :name="form.name" :members="workspaceAvatarMembers(form.memberIds, agents, dialog === 'editGroup' ? active : undefined)" :size="64" />
           <small>群聊头像由成员头像自动组合，随成员头像更新。</small>
         </div>
@@ -609,12 +629,13 @@ onBeforeUnmount(() => {
               {{ s.name }} · {{ s.nodeId === 'local' ? '当前服务' : s.nodeId }}
             </option></select
           ><small v-if="!sources.length"
-            >没有可用的基础 Agent，请检查 Web 的 Hermes 连接。</small
+            >{{ auth.isBotOnly ? '暂无可用的已分配 Agent，请联系管理员分配或检查连接。' : '没有可用的基础 Agent，请检查 Web 的 Hermes 连接。' }}</small
           ></label
         ><label
           >{{ isAgentDialog ? '角色提示词与规则' : '群规则'
           }}<textarea
             v-model="form.instructions"
+            :readonly="isRemoteAgent"
             rows="6"
             maxlength="24000"
             :placeholder="
@@ -624,6 +645,7 @@ onBeforeUnmount(() => {
             "
           />
         </label>
+        <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" @click="remotePickerOpen = true">添加远程 Agent</button>
         <fieldset v-if="selectedPreset" class="preset-role-mapping">
           <legend>角色分配</legend>
           <label v-for="(role, index) in selectedPreset.roles" :key="role.name">
@@ -694,7 +716,7 @@ onBeforeUnmount(() => {
         ></template>
         <footer>
           <button class="quiet-button" type="button" @click="closeDialog">取消</button
-          ><button class="solid-button" :disabled="busy || (!isAgentDialog && (form.memberIds.length < (dialog === 'group' ? 2 : 1) || form.memberIds.length > 8))">
+          ><button v-if="!isRemoteAgent" class="solid-button" :disabled="busy || (!isAgentDialog && (form.memberIds.length < (dialog === 'group' ? 2 : 1) || form.memberIds.length > 8))">
             {{ busy ? '保存中…' : '保存' }}
           </button>
         </footer>

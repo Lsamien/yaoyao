@@ -54,7 +54,7 @@ beforeEach(async () => {
       }),
     },
   }
-  nodes = { target: () => target } as unknown as WorkspaceNodes
+  nodes = { requireSource: () => {}, target: () => target } as unknown as WorkspaceNodes
   runtime = new WorkspaceRuntime(store, nodes, uploads)
   reply = (socket, p) =>
     setTimeout(
@@ -326,7 +326,7 @@ describe('Web-owned workspace', () => {
   it('persists a visible failure when a fixed member loses its source node',async()=>{
     const a=agent('不可用成员'),c=direct(a.id)
     runtime.close()
-    runtime=new WorkspaceRuntime(store,{target:()=>{throw new Error('基础节点不可用')}} as unknown as WorkspaceNodes,uploads)
+    runtime=new WorkspaceRuntime(store,{requireSource: () => {},target:()=>{throw new Error('基础节点不可用')}} as unknown as WorkspaceNodes,uploads)
     const run=runtime.send(owner,c.id,{requestId:randomUUID(),content:'执行任务'})
     await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',run.id).status).toBe('failed'))
     expect(store.messages(owner,c.id).at(-1)).toMatchObject({role:'system',status:'failed',content:'执行失败：基础节点不可用'})

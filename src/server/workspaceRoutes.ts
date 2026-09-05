@@ -64,7 +64,7 @@ export function workspaceRouter(
         'files',
         'voice',
         'context',
-        'nodes',
+        ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'remoteAgentReferences', 'editableNodeAddress'] : []),
         'events',
       ],
     }
@@ -72,19 +72,33 @@ export function workspaceRouter(
   router.get('/api/app/agents/sources', async (ctx) => {
     ctx.body = await nodes.sources(owner(ctx))
   })
-  router.get('/api/app/agents', (ctx) => {
-    ctx.body = { agents: store.list<WorkspaceAgent>(owner(ctx), 'agent').map(agent => store.agentSummary(agent)) }
+  router.get('/api/app/agents', async (ctx) => {
+    const user=owner(ctx), agents=store.list<WorkspaceAgent>(user,'agent')
+    for (const agent of agents) if (agent.remoteAgentId) void nodes.refreshRemoteAgent(user,agent).catch(()=>{})
+    ctx.body = { agents: agents.map(agent=>store.agentSummary(agent)) }
+  })
+  router.get('/api/app/nodes/:id/agents', async ctx => {
+    auth.requireAdmin(ctx)
+    ctx.body = { agents: await nodes.remoteAgents(owner(ctx),ctx.params.id) }
+  })
+  router.post('/api/app/agents/remote', async ctx => {
+    auth.requireAdmin(ctx)
+    const input = parse(z.object({nodeId:z.string().uuid(),agentId:z.string().uuid()}).strict(),body(ctx))
+    ctx.body = { agent: await nodes.importRemoteAgent(owner(ctx),input.nodeId,input.agentId) };ctx.status=201
   })
   router.post('/api/app/agents', async (ctx) => {
     const user = owner(ctx),
-      input = parse(agentInput, body(ctx)),
-      sources = await nodes.sources(user)
+      input = parse(agentInput, body(ctx))
+    nodes.requireSource(user, input)
+    const sources = await nodes.sources(user)
     if (!sources.sources.some((s) => s.nodeId === input.nodeId && s.profile === input.profile))
       throw new HttpError(409, '基础 Agent 当前不可用', 'source_unavailable')
+    nodes.requireSource(user, input)
     ctx.body = { agent: store.agentSummary(store.createAgent(user, input)) }
     ctx.status = 201
   })
   router.patch('/api/app/agents/:id', (ctx) => {
+    nodes.requireSource(owner(ctx), store.require<WorkspaceAgent>(owner(ctx), 'agent', ctx.params.id))
     ctx.body = { agent: store.agentSummary(store.updateAgent(owner(ctx), ctx.params.id, body(ctx))) }
   })
   router.get('/api/app/conversations', (ctx) => {
@@ -104,7 +118,10 @@ export function workspaceRouter(
   })
   router.post('/api/app/conversations', (ctx) => {
     const user = owner(ctx),
-      conversation = store.createGroup(user, body(ctx))
+      input = body(ctx)
+    for (const id of Array.isArray(input.memberIds) ? input.memberIds : [])
+      nodes.requireSource(user, store.require<WorkspaceAgent>(user, 'agent', id))
+    const conversation = store.createGroup(user, input)
     try {
       push.setGroupSubscription(user, conversation.id, true, conversation.lastSeq)
     } catch {
@@ -159,7 +176,10 @@ export function workspaceRouter(
     }
   })
   router.patch('/api/app/conversations/:id', async (ctx) => {
-    const user = owner(ctx), conversation = store.updateConversation(user, ctx.params.id, body(ctx))
+    const user = owner(ctx), input = body(ctx)
+    for (const id of Array.isArray(input.memberIds) ? input.memberIds : [])
+      nodes.requireSource(user, store.require<WorkspaceAgent>(user, 'agent', id))
+    const conversation = store.updateConversation(user, ctx.params.id, input)
     if (conversation.archived) await runtime.stopConversation(user, conversation.id)
     runtime.wake()
     ctx.body = { conversation: store.require(user, 'conversation', conversation.id) }
@@ -231,6 +251,7 @@ export function workspaceRouter(
     ctx.body = { events, cursor: events.at(-1)?.seq ?? after }
   })
   router.get('/api/app/nodes', (ctx) => {
+    auth.requireAdmin(ctx)
     ctx.body = {
       nodes: store
         .list<WorkspaceNode>(owner(ctx), 'node')
@@ -238,22 +259,19 @@ export function workspaceRouter(
     }
   })
   router.post('/api/app/nodes', async (ctx) => {
-    const b = parse(
-      z
-        .object({
-          name: z.string().min(1).max(100),
-          url: z.string().url().max(2048),
-          username: z.string().max(256),
-          password: z.string().max(4096),
-        })
-        .strict(),
-      body(ctx),
-    )
-    await nodes.add(owner(ctx), b)
-    ctx.status = 201
+    auth.requireAdmin(ctx)
+    const input = parse(z.object({ qrPayload: z.string().min(1).max(8192), name: z.string().max(100).default(''), nodeId:z.string().uuid().optional() }).strict(), body(ctx))
+    await nodes.pair(owner(ctx), input)
+    ctx.status = 201; ctx.body = { ok: true }
+  })
+  router.patch('/api/app/nodes/:id', async (ctx) => {
+    auth.requireAdmin(ctx)
+    const input = parse(z.object({ name: z.string().min(1).max(100), url: z.string().url().max(2048) }).strict(), body(ctx))
+    await nodes.update(owner(ctx), ctx.params.id, input)
     ctx.body = { ok: true }
   })
   router.delete('/api/app/nodes/:id', (ctx) => {
+    auth.requireAdmin(ctx)
     nodes.remove(owner(ctx), ctx.params.id)
     ctx.body = { ok: true }
   })

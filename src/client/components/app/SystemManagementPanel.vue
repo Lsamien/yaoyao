@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { Profile } from '@shared/types'
 import AppIcon from '@/components/common/AppIcon.vue'
 import {
   createUser,
@@ -25,18 +26,22 @@ import {
 type SystemManagementSection = 'users' | 'connection' | 'push'
 
 const props = withDefaults(defineProps<{
+  profiles?: Profile[]
   section: SystemManagementSection
   active?: boolean
   upstreamReady?: boolean
   upstreamError?: string
 }>(), {
   active: true,
+  profiles: () => [],
   upstreamReady: false,
   upstreamError: '',
 })
 
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
+const assignedProfiles = ref<string[]>([])
+const userAssignments = ref<Record<string, string[]>>({})
 const users = ref<ManagedUser[]>([])
 const username = ref('')
 const password = ref('')
@@ -187,6 +192,7 @@ async function refresh() {
   error.value = ''
   if (props.section === 'users') {
     users.value = await listUsers()
+    userAssignments.value = Object.fromEntries(users.value.map(user => [user.id, [...(user.assignedProfiles ?? [])]]))
     return
   }
   if (props.section === 'connection') {
@@ -235,10 +241,15 @@ async function run(action: () => Promise<void>, refreshAfter = true) {
 
 function add() {
   void run(async () => {
-    await createUser(username.value.trim(), password.value)
+    await createUser(username.value.trim(), password.value, assignedProfiles.value)
+    assignedProfiles.value = []
     username.value = ''
     password.value = ''
   })
+}
+
+function saveAssignments(user: ManagedUser) {
+  void run(async () => { await updateUser(user.id, { assignedProfiles: userAssignments.value[user.id] ?? [] }) })
 }
 
 function toggle(user: ManagedUser) {
@@ -401,6 +412,12 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
           <small>{{ user.role === 'admin' ? '管理员' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
         </span>
         <template v-if="user.role !== 'admin'">
+          <label class="user-assignment">基础 Agent
+            <select v-model="userAssignments[user.id]" multiple :disabled="busy" :aria-label="`分配给 ${user.username} 的基础 Agent`">
+              <option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option>
+            </select>
+          </label>
+          <button type="button" :disabled="busy" @click="saveAssignments(user)">保存分配</button>
           <button type="button" :aria-label="`为用户 ${user.username} 重置密码`" :disabled="busy" @click="reset(user)">重置密码</button>
           <button type="button" :aria-label="`${user.enabled ? '禁用' : '启用'}用户 ${user.username}`" :disabled="busy" @click="toggle(user)">{{ user.enabled ? '禁用' : '启用' }}</button>
           <button class="danger" type="button" :aria-label="`删除用户 ${user.username}`" :disabled="busy" @click="remove(user)">删除</button>
@@ -409,6 +426,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
       <form class="user-create-form" aria-label="创建用户" @submit.prevent="add">
         <label><span>新用户名</span><input v-model="username" name="managed-username" autocomplete="off" :disabled="busy" /></label>
         <label><span>临时密码</span><input v-model="password" name="managed-temporary-password" type="password" autocomplete="new-password" :disabled="busy" /><small>至少 8 位</small></label>
+        <label class="create-assignment"><span>分配基础 Agent</span><select v-model="assignedProfiles" multiple :disabled="busy" aria-label="新子账号的基础 Agent"><option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option></select><small>子账号仅可使用 Bot 模式，基于分配的 Agent 创建自己的 Agent；未分配时不可创建。保存权限后需重新登录。</small></label>
         <button class="solid-button" :disabled="busy || !username.trim() || password.length < 8">创建用户</button>
       </form>
     </div>
@@ -564,7 +582,11 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
 .push-error { background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .push-notice { background: color-mix(in srgb, var(--success, #21845b) 9%, transparent); color: var(--success, #21845b) !important; }
 .push-config-form footer { display: flex; justify-content: flex-end; }
-.user { display: flex; min-height: 58px; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.user { display: flex; flex-wrap: wrap; padding: 12px 0; min-height: 58px; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.user > span { flex-basis: 100%; }
+.user-assignment { display: grid; flex: 1; min-width: 150px; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.user-assignment select, .create-assignment select { width: 100%; min-height: 76px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--text-primary); font: inherit; }
+.create-assignment { grid-column: 1 / -1; }
 .user span { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .user b { font-size: 14px; }
 .user small { color: var(--text-muted); font-size: 12px; }

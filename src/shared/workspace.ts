@@ -6,6 +6,7 @@ export interface WorkspaceAgent {
   instructions: string
   nodeId: string
   profile: string
+  remoteAgentId?: string
   archived: boolean
   revision: number
   createdAt: number

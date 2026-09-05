@@ -32,7 +32,7 @@ describe('Agent management admin routes', () => {
       .set('Origin', 'http://127.0.0.1:15300')
       .set('X-CSRF-Token', bootstrap.body.csrfToken)
       .send({ provider: 'opencode-free', model: 'free-a' })
-      .expect(403, /需要管理员权限/)
+      .expect(403, /子账号只能使用 Bot 模式/)
   })
 
   it('proxies profile-scoped model services and masked duplex voice settings through 9119', async () => {

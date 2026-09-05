@@ -25,6 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
   const activeProfile = computed(() => profiles.value.find(profile => profile.name === activeProfileName.value)
     ?? profiles.value.find(profile => profile.isDefault)
     ?? profiles.value[0])
+  const isBotOnly = computed(() => Boolean(user.value && user.value.role !== 'admin'))
   const isAuthenticated = computed(() => status.value === 'authenticated')
 
   function publish(response: BootstrapResponse): void {
@@ -138,7 +139,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     status, user, profiles, activeProfileName, activeProfile, csrfToken, error, authRequired, setupRequired, insecureLan, groupUploadsEnabled,
-    upstreamReady, upstreamError, isAuthenticated, bootstrap, login, setup, logout, selectProfile, refreshProfiles, refreshProfileAvatars,
+    upstreamReady, upstreamError, isAuthenticated, isBotOnly, bootstrap, login, setup, logout, selectProfile, refreshProfiles, refreshProfileAvatars,
     changeCredentials, updateAccountAvatar, expire,
   }
 })

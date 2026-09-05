@@ -37,7 +37,7 @@ describe('native Hermes chat and history are separated on 15300', () => {
         if (path === '/auth/password-login') return new Response(JSON.stringify({ ok: true }), {
           headers: { 'content-type': 'application/json', 'set-cookie': 'hermes_service=session; Path=/; HttpOnly' },
         })
-        if (path === '/api/profiles') return Response.json({ profiles: [{ name: 'default' }] })
+        if (path === '/api/profiles') return Response.json({ profiles: [{ name: 'default', ui_meta: {'hermes-bots': {chat: 'native-canonical'}} }] })
         if (path === '/api/auth/ws-ticket') return Response.json({ ticket: 'fixture-ticket' })
         if (path === '/api/sessions/session-web') return Response.json(init?.method === 'PATCH' ? { ok: true } : { id: 'session-web', source: 'web' })
         return Response.json({ method: init?.method ?? 'GET' })
@@ -85,6 +85,12 @@ describe('native Hermes chat and history are separated on 15300', () => {
       canResume(profile: string, sessionID: string, jar?: unknown, owner?: string): Promise<boolean>
     }
     expect(await ownershipGate.canResume('default', 'session-web', undefined, owner)).toBe(false)
+    expect(await ownershipGate.canResume('default', 'native-canonical', undefined, owner)).toBe(false)
+    await agent.get('/api/app/hermes-bot/local/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(200)
+    await request(runtime.app.callback()).get('/api/app/hermes-bot/local/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(401)
+    await agent.post('/api/app/hermes-bot/local/api/profiles').set('Host', '127.0.0.1:15300')
+      .set('Origin', origin).set('X-CSRF-Token', csrf).send({}).expect(403)
+
     const deviceOwner = `device:${paired.device.id}`
     expect(await ownershipGate.canResume('default', 'session-web', undefined, deviceOwner)).toBe(false)
 

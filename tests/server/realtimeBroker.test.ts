@@ -25,7 +25,9 @@ async function fixture() {
     socket.on('message', raw => {
       const f = JSON.parse(raw.toString()); commands.push(f)
       if (f.method === 'prompt.submit' && dropPrompt) { socket.terminate(); return }
-      if (f.method === 'session.events.since') {
+      if (f.method === 'profiles.list') {
+        socket.send(JSON.stringify({id:f.id,result:{profiles:[{name:'default',ui_meta:{'hermes-bots':{chat:'stored-1'}}}]}}))
+      } else if (f.method === 'session.events.since') {
         socket.send(JSON.stringify({ id: f.id, result: { epoch: 'test', truncated: truncate,
           events: history.filter(e => e.seq > f.params.last_seen) } }))
       } else if (f.method === 'session.branch') {
@@ -62,6 +64,17 @@ describe('realtime broker', () => {
     expect(receipt).toMatchObject({ state: 'rejected', response: { error: { code: 'history_session_read_only' } } })
     expect(f.commands).toEqual([])
     expect(routes).toEqual([])
+  })
+  it('allows only a native Bots configured chat without claiming arbitrary history', async () => {
+    const f = await fixture()
+    const principal = {...f.principal('native:user:alice:1'), nativeBot:true, canResume:async()=>false}
+    const channel = await f.broker.create(principal,'chat')
+    expect(await f.broker.command(channel,'native-canonical',resume)).toMatchObject({state:'confirmed'})
+    expect(await f.broker.command(channel,'wrong-profile',{...resume,params:{...resume.params,profile:'other'}}))
+      .toMatchObject({state:'rejected',response:{error:{code:'history_session_read_only'}}})
+    expect(await f.broker.command(channel,'arbitrary-history',{...resume,params:{...resume.params,session_id:'history-2'}}))
+      .toMatchObject({state:'rejected',response:{error:{code:'history_session_read_only'}}})
+    expect(f.commands.filter(c=>c.method==='session.resume')).toHaveLength(1)
   })
   it('registers and resumes sessions only within one stable device owner', async () => {
     const f = await fixture()

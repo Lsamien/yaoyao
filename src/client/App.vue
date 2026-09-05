@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import LoadingScreen from '@/components/app/LoadingScreen.vue'
 import LoginView from '@/views/LoginView.vue'
 import PasswordChangeView from '@/views/PasswordChangeView.vue'
@@ -15,6 +15,11 @@ const chat = useChatStore()
 const kanban = useKanbanStore()
 const theme = useThemeStore()
 const route = useRoute()
+const router = useRouter()
+const allowedRoute = computed(() => !auth.isBotOnly || /^\/conversations(?:\/|$)/.test(route.path))
+watch([() => auth.isBotOnly, () => route.path], () => {
+  if (!allowedRoute.value) void router.replace('/conversations')
+}, { immediate: true, flush: 'sync' })
 const agentIdentityFixture = import.meta.env.DEV
   && new URLSearchParams(window.location.search).get('fixture') === 'agent-identity'
 
@@ -49,5 +54,6 @@ onMounted(() => {
   <LoadingScreen v-else-if="auth.status === 'checking'" />
   <LoginView v-else-if="!auth.isAuthenticated" />
   <PasswordChangeView v-else-if="auth.user?.mustChangePassword" />
-  <RouterView v-else />
+  <RouterView v-else-if="allowedRoute" />
+  <LoadingScreen v-else />
 </template>

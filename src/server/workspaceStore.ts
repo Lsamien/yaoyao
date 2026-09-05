@@ -312,6 +312,8 @@ export class WorkspaceStore {
     if (patch.avatar !== undefined) patch.avatar = normalizeAvatar(patch.avatar)
     return this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
+      if (agent.remoteAgentId && Object.keys(patch).some(key => key !== 'archived'))
+        throw new HttpError(409, '引用 Agent 的配置由远端管理', 'remote_agent_read_only')
       if (
         patch.name &&
         this.list<Agent>(owner, 'agent').some(

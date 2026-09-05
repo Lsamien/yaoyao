@@ -36,6 +36,7 @@ interface PersistedDevice {
   name: string
   tokenHash: string
   encryptedCookie: string
+  workspaceOwner?: string
   scopes: NodeScope[]
   createdAt: number
   lastUsedAt: number
@@ -51,6 +52,7 @@ interface PendingPairing {
   id: string
   secretHash: Buffer
   cookieHeader: string
+  workspaceOwner?: string
   scopes: NodeScope[]
   createdAt: number
   expiresAt: number
@@ -76,6 +78,8 @@ export interface PairedDeviceSummary {
 }
 
 export interface PairingClaim {
+  existingDeviceID?: string
+  existingToken?: string
   pairingID: string
   secret: string
   deviceName: string
@@ -176,7 +180,7 @@ export class NodePairingStore {
       .digest('base64url')
   }
 
-  create(cookieHeader: string | undefined, requestedScopes?: readonly string[]): PairingSession {
+  create(cookieHeader: string | undefined, requestedScopes?: readonly string[], workspaceOwner?: string): PairingSession {
     const cookies = cookieHeader?.trim() ?? ''
     if (!cookies) {
       throw new HttpError(401, 'An authenticated Hermes session is required', 'authentication_required')
@@ -194,6 +198,7 @@ export class NodePairingStore {
       id,
       secretHash: hashSecret(`${id}:${secret}`),
       cookieHeader: cookies,
+      workspaceOwner,
       scopes: parseScopes(requestedScopes),
       createdAt: now,
       expiresAt: now + PAIRING_TTL_MS,
@@ -238,21 +243,25 @@ export class NodePairingStore {
       || !timingSafeEqual(supplied, pending.secretHash)) {
       throw new HttpError(401, 'Pairing secret is invalid', 'invalid_pairing_secret')
     }
-    if (this.#state.devices.length >= MAX_PAIRED_DEVICES) {
+    const existing = input.existingDeviceID
+      ? (this.authorize(input.existingDeviceID,input.existingToken ?? ''), this.#state.devices.find(d=>d.id===input.existingDeviceID)) : undefined
+    if (!existing && this.#state.devices.length >= MAX_PAIRED_DEVICES) {
       throw new HttpError(409, 'Paired device limit reached', 'paired_device_limit')
     }
     const now = this.#clock()
-    const token = randomBytes(TOKEN_BYTES).toString('base64url')
+    const token = existing ? input.existingToken! : randomBytes(TOKEN_BYTES).toString('base64url')
     const device: PersistedDevice = {
-      id: randomUUID().toLowerCase(),
+      id: existing?.id ?? randomUUID().toLowerCase(),
       name: canonicalDeviceName(input.deviceName),
       tokenHash: hashSecret(token).toString('base64url'),
       encryptedCookie: this.#encrypt(pending.cookieHeader),
+      workspaceOwner: pending.workspaceOwner,
       scopes: [...pending.scopes],
-      createdAt: now,
+      createdAt: existing?.createdAt ?? now,
       lastUsedAt: now,
     }
-    this.#state.devices.push(device)
+    if (existing) Object.assign(existing,device)
+    else this.#state.devices.push(device)
     pending.claimedDeviceID = device.id
     pending.cookieHeader = ''
     this.#save()
@@ -315,6 +324,13 @@ export class NodePairingStore {
     device.lastUsedAt = this.#clock()
     this.#save()
     return this.#decrypt(device.encryptedCookie)
+  }
+
+  workspaceOwner(deviceID: string, token: string, scope: NodeScope): string {
+    this.authorize(deviceID, token, scope)
+    const owner = this.#state.devices.find(device => device.id === deviceID)?.workspaceOwner
+    if (!owner) throw new HttpError(403, '请升级远端并重新扫码授权，以读取远端 Bot 模式 Agent', 'workspace_agent_pairing_required')
+    return owner
   }
 
   updateCookies(deviceID: string, cookieHeader: string | undefined): void {
