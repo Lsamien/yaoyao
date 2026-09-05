@@ -187,13 +187,19 @@ test('created roles and editable teams share a durable chat list without plugin 
   await avatarEditor.locator('.mascot-grid--expression button').filter({hasText:'默认'}).click()
   await avatarEditor.getByRole('button', {name:'保存',exact:true}).click()
 
+  await expect(avatarEditor).toBeHidden()
+  const composerInput = page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行')
+  const sendButton = page.getByRole('button', { name: '发送消息', exact: true })
+  await expect(composerInput).toBeEnabled()
+
   await expect(rail.getByText('聊天', { exact: true })).toHaveCount(0)
   await expect(rail.getByText('聊天列表', { exact: true })).toHaveCount(0)
   await expect(rail.locator('.sidebar-item__row strong').first()).toHaveCSS('font-size', '15px')
   await expect(rail.locator('.sidebar-item__row--secondary').first()).toHaveCSS('font-size', '13px')
   await expect(rail.locator('.sidebar-item__row small').first()).toHaveCSS('font-size', '10px')
-  await page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行').fill('请说明角色职责')
-  await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  await composerInput.fill('请说明角色职责')
+  await expect(sendButton).toBeEnabled()
+  await sendButton.click()
   await expect(page.locator('.message--assistant')).toContainText('我是产品经理')
   for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme })
