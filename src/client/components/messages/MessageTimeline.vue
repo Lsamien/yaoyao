@@ -141,6 +141,10 @@ function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
   el.scrollTo({ top: el.scrollHeight, behavior })
 }
 
+function onMarkdownRendered() {
+  if (pinnedToBottom.value) scrollToBottom('auto')
+}
+
 function scrollToMessage(id: string): boolean {
   const root = scroller.value
   if (!root) return false
@@ -311,7 +315,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 
             <details v-if="message.reasoning" class="message__reasoning">
               <summary><AppIcon name="brain" :size="13" />思考过程 · {{ message.reasoning.length }} 字</summary>
-              <MarkdownContent :content="message.reasoning" />
+              <MarkdownContent :content="message.reasoning" :streaming="message.status === 'streaming'" @rendered="onMarkdownRendered" />
             </details>
 
             <div v-if="message.role === 'user' && message.attachments?.length" class="message__attachments">
@@ -331,6 +335,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
                 :mention-names="mentionNames"
                 :outline-prefix="message.role === 'assistant' ? `outline-${message.id}` : ''"
                 file-cards
+                @rendered="onMarkdownRendered"
                 @file-link="(name, url) => emit('previewFile', { name, url })"
               />
             </div>

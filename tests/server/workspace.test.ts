@@ -119,6 +119,31 @@ async function finished(id: string) {
   return store.require<WorkspaceRun>(owner, 'run', id)
 }
 describe('Web-owned workspace', () => {
+  it('flushes a paused delta before completion and cancels pending flush on finish', async () => {
+    let upstream: { socket: WebSocket; params: Record<string, any> } | undefined
+    reply = (socket, params) => {
+      upstream = { socket, params }
+      const event = (type: string, payload: Record<string, unknown>) => socket.send(JSON.stringify({
+        method: 'event', params: { type, session_id: params.session_id, payload },
+      }))
+      event('message.start', {})
+      event('message.delta', { text: '# 流式标题' })
+    }
+    const bot = agent('流式助手'), conversation = direct(bot.id)
+    const run = runtime.send(owner, conversation.id, { requestId: randomUUID(), content: '验证暂停分片' })
+    const assistant = () => store.list<WorkspaceMessage>(owner, 'message').find(m => m.runId === run.id && m.role === 'assistant')
+    await vi.waitFor(() => expect(assistant()?.content).toBe('# 流式标题'))
+    expect(assistant()?.status).toBe('streaming')
+    expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).not.toBe('complete')
+    const { socket, params } = upstream!
+    socket.send(JSON.stringify({ method: 'event', params: { type: 'message.delta', session_id: params.session_id, payload: { text: '\n\n最后一段' } } }))
+    completeReply(socket, params, '# 最终正文')
+    await finished(run.id)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(assistant()?.content).toBe('# 最终正文')
+    expect(assistant()?.status).toBe('complete')
+  })
+
   it('backfills legacy group history into the initial task instead of leaving a new empty task', () => {
     const legacyHome = mkdtempSync(join(tmpdir(), 'yaoyao-workspace-task-migration-'))
     let seededStore: WorkspaceStore | undefined = new WorkspaceStore(legacyHome)

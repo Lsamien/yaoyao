@@ -178,6 +178,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       completing = false,
       runtimeId = '',
       lastFlush = 0
+    let flushTimer: ReturnType<typeof setTimeout> | undefined
     let resolveTurn!: (m: Message) => void, rejectTurn!: (e: Error) => void
     const completion = new Promise<Message>((resolve, reject) => {
       resolveTurn = resolve
@@ -188,6 +189,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const finish = (error?: Error) => {
       if (settled) return
       settled = true
+      clearTimeout(flushTimer)
+      flushTimer = undefined
       this.live.delete(key)
       try {
         const current = this.getWork(owner, run.id)
@@ -349,10 +352,22 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           this.store.put(owner, 'binding', key, binding)
         }
       }
-      if (Date.now() - lastFlush >= 100) {
-        this.store.saveMessage(owner, resultMessage)
-        lastFlush = Date.now()
+      const flush = () => {
+        clearTimeout(flushTimer)
+        flushTimer = undefined
+        if (settled || this.closing) return
+        try {
+          this.store.saveMessage(owner, resultMessage)
+          lastFlush = Date.now()
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error('无法保存流式消息'))
+        }
       }
+      const remaining = 100 - (Date.now() - lastFlush)
+      if (remaining <= 0) flush()
+      // A stream may pause after any chunk. Publish the latest text even when
+      // no subsequent event arrives to trigger the next leading-edge flush.
+      else if (flushTimer === undefined) flushTimer = setTimeout(flush, remaining)
     }
     try {
       await gateway.connect()

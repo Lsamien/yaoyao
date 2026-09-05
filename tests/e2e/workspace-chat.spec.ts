@@ -423,3 +423,49 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   }
   await childContext.close()
 })
+
+for (const mode of ['普通聊天', 'Bot 单聊', '群聊', '普通长回复'] as const) {
+  test(`${mode} 在完成前格式化流式 Markdown 并保留最终内容`, async ({ page }, testInfo) => {
+    await login(page)
+    if (mode.startsWith('普通')) {
+      await page.goto('/chat')
+      await page.getByRole('button', { name: '新建聊天', exact: true }).click()
+    } else {
+      await createAgent(page, `${mode}流式验证助手`)
+      if (mode === '群聊') {
+        await createAgent(page, '群聊流式协作成员')
+        await openCreate(page, '新建群聊')
+        const dialog = page.getByRole('dialog')
+        await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('流式验证群')
+        await dialog.getByRole('checkbox', { name: `${mode}流式验证助手`, exact: true }).check()
+        await dialog.getByRole('checkbox', { name: '群聊流式协作成员', exact: true }).check()
+        await dialog.getByRole('combobox', { name: '管理员', exact: true }).selectOption({ label: `${mode}流式验证助手` })
+        await dialog.getByRole('button', { name: '保存', exact: true }).click()
+        await expect(page.getByRole('heading', { name: '流式验证群', exact: true })).toBeVisible()
+      }
+    }
+    await page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行').fill(`[streaming-markdown] ${mode === '普通长回复' ? '[long]' : ''} 演示排版`)
+    await page.getByRole('button', { name: '发送消息', exact: true }).click()
+    const message = page.locator('.message--assistant').last()
+    await expect(message.locator('.markdown--streaming h1')).toHaveText('流式标题')
+    await expect(message.locator('strong').filter({ hasText: '即时格式化' })).toBeVisible()
+    await expect(message.locator('li')).toHaveText(['第一项', '第二项'])
+    await expect(message.locator('pre code').first()).toContainText('const answer = 42')
+    await expect(message).not.toContainText('最终完整标记')
+    await page.screenshot({ path: testInfo.outputPath('streaming-markdown.png'), fullPage: true })
+    if (mode === '普通长回复') {
+      await expect(message.getByText('流式末尾标记', { exact: true })).toBeInViewport()
+      await page.locator('.timeline').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+      await expect(message.getByRole('heading', { name: '流式标题', exact: true })).toBeInViewport()
+    }
+    const released = await page.request.post('http://127.0.0.1:19120/__release')
+    expect(released.ok()).toBe(true)
+    await expect(message).toContainText('最终完整标记')
+    await expect(message.locator('table')).toContainText('项目')
+    await expect(message.locator('.markdown--streaming')).toHaveCount(0)
+    if (mode === '普通长回复') {
+      await expect(message.getByRole('heading', { name: '流式标题', exact: true })).toBeInViewport()
+      await expect(message.getByText('最终完整标记', { exact: true })).not.toBeInViewport()
+    }
+  })
+}

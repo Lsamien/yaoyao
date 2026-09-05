@@ -240,9 +240,12 @@ wss.on('connection', (socket) => {
       const name = /你是 (.*?)。/.exec(f.params.text)?.[1] || '助手'
       const requested = /本轮用户指定成员：([^\n]*)/.exec(f.params.text)?.[1] ?? ''
       const delegates = f.params.text.includes('你是管理员。') && !f.params.text.includes('本批次执行结果：') && requested.startsWith('@')
-      const text = `我是${name}。已按角色规则处理这条消息。\n\n- 会话独立保存\n- 可以继续交流\n\n[报告](/tmp/workspace-report.txt)${delegates ? `\n请${requested}处理任务。` : ''}`
+      const markdownStream = String(f.params.text).includes('[streaming-markdown]')
+      const markdownPrefix = '# 流式标题\n\n**即时格式化**\n\n- 第一项\n- 第二项\n\n```ts\nconst answer = 42' + (String(f.params.text).includes('[long]') ? `\n\x60\x60\x60\n\n${'这是持续生成的长回复段落。\n\n'.repeat(80)}流式末尾标记\n\n\x60\x60\x60ts\nconst tail = 1` : '')
+      const markdownFinal = `${markdownPrefix}\n\x60\x60\x60\n\n| 名称 | 数量 |\n| --- | --- |\n| 项目 | 2 |\n\n最终完整标记`
+      const text = markdownStream ? markdownFinal : `我是${name}。已按角色规则处理这条消息。\n\n- 会话独立保存\n- 可以继续交流\n\n[报告](/tmp/workspace-report.txt)${delegates ? `\n请${requested}处理任务。` : ''}`
       event('message.start', {}, f.params.session_id)
-      setTimeout(() => event('message.delta', { text: text.slice(0, 12) }, f.params.session_id), 80)
+      setTimeout(() => event('message.delta', { text: markdownStream ? markdownPrefix : text.slice(0, 12) }, f.params.session_id), 80)
       const complete = () => {
         stored!.running = false
         stored!.messages.push({
@@ -253,7 +256,7 @@ wss.on('connection', (socket) => {
         })
         event('message.complete', { text, status: 'complete' }, f.params.session_id)
       }
-      if (f.params.text.includes('[hold-workspace]')) heldReplies.push(complete)
+      if (markdownStream || f.params.text.includes('[hold-workspace]')) heldReplies.push(complete)
       else setTimeout(complete, 250)
       return
     }

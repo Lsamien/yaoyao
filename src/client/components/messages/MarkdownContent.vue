@@ -2,7 +2,7 @@
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
 import MarkdownIt from 'markdown-it'
-import { computed, onMounted, onUpdated, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { normalizeAssistantMediaMarkdown } from '@/utils/mediaMarkdown'
@@ -18,10 +18,51 @@ const props = withDefaults(defineProps<{
   outlinePrefix?: string
 }>(), { streaming: false, legacyMedia: false, plain: false, fileCards: false, outlinePrefix: '' })
 
-const emit = defineEmits<{ fileLink: [name: string, url: string] }>()
+const emit = defineEmits<{ fileLink: [name: string, url: string]; rendered: [] }>()
 
 const root = ref<HTMLElement | null>(null)
 const copied = ref('')
+const displayedContent = ref(props.content)
+let renderTimer: ReturnType<typeof setTimeout> | undefined
+function cancelRenderTimer() {
+  if (renderTimer !== undefined) clearTimeout(renderTimer)
+  renderTimer = undefined
+}
+// Throttle, not debounce: a continuous token stream must keep making progress.
+watch(() => [props.content, props.streaming, props.plain] as const, ([content, streaming, plain]) => {
+  if (!streaming || plain || !content.startsWith(displayedContent.value) || !displayedContent.value) {
+    cancelRenderTimer()
+    displayedContent.value = content
+  } else if (renderTimer === undefined) {
+    renderTimer = setTimeout(() => {
+      renderTimer = undefined
+      displayedContent.value = props.content
+    }, 80)
+  }
+})
+onBeforeUnmount(cancelRenderTimer)
+
+// Completed code blocks retain their HTML as the trailing block grows.
+const highlightedCode = new Map<string, string>()
+let highlightCost = 0
+function highlightCode(source: string, language: string): string {
+  const key = `${language}\0${source}`
+  const cached = highlightedCode.get(key)
+  if (cached !== undefined) return cached
+  const html = language && hljs.getLanguage(language)
+    ? hljs.highlight(source, { language, ignoreIllegals: true }).value
+    : escapeHtml(source)
+  if (key.length + html.length <= 256_000) {
+    highlightedCode.set(key, html)
+    highlightCost += key.length + html.length
+    while (highlightedCode.size > 32 || highlightCost > 512_000) {
+      const oldest = highlightedCode.keys().next().value!
+      highlightCost -= oldest.length + highlightedCode.get(oldest)!.length
+      highlightedCode.delete(oldest)
+    }
+  }
+  return html
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -38,9 +79,7 @@ const md = new MarkdownIt({
   typographer: false,
   highlight(str: string, lang: string): string {
     const language = lang.trim().split(/\s+/)[0]?.toLowerCase() || ''
-    const highlighted = language && hljs.getLanguage(language)
-      ? hljs.highlight(str, { language, ignoreIllegals: true }).value
-      : escapeHtml(str)
+    const highlighted = highlightCode(str, language)
     const label = language || 'text'
     return `<pre class="code-block"><div class="code-header"><span class="code-lang">${escapeHtml(label)}</span><button type="button" class="code-copy" aria-label="复制代码">复制</button></div><code class="hljs language-${escapeHtml(label)}">${highlighted}</code></pre>`
   },
@@ -59,8 +98,8 @@ md.renderer.rules.link_open = (tokens, index, options, env, self) => {
 
 const markdownSource = computed(() => {
   let source = props.legacyMedia
-    ? normalizeAssistantMediaMarkdown(props.content || '', props.streaming)
-    : props.content || ''
+    ? normalizeAssistantMediaMarkdown(displayedContent.value || '', props.streaming)
+    : displayedContent.value || ''
   source = repairMarkdownForRender(source, props.streaming)
   return source
 })
@@ -76,8 +115,7 @@ function highlightMentions(html: string): string {
   return html.replace(re, match => `<span class="mention-highlight">${match}</span>`)
 }
 
-const rendered = computed(() => {
-  const html = md.render(markdownSource.value)
+function sanitize(html: string): string {
   return DOMPurify.sanitize(highlightMentions(html), {
     USE_PROFILES: { html: true },
     // MarkdownIt generates the inert code-copy button above. User-provided HTML
@@ -87,7 +125,27 @@ const rendered = computed(() => {
     ALLOW_UNKNOWN_PROTOCOLS: false,
     ADD_ATTR: ['target'],
   })
+}
+
+const renderedBlocks = computed(() => {
+  if (props.plain) return []
+  const env = {}
+  const tokens = md.parse(markdownSource.value, env)
+  const blocks: string[] = []
+  let start = 0
+  let depth = 0
+  for (let index = 0; index < tokens.length; index++) {
+    depth += tokens[index].nesting
+    if (depth !== 0) continue
+    blocks.push(sanitize(md.renderer.render(tokens.slice(start, index + 1), md.options, env)))
+    start = index + 1
+  }
+  return blocks
 })
+watch(renderedBlocks, async () => {
+  await nextTick()
+  emit('rendered')
+}, { flush: 'post' })
 
 function decorateCopyButtons() {
   if (!root.value) return
@@ -177,14 +235,17 @@ onUpdated(() => { decorateCopyButtons(); decorateFileLinks(); decorateMediaPrevi
 
 <template>
   <div v-if="plain" class="plain-text">{{ content }}</div>
-  <div v-else ref="root" class="markdown" :class="{ 'markdown--streaming': streaming }" @click="onClick" v-html="rendered" />
+  <div v-else ref="root" class="markdown" :class="{ 'markdown--streaming': streaming }" @click="onClick">
+    <div v-for="(html, index) in renderedBlocks" :key="index" class="markdown-block" v-html="html" />
+  </div>
   <AppIcon v-if="streaming" class="stream-caret" name="arrow-up" :size="0" />
 </template>
 
 <style scoped>
 .plain-text { min-width: 0; color: inherit; font-size: 13px; line-height: 1.68; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-block { display: flow-root; }
 .markdown { min-width: 0; color: inherit; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-.markdown :deep(p) { margin: 0 0 10px; }.markdown :deep(p:last-child) { margin-bottom: 0; }
+.markdown :deep(p) { margin: 0 0 10px; }.markdown-block:last-child :deep(> p:last-child) { margin-bottom: 0; }
 .markdown :deep(h1), .markdown :deep(h2), .markdown :deep(h3), .markdown :deep(h4), .markdown :deep(h5), .markdown :deep(h6) { margin: 1.5em 0 .55em; color: var(--text-primary); line-height: 1.35; letter-spacing: -.01em; }
 .markdown :deep(h1) { font-size: 1.5em; }.markdown :deep(h2) { font-size: 1.28em; }.markdown :deep(h3) { font-size: 1.12em; }.markdown :deep(h4), .markdown :deep(h5), .markdown :deep(h6) { font-size: 1em; }
 .markdown :deep(ul), .markdown :deep(ol) { margin: .45em 0 10px; padding-left: 1.55em; }.markdown :deep(li) { margin: .32em 0; }
@@ -205,7 +266,7 @@ onUpdated(() => { decorateCopyButtons(); decorateFileLinks(); decorateMediaPrevi
 .markdown :deep(img) { display: block; width: auto; max-width: min(100%, 560px); max-height: 360px; margin: .7em 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); object-fit: contain; }.markdown :deep(img[data-media-preview]) { cursor: zoom-in; }
 .markdown :deep(.file-link-card) { display: flex; width: min(390px, 100%); min-height: 52px; align-items: center; gap: 9px; margin: 8px 0; padding: 8px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 3px 10px rgba(0,0,0,.035); color: var(--text-primary); text-decoration: none; }.markdown :deep(.file-link-card)::before { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 7px; background: var(--surface-soft); color: var(--text-secondary); content: '▤'; font-size: 15px; }.markdown :deep(.file-link-card)::after { margin-left: auto; color: var(--text-muted); content: '预览'; font-size: 9px; }.markdown :deep(.file-link-card:hover) { border-color: var(--line-strong); background: var(--surface-soft); text-decoration: none; }
 .markdown :deep(.mention-highlight) { padding: .08em .34em; border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-primary); font-weight: 600; }
-.markdown--streaming :deep(p:last-child)::after { content: ''; display: inline-block; width: 5px; height: 14px; margin-left: 3px; border-radius: 1px; background: currentColor; vertical-align: -2px; animation: caret 1s step-end infinite; }
+.markdown--streaming > .markdown-block:last-child::after { content: ''; display: inline-block; width: 5px; height: 14px; margin-left: 3px; border-radius: 1px; background: currentColor; vertical-align: -2px; animation: caret 1s step-end infinite; }
 .stream-caret { display: none; }
 @keyframes caret { 50% { opacity: 0; } }
 @media (max-width: 600px) { .markdown :deep(img) { max-height: 280px; } }

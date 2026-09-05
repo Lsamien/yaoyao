@@ -41,3 +41,87 @@ describe('MarkdownContent code copy', () => {
     wrapper.unmount()
   })
 })
+
+describe('streaming Markdown', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('formats before completion, preserves settled DOM blocks, and flushes the final token', async () => {
+    vi.useFakeTimers()
+    const prefix = '# 流式标题\n\n- 第一项\n- 第二项\n\n```ts\nconst x = '
+    const wrapper = mount(MarkdownContent, { props: { content: prefix, streaming: true } })
+    expect(wrapper.get('h1').text()).toBe('流式标题')
+    expect(wrapper.findAll('li')).toHaveLength(2)
+    expect(wrapper.get('pre code').element.textContent).toBe('const x = ')
+    const heading = wrapper.get('h1').element
+    const list = wrapper.get('ul').element
+    await wrapper.setProps({ content: `${prefix}42` })
+    await vi.advanceTimersByTimeAsync(80)
+    expect(wrapper.get('pre code').text()).toContain('42')
+    expect(wrapper.get('h1').element).toBe(heading)
+    expect(wrapper.get('ul').element).toBe(list)
+    await wrapper.setProps({ content: `${prefix}42\n\x60\x60\x60\n\n最后一个字`, streaming: false })
+    expect(wrapper.text()).toContain('最后一个字')
+    expect(wrapper.find('.markdown--streaming').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wrapper.text()).toContain('最后一个字')
+    wrapper.unmount()
+  })
+
+  it('does not starve while tokens arrive faster than the render interval', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(MarkdownContent, { props: { content: '# 连续输出\n\n', streaming: true } })
+    let content = '# 连续输出\n\n'
+    for (let index = 0; index < 20; index++) {
+      content += `${index} `
+      await wrapper.setProps({ content })
+      await vi.advanceTimersByTimeAsync(10)
+      if (index === 10) expect(wrapper.text()).toContain('7')
+    }
+    await vi.advanceTimersByTimeAsync(80)
+    expect(wrapper.text()).toContain('19')
+    wrapper.unmount()
+  })
+
+  it('handles replacement, interruption, literal user text, and unmount during a pending update', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(MarkdownContent, { props: { content: '```swift\nlet x = ', streaming: true } })
+    await wrapper.setProps({ content: '```swift\nlet x = 1' })
+    await wrapper.setProps({ streaming: false })
+    expect(wrapper.get('pre code').text()).toContain('let x = 1')
+    await wrapper.setProps({ content: '# 另一条消息', streaming: true })
+    expect(wrapper.get('h1').text()).toBe('另一条消息')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wrapper.find('pre').exists()).toBe(false)
+    await wrapper.setProps({ content: '**用户原文**', plain: true })
+    expect(wrapper.get('.plain-text').text()).toBe('**用户原文**')
+    expect(wrapper.find('strong').exists()).toBe(false)
+    await wrapper.setProps({ content: '# 新内容', plain: false })
+    await wrapper.setProps({ content: '# 新内容继续' })
+    wrapper.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('renders split tables, links and emphasis safely and preserves the full long reply', async () => {
+    vi.useFakeTimers()
+    const source = '# 标题\n\n**粗体** 和 `行内代码`\n\n> 引用\n\n| 名称 | 数量 |\n| --- | --- |\n| 项目 | 2 |\n\n[链接](https://example.com)\n\n<script>alert(1)</script>\n\n[危险](javascript:alert(1))'
+    const wrapper = mount(MarkdownContent, { props: { content: '', streaming: true } })
+    for (let index = 1; index <= source.length; index++) {
+      await wrapper.setProps({ content: source.slice(0, index) })
+      await vi.advanceTimersByTimeAsync(80)
+    }
+    expect(wrapper.get('strong').text()).toBe('粗体')
+    expect(wrapper.get('blockquote').text()).toBe('引用')
+    expect(wrapper.get('table').text()).toContain('项目')
+    expect(wrapper.get('a').attributes('href')).toBe('https://example.com')
+    expect(wrapper.find('script').exists()).toBe(false)
+    expect(wrapper.find('a[href^="javascript:"]').exists()).toBe(false)
+    const long = `${source}\n\n${'完整的长段落。\n\n'.repeat(400)}最终唯一标记`
+    await wrapper.setProps({ content: long })
+    await vi.advanceTimersByTimeAsync(80)
+    expect(wrapper.text()).toContain('最终唯一标记')
+    await wrapper.setProps({ streaming: false })
+    expect(wrapper.text()).toContain('最终唯一标记')
+    expect(wrapper.emitted('rendered')?.length).toBeGreaterThan(1)
+    wrapper.unmount()
+  })
+})

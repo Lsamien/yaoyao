@@ -28,7 +28,7 @@ const statusLabel = computed(() => props.group.status === 'running' ? '进行中
       <template v-for="entry in group.entries" :key="entry.id">
         <section v-if="entry.type === 'reasoning'" class="turn-trace__item turn-trace__reasoning">
           <header><AppIcon name="brain" :size="12" />思考过程 · {{ entry.content.length }} 字</header>
-          <MarkdownContent :content="entry.content" />
+          <MarkdownContent :content="entry.content" :streaming="group.status === 'running'" />
         </section>
         <ToolTrace v-else class="turn-trace__item turn-trace__tool" :tool="entry.tool" expanded />
       </template>
