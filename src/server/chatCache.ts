@@ -57,6 +57,53 @@ function sessionTitle(value: Record<string, unknown>): string {
   return String(value.title ?? '').trim()
 }
 
+// Hermes uses Unix seconds; local route registration uses milliseconds. Keep
+// the public summary in seconds so Web and iOS compare the same activity time.
+function timestampSeconds(value: unknown): number | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined
+  const numeric = Number(value)
+  const seconds = Number.isFinite(numeric)
+    ? numeric > 10_000_000_000 ? numeric / 1_000 : numeric
+    : typeof value === 'string' ? Date.parse(value) / 1_000 : NaN
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined
+}
+
+function firstTimestamp(value: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const timestamp = timestampSeconds(value[key])
+    if (timestamp !== undefined) return timestamp
+  }
+  return undefined
+}
+
+const START_TIME_KEYS = ['started_at', 'startedAt', 'session_started', 'created_at', 'createdAt']
+const ACTIVITY_TIME_KEYS = ['last_active', 'last_active_at', 'last_activity_at', 'lastActive', 'updated_at', 'updatedAt']
+
+function mergeSessionMetadata(previous: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
+  const summary = { ...previous, ...incoming }
+  // A messages response can carry title/model metadata, but its envelope is
+  // not a replacement for the session detail.
+  delete summary.messages
+  delete summary.pagination
+  const started = firstTimestamp(incoming, START_TIME_KEYS) ?? firstTimestamp(previous, START_TIME_KEYS)
+  const activity = firstTimestamp(incoming, ACTIVITY_TIME_KEYS) ?? firstTimestamp(previous, ACTIVITY_TIME_KEYS)
+  if (started !== undefined) summary.started_at = started
+  if (activity !== undefined) summary.last_active = activity
+  return summary
+}
+
+function messageTimeBounds(messages: Record<string, unknown>[]): { first?: number; last?: number } {
+  let first: number | undefined
+  let last: number | undefined
+  for (const message of messages) {
+    const time = firstTimestamp(message, ['timestamp', 'created_at', 'createdAt'])
+    if (time === undefined) continue
+    first = Math.min(first ?? time, time)
+    last = Math.max(last ?? time, time)
+  }
+  return { first, last }
+}
+
 function isPlaceholderTitle(value: string): boolean {
   return new Set([
     '', '新对话', '新会话', '未命名对话', '未命名会话', 'new conversation', 'new session', 'untitled',
@@ -202,6 +249,36 @@ export class ChatCacheStore {
         try { summary = object(JSON.parse(row.data)) ?? {} } catch { continue }
         const title = sessionTitle(summary)
         if (!isPlaceholderTitle(title)) backfillTitle.run(title, row.owner, row.profile, row.session_id)
+      }
+      if (!this.db.prepare("SELECT 1 FROM chat_meta WHERE key='session-activity-v1'").get()) {
+        const rows = this.db.prepare(`SELECT owner,profile,session_id,source,data,owned_at,message_total
+          FROM chat_sessions WHERE owned_at IS NOT NULL`).all() as Array<{
+            owner: string; profile: string; session_id: string; source: string; data: string
+            owned_at: number; message_total: number | null
+          }>
+        const update = this.db.prepare(`UPDATE chat_sessions SET data=? WHERE owner=? AND profile=? AND session_id=?`)
+        for (const row of rows) {
+          let stored: Record<string, unknown>
+          try { stored = object(JSON.parse(row.data)) ?? {} } catch { continue }
+          const summary = mergeSessionMetadata({}, stored)
+          if (Array.isArray(stored.messages) || !firstTimestamp(summary, START_TIME_KEYS)
+            || !firstTimestamp(summary, ACTIVITY_TIME_KEYS)) {
+            const messages = this.db.prepare(`SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=?`)
+              .all(row.owner, row.profile, row.session_id) as Array<{ data: string }>
+            const bounds = messageTimeBounds(messages.flatMap(message => {
+              try { return [object(JSON.parse(message.data)) ?? {}] } catch { return [] }
+            }))
+            summary.started_at = firstTimestamp(summary, START_TIME_KEYS) ?? bounds.first ?? timestampSeconds(row.owned_at)
+            summary.last_active = Math.max(firstTimestamp(summary, ACTIVITY_TIME_KEYS) ?? 0,
+              bounds.last ?? 0) || summary.started_at
+            if (row.message_total !== null) summary.message_count = row.message_total
+          }
+          summary.id = row.session_id
+          summary.profile = row.profile
+          summary.source = sessionSource(summary) || row.source
+          update.run(JSON.stringify(summary), row.owner, row.profile, row.session_id)
+        }
+        this.db.prepare("INSERT INTO chat_meta(key,value) VALUES('session-activity-v1','complete')").run()
       }
       // List bodies written before ownership became an explicit projection do
       // not carry `owned` and may have been filtered by `source`. Rebuild them on
@@ -546,14 +623,8 @@ export class ChatCacheStore {
         })
       }
     }
-    const activity = (session: Record<string, unknown>): number => Number(
-      session.last_active_at
-        ?? session.last_active
-        ?? session.updated_at
-        ?? session.started_at
-        ?? session._yaoyao_registry_activity
-        ?? 0,
-    ) || 0
+    const activity = (session: Record<string, unknown>): number =>
+      firstTimestamp(session, ACTIVITY_TIME_KEYS) ?? firstTimestamp(session, START_TIME_KEYS) ?? 0
     const archived = (session: Record<string, unknown>): boolean => bool(
       session.is_archived ?? session.isArchived ?? session.archived,
     )
@@ -569,7 +640,7 @@ export class ChatCacheStore {
     const offset = Math.max(0, Math.trunc(page.offset ?? 0))
     const limit = Math.max(1, Math.min(500, Math.trunc(page.limit ?? 100)))
     const sessions = allSessions.slice(offset, offset + limit).map((session) => {
-      const publicSession = { ...session }
+      const publicSession = mergeSessionMetadata({}, session)
       delete publicSession._yaoyao_registry_activity
       return publicSession
     })
@@ -746,9 +817,9 @@ export class ChatCacheStore {
       const registered = this.ownsSession(owner, profile, id)
       const source = sessionSource(session)
       if (!registered) continue
-      const titleRow = this.db.prepare(`SELECT authoritative_title,authoritative_title_at FROM chat_sessions
+      const titleRow = this.db.prepare(`SELECT data,authoritative_title,authoritative_title_at FROM chat_sessions
         WHERE owner=? AND profile=? AND session_id=?`).get(owner, profile, id) as {
-          authoritative_title?: string | null; authoritative_title_at?: number
+          data: string; authoritative_title?: string | null; authoritative_title_at?: number
         } | undefined
       const authoritativeTitle = String(titleRow?.authoritative_title ?? '').trim()
       const authoritativeTitleAt = Number(titleRow?.authoritative_title_at ?? 0)
@@ -756,14 +827,17 @@ export class ChatCacheStore {
       const preservesAuthoritativeTitle = Boolean(authoritativeTitle)
         && (kind !== 'detail' || isPlaceholderTitle(incomingTitle)
           || requestStartedAt <= authoritativeTitleAt)
-      const storedSession = preservesAuthoritativeTitle
-        ? { ...session, title: authoritativeTitle }
-        : session
+      let previous: Record<string, unknown> = {}
+      try { previous = object(JSON.parse(titleRow?.data ?? '{}')) ?? {} } catch { /* Recover from incoming metadata. */ }
+      const storedSession = mergeSessionMetadata(previous, session)
+      if (preservesAuthoritativeTitle) storedSession.title = authoritativeTitle
+      const metadataComplete = kind !== 'messages' || direct ? 1 : 0
       this.db.prepare(`INSERT INTO chat_sessions(owner,profile,session_id,runtime_id,source,data,sync_state,complete,last_synced_at,metadata_complete)
-        VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(owner,profile,session_id) DO UPDATE SET data=excluded.data,metadata_complete=1,
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET data=excluded.data,
+        metadata_complete=MAX(chat_sessions.metadata_complete,excluded.metadata_complete),
         source=CASE WHEN excluded.source='unknown' THEN chat_sessions.source ELSE excluded.source END,
         sync_state='current',last_synced_at=excluded.last_synced_at`)
-        .run(owner, profile, id, null, source || 'unknown', JSON.stringify(storedSession), 'current', 0, now)
+        .run(owner, profile, id, null, source || 'unknown', JSON.stringify(storedSession), 'current', 0, now, metadataComplete)
       const acceptedTitle = sessionTitle(storedSession)
       if (acceptedTitle && !isPlaceholderTitle(acceptedTitle)
         && (!authoritativeTitle || kind === 'detail')) {
@@ -802,6 +876,17 @@ export class ChatCacheStore {
       FROM chat_messages WHERE owner=? AND profile=? AND session_id=?`).get(owner, profile, sessionID) as Record<string, number>
     const complete = total === 0 ? coverage.count === 0
       : coverage.count === total && coverage.positions === total && coverage.first === 0 && coverage.last === total - 1
+    const row = this.db.prepare('SELECT data FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
+      .get(owner, profile, sessionID) as { data: string }
+    const summary = mergeSessionMetadata({}, object(JSON.parse(row.data)) ?? {})
+    const bounds = messageTimeBounds(messages)
+    if (!firstTimestamp(summary, START_TIME_KEYS) && bounds.first !== undefined) summary.started_at = bounds.first
+    if (bounds.last !== undefined) {
+      summary.last_active = Math.max(firstTimestamp(summary, ACTIVITY_TIME_KEYS) ?? 0, bounds.last)
+    }
+    summary.message_count = total
+    this.db.prepare('UPDATE chat_sessions SET data=? WHERE owner=? AND profile=? AND session_id=?')
+      .run(JSON.stringify(summary), owner, profile, sessionID)
     this.db.prepare(`UPDATE chat_sessions SET complete=?,message_total=?,sync_state='current',last_synced_at=?
       WHERE owner=? AND profile=? AND session_id=?`).run(complete ? 1 : 0, total, now, owner, profile, sessionID)
   }

@@ -30,6 +30,79 @@ afterEach(() => {
 })
 
 describe('durable source=web chat cache', () => {
+  it('keeps session metadata when message envelopes only contain session_id and advances activity from messages', () => {
+    const f = fixture()
+    f.store.recordRoute(owner, profile, sessionID, 'runtime-web')
+    f.store.putSnapshot(owner, 'detail', 'detail', profile, sessionID, response({
+      id: sessionID, profile, source: 'ios', title: '准备 GPT-6 详细 Markdown 文档',
+      started_at: 1_788_661_637, last_active: 1_788_661_640, pinned: true, message_count: 1,
+    }))
+    f.store.putSnapshot(owner, 'tail', 'messages', profile, sessionID, response({
+      session_id: sessionID, model: 'test-model',
+      messages: [{ id: 'latest', timestamp: 1_788_663_697.824613, role: 'assistant', content: '完成' }],
+      pagination: { total: 2, offset: 0 },
+    }))
+    f.store.putSnapshot(owner, 'older', 'messages', profile, sessionID, response({
+      session_id: sessionID,
+      messages: [{ id: 'first', timestamp: 1_788_661_640_000, role: 'user', content: '开始' }],
+      pagination: { total: 2, offset: 1 },
+    }))
+    const summary = JSON.parse(f.store.localDetail(owner, profile, sessionID)!.response.body.toString())
+    expect(summary).toMatchObject({
+      id: sessionID, profile, source: 'ios', title: '准备 GPT-6 详细 Markdown 文档',
+      started_at: 1_788_661_637, last_active: 1_788_663_697.824613,
+      pinned: true, model: 'test-model', message_count: 2,
+    })
+    expect(summary).not.toHaveProperty('messages')
+    expect(summary).not.toHaveProperty('pagination')
+    f.store.close()
+  })
+
+  it('repairs overwritten summaries on restart using message time instead of cache refresh time', () => {
+    const f = fixture()
+    f.store.recordRoute(owner, profile, sessionID, 'runtime-web')
+    f.store.recordCommand(owner, profile, sessionID, 'session.create', { source: 'ios' })
+    f.store.putSnapshot(owner, 'messages', 'messages', profile, sessionID, response({
+      session_id: sessionID,
+      messages: [
+        { id: 'first', timestamp: '2026-09-06T03:00:00Z', role: 'user', content: '开始' },
+        { id: 'last', timestamp: 1_788_663_697.824613, role: 'assistant', content: '完成' },
+      ],
+      pagination: { total: 2, offset: 0 },
+    }))
+    f.store.db.prepare(`UPDATE chat_sessions SET data=?,owned_at=?,last_synced_at=?
+      WHERE owner=? AND profile=? AND session_id=?`).run(JSON.stringify({
+      session_id: sessionID, title: '准备 GPT-6 详细 Markdown 文档', model: 'test-model',
+      messages: [], pagination: { total: 2 },
+    }), 1_788_661_637_003, 1_900_000_000_000, owner, profile, sessionID)
+    f.store.db.prepare("DELETE FROM chat_meta WHERE key='session-activity-v1'").run()
+    f.store.close()
+
+    const restored = new ChatCacheStore(f.home)
+    const summary = JSON.parse(restored.localList(owner, profile, {}).body.toString()).sessions[0]
+    expect(summary).toMatchObject({
+      id: sessionID, source: 'ios', title: '准备 GPT-6 详细 Markdown 文档',
+      started_at: 1_788_663_600, last_active: 1_788_663_697.824613, message_count: 2,
+    })
+    expect(summary).not.toHaveProperty('messages')
+    expect(summary).not.toHaveProperty('pagination')
+    restored.close()
+    const again = new ChatCacheStore(f.home)
+    expect(JSON.parse(again.localList(owner, profile, {}).body.toString()).sessions[0]).toEqual(summary)
+    again.close()
+  })
+
+  it('orders owned conversations by real time across seconds and milliseconds', () => {
+    const f = fixture()
+    for (const [id, activity] of [['older', 1_788_561_050_759], ['newer', 1_788_663_697.824613]] as const) {
+      f.store.recordRoute(owner, profile, id, `runtime-${id}`)
+      f.store.putSnapshot(owner, id, 'detail', profile, id, response({ id, last_active: activity }))
+    }
+    expect(JSON.parse(f.store.localList(owner, profile, {}).body.toString()).sessions.map((s: { id: string }) => s.id))
+      .toEqual(['newer', 'older'])
+    f.store.close()
+  })
+
   it('serves a warm list without a second 9119 request and survives restart', async () => {
     const f = fixture()
     f.store.recordRoute(owner, profile, sessionID, 'runtime-web')
