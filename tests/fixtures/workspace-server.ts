@@ -209,7 +209,8 @@ wss.on('connection', (socket) => {
         }
         sessions.set(stored.id, stored)
       }
-      const runtimeId = randomUUID()
+      // A live Hermes resume joins the same runtime, including other viewers.
+      const runtimeId = latestRuntimeBySession.get(stored.id) ?? randomUUID()
       runtimes.set(runtimeId, stored.id)
       latestRuntimeBySession.set(stored.id, runtimeId)
       respond({
@@ -241,12 +242,15 @@ wss.on('connection', (socket) => {
       const requested = /本轮用户指定成员：([^\n]*)/.exec(f.params.text)?.[1] ?? ''
       const delegates = f.params.text.includes('你是管理员。') && !f.params.text.includes('本批次执行结果：') && requested.startsWith('@')
       const markdownStream = String(f.params.text).includes('[streaming-markdown]')
+      const crossClientRun = String(f.params.text).includes('[cross-client-live]')
       const markdownPrefix = '# 流式标题\n\n**即时格式化**\n\n- 第一项\n- 第二项\n\n```ts\nconst answer = 42' + (String(f.params.text).includes('[long]') ? `\n\x60\x60\x60\n\n${'这是持续生成的长回复段落。\n\n'.repeat(80)}流式末尾标记\n\n\x60\x60\x60ts\nconst tail = 1` : '')
       const markdownFinal = `${markdownPrefix}\n\x60\x60\x60\n\n| 名称 | 数量 |\n| --- | --- |\n| 项目 | 2 |\n\n最终完整标记`
       const text = markdownStream ? markdownFinal : `我是${name}。已按角色规则处理这条消息。\n\n- 会话独立保存\n- 可以继续交流\n\n[报告](/tmp/workspace-report.txt)${delegates ? `\n请${requested}处理任务。` : ''}`
       event('message.start', {}, f.params.session_id)
-      setTimeout(() => event('message.delta', { text: markdownStream ? markdownPrefix : text.slice(0, 12) }, f.params.session_id), 80)
+      if (crossClientRun) event('tool.start', { tool_id: 'cross-client-tool', name: 'read_file' }, f.params.session_id)
+      else setTimeout(() => event('message.delta', { text: markdownStream ? markdownPrefix : text.slice(0, 12) }, f.params.session_id), 80)
       const complete = () => {
+        if (crossClientRun) event('tool.complete', { tool_id: 'cross-client-tool', name: 'read_file', result: 'ok' }, f.params.session_id)
         stored!.running = false
         stored!.messages.push({
           id: randomUUID(),
@@ -256,7 +260,7 @@ wss.on('connection', (socket) => {
         })
         event('message.complete', { text, status: 'complete' }, f.params.session_id)
       }
-      if (markdownStream || f.params.text.includes('[hold-workspace]')) heldReplies.push(complete)
+      if (crossClientRun || markdownStream || f.params.text.includes('[hold-workspace]')) heldReplies.push(complete)
       else setTimeout(complete, 250)
       return
     }

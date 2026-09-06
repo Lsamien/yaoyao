@@ -83,6 +83,45 @@ test('an open Web chat list receives cross-client sessions and real title events
       .__crossClientProjectionSentinel)).toBe(sentinel)
 })
 
+test('an idle Web viewer follows an iOS-origin run and restores thinking after reload', async ({ page }, testInfo) => {
+  await login(page)
+  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
+  const opened = await page.request.post('/api/realtime/channels', { headers, data: { channel: 'chat' } })
+  expect(opened.ok(), await opened.text()).toBe(true)
+  const channel = (await opened.json()).id
+  let sequence = 0
+  async function command(method: string, params: Record<string, unknown>) {
+    const response = await page.request.post(`/api/realtime/channels/${channel}/commands`, {
+      headers: { ...headers, 'Idempotency-Key': `ios-live-${Date.now()}-${++sequence}` },
+      data: { jsonrpc: '2.0', method, params },
+    })
+    expect(response.ok(), await response.text()).toBe(true)
+    const receipt = await response.json()
+    expect(receipt.state).toBe('confirmed')
+    return receipt.response.result
+  }
+  const session = await command('session.create', { profile: 'default', source: 'ios' })
+  const subscribed = page.waitForResponse(response => response.url().endsWith('/commands')
+    && response.request().postDataJSON()?.method === 'session.resume')
+  await page.goto(`/chat/${session.stored_session_id}?profile=default`)
+  await subscribed
+  await command('prompt.submit', { session_id: session.session_id, text: '[cross-client-live] 检查文件' })
+  await expect(page.getByRole('status', { name: '正在思考', exact: true })).toBeVisible()
+  await page.getByText('思考与工具', { exact: true }).click()
+  await expect(page.getByText('read_file', { exact: true })).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('ios-run-web-thinking-tools.png') })
+
+  // This Web page has never submitted a prompt or written an in-flight marker.
+  await page.evaluate(() => sessionStorage.clear())
+  await page.reload()
+  await expect(page.getByRole('status', { name: '正在思考', exact: true })).toBeVisible()
+  await page.request.post('http://127.0.0.1:19120/__release')
+  await expect(page.locator('.message--assistant')).toContainText('会话独立保存')
+  await expect(page.getByRole('status', { name: '正在思考', exact: true })).toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('ios-run-web-completed.png') })
+})
+
 test('created roles and editable teams share a durable chat list without plugin calls', async ({
   page,
   context,

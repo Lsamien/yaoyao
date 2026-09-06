@@ -112,7 +112,6 @@ export const useChatStore = defineStore('chat', () => {
   let unreadLoadGeneration = 0
   let reconnectResumePromise: Promise<unknown> | undefined
   let persistedRecoveryPromise: Promise<void> | undefined
-  let hasConnectedOnce = false
   const runtimePromises = new Map<string, Promise<ChatRouteState>>()
 
   const activeRouteState = computed(() => {
@@ -248,10 +247,9 @@ export const useChatStore = defineStore('chat', () => {
     connectionState.value = state
     if (state === 'ready') {
       reconnectAttempt = 0
-      const shouldResume = hasConnectedOnce
-      hasConnectedOnce = true
       const active = activeRouteState.value
-      if (shouldResume && active?.isStreaming && !active.runtimeSessionId && !reconnectResumePromise) {
+      if (active?.historySynced && (active.isStreaming || activeSession.value?.owned === true)
+        && !active.route.sessionId.startsWith('draft-') && !active.runtimeSessionId && !reconnectResumePromise) {
         reconnectResumePromise = ensureRuntime(active)
           .catch(cause => { active.error = errorMessage(cause) })
           .finally(() => { reconnectResumePromise = undefined })
@@ -293,7 +291,8 @@ export const useChatStore = defineStore('chat', () => {
     const draftIndex = sessions.value.findIndex(session => session.id === oldState.route.sessionId && session.profile === oldState.route.profile)
     const now = Date.now() / 1000
     const summary: SessionSummary = draftIndex >= 0
-      ? { ...sessions.value[draftIndex], id: storedSessionId, owned: true, updatedAt: now }
+      ? { ...sessions.value[draftIndex], id: storedSessionId, owned: true,
+          updatedAt: newKey === oldKey ? sessions.value[draftIndex].updatedAt : now }
       : { id: storedSessionId, profile: oldState.route.profile, source: 'web', owned: true, title: '新会话', messageCount: 0, toolCallCount: 0, startedAt: now, updatedAt: now }
     if (draftIndex >= 0) sessions.value.splice(draftIndex, 1, summary)
     else sessions.value.unshift(summary)
@@ -370,7 +369,6 @@ export const useChatStore = defineStore('chat', () => {
   function disconnect(): void {
     if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
     reconnectTimer = undefined
-    hasConnectedOnce = false
     socket.close()
     runtimeRoutes.clear()
     runtimePromises.clear()
@@ -525,12 +523,19 @@ export const useChatStore = defineStore('chat', () => {
     activeProfileName.value = selectedProfile
     const state = ensureRoute(selectedProfile, sessionId)
     syncSelectedModel(session?.model, session?.provider)
-    // Reading an old session must not rewrite the server's last_active field.
-    // The runtime is attached lazily by send/interrupt/usage, or when a known
-    // in-flight turn reconnects. REST history remains authoritative here.
+    // REST owns history, but an owned chat also needs a runtime subscription:
+    // another device can start a turn while this viewer has never sent one.
+    // History-only sessions and unsent drafts must remain unattached.
     if (!state.historySynced) await loadHistory(state)
     const refreshed = sessions.value.find(item => item.id === sessionId && item.profile === selectedProfile)
     syncSelectedModel(refreshed?.model, refreshed?.provider)
+    if (refreshed?.owned === true && !sessionId.startsWith('draft-')
+      && activeSessionId.value === sessionId && activeProfileName.value === selectedProfile) {
+      await ensureRuntime(state).catch(cause => {
+        const current = routes[routeKey(selectedProfile, sessionId)]
+        if (current) current.error = errorMessage(cause)
+      })
+    }
   }
 
   async function forceRefreshHistory(): Promise<void> {
@@ -605,6 +610,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!runtimeId) throw new Error('Hermes 未返回运行会话标识')
     const storedId = string(result.stored_session_id ?? result.storedSessionId ?? result.session_key, initialState.route.sessionId)
     const migrated = migrateRoute(initialKey, storedId, runtimeId)
+    migrated.error = undefined
     const info = record(result.info)
     if (!desiredModelRoutes.has(routeKey(migrated.route.profile, migrated.route.sessionId))) {
       syncSelectedModel(string(result.model ?? info.model), string(result.provider ?? info.provider))
@@ -619,13 +625,17 @@ export const useChatStore = defineStore('chat', () => {
     const inflight = record(result.inflight ?? result.active_run)
     const assistant = string(inflight.assistant)
     const inflightError = string(inflight.error)
-    migrated.isStreaming = bool(result.running) || bool(inflight.streaming)
+    migrated.isStreaming = bool(result.running) || bool(info.running) || bool(inflight.streaming)
     const queued = record(result.queued)
     const queuedUser = string(queued.user)
     migrated.isQueued = Boolean(queuedUser)
-    if (assistant || inflightError) {
+    // A turn can be thinking or calling tools before producing any text.
+    // Create its live row now so subsequent tool events have a visible target.
+    const existing = [...migrated.messages].reverse().find(message => message.role === 'assistant' && message.isStreaming)
+    if (migrated.isStreaming || inflightError || (existing && assistant)) {
       migrated.messages = mergeChatMessages(migrated.messages, [{
-        id: `resume:${runtimeId}`,
+        ...existing,
+        id: existing?.id ?? `resume:${runtimeId}`,
         sessionId: storedId,
         profile: migrated.route.profile,
         role: 'assistant',
@@ -636,6 +646,14 @@ export const useChatStore = defineStore('chat', () => {
         error: inflightError || undefined,
       }])
     }
+    if (!migrated.isStreaming) {
+      migrated.liveStatus = undefined
+      migrated.messages = migrated.messages.map(message => message.isStreaming
+        ? { ...message, isStreaming: false, stage: message.stage === 'streaming' ? 'settled' : message.stage }
+        : message)
+    }
+    migrated.pendingApproval = undefined
+    migrated.pendingClarification = undefined
     values(inflight.corrections).forEach((correction, index) => {
       const content = string(correction)
       if (!content) return
@@ -690,7 +708,8 @@ export const useChatStore = defineStore('chat', () => {
     const existing = runtimePromises.get(key)
     if (existing) return existing
     let operation: Promise<ChatRouteState>
-    operation = performEnsureRuntime(initialState).finally(() => {
+    // Register the operation before connect can publish ready and re-enter.
+    operation = Promise.resolve().then(() => performEnsureRuntime(initialState)).finally(() => {
       if (runtimePromises.get(key) === operation) runtimePromises.delete(key)
     })
     runtimePromises.set(key, operation)
