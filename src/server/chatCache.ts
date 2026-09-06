@@ -855,8 +855,11 @@ export class ChatCacheStore {
     if (!Array.isArray(payload.messages) || !sessionID) return
     const profile = fallbackProfile || profileOf(direct ?? {}, 'default') || 'default'
     const pagination = object(payload.pagination) ?? {}
-    const total = Math.max(messages.length, Number(pagination.total ?? payload.total ?? messages.length) || messages.length)
     const offset = Math.max(0, Number(pagination.offset ?? payload.offset ?? 0) || 0)
+    const storedDetail = this.localDetail(owner, profile, sessionID)
+    const storedSummary = storedDetail ? parseResponse(storedDetail.response) ?? {} : {}
+    const total = Math.max(offset + messages.length,
+      Number(pagination.total ?? payload.total ?? storedSummary.message_count ?? storedSummary.messageCount ?? 0) || 0)
     const start = Math.max(0, total - offset - messages.length)
     messages.forEach((message, index) => {
       const data = JSON.stringify(message)
@@ -1019,10 +1022,14 @@ export class ChatCacheCoordinator {
       const detailStartedAt = Date.now()
       const detail = await this.upstream.request(detailPath, { search: new URLSearchParams({ profile }), cache: 'reload' })
       if (detail.status !== 200) throw new Error('Unable to synchronize conversation metadata')
-      const pages = [{ key: `detail:${profile}:${sessionID}`, kind: 'detail', response: detail, startedAt: detailStartedAt }]
+      const detailPayload = parseResponse(detail) ?? {}
+      const detailSummary = object(detailPayload.session) ?? detailPayload
+      const summaryTotal = Math.max(0, Number(detailSummary.message_count ?? detailSummary.messageCount ?? previousTotal) || 0)
+      const pages = [{ key: `detail:${profile}:${sessionID}`, kind: 'detail', response: detail, startedAt: detailStartedAt, offset: 0 }]
       let offset = 0
       let done = false
       let expectedTotal: number | undefined
+      let resolvedTotal = summaryTotal
       // Stop as soon as the authoritative tail overlaps durable messages. Only
       // explicit refresh (or uncached history) walks all the way to the beginning.
       for (let page = 0; page < 1_000; page++) {
@@ -1033,19 +1040,47 @@ export class ChatCacheCoordinator {
         if (response.status !== 200 || !Array.isArray(payload?.messages)) throw new Error('Unable to synchronize conversation messages')
         const messages = payload.messages.flatMap(value => object(value) ? [object(value)!] : [])
         const pagination = object(payload.pagination) ?? {}
-        const total = Number(pagination.total ?? payload.total ?? messages.length)
+        const explicitTotal = pagination.total ?? payload.total
+        const total = Math.max(offset + messages.length, Number(explicitTotal ?? summaryTotal) || 0)
         if (!force && total < previousTotal) throw new Error('Stored history changed; explicit refresh is required')
-        if (expectedTotal !== undefined && expectedTotal !== total) throw new Error('Conversation changed during synchronization')
-        expectedTotal = total
+        if (explicitTotal !== undefined) {
+          if (expectedTotal !== undefined && expectedTotal !== total) throw new Error('Conversation changed during synchronization')
+          expectedTotal = total
+        }
         const anchors = !force ? messages.map((message, index) =>
           this.store.hasMessage(owner, profile, sessionID, message, total - offset - messages.length + index)) : []
         const overlap = anchors.some(Boolean)
-        pages.push({ key: `messages:${profile}:${sessionID}:${offset}:100`, kind: 'messages', response, startedAt })
-        if (overlap || !bool(pagination.hasMore ?? pagination.has_more ?? payload.hasMore ?? payload.has_more)) { done = true; break }
+        pages.push({ key: `messages:${profile}:${sessionID}:${offset}:100`, kind: 'messages', response, startedAt, offset })
+        const more = pagination.hasMore ?? pagination.has_more ?? payload.hasMore ?? payload.has_more
+        const hasMore = more === undefined ? messages.length >= 100 : bool(more)
+        if (overlap || !hasMore) {
+          if (!overlap && expectedTotal !== undefined && expectedTotal !== offset + messages.length) throw new Error('Conversation pagination ended before its declared total')
+          resolvedTotal = overlap ? total : offset + messages.length
+          done = true
+          break
+        }
         if (!messages.length) break
         offset += messages.length
       }
       if (!done) throw new Error('Conversation synchronization is incomplete')
+      // Newer Hermes omits total/has_more. Once the end is known, project the
+      // same verified total onto every page before assigning absolute positions.
+      for (let index = 0; index < pages.length; index++) {
+        const entry = pages[index]!
+        const payload = parseResponse(entry.response)!
+        if (entry.kind === 'detail') {
+          const summary = object(payload.session) ?? payload
+          summary.message_count = resolvedTotal
+        } else {
+          const pagination = object(payload.pagination) ?? {}
+          const pageOffset = entry.offset
+          payload.pagination = { ...pagination, total: resolvedTotal, offset: pageOffset,
+            has_more: pageOffset + (payload.messages as unknown[]).length < resolvedTotal }
+        }
+        const headers = new Headers(entry.response.headers)
+        headers.delete('content-length')
+        entry.response = { ...entry.response, headers, body: Buffer.from(JSON.stringify(payload)) }
+      }
       if (!this.store.applySync(owner, profile, sessionID, revision, pages, force)) {
         // Preserve the invalidation when a newer event arrived during the read.
         // Its completion joins this flight and schedules the next tail read.
