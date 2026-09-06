@@ -51,7 +51,6 @@ const composer = ref<InstanceType<typeof ComposerShell> | null>(null)
 const timeline = ref<InstanceType<typeof MessageTimeline> | null>(null)
 const headerSessionMenuButton = ref<HTMLButtonElement | null>(null)
 const restoringRouteProfile = ref('')
-let modelSyncTimer: number | undefined
 
 function handleModelCatalogChanged(event: Event) {
   const profile = modelCatalogChangedProfile(event)
@@ -260,7 +259,7 @@ function openSessionActions(id: string, event?: MouseEvent) {
   renameValue.value = session?.title || ''
   renaming.value = false
   const menuWidth = 208
-  const menuHeight = 176
+  const menuHeight = 210
   const inset = 8
   const anchor = event?.currentTarget instanceof HTMLElement ? event.currentTarget.getBoundingClientRect() : null
   const requestedX = event?.type === 'contextmenu' ? event.clientX : anchor ? anchor.right - menuWidth : window.innerWidth - menuWidth - 14
@@ -274,6 +273,12 @@ function openSessionActions(id: string, event?: MouseEvent) {
 function closeSessionActions() {
   actionSessionId.value = ''
   renaming.value = false
+}
+
+async function forceRefreshHistory() {
+  closeSessionActions()
+  try { await chat.forceRefreshHistory() }
+  catch { /* The chat store displays the refresh error without clearing messages. */ }
 }
 
 function handleSessionActionPointer(event: PointerEvent) {
@@ -353,9 +358,6 @@ onMounted(async () => {
   await refreshSessions()
   await Promise.allSettled([chat.loadModels(auth.activeProfile?.name), chat.connect()])
   void chat.refreshActiveSessionModel().catch(() => undefined)
-  modelSyncTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void chat.refreshActiveSessionModel().catch(() => undefined)
-  }, 3_000)
   await revealSourceMessage()
   const pendingFile = await consumeLibraryItemForComposer()
   if (pendingFile) composer.value?.attachFiles([pendingFile])
@@ -365,7 +367,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleSessionActionPointer)
   document.removeEventListener('keydown', handleSessionActionKey)
   window.removeEventListener(MODEL_CATALOG_CHANGED_EVENT, handleModelCatalogChanged)
-  if (modelSyncTimer !== undefined) window.clearInterval(modelSyncTimer)
 })
 
 watch(() => auth.activeProfile?.name, async (profile, previous) => {
@@ -511,6 +512,7 @@ watch(() => chat.activeSessionId, async id => {
         </template>
         <template v-else>
           <button class="action-row" role="menuitem" type="button" @click="openSessionOutline"><AppIcon name="menu" :size="14" />会话大纲</button>
+          <button v-if="actionSessionId === chat.activeSessionId" class="action-row" role="menuitem" type="button" :disabled="chat.isStreaming || chat.isQueued || chat.isSending || chat.activeRouteState?.isLoadingHistory" @click="forceRefreshHistory"><AppIcon name="refresh" :size="14" />强制刷新历史</button>
           <button class="action-row" role="menuitem" type="button" @click="toggleSessionPinned"><AppIcon :name="actionSession?.pinned ? 'pin-off' : 'pin'" :size="14" />{{ actionSession?.pinned ? '取消置顶' : '置顶会话' }}</button>
           <button class="action-row" role="menuitem" type="button" @click="renaming = true"><AppIcon name="edit" :size="14" />重命名</button>
           <button class="action-row danger" role="menuitem" type="button" @click="deleteSession"><AppIcon name="trash" :size="14" />删除会话</button>

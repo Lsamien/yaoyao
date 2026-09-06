@@ -743,6 +743,17 @@ async function cachedChatRead(
     throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
   }
   if (ctx.get('x-yaoyao-cache').toLowerCase() === 'bypass') {
+    if (options.kind === 'messages' && options.sessionID
+      && dependencies.chatCache.mode !== 'upstream-only'
+      && dependencies.chatCache.store.ownsSession(user.id, options.profile, options.sessionID)) {
+      await dependencies.chatCache.reconcile(user.id, options.profile, options.sessionID, true)
+      const page = dependencies.chatCache.store.messagePage(user.id, options.profile, options.sessionID, options.offset ?? 0, options.limit ?? 100)
+      if (!page) throw new HttpError(503, 'History refresh is incomplete', 'chat_refresh_incomplete')
+      ctx.set('X-Yaoyao-Data-Source', 'upstream')
+      ctx.set('X-Yaoyao-Sync-State', page.state)
+      sendUpstreamResponse(ctx, page.response, dependencies.upstreamSession.jar)
+      return
+    }
     const requestStartedAt = Date.now()
     const upstreamResponse = await load()
     const response = options.kind === 'list' && options.ownedList
@@ -2076,7 +2087,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       key: chatCacheKey('list', profile, undefined, search),
       kind: 'list', profile, ownedList: true, offset, limit,
       archived: search.get('archived') || 'exclude',
-      load: jar => dependencies.upstream.request(path, jar, { search: upstreamSearch }),
+      load: jar => completeSessionList(dependencies.upstream, path, jar, upstreamSearch),
     })
   })
   router.get('/api/app/sessions/:sessionID/messages', async (ctx) => {
@@ -2129,7 +2140,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
           )
         }
         dependencies.chatCache?.store.markListsStale(owner)
-        void dependencies.chatCache?.reconcile(owner, profile, id)
+        void dependencies.chatCache?.reconcile(owner, profile, id).catch(() => {})
       }
       sendUpstreamResponse(ctx, response, jar)
     })

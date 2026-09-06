@@ -403,12 +403,13 @@ export class RealtimeBroker {
       for (const owner of owners) this.publishOwnerSessionsChanged(owner)
     }
   }
-  private publishOwnerSessionsChanged(owner: string): void {
+  publishOwnerSessionsChanged(owner: string, reason = 'session.title', profile?: string, sessionID?: string): void {
+    if (this.closed) return
     this.onNativeGlobalEvent(owner, 'sessions.changed')
     const frame = {
       jsonrpc: '2.0',
       method: 'event',
-      params: { type: 'sessions.changed', payload: { reason: 'session.title' } },
+      params: { type: 'sessions.changed', payload: { reason, profile, session_id: sessionID } },
     }
     for (const channel of this.channels.values()) {
       if (channel.kind !== 'chat' || !channel.principal.valid()

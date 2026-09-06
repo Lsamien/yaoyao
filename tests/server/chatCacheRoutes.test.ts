@@ -421,7 +421,7 @@ describe('source=web chat cache routes', () => {
     const offlineMedia = await request(restarted.app.callback()).get(mediaPath).set('Host', host).set('Cookie', sessionCookie)
       .expect('X-Yaoyao-Data-Source', 'local').expect(200)
     expect(Buffer.from(offlineMedia.body).toString()).toBe('png-bytes')
-    expect(offlineFetch).toHaveBeenCalledTimes(1)
+    expect(offlineFetch).not.toHaveBeenCalled()
     await request(restarted.app.callback()).get('/api/app/sessions?view=history').set('Host', host).set('Cookie', sessionCookie)
       .expect(502)
     expect(offlineFetch).toHaveBeenCalled()

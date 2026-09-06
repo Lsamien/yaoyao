@@ -481,7 +481,7 @@ export const useChatStore = defineStore('chat', () => {
     unreadCounts.value = { ...unreadCounts.value, [sessionId]: 0 }
   }
 
-  async function loadHistory(state: ChatRouteState): Promise<void> {
+  async function loadHistory(state: ChatRouteState, forceRefresh = false): Promise<void> {
     const generation = ++state.generation
     state.isLoadingHistory = true
     state.error = undefined
@@ -494,9 +494,13 @@ export const useChatStore = defineStore('chat', () => {
       state.loadedMessageCount = cached.messages.length
     }
     try {
-      const page = await getMessages(state.route.sessionId, 0, 150, state.route.profile)
+      const page = await getMessages(state.route.sessionId, 0, 150, state.route.profile, forceRefresh)
       if (generation !== state.generation) return
-      state.messages = mergeChatMessages(state.messages, page.messages, 'snapshot')
+      if (forceRefresh && routes[routeKey(state.route.profile, state.route.sessionId)]?.isStreaming) {
+        throw new Error('正在回复，请结束后再刷新历史')
+      }
+      const retained = forceRefresh ? state.messages.filter(message => message.role === 'user' && message.stage !== 'settled') : state.messages
+      state.messages = mergeChatMessages(retained, page.messages, 'snapshot')
       state.messageTotal = page.total
       state.loadedMessageCount = page.returned
       state.hasMoreBefore = page.hasMore
@@ -527,6 +531,12 @@ export const useChatStore = defineStore('chat', () => {
     if (!state.historySynced) await loadHistory(state)
     const refreshed = sessions.value.find(item => item.id === sessionId && item.profile === selectedProfile)
     syncSelectedModel(refreshed?.model, refreshed?.provider)
+  }
+
+  async function forceRefreshHistory(): Promise<void> {
+    const state = activeRouteState.value
+    if (!state || state.isLoadingHistory || state.isStreaming || state.isQueued || state.pendingApproval || state.pendingClarification || state.route.sessionId.startsWith('draft-')) return
+    await loadHistory(state, true)
   }
 
   async function loadOlder(): Promise<void> {
@@ -1000,7 +1010,7 @@ export const useChatStore = defineStore('chat', () => {
     sessions, activeSessionId, activeProfileName, activeSession, routes, activeRouteState, messages,
     connectionState, historySynced, hasMoreBefore, isLoading, isLoadingMoreSessions, hasMoreSessions, isSending, isStreaming, isQueued,
     error, models, selectedModel, reasoningEffort, fastMode, contextUsage, pendingApproval, pendingClarification, unreadCounts,
-    loadSessions, loadMoreSessions, selectSession, loadOlder, createSession, clearSelection, connect, disconnect, send, interrupt,
+    loadSessions, loadMoreSessions, selectSession, loadOlder, forceRefreshHistory, createSession, clearSelection, connect, disconnect, send, interrupt,
     respondToApproval, respondToClarification, branchSession, renameSession, setSessionPinned, removeSession,
     loadModels, setModel, setFastMode, refreshActiveSessionModel, refreshContextUsage, loadUnread, markRead, switchProfile,
   }

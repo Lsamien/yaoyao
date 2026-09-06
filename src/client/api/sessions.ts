@@ -71,6 +71,7 @@ export async function getMessages(
   offset: number,
   limit = 150,
   profile?: string,
+  forceRefresh = false,
 ): Promise<MessagePage> {
   const safeOffset = Math.max(0, Math.trunc(offset))
   const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)))
@@ -81,7 +82,7 @@ export async function getMessages(
     include_compacted: true,
     profile,
   })
-  const payload = unwrapData(await apiRequest<unknown>(url))
+  const payload = unwrapData(await apiRequest<unknown>(url, forceRefresh ? { headers: { 'X-Yaoyao-Cache': 'bypass' } } : {}))
   const source = record(payload)
   const pagination = record(source.pagination)
   const messages = values(source.messages ?? source.items ?? payload).map(message => normalizeChatMessage(message, sessionId, profile))

@@ -38,16 +38,17 @@ describe('durable source=web chat cache', () => {
     const key = chatCacheKey('list', profile, undefined, search)
     const load = vi.fn(async () => response({ sessions: [{ id: sessionID, profile, source: 'web', title: '本地会话' }] }))
 
+    f.store.putSnapshot(owner, 'seed-detail', 'detail', profile, sessionID, response({ id: sessionID, profile, title: '本地会话', message_count: 0 }))
     const first = await f.coordinator.read(owner, key, 'list', profile, undefined, load, true)
     const second = await f.coordinator.read(owner, key, 'list', profile, undefined, load, true)
-    expect(first.source).toBe('upstream')
+    expect(first.source).toBe('local')
     expect(second.source).toBe('local')
-    expect(load).toHaveBeenCalledTimes(1)
+    expect(load).not.toHaveBeenCalled()
 
     f.store.close()
     const restored = new ChatCacheStore(f.home)
-    const cached = restored.snapshot(owner, key)
-    expect(JSON.parse(cached!.response.body.toString()).sessions[0].title).toBe('本地会话')
+    const cached = restored.localList(owner, profile, {})
+    expect(JSON.parse(cached.body.toString()).sessions[0].title).toBe('本地会话')
     restored.close()
   })
 
@@ -87,7 +88,7 @@ describe('durable source=web chat cache', () => {
       true,
       { offset: 0, limit: 100 },
     )
-    expect(projected).toMatchObject({ source: 'local', state: 'stale' })
+    expect(projected).toMatchObject({ source: 'local', state: 'current' })
     expect(JSON.parse(projected.response.body.toString()).sessions[0]).toMatchObject({
       id: sessionID,
       source: 'ios',
@@ -495,6 +496,160 @@ describe('durable source=web chat cache', () => {
     expect(payload.sessions).toHaveLength(100)
     expect(payload.sessions[0]).toMatchObject({ id: 'owned-0', pinned: true, owned: true })
     expect(payload.sessions.map((session: { id: string }) => session.id)).not.toContain('owned-1')
+    f.store.close()
+  })
+})
+
+describe('local history and bounded tail synchronization', () => {
+  function cached(count = 1_000) {
+    const f = fixture()
+    f.store.recordRoute(owner, profile, sessionID, 'runtime')
+    const rows = Array.from({ length: count }, (_, i) => ({ id: `row-${i}`, role: i % 2 ? 'assistant' : 'user', content: `message ${i}` }))
+    const summary = { id: sessionID, profile, title: 'cached', message_count: count }
+    f.store.putSnapshot(owner, 'seed', 'messages', profile, sessionID, response({ session: summary, messages: rows,
+      pagination: { total: count, offset: 0, has_more: false } }))
+    return { ...f, rows, summary }
+  }
+  function upstreamFor(f: ReturnType<typeof cached>, rows: typeof f.rows) {
+    const request = vi.fn(async (path: string, options: { search: URLSearchParams }) => {
+      if (!path.endsWith('/messages')) return response({ ...f.summary, message_count: rows.length })
+      const offset = Number(options.search.get('offset'))
+      const limit = Number(options.search.get('limit'))
+      const end = Math.max(0, rows.length - offset), start = Math.max(0, end - limit)
+      return response({ messages: rows.slice(start, end), pagination: { total: rows.length, offset, has_more: start > 0 } })
+    })
+    const coordinator = new ChatCacheCoordinator(f.store, { request } as unknown as UpstreamServiceSession)
+    return { coordinator, request }
+  }
+
+  it('never rereads stored pages while a new turn invalidates the tail', async () => {
+    const f = cached()
+    f.store.recordCommand(owner, profile, sessionID, 'prompt.submit', { text: 'next' })
+    f.store.recordEvent(owner, profile, sessionID, { type: 'message.delta', seq: 1, payload: { delta: 'new' } })
+    const load = vi.fn(async () => { throw new Error('must remain local') })
+    for (let i = 0; i < 20; i++) {
+      const page = await f.coordinator.messages(owner, `page-${i}`, profile, sessionID, (i % 10) * 100, 100, load)
+      expect(page.source).toBe('local')
+      expect(JSON.parse(page.response.body.toString()).messages).toHaveLength(100)
+    }
+    expect(load).not.toHaveBeenCalled()
+    f.store.close()
+  })
+
+  it('persists new rows using one tail page and does not rewrite unchanged history', async () => {
+    const f = cached()
+    f.store.db.exec('CREATE TABLE changed_rows(id TEXT); CREATE TRIGGER changed_message AFTER UPDATE ON chat_messages BEGIN INSERT INTO changed_rows VALUES(new.message_id); END')
+    const rows = [...f.rows, { id: 'new-user', role: 'user', content: 'next' }, { id: 'new-answer', role: 'assistant', content: 'answer' }]
+    const { coordinator, request } = upstreamFor(f, rows)
+    coordinator.observe(owner, profile, sessionID, { type: 'message.complete', seq: 1 })
+    const page = await coordinator.messages(owner, 'last', profile, sessionID, 0, 10, async () => { throw new Error('unexpected read') })
+    expect(JSON.parse(page.response.body.toString()).messages.at(-1).id).toBe('new-answer')
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(1)
+    expect(f.store.db.prepare('SELECT * FROM changed_rows').all()).toEqual([])
+    expect(f.store.messagePage(owner, profile, sessionID, 902, 100)).toBeDefined()
+    coordinator.observe(owner, profile, sessionID, { type: 'message.complete', seq: 1 })
+    expect(request).toHaveBeenCalledTimes(2)
+    f.store.close()
+  })
+
+  it('fetches only the missing suffix after a replay gap', async () => {
+    const f = cached()
+    const rows = [...f.rows, ...Array.from({ length: 130 }, (_, i) => ({ id: `new-${i}`, role: 'assistant', content: 'reply' }))]
+    const { coordinator, request } = upstreamFor(f, rows)
+    await coordinator.reconcile(owner, profile, sessionID)
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(2)
+    expect(JSON.parse(f.store.messagePage(owner, profile, sessionID, 0, 10)!.response.body.toString()).pagination.total).toBe(1130)
+    f.store.close()
+  })
+
+  it('refreshes old edits and deletions only when explicitly forced', async () => {
+    const f = cached()
+    const rows = f.rows.slice(1).map(row => row.id === 'row-2' ? { ...row, content: 'edited old message' } : row)
+    const { coordinator, request } = upstreamFor(f, rows)
+    await expect(coordinator.reconcile(owner, profile, sessionID)).rejects.toThrow('explicit refresh')
+    expect(JSON.parse(f.store.messagePage(owner, profile, sessionID, 900, 100)!.response.body.toString()).messages[0].id).toBe('row-0')
+    request.mockClear()
+    await coordinator.reconcile(owner, profile, sessionID, true)
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(10)
+    const page = JSON.parse(f.store.messagePage(owner, profile, sessionID, 899, 100)!.response.body.toString())
+    expect(page.messages[0].id).toBe('row-1')
+    expect(page.messages[1].content).toBe('edited old message')
+    expect(page.pagination.total).toBe(999)
+    f.store.close()
+  })
+
+  it('does not require a full archive before serving a stored page', async () => {
+    const f = fixture()
+    f.store.recordRoute(owner, profile, sessionID, 'runtime')
+    f.store.putSnapshot(owner, 'tail', 'messages', profile, sessionID, response({ messages: [{ id: 'last', role: 'assistant', content: 'tail' }], pagination: { total: 400, offset: 0, has_more: true } }))
+    expect(f.store.messagePage(owner, profile, sessionID, 0, 1)).toBeDefined()
+    expect(f.store.messagePage(owner, profile, sessionID, 1, 100)).toBeUndefined()
+    f.store.close()
+  })
+
+  it('keeps the previous archive when a forced refresh fails halfway', async () => {
+    const f = cached()
+    let calls = 0
+    const coordinator = new ChatCacheCoordinator(f.store, { request: async (path: string) => {
+      if (!path.endsWith('/messages')) return response(f.summary)
+      if (++calls > 1) throw new Error('offline')
+      return response({ messages: f.rows.slice(-100), pagination: { total: 1000, offset: 0, has_more: true } })
+    } } as unknown as UpstreamServiceSession)
+    await expect(coordinator.reconcile(owner, profile, sessionID, true)).rejects.toThrow('offline')
+    expect(f.store.messagePage(owner, profile, sessionID, 900, 100)).toBeDefined()
+    f.store.close()
+  })
+
+  it('does not commit an older fetch over a newer event', async () => {
+    const f = cached()
+    const { coordinator, request } = upstreamFor(f, f.rows)
+    const original = request.getMockImplementation()!
+    request.mockImplementation(async (path, options) => {
+      const result = await original(path, options)
+      if (path.endsWith('/messages')) f.store.recordEvent(owner, profile, sessionID, { type: 'message.delta', seq: 2, payload: { delta: 'newer' } })
+      return result
+    })
+    await coordinator.reconcile(owner, profile, sessionID)
+    expect(f.store.localDetail(owner, profile, sessionID)?.state).toBe('stale')
+    f.store.close()
+  })
+
+  it('joins an in-flight completion and publishes only after the newest revision commits', async () => {
+    const f = cached()
+    const rows = [...f.rows, { id: 'newest', role: 'assistant', content: 'newest reply' }]
+    const { coordinator, request } = upstreamFor(f, rows)
+    const original = request.getMockImplementation()!
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let first = true
+    request.mockImplementation(async (path, options) => {
+      if (first) { first = false; await gate }
+      return original(path, options)
+    })
+    const published = vi.fn(() => {
+      const stored = JSON.parse(f.store.messagePage(owner, profile, sessionID, 0, 1)!.response.body.toString())
+      expect(stored.messages[0].id).toBe('newest')
+    })
+    coordinator.onSynchronized = published
+    f.store.recordEvent(owner, profile, sessionID, { type: 'message.complete', seq: 1 })
+    const firstSync = coordinator.reconcile(owner, profile, sessionID)
+    f.store.recordEvent(owner, profile, sessionID, { type: 'message.complete', seq: 2 })
+    const latestSync = coordinator.reconcile(owner, profile, sessionID)
+    release()
+    await Promise.all([firstSync, latestSync])
+    expect(published).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledTimes(4)
+    expect(f.store.localDetail(owner, profile, sessionID)?.state).toBe('current')
+    f.store.close()
+  })
+
+  it('serves a cached empty conversation without requesting it again', async () => {
+    const f = cached(0)
+    const load = vi.fn(async () => { throw new Error('unexpected read') })
+    const page = await f.coordinator.messages(owner, 'empty', profile, sessionID, 0, 100, load)
+    expect(page.source).toBe('local')
+    expect(JSON.parse(page.response.body.toString()).messages).toEqual([])
+    expect(load).not.toHaveBeenCalled()
     f.store.close()
   })
 })

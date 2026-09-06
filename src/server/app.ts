@@ -227,6 +227,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
     void workspaceAssets.archiveText(owner, text, 'local', profile, storedId, messageId, frame.type === 'attachment.staged' ? 'user' : 'agent').catch(() => {})
   }
   realtime.broker.onNativeGlobalEvent = (owner, type) => chatCache?.observeGlobal(owner, type)
+  chatCache.onSynchronized = (owner, profile, sessionID) => {
+    realtime.broker.publishOwnerSessionsChanged(owner, 'cache.synced', profile, sessionID)
+  }
   realtime.broker.onNativeCommand = (owner, profile, storedId, method, params) => {
     chatCache?.command(owner, profile, storedId, method, params)
   }

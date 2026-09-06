@@ -8,6 +8,7 @@ const realtime = vi.hoisted(() => ({
 }))
 const sessionsApi = vi.hoisted(() => ({
   getSession: vi.fn(),
+  getMessages: vi.fn(),
   getSessions: vi.fn(),
 }))
 
@@ -25,7 +26,7 @@ vi.mock('@/api/realtime', () => {
 
 vi.mock('@/api/sessions', () => ({
   deleteSession: vi.fn(),
-  getMessages: vi.fn(),
+  getMessages: sessionsApi.getMessages,
   getSession: sessionsApi.getSession,
   getSessions: sessionsApi.getSessions,
   getSessionUnread: vi.fn(),
@@ -47,6 +48,7 @@ describe('chat model realtime synchronization', () => {
   beforeEach(() => {
     realtime.eventHandler = undefined
     realtime.request.mockReset().mockResolvedValue({})
+    sessionsApi.getMessages.mockReset()
     sessionsApi.getSession.mockReset()
     sessionsApi.getSessions.mockReset().mockResolvedValue({ items: [], nextCursor: null })
     setActivePinia(createPinia())
@@ -221,4 +223,27 @@ describe('chat model realtime synchronization', () => {
       }
     },
   )
+  it('uses a synchronized route without history reads and forces refresh only on request', async () => {
+    const chat = useChatStore()
+    const key = routeKey('alpha', 'session-1')
+    chat.activeSessionId = 'session-1'
+    chat.activeProfileName = 'alpha'
+    chat.routes[key] = {
+      route: { profile: 'alpha', sessionId: 'session-1' },
+      messages: [
+        { id: 'old', sessionId: 'session-1', role: 'assistant', content: 'old history', timestamp: 1, stage: 'settled' },
+        { id: 'unsent', sessionId: 'session-1', role: 'user', content: 'keep failed send', timestamp: 2, stage: 'failed' },
+      ], historySynced: true, hasMoreBefore: false, loadedMessageCount: 1, messageTotal: 1,
+      isLoadingHistory: false, isStreaming: false, isQueued: false, generation: 1,
+    }
+    for (let i = 0; i < 5; i++) await chat.selectSession('session-1', 'alpha')
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
+    sessionsApi.getMessages.mockResolvedValue({ messages: [
+      { id: 'new', sessionId: 'session-1', role: 'assistant', content: 'authoritative', timestamp: 1, stage: 'settled' },
+    ], returned: 1, total: 1, hasMore: false })
+    await chat.forceRefreshHistory()
+    expect(sessionsApi.getMessages).toHaveBeenCalledWith('session-1', 0, 150, 'alpha', true)
+    expect(chat.messages.map(message => message.id)).toEqual(['new', 'unsent'])
+  })
+
 })
