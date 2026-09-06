@@ -96,7 +96,7 @@ onMounted(() => { void load() })
   <section class="voice-panel" aria-label="双流语音">
     <div class="voice-heading"><div><h3>yaoyao 双流语音</h3><p>这是整个 yaoyao 安装共享的全局设置，不随当前 Agent 切换。</p></div><span>全局</span></div>
     <p v-if="error" class="voice-error" role="alert">{{ error }}</p><p v-else-if="notice" class="voice-notice" role="status">{{ notice }}</p>
-    <p v-if="loading" class="voice-empty">正在读取 yaoyao 插件设置…</p>
+    <p v-if="loading" class="voice-empty">正在读取语音设置…</p>
     <form v-else :aria-busy="busy" @submit.prevent="save">
       <label>API Key<input v-model="apiKey" type="password" :disabled="busy" :placeholder="hasApiKey ? '已保存；留空保持不变' : '输入双流语音 API Key'" autocomplete="new-password" /></label>
       <div class="voice-list-heading"><strong>音色列表</strong><button type="button" :disabled="busy || voices.length >= 100" @click="addVoice"><AppIcon name="plus" :size="13" />增加音色</button></div>

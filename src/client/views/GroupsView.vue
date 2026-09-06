@@ -821,7 +821,7 @@ watch(() => auth.activeProfile?.name, profile => { if (profile) restoreShowThink
     </template>
 
     <div v-if="groups.availability === 'unsupported' || groups.availability === 'unavailable'" class="groups-unavailable">
-      <EmptyState icon="alert" :title="groups.availability === 'unsupported' ? '团队协议版本不兼容' : '团队服务暂不可用'" :description="groups.error || `请确认 9119 已安装 YaoYao 团队协议 ${SUPPORTED_GROUP_PROTOCOL_VERSION_LABEL} 插件。`" action-label="重新检查" @action="groups.refresh" />
+      <EmptyState icon="alert" :title="groups.availability === 'unsupported' ? '团队协议版本不兼容' : '团队服务暂不可用'" :description="groups.error || '请检查团队服务连接后重试。'" action-label="重新检查" @action="groups.refresh" />
     </div>
     <div v-else class="groups-workspace">
       <MessageTimeline

@@ -60,7 +60,7 @@ async function poll(next: UpdateJob) {
 
 async function applyUpdate() {
   const target = status.value?.latest
-  if (!target || !window.confirm(`仅升级 Web 到 ${target.webVersion}？无需连接 9119，不会更新插件。`)) return
+  if (!target || !window.confirm(`将 Web 升级到 ${target.webVersion}？`)) return
   busy.value = true
   error.value = ''
   try {
@@ -73,7 +73,7 @@ async function applyUpdate() {
 }
 
 async function rollback() {
-  if (!window.confirm('仅回滚到上一次 Web 版本？无需连接 9119，插件保持不变。')) return
+  if (!window.confirm('回滚到上一个 Web 版本？')) return
   busy.value = true
   error.value = ''
   try {
@@ -110,7 +110,7 @@ onBeforeUnmount(stopPolling)
             <button class="icon-button" type="button" aria-label="关闭系统更新" :disabled="!!active" @click="emit('close')"><AppIcon name="close" /></button>
           </header>
 
-          <p class="system-update-intro">Web 服务独立升级与回滚，9119 离线或认证失败也不影响。这里只检查 Web 发布源，不检测或更新插件；插件由 9119 独立管理。</p>
+          <p class="system-update-intro">查看 Web 版本、检查更新或回滚到上一个版本。更新完成后刷新页面即可使用新版本。</p>
           <p v-if="error" class="system-update-error"><AppIcon name="alert" :size="15" />{{ error }}</p>
 
           <section v-if="status" class="version-grid">

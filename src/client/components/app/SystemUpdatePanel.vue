@@ -81,7 +81,7 @@ async function loadAndResume(token: number) {
 
 async function applyUpdate() {
   const target = status.value?.latest
-  if (!target || !window.confirm(`仅升级 Web 到 ${target.webVersion}？无需连接 9119，不会更新插件。`)) return
+  if (!target || !window.confirm(`将 Web 升级到 ${target.webVersion}？`)) return
   const token = lifecycleToken
   operationStarting.value = true
   busy.value = true
@@ -102,7 +102,7 @@ async function applyUpdate() {
 }
 
 async function rollback() {
-  if (!window.confirm('仅回滚到上一次 Web 版本？无需连接 9119，插件保持不变。')) return
+  if (!window.confirm('回滚到上一个 Web 版本？')) return
   const token = lifecycleToken
   operationStarting.value = true
   busy.value = true
@@ -144,7 +144,7 @@ onBeforeUnmount(() => { lifecycleToken += 1; operationStarting.value = false; st
 
 <template>
   <section class="system-update-panel" aria-label="更新与回滚">
-    <p class="system-update-intro">Web 服务独立升级与回滚，9119 离线或认证失败也不影响。这里只检查 Web 发布源，不检测或更新插件；插件由 9119 独立管理。</p>
+    <p class="system-update-intro">查看 Web 版本、检查更新或回滚到上一个版本。更新完成后刷新页面即可使用新版本。</p>
     <p v-if="error" class="system-update-error" role="alert"><AppIcon name="alert" :size="16" />{{ error }}</p>
 
     <section v-if="status" class="version-grid" aria-label="版本信息">

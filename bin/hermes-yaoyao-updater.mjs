@@ -274,7 +274,7 @@ async function runUpdate(jobPath, job) {
       finalRoot,
       commit,
     })
-    updateJob(jobPath, { state: 'succeeded', message: `已升级 Web ${target.webVersion}；插件由 9119 管理` })
+    updateJob(jobPath, { state: 'succeeded', message: `已升级 Web ${target.webVersion}` })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (transitioned) {
@@ -318,7 +318,7 @@ async function runRollback(jobPath, job) {
   })
   await verifyRuntime()
   rmSync(recordPath, { force: true })
-  updateJob(jobPath, { state: 'rolled_back', message: '已回滚 Web 服务；插件继续由 9119 管理' })
+  updateJob(jobPath, { state: 'rolled_back', message: '已回滚 Web 服务' })
 }
 
 async function main() {

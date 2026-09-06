@@ -1,30 +1,22 @@
-.git
-.gitignore
-.codegraph
-.DS_Store
+# Only send the inputs consumed by Dockerfile to the builder.
+**
+!package.json
+!package-lock.json
+!release.json
+!tsconfig.json
+!tsconfig.client.json
+!tsconfig.client.build.json
+!tsconfig.server.json
+!vite.config.ts
+!index.html
+!public/
+!public/**
+!scripts/
+!scripts/**
+!src/
+!src/**
 
-node_modules
-dist
-dist-server
-coverage
-playwright-report
-test-results
-
-.env
-.env.*
-docker.env
-*.log
-*.pem
-*.key
-
-.hermes-yaoyao
-# The runtime only needs the published Dashboard plugin as an offline install
-# payload. Keep all other plugin sources out of the image context.
-hermes-plugins/*
-!hermes-plugins/yaoyao
-hermes-plugins/yaoyao/*
-!hermes-plugins/yaoyao/plugin.yaml
-!hermes-plugins/yaoyao/dashboard
-!hermes-plugins/yaoyao/dashboard/**
-docs
-tests
+**/.DS_Store
+**/*.log
+**/*.pem
+**/*.key
