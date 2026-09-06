@@ -74,6 +74,23 @@ function bodyBytes(response: request.Response): Buffer {
 
 describe('historical Hermes media routes', () => {
   it.each([
+    '/Users/samien/.hermes/workspace/gpt-6-astra-report.md',
+    '/Users/samien/.hermes/profiles/yaoer/workspace/详细 文档.md',
+  ])('serves generated workspace documents for preview and download: %s', async path => {
+    const document = '# GPT-6\n\n文档正文'
+    const fixture = gateway(() => new Response(document, {
+      headers: { 'content-type': 'text/markdown', 'content-disposition': 'attachment; filename="report.md"' },
+    }))
+    const runtime = runtimeFor(fixture)
+    const response = await request(runtime.app.callback()).get(encodeURI(path)).set('Host', HOST).expect(200)
+    expect(response.text).toBe(document)
+    expect(response.headers['content-type']).toMatch(/^text\/markdown/)
+    expect(response.headers['content-disposition']).toBeUndefined()
+    expect(response.headers['cache-control']).toContain('private, no-store')
+    expect([...fixture.downloads()[0]!.url.searchParams]).toEqual([['path', path]])
+  })
+
+  it.each([
     `/Users/samien/.hermes/cache/images/${IMAGE_NAME}`,
     `/Users/samien/.hermes/profiles/yaoer/cache/images/${IMAGE_NAME}`,
   ])('serves the original generated-image URL through the remote Hermes service: %s', async path => {
@@ -138,11 +155,14 @@ describe('historical Hermes media routes', () => {
     expect(response.headers['content-disposition'] ?? '').not.toMatch(/^attachment/i)
   })
 
-  it('requires a local login before contacting Hermes', async () => {
+  it.each([
+    '/Users/samien/.hermes/profiles/yaoer/cache/images/result.png',
+    '/Users/samien/.hermes/workspace/report.md',
+  ])('requires a local login before contacting Hermes: %s', async path => {
     const fixture = gateway()
     const runtime = runtimeFor(fixture, false)
     await request(runtime.app.callback())
-      .get('/Users/samien/.hermes/profiles/yaoer/cache/images/result.png')
+      .get(path)
       .set('Host', HOST).expect(401)
     expect(fixture.calls).toHaveLength(0)
   })
@@ -174,6 +194,9 @@ describe('historical Hermes media routes', () => {
   })
 
   it.each([
+    '/Users/samien/.hermes/workspace/nested%2F..%2Fconfig.yaml',
+    '/Users/samien/.hermes/workspace/result%5C.md',
+    '/Users/samien/.hermes/workspace/result%00.md',
     '/Users/samien/.hermes/profiles/yaoer/config/result.png',
     '/Users/samien/.hermes/profiles/yaoer/cache/images/nested%2F..%2Fresult.png',
     '/Users/samien/.hermes/profiles/yaoer/cache/images/result%5C.png',

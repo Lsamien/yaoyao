@@ -91,6 +91,12 @@ md.disable('smartquotes')
 const defaultLinkOpen = md.renderer.rules.link_open ?? ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options))
 md.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index]
+  // Some assistants wrap real Hermes workspace paths in a sandbox: URI.
+  // Resolve only this known file route before sanitizing the Markdown.
+  const href = token.attrGet('href') || ''
+  if (props.fileCards && /^sandbox:\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/i.test(href)) {
+    token.attrSet('href', href.slice('sandbox:'.length))
+  }
   token.attrSet('target', '_blank')
   token.attrSet('rel', 'noopener noreferrer')
   return defaultLinkOpen(tokens, index, options, env, self)
@@ -176,8 +182,9 @@ function decorateFileLinks() {
     let url: URL
     try { url = new URL(link.href, window.location.href) } catch { return }
     const isAgentFile = /^\/Users\/[^/]+\/Agents\/.+/.test(url.pathname)
+    const isWorkspaceFile = /^\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/.test(url.pathname)
     const isRemoteNodeFile = /^\/api\/app\/files\/(?:[0-9a-f-]{36}|[0-9]+)\/(?:download|preview)$/i.test(url.pathname)
-    if (url.origin !== window.location.origin || (!isAgentFile && !isRemoteNodeFile)) return
+    if (url.origin !== window.location.origin || (!isAgentFile && !isWorkspaceFile && !isRemoteNodeFile)) return
     link.dataset.fileCard = 'true'
     link.classList.add('file-link-card')
     link.removeAttribute('target')

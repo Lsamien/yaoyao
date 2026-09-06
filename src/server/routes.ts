@@ -1100,7 +1100,7 @@ function prepareFilePreview(ctx: Koa.Context, name: string): void {
   }
 }
 
-function hermesMediaPath(ctx: Koa.Context): string {
+function hermesMediaPath(ctx: Koa.Context, rootDirectory = 'cache'): string {
   const segment = (value: string): string => {
     if (!value || value === '.' || value === '..' || /[/\\\u0000-\u001f\u007f]/.test(value)) {
       throw new HttpError(400, '媒体路径无效', 'invalid_media_path')
@@ -1109,8 +1109,8 @@ function hermesMediaPath(ctx: Koa.Context): string {
   }
   const owner = segment(ctx.params.owner)
   const profile = ctx.params.profile ? segment(ctx.params.profile) : undefined
-  const directory = profile ? ctx.params.mediaDir : 'cache'
-  if (!['cache', 'images', 'screenshots', 'attachments'].includes(directory)) {
+  const directory = profile ? ctx.params.mediaDir : rootDirectory
+  if (!['cache', 'images', 'screenshots', 'attachments', 'workspace'].includes(directory)) {
     throw new HttpError(404, '媒体目录不存在', 'media_not_found')
   }
   const raw = ctx.params.filePath
@@ -1118,9 +1118,9 @@ function hermesMediaPath(ctx: Koa.Context): string {
   return `/Users/${owner}/.hermes/${profile ? `profiles/${profile}/` : ''}${directory}/${parts.join('/')}`
 }
 
-async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencies): Promise<void> {
+async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencies, rootDirectory = 'cache'): Promise<void> {
   const user = dependencies.auth.require(ctx)
-  const path = hermesMediaPath(ctx)
+  const path = hermesMediaPath(ctx, rootDirectory)
   const cached = dependencies.chatCache?.store.attachment(user.id, path)
   if (cached) {
     ctx.set('X-Yaoyao-Data-Source', 'local')
@@ -1580,6 +1580,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   // Keep the original URL usable by inline Markdown, the lightbox and downloads.
   // These root/profile cache paths are not files on the Web server itself.
   router.get('/Users/:owner/.hermes/cache/*filePath', ctx => proxyHermesMedia(ctx, dependencies))
+  router.get('/Users/:owner/.hermes/workspace/*filePath', ctx => proxyHermesMedia(ctx, dependencies, 'workspace'))
   router.get('/Users/:owner/.hermes/profiles/:profile/:mediaDir/*filePath', ctx => proxyHermesMedia(ctx, dependencies))
 
   // Historical messages can contain Markdown links such as

@@ -42,6 +42,46 @@ describe('MarkdownContent code copy', () => {
   })
 })
 
+describe('Markdown file cards', () => {
+  it.each([
+    '/Users/samien/.hermes/workspace/gpt-6-astra-report.md',
+    '/Users/samien/.hermes/profiles/yaoer/workspace/详细 文档.md',
+    'sandbox:/Users/samien/.hermes/workspace/gpt-6-astra-report.md',
+    '/Users/samien/Agents/report.md',
+    '/api/app/files/12/download',
+  ])('renders a preview card for %s', async path => {
+    const wrapper = mount(MarkdownContent, {
+      props: { content: `[报告.md](<${path}>)`, fileCards: true },
+    })
+    const card = wrapper.get('a.file-link-card')
+    expect(card.attributes('target')).toBeUndefined()
+    expect(card.attributes('aria-label')).toBe('预览文件 报告.md')
+    await card.trigger('click')
+    expect(wrapper.emitted('fileLink')).toEqual([['报告.md', encodeURI(path.replace(/^sandbox:/, ''))]])
+    wrapper.unmount()
+  })
+
+  it('preserves ordinary links and keeps unknown protocols sanitized', () => {
+    const wrapper = mount(MarkdownContent, { props: { fileCards: true, content: [
+      '[外部](https://example.com/Users/samien/.hermes/workspace/report.md)',
+      '[普通](https://example.com/report.md)',
+      '[配置](/Users/samien/.hermes/config.yaml)',
+      '[未知](sandbox:/etc/passwd)',
+    ].join('\n\n') } })
+    expect(wrapper.find('.file-link-card').exists()).toBe(false)
+    expect(wrapper.find('a[href^="sandbox:"]').exists()).toBe(false)
+    expect(wrapper.findAll('a[href]')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
+  it('decorates workspace links arriving in a later message update', async () => {
+    const wrapper = mount(MarkdownContent, { props: { content: '附件如下：', fileCards: true } })
+    await wrapper.setProps({ content: '附件如下：\n\n[报告.md](/Users/samien/.hermes/workspace/report.md)' })
+    expect(wrapper.find('a.file-link-card').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
 describe('streaming Markdown', () => {
   afterEach(() => vi.useRealTimers())
 
