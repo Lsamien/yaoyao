@@ -103,6 +103,35 @@ describe('durable source=web chat cache', () => {
     f.store.close()
   })
 
+  it('hydrates all owned list metadata before paging and keeps upstream activity aliases authoritative', async () => {
+    const f = fixture()
+    const sessions = Array.from({ length: 103 }, (_, index) => ({
+      id: `owned-${index}`, profile, source: 'web', title: `Conversation ${index}`,
+      started_at: 1_700_000_000 - index, last_active_at: 1_700_000_100 - index,
+      message_count: 0, pinned: index === 102,
+    }))
+    for (const session of sessions) {
+      f.store.recordCommand(owner, profile, session.id, 'session.create', { source: 'web' })
+    }
+    const load = vi.fn(async () => response({ sessions: [
+      { id: 'unowned-history', profile, source: 'web', title: 'Private native history' }, ...sessions,
+    ] }))
+    const first = await f.coordinator.read(owner, 'first', 'list', profile, undefined, load, true, { limit: 100 })
+    const firstPage = JSON.parse(first.response.body.toString())
+    expect(firstPage.sessions[0]).toMatchObject({ id: 'owned-102', last_active: sessions[102]!.last_active_at })
+    expect(firstPage.sessions[1]).toMatchObject({ id: 'owned-0', last_active: sessions[0]!.last_active_at })
+    expect(f.store.needsListMetadata(owner, profile)).toBe(false)
+    const second = await f.coordinator.read(owner, 'second', 'list', profile, undefined, load, true, { offset: 100, limit: 100 })
+    expect(second.source).toBe('local')
+    expect(load).toHaveBeenCalledTimes(1)
+    const secondPage = JSON.parse(second.response.body.toString())
+    const ids = [...firstPage.sessions, ...secondPage.sessions].map((session: { id: string }) => session.id)
+    expect(ids).toEqual(['owned-102', ...sessions.slice(0, 102).map(session => session.id)])
+    expect(f.store.snapshot(owner, 'first')!.response.body.toString()).not.toContain('unowned-history')
+    expect(f.store.localDetail(owner, profile, 'unowned-history')).toBeUndefined()
+    f.store.close()
+  })
+
   it('serves a warm list without a second 9119 request and survives restart', async () => {
     const f = fixture()
     f.store.recordRoute(owner, profile, sessionID, 'runtime-web')

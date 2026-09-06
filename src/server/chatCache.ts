@@ -349,7 +349,8 @@ export class ChatCacheStore {
   }
 
   putSnapshot(owner: string, key: string, kind: string, profile: string, sessionID: string | undefined,
-    response: UpstreamResponse, ownedList = false, requestStartedAt = Date.now()): boolean {
+    response: UpstreamResponse, ownedList = false, requestStartedAt = Date.now(),
+    metadataResponse: UpstreamResponse = response): boolean {
     const payload = parseResponse(response)
     if (!payload) return false
     if (kind === 'list' && !ownedList) return false
@@ -358,7 +359,9 @@ export class ChatCacheStore {
     const now = Date.now()
     this.db.exec('SAVEPOINT chat_snapshot')
     try {
-      this.ingestPayload(owner, profile, sessionID, payload, now, kind, requestStartedAt)
+      // Hydrate all registered sessions from the unsliced upstream list, while
+      // persisting only the owner-filtered page as the public response snapshot.
+      this.ingestPayload(owner, profile, sessionID, parseResponse(metadataResponse) ?? payload, now, kind, requestStartedAt)
       this.db.prepare(`INSERT INTO chat_snapshots(owner,cache_key,kind,profile,session_id,status,headers,body,sync_state,saved_at)
         VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,cache_key) DO UPDATE SET status=excluded.status,headers=excluded.headers,
         body=excluded.body,sync_state='current',saved_at=excluded.saved_at`)
@@ -615,8 +618,7 @@ export class ChatCacheStore {
       if (row) {
         const title = row.authoritative_title?.trim()
         merged.set(key, {
-          ...merged.get(key),
-          ...session,
+          ...mergeSessionMetadata(merged.get(key) ?? {}, session),
           ...(title ? { title } : {}),
           _yaoyao_registry_activity: row.last_synced_at,
           owned: true,
@@ -963,7 +965,7 @@ export class ChatCacheCoordinator {
             listPage,
           )
         : upstreamResponse
-      this.store.putSnapshot(owner, key, kind, profile, sessionID, response, ownedList, requestStartedAt)
+      this.store.putSnapshot(owner, key, kind, profile, sessionID, response, ownedList, requestStartedAt, upstreamResponse)
       return { response, source: 'upstream', state: 'current' }
     } catch (error) {
       if (this.mode === 'prefer-local' && local) return { response: projectedLocal!.response, source: 'local', state: 'stale' }

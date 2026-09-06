@@ -766,7 +766,7 @@ async function cachedChatRead(
       : upstreamResponse
     dependencies.chatCache.store.putSnapshot(
       user.id, options.key, options.kind, options.profile,
-      options.sessionID, response, options.ownedList, requestStartedAt,
+      options.sessionID, response, options.ownedList, requestStartedAt, upstreamResponse,
     )
     ctx.set('X-Yaoyao-Data-Source', 'upstream')
     ctx.set('X-Yaoyao-Sync-State', 'current')
