@@ -1,3 +1,5 @@
+import { readServerIdentity } from './serverIdentity.js'
+import { randomUUID } from 'node:crypto'
 import Router from '@koa/router'
 import type Koa from 'koa'
 import { createReadStream, statSync } from 'node:fs'
@@ -16,6 +18,7 @@ import { HttpError } from './errors.js'
 import type { PushCoordinator } from './pushCoordinator.js'
 import type { LocalAuthStore } from './localAuth.js'
 import type {
+  WorkspaceMessage,
   WorkspaceAgent,
   WorkspaceConversation,
   WorkspaceRun,
@@ -47,9 +50,11 @@ export function workspaceRouter(
       const row = store.db
         .prepare("SELECT data FROM workspace_entities WHERE owner=? AND kind='file' AND rowid=?")
         .get(user, Number(id))
-      if (row) return JSON.parse(String(row.data))
+      if (row) {const file:StoredWorkspaceFile=JSON.parse(String(row.data));if(file.sourceNodeId&&file.profile)nodes.requireSource(user,{nodeId:file.sourceNodeId,profile:file.profile});return file}
     }
-    return store.require(user, 'file', id)
+    const file=store.require<StoredWorkspaceFile>(user,'file',id)
+    if(file.sourceNodeId&&file.profile)nodes.requireSource(user,{nodeId:file.sourceNodeId,profile:file.profile})
+    return file
   }
   router.get('/api/app/capabilities', (ctx) => {
     owner(ctx)
@@ -61,6 +66,8 @@ export function workspaceRouter(
         'conversations',
         'conversationTasks',
         'editableGroups',
+        'agentTeamManagement',
+        'computerControl','sharedComputers','computerManagement',
         'files',
         'voice',
         'context',
@@ -89,17 +96,33 @@ export function workspaceRouter(
   router.post('/api/app/agents', async (ctx) => {
     const user = owner(ctx),
       input = parse(agentInput, body(ctx))
+    const authorization = auth.pushAuthorizationVersion(user)
     nodes.requireSource(user, input)
     const sources = await nodes.sources(user)
     if (!sources.sources.some((s) => s.nodeId === input.nodeId && s.profile === input.profile))
       throw new HttpError(409, '基础 Agent 当前不可用', 'source_unavailable')
     nodes.requireSource(user, input)
+    if (input.canManageTeam || input.execution==='computer') await runtime.teamTools.requireAvailable(user, input)
+    if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
     ctx.body = { agent: store.agentSummary(store.createAgent(user, input)) }
     ctx.status = 201
   })
-  router.patch('/api/app/agents/:id', (ctx) => {
-    nodes.requireSource(owner(ctx), store.require<WorkspaceAgent>(owner(ctx), 'agent', ctx.params.id))
-    ctx.body = { agent: store.agentSummary(store.updateAgent(owner(ctx), ctx.params.id, body(ctx))) }
+  router.patch('/api/app/agents/:id', async (ctx) => {
+    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id), input = body(ctx)
+    const authorization = auth.pushAuthorizationVersion(user)
+    nodes.requireSource(user, agent)
+    if ((input.canManageTeam === true && agent.canManageTeam !== true) || input.execution==='computer') await runtime.teamTools.requireAvailable(user, {...agent,...(input.execution?{execution:input.execution}:{})})
+    if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
+    nodes.requireSource(user, agent)
+    ctx.body = { agent: store.agentSummary(store.updateAgent(user, ctx.params.id, input)) }
+  })
+  router.delete('/api/app/agents/:id', (ctx) => {
+    store.deleteAgent(owner(ctx), ctx.params.id)
+    ctx.body = { ok: true }
+  })
+  router.delete('/api/app/conversations/:id', (ctx) => {
+    store.deleteConversation(owner(ctx), ctx.params.id)
+    ctx.body = { ok: true }
   })
   router.get('/api/app/conversations', (ctx) => {
     const user = owner(ctx)
@@ -135,6 +158,33 @@ export function workspaceRouter(
     store.resolveTask(user, ctx.params.id)
     ctx.body = { tasks: store.tasks(user, ctx.params.id) }
   })
+  router.get('/api/app/conversations/:id/tasks/:taskId/plan', (ctx) => {
+    const user = owner(ctx)
+    store.requireTask(user, ctx.params.id, ctx.params.taskId)
+    ctx.body = { goal: store.get(user, 'goal', ctx.params.taskId) ?? null,
+      assignments: runtime.tasks.assignments(user, ctx.params.taskId) }
+  })
+  router.post('/api/app/conversations/:id/tasks/:taskId/stop', async (ctx) => {
+    const user=owner(ctx)
+    store.requireTask(user,ctx.params.id,ctx.params.taskId)
+    await runtime.stopTask(user,ctx.params.id,ctx.params.taskId)
+    ctx.body={ok:true}
+  })
+  router.post('/api/app/conversations/:id/tasks/:taskId/resume', async (ctx) => {
+    const user=owner(ctx), input=parse(z.object({requestId:z.string().uuid()}).strict(),body(ctx))
+    const version=auth.pushAuthorizationVersion(user)
+    store.requireTask(user,ctx.params.id,ctx.params.taskId)
+    const goal=store.require<import('../shared/agentTasks.js').AgentGoal>(user,'goal',ctx.params.taskId)
+    const agent=store.require<WorkspaceAgent>(user,'agent',goal.coordinatorId)
+    await runtime.teamTools.requireAvailable(user,agent)
+    if(auth.pushAuthorizationVersion(user)!==version)throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
+    ctx.body=store.command(user,input.requestId,{operation:'goal.resume-user',goalId:goal.id},()=>{
+      const run=runtime.send(user,ctx.params.id,{requestId:randomUUID(),taskId:goal.id,content:'继续处理当前目标，请先核对已有工作，避免重复执行。'})
+      const updated=runtime.tasks.resume(user,agent.id,{requestId:randomUUID(),goalId:goal.id},
+        {conversationId:ctx.params.id,conversationTaskId:goal.id,runId:run.id,agentId:agent.id})
+      return {goal:updated,run}
+    })
+  })
   router.post('/api/app/conversations/:id/tasks', (ctx) => {
     const task = store.createTask(owner(ctx), ctx.params.id, body(ctx))
     ctx.status = 201
@@ -164,6 +214,7 @@ export function workspaceRouter(
       conversation: store.conversationSummary(user, conversation),
       task: task ?? null,
       tasks,
+      assignments: task ? runtime.tasks.assignments(user, task.id) : [],
       messages: store.messages(user, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, task?.id),
       hiddenMessageIds: store.hiddenMessageIds(user, conversation.id, task?.id),
       run: activeRunId
@@ -248,7 +299,7 @@ export function workspaceRouter(
       after = number(ctx.query.after, 0),
       events = store.events(user, after)
     ctx.set('Cache-Control', 'no-store')
-    ctx.body = { events, cursor: events.at(-1)?.seq ?? after }
+    ctx.body = { events, cursor: events.at(-1)?.seq ?? after, serverIdentity: readServerIdentity(store) }
   })
   router.get('/api/app/nodes', (ctx) => {
     auth.requireAdmin(ctx)
@@ -335,7 +386,7 @@ export function workspaceRouter(
         ids.map((id) => [
           id,
           files
-            .filter((f) => f.messageId === id)
+            .filter((f) => f.messageId === id || store.get<WorkspaceMessage>(owner(ctx),'message',id)?.attachments.some(attachment=>attachment.id===f.id))
             .map((f, ordinal) => ({
               itemId: libraryId(owner(ctx), f.id),
               messageId: id,
@@ -367,6 +418,7 @@ export function workspaceRouter(
       )
       ctx.set('Accept-Ranges', 'bytes')
       ctx.set('Cache-Control', 'private, no-store')
+      if(size===0){ctx.body=Buffer.alloc(0);return}
       const range = ctx.get('range'),
         match = /^bytes=(\d*)-(\d*)$/.exec(range)
       let start = 0,

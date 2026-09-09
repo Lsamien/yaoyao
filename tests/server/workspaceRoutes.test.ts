@@ -2,7 +2,8 @@
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import request from 'supertest'
 import type Koa from 'koa'
 import { createApplication, type ApplicationRuntime } from '../../src/server/app'
@@ -10,7 +11,7 @@ import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth'
 import { WorkspaceAssets } from '../../src/server/workspaceAssets'
 
-let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, upstream: string[]
+let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, upstream: string[], bridgeReady: boolean
 const first: LocalUser = {
   id: 'first',
   username: 'first',
@@ -50,6 +51,7 @@ function req(method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'yaoyao-workspace-routes-'))
   upstream = []
+  bridgeReady = false
   const config = loadServerConfig({
     HERMES_YAOYAO_HOME: home,
     HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:19119',
@@ -62,7 +64,9 @@ beforeEach(async () => {
       const path = new URL(String(input)).pathname
       upstream.push(path)
       const body =
-        path === '/api/pair/v1/capabilities'
+        path === '/api/plugins/yaoyao-bot-bridge/capabilities' && bridgeReady
+          ? {version:1,ready:true,in_process:true,native_tools:true}
+          : path === '/api/pair/v1/capabilities'
           ? {protocolVersion:1,serviceType:'yaoyao-web',nodeId:'11111111-1111-4111-8111-111111111111',fingerprint:'f'.repeat(64)}
           : path === '/api/pair/v1/claim'
           ? {protocolVersion:1,serviceType:'yaoyao-web',nodeId:'11111111-1111-4111-8111-111111111111',fingerprint:'f'.repeat(64),deviceId:'22222222-2222-4222-8222-222222222222',token:'delegated-token',scopes:['agents.read','sessions.execute','history.read'],serverUrl:'http://child.test:15300/node/22222222-2222-4222-8222-222222222222'}
@@ -74,7 +78,7 @@ beforeEach(async () => {
               ? { profiles: [{ name: 'default', display_name: '基础 Agent' }] }
               : { ok: true }
       return new Response(JSON.stringify(body), {
-        status: path.includes('/plugins/') ? 404 : 200,
+        status: path.includes('/plugins/') && !bridgeReady ? 404 : 200,
         headers: { 'Content-Type': 'application/json' },
       })
     }) as typeof fetch,
@@ -91,6 +95,109 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it('deletes only archived owned chats, clears their records, and preserves library files and members', async () => {
+    const store = runtime.workspace
+    const lead = store.createAgent('first', { name: '负责人', profile: 'default' })
+    const member = store.createAgent('first', { name: '成员', profile: 'default' })
+    const group = store.createGroup('first', { name: '待删除群聊', memberIds: [lead.id, member.id], administratorId: lead.id })
+    const task = store.tasks('first', group.id)[0]!
+    const path = `/api/app/conversations/${group.id}`
+    await req('delete', path).expect(409)
+    store.updateConversation('first', group.id, { archived: true })
+    store.put('second', 'conversation', group.id, group)
+    for (const kind of ['message', 'run', 'turn', 'interaction', 'interaction-binding', 'binding', 'assignment']) {
+      store.put('first', kind, kind, { id: kind, conversationId: group.id, conversationTaskId: task.id, status: 'complete' })
+      store.put('second', kind, kind, { id: kind, conversationId: group.id })
+    }
+    store.put('first', 'context', task.id, { used: 5 })
+    const bindingKey = `${group.id}:${task.id}:${lead.id}`
+    store.put('first', 'binding', bindingKey, { conversationTaskId: task.id, sessionId: 'session' })
+    store.put('first', 'interaction-binding', 'legacy-interaction', { key: bindingKey, taskId: 'turn' })
+    store.put('second', 'binding', bindingKey, { sessionId: 'other-session' })
+    store.put('first', 'file', 'file', { id: 'file', conversationId: group.id, messageId: 'message', name: '保留.txt' })
+    await req('delete', path, 'third').expect(404)
+    await req('delete', path).set('X-CSRF-Token', 'invalid').expect(403)
+    await req('delete', path).expect(200)
+    await req('get', path).expect(404)
+    expect(store.get('first', 'context', task.id)).toBeUndefined()
+    expect(store.get('first', 'conversation-task', task.id)).toBeUndefined()
+    expect(store.list('first', 'message')).toEqual([])
+    expect(store.list('first', 'run')).toEqual([])
+    expect(store.list('first', 'binding')).toEqual([])
+    expect(store.list('first', 'interaction-binding')).toEqual([])
+    expect(store.get('second', 'binding', bindingKey)).toEqual({ sessionId: 'other-session' })
+    expect(store.get('first', 'file', 'file')).toEqual({ id: 'file', name: '保留.txt' })
+    expect(store.list('first', 'agent')).toHaveLength(2)
+    expect(store.get('second', 'conversation', group.id)).toEqual(group)
+    expect(store.get('second', 'message', 'message')).toBeDefined()
+    expect((await req('get', '/api/app/events')).body.events.some((e: any) => e.type === 'conversation.deleted' && e.conversationId === group.id)).toBe(true)
+  })
+  it('deletes an archived Bot and its direct chat only after group references are removed', async () => {
+    const store = runtime.workspace
+    const bot = store.createAgent('first', { name: '归档 Bot', profile: 'default' })
+    const member = store.createAgent('first', { name: '成员', profile: 'default' })
+    const direct = store.list<any>('first', 'conversation').find(c => c.memberIds[0] === bot.id)!
+    const group = store.createGroup('first', { name: '关联群', memberIds: [bot.id, member.id], administratorId: member.id })
+    const path = `/api/app/agents/${bot.id}`
+    await req('delete', path).expect(409)
+    store.updateAgent('first', bot.id, { archived: true })
+    await req('delete', `/api/app/conversations/${direct.id}`).expect(400)
+    expect((await req('delete', path).expect(409)).body.code).toBe('agent_in_group')
+    expect(store.get('first', 'agent', bot.id)).toBeDefined()
+    store.updateConversation('first', group.id, { memberIds: [member.id] })
+    await req('delete', path, 'second').expect(404)
+    await req('delete', path).expect(200)
+    expect(store.get('first', 'agent', bot.id)).toBeUndefined()
+    expect(store.get('first', 'conversation', direct.id)).toBeUndefined()
+    expect(store.get('first', 'conversation', group.id)).toBeDefined()
+    expect(store.get('first', 'agent', member.id)).toBeDefined()
+  })
+  it('keeps archived chats intact while runs or delegated goals are unresolved', async () => {
+    const store = runtime.workspace
+    const bot = store.createAgent('first', { name: '运行中', profile: 'default' })
+    const direct = store.list<any>('first', 'conversation')[0]!
+    store.updateAgent('first', bot.id, { archived: true })
+    store.put('first', 'run', 'pending', { id: 'pending', conversationId: direct.id, status: 'uncertain' })
+    const path = `/api/app/agents/${bot.id}`
+    await req('delete', path).expect(409)
+    expect(store.get('first', 'conversation', direct.id)).toBeDefined()
+    store.remove('first', 'run', 'pending')
+    store.put('first', 'goal', 'delegated', { id: 'delegated', conversationId: 'another-chat', origin: { conversationId: direct.id }, status: 'waiting' })
+    await req('delete', path).expect(409)
+    expect(store.get('first', 'agent', bot.id)).toBeDefined()
+  })
+  it('resumes a stopped goal from a real user request without duplicating its run',async()=>{
+    vi.spyOn(runtime.workspaceRuntime,'wake').mockImplementation(()=>{})
+    vi.spyOn(runtime.workspaceRuntime.teamTools,'requireAvailable').mockResolvedValue()
+    const lead=runtime.workspace.createAgent('first',{name:'任务负责人',profile:'default',canManageTeam:true})
+    const member=runtime.workspace.createAgent('first',{name:'成员',profile:'default'})
+    const source=runtime.workspace.list<any>('first','conversation').find(c=>c.kind==='direct'&&c.memberIds[0]===lead.id)!
+    const original=runtime.workspaceRuntime.send('first',source.id,{requestId:randomUUID(),content:'完成任务'})
+    const team=runtime.workspace.createGroup('first',{name:'任务组',memberIds:[lead.id,member.id],administratorId:lead.id})
+    const task=runtime.workspace.tasks('first',team.id)[0]!
+    runtime.workspaceRuntime.tasks.begin('first',task,lead,'完成任务',{conversationId:source.id,runId:original.id,agentId:lead.id})
+    await req('post',`/api/app/conversations/${team.id}/tasks/${task.id}/stop`).send({}).expect(200)
+    const input={requestId:randomUUID()}
+    const resumed=await req('post',`/api/app/conversations/${team.id}/tasks/${task.id}/resume`).send(input).expect(200)
+    expect(resumed.body.goal.status).toBe('running')
+    const repeated=await req('post',`/api/app/conversations/${team.id}/tasks/${task.id}/resume`).send(input).expect(200)
+    expect(repeated.body.run.id).toBe(resumed.body.run.id)
+    await req('post',`/api/app/conversations/${team.id}/tasks/${task.id}/resume`,'second').send({requestId:randomUUID()}).expect(404)
+  })
+  it('grants team management only with a ready bridge and persists explicit revocation', async () => {
+    const denied = await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true}).expect(409)
+    expect(denied.body.code).toBe('team_tools_unavailable')
+    expect((await req('get','/api/app/agents')).body.agents).toEqual([])
+    bridgeReady = true
+    const agent = (await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true}).expect(201)).body.agent
+    expect(agent.canManageTeam).toBe(true)
+    await req('patch',`/api/app/agents/${agent.id}`,'second').send({canManageTeam:false}).expect(404)
+    bridgeReady = false
+    const disabled = await req('patch',`/api/app/agents/${agent.id}`).send({canManageTeam:false}).expect(200)
+    expect(disabled.body.agent.canManageTeam).toBe(false)
+    expect((await req('get','/api/app/agents')).body.agents[0].canManageTeam).toBe(false)
+    await req('patch',`/api/app/agents/${agent.id}`).send({canManageTeam:true}).expect(409)
+  })
   it('accepts only child pairing, hides credentials, and scopes address edits to the owner', async () => {
     const code = new URL('yaoyao://pair')
     for (const [key,value] of Object.entries({v:'1',url:'http://child.test:15300',node:'11111111-1111-4111-8111-111111111111',id:'33333333-3333-4333-8333-333333333333',fingerprint:'f'.repeat(64),secret:'s'.repeat(64)})) code.searchParams.set(key,value)

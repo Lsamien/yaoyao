@@ -1,0 +1,49 @@
+appId: cn.samien.yaoyao.desktop
+productName: 夭夭
+directories:
+  output: desktop-release
+  app: .desktop-build/shell
+files:
+  - '**/*'
+extraResources:
+  - from: .desktop-build
+    to: runtime
+    filter:
+      - server.mjs
+      - server.mjs.map
+      - runner.mjs
+      - runner.mjs.map
+      - runner-image.mjs
+      - runner-maintenance.mjs
+      - computer-image/**/*
+      - third-party/**/*
+      - runner-config.mjs
+      - runner-config.mjs.map
+      - hermes_worker.py
+      - guest_proxy.py
+      - release.json
+      - build-info.json
+      - keychain-helper
+      - ui/**/*
+      - web-service/**/*
+asar: true
+npmRebuild: false
+mac:
+  # Keep the independently signed Node runtime byte-identical to its sealed manifest.
+  signIgnore:
+    - /web-service/node$
+  category: public.app-category.productivity
+  icon: public/icons/icon-512.png
+  target:
+    - target: dir
+      arch: [arm64]
+    - target: dmg
+      arch: [arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  extendInfo:
+    NSMicrophoneUsageDescription: 夭夭使用麦克风接收语音消息。
+dmg:
+  title: 夭夭 ${version}
+artifactName: Yaoyao-${version}-${arch}.${ext}
+publish: null

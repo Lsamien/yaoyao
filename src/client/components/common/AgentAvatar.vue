@@ -2,10 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { decodeAgentAvatar, defaultAgentIdentity } from '@shared/agentIdentity'
 import { mountCursorAvatar, type CursorState } from './maus/cursor-engine'
-import { MASCOT_BODIES } from './maus/mascot-bodies'
-import { MASCOT_SILHOUETTES } from './maus/silhouettes'
+import { MASCOT_SILHOUETTES, LAOA_BODIES } from './maus/silhouettes'
 type MascotState = 'idle' | 'working' | 'loading' | 'notifying' | 'waiting' | 'success' | 'failure'
-const props = withDefaults(defineProps<{ name: string; avatar?: string; size?: number; state?: MascotState; animated?: boolean; fixedTime?: number; activityKey?: string | number }>(), { avatar: '', size: 32, state: 'idle', animated: undefined })
+const props = withDefaults(defineProps<{ name: string; avatar?: string; size?: number; state?: MascotState; animated?: boolean; fixedTime?: number; expressionIndex?: number; activityKey?: string | number }>(), { avatar: '', size: 32, state: 'idle', animated: undefined })
 const host = ref<HTMLElement>(), svg = ref<SVGSVGElement>(), visible = ref(true), foreground = ref(true), reduced = ref(false), hover = ref(false)
 const gaze = ref({x:0,y:0})
 const oneShot = ref<CursorState>()
@@ -22,7 +21,7 @@ const runtimeActive = computed(() => props.state !== 'idle' && !beatEnded.value)
 const state = computed<CursorState>(() => runtimeActive.value ? states[props.state] : oneShot.value ?? identity.value.expression)
 const live = computed(() => visible.value && foreground.value && !reduced.value && props.animated !== false && (props.animated === true || props.size >= 56 || runtimeActive.value || !!oneShot.value || hover.value))
 const options = computed(() => ({ state: state.value, paused: !live.value, color: identity.value.color, gaze: gaze.value,
-  silhouette: identity.value.bodyId ? MASCOT_BODIES[identity.value.bodyId] : MASCOT_SILHOUETTES[identity.value.shape === 'ellipse' ? 'oval' : identity.value.shape], fixedTime: props.fixedTime }))
+  silhouette: identity.value.bodyId ? LAOA_BODIES[identity.value.bodyId] : MASCOT_SILHOUETTES[identity.value.shape === 'ellipse' ? 'oval' : identity.value.shape], fixedTime: props.fixedTime, expression: props.expressionIndex }))
 function sync() {
   if (!svg.value || hasImage.value) { renderer?.dispose();renderer=undefined;return }
   if (!renderer) renderer=mountCursorAvatar(svg.value, options.value)

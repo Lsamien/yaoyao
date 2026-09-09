@@ -15,9 +15,14 @@ docker.env
 hermes-yaoyao-*.tar
 .hermes-yaoyao/
 .codegraph/
+.desktop-build/
+desktop-release/
+desktop/icon.png
 
 # Hermes plugin runtime and Python test caches.
 hermes-plugins/**/__pycache__/
 hermes-plugins/**/*.py[cod]
 hermes-plugins/**/.pytest_cache/
 hermes-plugins/**/data/
+.runner-build/
+build-info.json

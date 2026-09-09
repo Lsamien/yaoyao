@@ -392,6 +392,7 @@ onBeforeUnmount(() => {
 
 defineExpose({
   attachFiles: addFiles,
+  filesSnapshot: () => attachments.value.map(attachment => attachment.file),
   focus: () => textarea.value?.focus(),
   clearAfterSend,
 })

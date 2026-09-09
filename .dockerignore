@@ -11,6 +11,10 @@
 !index.html
 !public/
 !public/**
+!deploy/
+!deploy/**
+!third-party/
+!third-party/**
 !scripts/
 !scripts/**
 !src/

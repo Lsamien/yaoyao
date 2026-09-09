@@ -6,12 +6,14 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY release.json ./
-RUN npm ci
+RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
 
 COPY tsconfig.json tsconfig.client.json tsconfig.client.build.json tsconfig.server.json vite.config.ts ./
 COPY index.html ./
 COPY public ./public
 COPY scripts ./scripts
+COPY deploy ./deploy
+COPY third-party ./third-party
 COPY src ./src
 
 RUN npm run build \

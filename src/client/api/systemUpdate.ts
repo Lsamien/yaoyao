@@ -33,7 +33,8 @@ export interface UpdateJob {
 
 export interface SystemUpdateStatus {
   current: ReleaseManifest
-  installationMode: 'source' | 'release'
+  build?: { commit: string; buildNumber: number; dirty: boolean; artifactDigest?: string }
+  installationMode: 'source' | 'release' | 'desktop'
   latest?: ReleaseManifest
   updateAvailable: boolean
   supported: boolean

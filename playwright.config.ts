@@ -2,7 +2,8 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testIgnore: ['**/workspace-chat.spec.ts', '**/avatarReference.spec.ts'],
+  // These suites own different fixtures and run with their dedicated configurations.
+  testIgnore: ['**/workspace-chat.spec.ts', '**/team-tools.spec.ts', '**/avatarReference.spec.ts', '**/avatarRoundTrip.spec.ts', '**/serverIdentity.spec.ts'],
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,

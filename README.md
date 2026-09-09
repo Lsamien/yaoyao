@@ -1,8 +1,8 @@
 # 夭夭 Web
 
-当前发布版本：**v0.3.30**，配套 iOS **1.3（188）**。详见 [发布说明](docs/releases/v0.3.30.md)。
+当前 Web 与 macOS 桌面发布版本：**v0.4.0**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.0.md)。
 
-夭夭 Web 为网页和 iOS 提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
+夭夭 Web 为网页、iOS 和安卓提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
 
 ## 聊天与 Agent
 
@@ -33,6 +33,12 @@ HERMES_YAOYAO_UPSTREAM=http://服务器:9119 npm start
 Web 数据默认保存在 `~/.hermes-yaoyao`，可用 `HERMES_YAOYAO_HOME` 指定。备份应包含整个数据目录及加密密钥。
 
 由 Web 或 iOS 创建的普通聊天会按登录用户、Profile 和 Session ID 在 `chat-cache.sqlite3` 中登记所有权并持久化；后续续聊与列表展示以这份服务端登记为准，不再单独依赖 Hermes 的 `source` 标记。Web 的只读历史记录不进入该数据库，继续按需读取 9119。可通过 `HERMES_YAOYAO_CHAT_CACHE_MODE=upstream-only|shadow|prefer-local` 切换策略，默认 `prefer-local`。
+
+## macOS 桌面版
+
+在 [v0.4.0 发布页](http://192.168.153.8:3000/samien/hermes-yaoyao/releases/tag/v0.4.0) 下载 `Yaoyao-0.4.0-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
+
+此 DMG 使用 Apple Development 开发签名，未做 Apple 公证。
 
 ## Docker 安装
 

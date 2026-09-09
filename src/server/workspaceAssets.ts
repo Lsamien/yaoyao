@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, basename } from 'node:path'
+import {HttpError} from './errors.js'
 import { lookup } from 'mime-types'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
@@ -8,6 +9,7 @@ import type { WorkspaceAgent, WorkspaceFile, WorkspaceMessage } from '../shared/
 export interface StoredWorkspaceFile extends WorkspaceFile {
   path: string
   digest?: string
+  sourceNodeId?:string
 }
 export function publicFile(f: StoredWorkspaceFile): WorkspaceFile {
   const { path: _path, digest: _digest, ...result } = f
@@ -80,6 +82,22 @@ export class WorkspaceAssets {
     readonly nodes: WorkspaceNodes,
     readonly home: string,
   ) {}
+  publish(owner:string,message:WorkspaceMessage,agent:WorkspaceAgent,name:string,bytes:Buffer):WorkspaceFile {
+    const digest=createHash('sha256').update(bytes).digest('hex')
+    name=basename(name).replace(/[\\/\u0000-\u001f\u007f]/g,'_').slice(0,240)||'artifact'
+    const files=this.store.list<StoredWorkspaceFile>(owner,'file')
+    const existing=files.find(file=>file.messageId===message.id&&file.name===name&&file.digest===digest)
+    if(existing)return publicFile(existing)
+    if(bytes.length>25*1024*1024||files.filter(file=>file.messageId===message.id).length>=8)throw new HttpError(413,'每轮最多 8 个产物，每个不超过 25 MiB','artifact_limit')
+    const used=Number(this.store.db.prepare("SELECT coalesce(sum(json_extract(data,'$.size')),0) AS n FROM workspace_entities WHERE kind='file'").get()?.n??0)
+    if(used+bytes.length>2*1024*1024*1024)throw new HttpError(413,'产物存储空间已达上限','artifact_quota')
+    const dir=join(this.home,'workspace-files',owner);mkdirSync(dir,{recursive:true,mode:0o700})
+    const path=join(dir,digest)
+    try{writeFileSync(path,bytes,{mode:0o600,flag:'wx'})}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error}
+    const file:StoredWorkspaceFile={id:randomUUID(),name,mimeType:lookup(name)||'application/octet-stream',path,digest,size:bytes.length,sender:'agent',profile:agent.profile,sourceNodeId:agent.nodeId,conversationId:message.conversationId,messageId:message.id,createdAt:Date.now()}
+    this.store.atomic(()=>{this.store.put(owner,'file',file.id,file);this.store.event(owner,'files.changed',publicFile(file),message.conversationId)})
+    return publicFile(file)
+  }
   async archive(owner: string, message: WorkspaceMessage): Promise<void> {
     if (!message.agentId) return
     const agent = this.store.require<WorkspaceAgent>(owner, 'agent', message.agentId)
@@ -114,6 +132,8 @@ export class WorkspaceAssets {
     remoteAgentId?: string,
   ): Promise<void> {
     if (this.stopped) return
+    const message=this.store.get<WorkspaceMessage>(owner,'message',messageId)
+    if(message?.execution==='computer'||(!message?.execution&&message?.agentId&&this.store.get<WorkspaceAgent>(owner,'agent',message.agentId)?.execution==='computer'))return
     const paths = new Set<string>()
     for (const m of text.matchAll(
       /(?:MEDIA:\s*|\]\(<?|"(?:path|file_path|output_path)"\s*:\s*")((?:\/|~\/)[^\n"<>)]{1,4096})/g,

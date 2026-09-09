@@ -16,6 +16,6 @@
     "skipLibCheck": true,
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src/server/**/*.ts", "src/shared/**/*.ts"],
+  "include": ["src/server/**/*.ts", "src/shared/**/*.ts", "src/runner/**/*.ts"],
   "exclude": ["tests", "src/client"]
 }

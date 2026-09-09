@@ -35,6 +35,8 @@ export const agentInput = z
     name,
     avatar: avatar.default(''),
     instructions: z.string().max(24_000).default(''),
+    execution:z.enum(['profile','computer']).default('profile'),
+    canManageTeam: z.boolean().default(false),
     nodeId: z.string().default('local'),
     profile: z.string().min(1).max(256),
   })
@@ -44,6 +46,8 @@ export const agentPatch = z
     name: name.optional(),
     avatar: avatar.optional(),
     instructions: z.string().max(24_000).optional(),
+    execution:z.enum(['profile','computer']).optional(),
+    canManageTeam: z.boolean().optional(),
     archived: z.boolean().optional(),
   })
   .strict()
@@ -96,6 +100,16 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   return parsed.data
 }
 export class WorkspaceStore {
+  prepareAgent?: (owner:string,agent:Agent)=>void
+  private observers = new Set<(owner: string, event: WorkspaceEvent) => void>()
+  observe(listener: (owner: string, event: WorkspaceEvent) => void): () => void {
+    this.observers.add(listener)
+    return () => { this.observers.delete(listener) }
+  }
+  private publish(owner: string, event: WorkspaceEvent): void {
+    this.changes.emit(owner, event)
+    for (const listener of this.observers) { try { listener(owner, event) } catch { /* Observers cannot undo a committed transaction. */ } }
+  }
   readonly db: DatabaseSync
   readonly changes = new EventEmitter()
   private transactionEvents: Array<{ owner: string; event: WorkspaceEvent }> | undefined
@@ -115,6 +129,8 @@ export class WorkspaceStore {
       CREATE INDEX IF NOT EXISTS workspace_message_task ON workspace_entities(owner, json_extract(data,'$.conversationTaskId'), json_extract(data,'$.seq')) WHERE kind='message';
       CREATE INDEX IF NOT EXISTS workspace_run_task ON workspace_entities(owner, json_extract(data,'$.conversationTaskId'), json_extract(data,'$.status')) WHERE kind='run';
       CREATE INDEX IF NOT EXISTS workspace_turn_task ON workspace_entities(owner, json_extract(data,'$.conversationTaskId'), json_extract(data,'$.status')) WHERE kind='turn';`)
+    this.db.exec('CREATE TABLE IF NOT EXISTS server_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1), server_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL)')
+    this.db.prepare('INSERT OR IGNORE INTO server_identity VALUES(1, ?, ?, 0)').run(randomUUID(), '')
     this.changes.setMaxListeners(0)
     this.atomic(() => {
       this.db.exec('CREATE TABLE IF NOT EXISTS workspace_migrations(id TEXT PRIMARY KEY)')
@@ -205,7 +221,7 @@ export class WorkspaceStore {
       this.db.exec('COMMIT')
       const events = this.transactionEvents
       this.transactionEvents = undefined
-      for (const entry of events) this.changes.emit(entry.owner, entry.event)
+      for (const entry of events) this.publish(entry.owner, entry.event)
       return result
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -221,7 +237,7 @@ export class WorkspaceStore {
     )
     const event = { seq, type, conversationId, data }
     if (this.transactionEvents) this.transactionEvents.push({ owner, event })
-    else this.changes.emit(owner, event)
+    else this.publish(owner, event)
     return seq
   }
   events(owner: string, after: number): WorkspaceEvent[] {
@@ -261,8 +277,21 @@ export class WorkspaceStore {
       return result
     })
   }
-  createAgent(owner: string, input: unknown): Agent {
+  taskMemberIds(owner:string,conversation:Conversation,taskId?:string):string[]{
+    const base=conversation.memberIds.filter(id=>!this.get<Agent>(owner,'agent',id)?.temporaryGoalId)
+    if(!taskId)return base
+    const goal=this.get<import('../shared/agentTasks.js').AgentGoal>(owner,'goal',taskId)
+    if(!goal||goal.conversationId!==conversation.id||['complete','blocked','cancelled','cancelling'].includes(goal.status))return base
+    return [...new Set([...base,...this.list<Agent>(owner,'agent').filter(agent=>!agent.archived&&agent.temporaryGoalId===taskId&&agent.helperActivation===(goal.activation??1)).map(agent=>agent.id)])]
+  }
+  requireAgentTask(owner:string,agent:Agent,conversationId:string,taskId?:string):void {
+    if(!agent.temporaryGoalId)return
+    const conversation=this.require<Conversation>(owner,'conversation',conversationId)
+    if(agent.temporaryGoalId!==taskId||!this.taskMemberIds(owner,conversation,taskId).includes(agent.id))throw new HttpError(403,'临时助手只能执行所属任务','helper_task_bound')
+  }
+  createAgent(owner: string, input: unknown, origin?: { createdByAgentId: string; createdFromRunId: string;temporaryGoalId?:string;helperActivation?:number;helperRunnerId?:string }): Agent {
     const body = parse(agentInput, input)
+    if (origin) this.require<Agent>(owner, 'agent', origin.createdByAgentId)
     return this.atomic(() => {
       if (
         this.list<Agent>(owner, 'agent').some(
@@ -274,14 +303,18 @@ export class WorkspaceStore {
         id = randomUUID()
       const agent: Agent = {
         ...body,
+        ...origin,
         avatar: body.avatar ? normalizeAvatar(body.avatar) : encodeAgentAvatar(randomAgentIdentity(id, body.name)),
         id,
         archived: false,
         revision: 1,
+        teamAuthorizationVersion: body.canManageTeam ? 1 : 0,
         createdAt: now,
         updatedAt: now,
       }
+      this.prepareAgent?.(owner,agent)
       this.put(owner, 'agent', id, agent)
+      if(origin?.temporaryGoalId){this.event(owner,'agent.changed',agent);return agent}
       const conversation: Conversation = {
         id: randomUUID(),
         kind: 'direct',
@@ -312,6 +345,9 @@ export class WorkspaceStore {
     if (patch.avatar !== undefined) patch.avatar = normalizeAvatar(patch.avatar)
     return this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
+      if(agent.temporaryGoalId&&(Object.keys(patch).some(key=>key!=='archived')||patch.archived===false))throw new HttpError(409,'临时助手由所属任务管理，不能修改权限或恢复为持久成员','helper_task_bound')
+      if(agent.computerEnvironmentId&&patch.execution==='profile')throw new HttpError(409,'请先解除电脑共享，再切换执行环境','shared_computer_active')
+      if(patch.execution&&patch.execution!==(agent.execution??'profile')&&this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['running','waiting','uncertain'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再切换执行环境','agent_execution_busy')
       if (agent.remoteAgentId && Object.keys(patch).some(key => key !== 'archived'))
         throw new HttpError(409, '引用 Agent 的配置由远端管理', 'remote_agent_read_only')
       if (
@@ -322,6 +358,8 @@ export class WorkspaceStore {
       )
         throw new HttpError(409, 'Agent 名称已存在', 'duplicate_agent_name')
       const next = { ...agent, ...patch, revision: agent.revision + 1, updatedAt: Date.now() }
+      if (patch.canManageTeam !== undefined && patch.canManageTeam !== (agent.canManageTeam === true))
+        next.teamAuthorizationVersion = (agent.teamAuthorizationVersion ?? 0) + 1
       this.put(owner, 'agent', id, next)
       this.event(owner, 'agent.changed', next)
       for (const c of this.list<Conversation>(owner, 'conversation').filter(
@@ -334,6 +372,53 @@ export class WorkspaceStore {
       return next
     })
   }
+  deleteAgent(owner: string, id: string): void {
+    this.atomic(() => {
+      const agent = this.require<Agent>(owner, 'agent', id)
+      if (!agent.archived) throw new HttpError(409, '请先归档 Bot，再删除', 'agent_not_archived')
+      if (agent.temporaryGoalId) throw new HttpError(409, '临时助手由所属任务管理', 'helper_task_bound')
+      if (agent.computerEnvironmentId) throw new HttpError(409, '请先解除电脑共享，再删除 Bot', 'shared_computer_active')
+      const conversations = this.list<Conversation>(owner, 'conversation')
+      if (conversations.some(c => c.kind === 'group' && c.memberIds.includes(id)))
+        throw new HttpError(409, '此 Bot 仍是群聊成员，请先从群聊移除或删除相关群聊', 'agent_in_group')
+      if (this.list<{ agentId: string; status: string }>(owner, 'turn').some(work => work.agentId === id && !['complete', 'failed', 'interrupted', 'skipped'].includes(work.status)))
+        throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
+      for (const conversation of conversations.filter(c => c.kind === 'direct' && c.memberIds[0] === id))
+        this.deleteConversation(owner, conversation.id, true)
+      this.remove(owner, 'agent', id)
+      this.event(owner, 'agent.deleted', { id })
+    })
+  }
+  deleteConversation(owner: string, id: string, deletingAgent = false): void {
+    this.atomic(() => {
+      const conversation = this.require<Conversation>(owner, 'conversation', id)
+      if (conversation.kind === 'direct' && !deletingAgent)
+        throw new HttpError(400, '请删除对应的 Bot', 'delete_agent_instead')
+      if (!conversation.archived) throw new HttpError(409, '请先归档聊天，再删除', 'conversation_not_archived')
+      if (['run', 'turn'].some(kind => this.list<{ conversationId: string; status: string }>(owner, kind).some(run => run.conversationId === id && !['complete', 'failed', 'interrupted'].includes(run.status))))
+        throw new HttpError(409, '聊天仍有任务未结束，请停止任务后重试', 'conversation_running')
+      if (this.list<{ conversationId: string; origin?: { conversationId: string }; status: string }>(owner, 'goal').some(goal =>
+        (goal.conversationId === id || goal.origin?.conversationId === id) && !['complete', 'blocked', 'cancelled'].includes(goal.status)))
+        throw new HttpError(409, '聊天仍有关联任务未结束，请停止任务后重试', 'conversation_running')
+      const taskIds = new Set(this.list<Task>(owner, 'conversation-task').filter(task => task.conversationId === id).map(task => task.id))
+      for (const taskId of taskIds) {
+        this.remove(owner, 'context', taskId)
+        this.db.prepare("DELETE FROM workspace_entities WHERE owner=? AND kind='task-delivery' AND json_extract(data,'$.goalId')=?").run(owner, taskId)
+      }
+      // Keep files in the file library, matching task deletion; detach their chat references.
+      for (const file of this.list<{ id: string; conversationId?: string; conversationTaskId?: string }>(owner, 'file')) {
+        if (file.conversationId === id || (file.conversationTaskId && taskIds.has(file.conversationTaskId)))
+          this.put(owner, 'file', file.id, { ...file, conversationId: undefined, conversationTaskId: undefined, messageId: undefined })
+      }
+      const bindingPrefix = `${id}:`
+      this.db.prepare("DELETE FROM workspace_entities WHERE owner=? AND ((kind='binding' AND substr(id,1,?)=?) OR (kind='interaction-binding' AND substr(json_extract(data,'$.key'),1,?)=?))").run(owner, bindingPrefix.length, bindingPrefix, bindingPrefix.length, bindingPrefix)
+      this.db.prepare("DELETE FROM workspace_entities WHERE owner=? AND kind IN ('message','run','turn','interaction','interaction-binding','binding','conversation-task','goal','assignment') AND json_extract(data,'$.conversationId')=?").run(owner, id)
+      this.db.prepare("DELETE FROM workspace_commands WHERE owner=? AND json_extract(result,'$.conversationId')=?").run(owner, id)
+      this.remove(owner, 'context', id)
+      this.remove(owner, 'conversation', id)
+      this.event(owner, 'conversation.deleted', { id }, id)
+    })
+  }
   createGroup(owner: string, input: unknown): Conversation {
     const body = parse(groupInput, input)
     const ids = new Set(body.memberIds)
@@ -344,9 +429,11 @@ export class WorkspaceStore {
       Object.keys(body.memberRoles).some(id => !ids.has(id))
     )
       throw new HttpError(400, '群成员或管理员无效', 'invalid_members')
-    for (const id of ids)
-      if (this.require<Agent>(owner, 'agent', id).archived)
-        throw new HttpError(409, '已归档 Agent 不能加入新群', 'agent_archived')
+    for (const id of ids){
+      const agent=this.require<Agent>(owner,'agent',id)
+      if(agent.temporaryGoalId)throw new HttpError(409,'临时助手不能加入持久团队','helper_task_bound')
+      if(agent.archived)throw new HttpError(409,'已归档 Agent 不能加入新群','agent_archived')
+    }
     const now = Date.now()
     const c: Conversation = {
       ...body,
@@ -606,6 +693,7 @@ export class WorkspaceStore {
       throw new HttpError(400, '群成员或管理员无效', 'invalid_members')
     for (const memberId of memberIds) {
       const agent = this.require<Agent>(owner, 'agent', memberId)
+      if(agent.temporaryGoalId)throw new HttpError(409,'临时助手不能加入其他群聊','helper_task_bound')
       if (!c.memberIds.includes(memberId) && agent.archived)
         throw new HttpError(409, '已归档 Agent 不能加入群聊', 'agent_archived')
     }

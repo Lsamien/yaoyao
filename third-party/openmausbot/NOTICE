@@ -1,0 +1,4 @@
+The computer image recipe derives from OpenMausBot server/container-computer.ts, commit 886b786c.
+OpenMausBot contributors, Apache License 2.0.
+Changes: standalone Dockerfile, Yaoyao image metadata and persistent Firefox profile preparation.
+CUA, XFCE, browsers, fonts and base image retain their respective upstream licenses.

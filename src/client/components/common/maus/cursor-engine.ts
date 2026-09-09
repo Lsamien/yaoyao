@@ -1,3 +1,4 @@
+import { LAOA_DATA } from './laoa-data'
 // Adapted from OpenMausBot (3a84701), Apache-2.0. See THIRD_PARTY_NOTICES.md.
 /**
  * CursorAvatar — an animated mascot built on the "cursor" silhouette.
@@ -16,7 +17,6 @@
  *   expression   pin a single face and stop the cycling
  *   lookAround   how much each expression glances around. 0 = always straight ahead
  *   gaze / turn  aim the eyes, or rotate the head around its implied sphere
- *   showMouth    false for an eyes-only face
  *
  * Made with Blob Studio.
  */
@@ -27,11 +27,7 @@ import {
   EXPRESSION_COUNT,
   FACE_BOX,
   FACE_CENTRE,
-  GAZE,
   GAZE_TRAVEL,
-  MOUTHS,
-  MOUTH_STROKE,
-  mouthFrame,
   type Ring,
 } from "./cursor-face-data"
 
@@ -40,17 +36,14 @@ export {
   EXPRESSION_COUNT,
   FACE_BOX,
   FACE_CENTRE,
-  GAZE,
   GAZE_TRAVEL,
-  MOUTHS,
-  MOUTH_STROKE,
-  mouthFrame,
 }
 export type { Ring }
 
 /* ------------------------------------------------------------------- shape */
 
 export interface CursorSilhouette {
+  viewBox?: string
   /** Human-readable name, used for the accessible label. */
   name: string
   /** Transform mapping the artwork into the 228.541-unit face box. '' for none. */
@@ -477,204 +470,7 @@ export type CursorState =
  * Which expressions a state cycles through. The first is its resting face, chosen as the
  * pool's most forward-facing member so a mascot at rest looks at you rather than past you.
  */
-export const POOLS = {
-  sleeping: [
-    22,
-    13,
-    4
-  ],
-  waking: [
-    13
-  ],
-  idle: [
-    6,
-    0,
-    8
-  ],
-  listening: [
-    1,
-    10,
-    19
-  ],
-  thinking: [
-    17,
-    8,
-    16,
-    14,
-    5
-  ],
-  searching: [
-    20,
-    15,
-    9,
-    3,
-    12,
-    18
-  ],
-  working: [
-    10,
-    7,
-    16,
-    11
-  ],
-  excited: [
-    2,
-    17,
-    21,
-    3,
-    11
-  ],
-  surprised: [
-    21,
-    3
-  ],
-  suspicious: [
-    5,
-    14,
-    23
-  ],
-  angry: [
-    7,
-    16
-  ],
-  drowsy: [
-    22,
-    4,
-    13
-  ],
-  happy: [
-    19,
-    2,
-    11,
-    17
-  ],
-  curious: [
-    21,
-    3,
-    0,
-    15
-  ],
-  confused: [
-    8,
-    14,
-    5
-  ],
-  bored: [
-    0,
-    4,
-    22
-  ],
-  proud: [
-    2,
-    15,
-    8
-  ],
-  shy: [
-    24,
-    0,
-    13
-  ],
-  sad: [
-    22,
-    4,
-    13
-  ],
-  laughing: [
-    2,
-    11,
-    17
-  ],
-  scared: [
-    21,
-    3
-  ],
-  playful: [
-    2,
-    17,
-    11,
-    8
-  ],
-  celebrate: [
-    2,
-    8,
-    17
-  ],
-  orbit: [
-    6,
-    0,
-    8
-  ],
-  radar: [
-    6,
-    0,
-    8
-  ],
-  progress: [
-    6,
-    0,
-    8
-  ],
-  spawning: [
-    3,
-    0
-  ],
-  humming: [
-    6,
-    0,
-    8
-  ],
-  loading: [
-    6,
-    0,
-    8
-  ],
-  dictating: [
-    1,
-    10,
-    19
-  ],
-  sending: [
-    6,
-    0,
-    8
-  ],
-  receiving: [
-    19,
-    0,
-    8
-  ],
-  uploading: [
-    15,
-    9,
-    8
-  ],
-  writing: [
-    15,
-    9
-  ],
-  notifying: [
-    21,
-    3,
-    0
-  ],
-  alerting: [
-    21,
-    3
-  ],
-  bouncing: [
-    2,
-    17
-  ],
-  dragging: [
-    3,
-    15,
-    0
-  ],
-  "powering-down": [
-    22,
-    13
-  ]
-} satisfies Record<CursorState, number[]>
+export const POOLS: Record<CursorState, number[]> = Object.fromEntries(Object.entries(LAOA_DATA.pools).map(([key,values]) => [key,[...values]])) as Record<CursorState, number[]>
 
 /** How long a state holds an expression before drifting to another, in ms. */
 const EXPR_CADENCE = {
@@ -1013,7 +809,7 @@ const toPath = (ring: Ring) =>
 const clone = (rings: Ring[]): Ring[] =>
   rings.map(r => r.map((p): [number, number] => [p[0], p[1]]))
 
-/** Ring centroid — same computation cursor-face-data.ts uses for mouthFrame, needed here too for eye projection. */
+/** Ring centroid for eye projection. */
 const ringCentre = (ring: Ring): [number, number] => {
   let x = 0
   let y = 0
@@ -1022,23 +818,6 @@ const ringCentre = (ring: Ring): [number, number] => {
     y += p[1]
   }
   return [x / ring.length, y / ring.length]
-}
-
-export function mouthPath(frame: { x: number; y: number; angle: number }, spec: number[]) {
-  const ca = Math.cos(frame.angle)
-  const sa = Math.sin(frame.angle)
-  const at = (lx: number, ly: number): [number, number] => [
-    frame.x + lx * ca - ly * sa,
-    frame.y + lx * sa + ly * ca,
-  ]
-  const a = at(-spec[0], 0)
-  const c = at(0, spec[1])
-  const b = at(spec[0], 0)
-  return (
-    'M' + a[0].toFixed(2) + ' ' + a[1].toFixed(2) +
-    ' Q' + c[0].toFixed(2) + ' ' + c[1].toFixed(2) +
-    ' ' + b[0].toFixed(2) + ' ' + b[1].toFixed(2)
-  )
 }
 
 /** Face-space transform placing the face inside a silhouette. */
@@ -1140,8 +919,8 @@ export interface CursorOptions {
 }
 type Engine = ReturnType<typeof newEngine>
 function newEngine() {
-  return { current: clone(EXPRESSIONS[0]), target: EXPRESSIONS[0], currentMouth: MOUTHS[0].slice(), targetMouth: MOUTHS[0], currentGaze: [...GAZE[0]], targetGaze: [...GAZE[0]], expression: 0, morph: 1, velocity: 0, blinkStart: noTimestamp(), spinStart: noTimestamp(), spinDuration: 900, last: 0, stateStart: 0, lastState: 'idle' as CursorState, lastBodyTransform: '',
-    props: {state: 'idle' as CursorState, expression: undefined as number | undefined, gaze: undefined as {x?:number;y?:number}|undefined, turn:0, spring:7, eyeScale:1, paused:true, lookAround:0, motionStrength:0, effects:true, glyphs:true} }
+  return { current: clone(EXPRESSIONS[0]), target: EXPRESSIONS[0], expression: 0, morph: 1, velocity: 0, blinkStart: noTimestamp(), spinStart: noTimestamp(), spinDuration: 900, last: 0, stateStart: 0, lastState: 'idle' as CursorState, lastBodyTransform: '',
+    props: {state: 'idle' as CursorState, expression: undefined as number | undefined, gaze: undefined as {x?:number;y?:number}|undefined, turn:0, spring:7, eyeScale:1, paused:true, motionStrength:0, effects:true, glyphs:true} }
 }
 let nextId = 0
 export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
@@ -1150,25 +929,18 @@ export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
   const paintRef = { current: initial.color }
   const node = <T extends Element>(id: string) => ({ current: svg.querySelector<T>(`[data-part="${id}"]`)! })
   svg.setAttribute('viewBox', VIEW_BOX)
-  svg.innerHTML = `<defs><clipPath id="${uid}-clip" data-part="clip" /></defs><g data-part="trails"/><g data-part="bodyGroup"><g data-part="bodyContent"><g data-part="outline"/><g clip-path="url(#${uid}-clip)"><g data-part="face"><path data-part="eye0" fill="white"/><path data-part="eye1" fill="white"/><path data-part="mouth" fill="none" stroke="white" stroke-width="${MOUTH_STROKE}" stroke-linecap="round"/></g></g></g><g data-part="glyph" opacity="0"/></g><g data-part="confetti"/>`
-  const eye0=node<SVGPathElement>('eye0'), eye1=node<SVGPathElement>('eye1'), mouth=node<SVGPathElement>('mouth')
+  svg.innerHTML = `<defs><clipPath id="${uid}-clip" data-part="clip" /></defs><g data-part="trails"/><g data-part="bodyGroup"><g data-part="bodyContent"><g data-part="outline"/><g clip-path="url(#${uid}-clip)"><g data-part="face"><path data-part="eye0" fill="white"/><path data-part="eye1" fill="white"/></g></g></g><g data-part="glyph" opacity="0"/></g><g data-part="confetti"/>`
+  const eye0=node<SVGPathElement>('eye0'), eye1=node<SVGPathElement>('eye1')
   const bodyGroup=node<SVGGElement>('bodyGroup'), bodyContent=node<SVGGElement>('bodyContent'), trailLayer=node<SVGGElement>('trails'), confettiLayer=node<SVGGElement>('confetti'), glyphLayer=node<SVGGElement>('glyph')
   const selectExpression = (index:number, immediate = false) => {
     const e=engine.current, i=((index % EXPRESSION_COUNT)+EXPRESSION_COUNT)%EXPRESSION_COUNT
     if (i === e.expression && e.morph >= 1 && !immediate) return
-    e.current=displayed(e);e.currentMouth=displayedMouth(e);e.currentGaze=displayedGaze(e)
-    e.target=EXPRESSIONS[i];e.targetMouth=MOUTHS[i];e.targetGaze=GAZE[i];e.expression=i;e.morph=immediate?1:0;e.velocity=0
+    e.current=displayed(e)
+    e.target=EXPRESSIONS[i];e.expression=i;e.morph=immediate?1:0;e.velocity=0
   }
       const draw = (e: Engine, now: number, spinTurn: number) => {
         const p = e.props
-        // Re-apply a fraction of this expression's own look-direction.
-        const g = displayedGaze(e)
-        const look = p.lookAround ?? 0.35
-        const ox = g[0] * look
-        const oy = g[1] * look
-        const rings = displayed(e).map(ring =>
-          ring.map((pt): [number, number] => [pt[0] + ox, pt[1] + oy])
-        )
+        const rings = displayed(e)
         const gx = clamp(p.gaze?.x ?? 0, -1, 1) * GAZE_TRAVEL.x
         const gy = clamp(p.gaze?.y ?? 0, -1, 1) * GAZE_TRAVEL.y
         const radians = (((p.turn ?? 0) + spinTurn) * Math.PI) / 180
@@ -1196,27 +968,6 @@ export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
           )
           el.style.opacity = depth > 0.02 ? '1' : '0'
         })
-
-        // Mouth: same sphere projection as the eyes, but blinking never touches it.
-        const mouthEl = mouth.current
-        if (mouthEl) {
-          const spec = displayedMouth(e)
-          const frameGeom = mouthFrame(rings, spec)
-          const baseLongitude = Math.asin(clamp((frameGeom.x - SPHERE_C) / SPHERE_R, -1, 1))
-          const longitude = baseLongitude + radians
-          const depth = Math.cos(longitude)
-          const perspective = Math.max(depth, 0.02) / Math.max(Math.cos(baseLongitude), 0.02)
-          mouthEl.setAttribute('d', mouthPath(frameGeom, spec))
-          mouthEl.setAttribute(
-            'transform',
-            `translate(${(SPHERE_C + SPHERE_R * Math.sin(longitude) + gx).toFixed(2)} ${(
-              frameGeom.y + gy
-            ).toFixed(2)}) scale(${clamp(perspective, 0.02, 2.4).toFixed(4)} 1) translate(${(
-              -frameGeom.x
-            ).toFixed(2)} ${(-frameGeom.y).toFixed(2)})`
-          )
-          mouthEl.style.opacity = depth > 0.02 ? '1' : '0'
-        }
 
         // The body. One-shot entrances need time since the state began, so track that here
         // rather than in an effect — the loop already has the clock.
@@ -1278,8 +1029,9 @@ export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
     const changed=options.state!==next.state||options.expression!==next.expression
     const resume=options.paused!==next.paused||options.fixedTime!==next.fixedTime
     options=next
+    svg.setAttribute('viewBox', next.silhouette.viewBox ?? VIEW_BOX)
     const e=engine.current, now=performance.now();paintRef.current=next.color
-    e.props={...e.props,state:next.state,expression:next.expression,gaze:next.gaze,paused:next.paused,motionStrength:1}
+    e.props={...e.props,state:next.state,expression:next.expression,gaze:next.gaze,paused:next.paused,motionStrength:next.paused?0:1}
     const outline=node<SVGGElement>('outline').current, clip=node<SVGClipPathElement>('clip').current, face=node<SVGGElement>('face').current
     const body=next.silhouette.body.replace(/\{\{GRADIENT\}\}/g,next.color)
     if(lastBody!==body){outline.innerHTML=body;lastBody=body}
@@ -1303,16 +1055,6 @@ function displayed(e: { current: Ring[]; target: Ring[]; morph: number }): Ring[
       p[1] + (e.target[eye][i][1] - p[1]) * m,
     ])
   )
-}
-
-function displayedMouth(e: { currentMouth: number[]; targetMouth: number[]; morph: number }) {
-  const m = clamp(e.morph, 0, 1)
-  return e.currentMouth.map((v, i) => v + (e.targetMouth[i] - v) * m)
-}
-
-function displayedGaze(e: { currentGaze: number[]; targetGaze: number[]; morph: number }) {
-  const m = clamp(e.morph, 0, 1)
-  return e.currentGaze.map((v, i) => v + (e.targetGaze[i] - v) * m)
 }
 
 function blinkScale(e: { blinkStart: number | null }, now: number) {

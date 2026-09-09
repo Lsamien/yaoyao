@@ -1,5 +1,6 @@
 import WebSocket from 'ws'
-import { randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
+import {requireSharedComputer} from './sharedComputers.js'
+import { randomUUID, randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { UpstreamClient, CookieJar } from './upstream.js'
@@ -20,11 +21,19 @@ export interface WorkspaceNode {
   fingerprint?: string
   deviceId?: string
 }
+export interface GatewayExecutionScope {workId:string;cleanupOnly?:boolean;sessionId?:string;authorize():void;publishArtifact?(name:string,bytes:Buffer):Promise<unknown>}
 export interface GatewayTarget {
   url: URL
   client: UpstreamClient
   session: Pick<UpstreamServiceSession, 'request' | 'webSocketCredential'>
   pairedToken?: string
+  runner?: {
+    id: string
+    computer?:boolean
+    helperRetirement?:boolean
+    open(onEvent:(frame:GatewayFrame)=>void,onDisconnect:()=>void,scope?:GatewayExecutionScope):Promise<{rpc(method:string,params:Record<string,unknown>):Promise<any>;close():void}>
+    lease(input:import('./workspaceToolLease.js').LeaseInput):Promise<import('./workspaceToolLease.js').WorkspaceToolLease>
+  }
 }
 export interface GatewayFrame {
   type: string
@@ -32,8 +41,10 @@ export interface GatewayFrame {
   payload?: Record<string, any>
 }
 export class WorkspaceNodes {
+  runnerTarget?: (owner:string,nodeId:string,computer?:{environmentId:string;ownerKey:string;agentId:string})=>GatewayTarget|undefined
   sourceAllowed: (owner: string, nodeId: string, profile: string) => boolean = () => true
-  requireSource(owner: string, agent: { nodeId: string; profile: string }): void {
+  requireSource(owner: string, agent: { id?:string;nodeId: string; profile: string;computerEnvironmentId?:string }): void {
+    requireSharedComputer(this.store,owner,agent)
     if (!this.sourceAllowed(owner, agent.nodeId, agent.profile)) throw new HttpError(403, '基础 Agent 未分配给当前账号', 'agent_source_forbidden')
   }
   private readonly key: Buffer
@@ -71,6 +82,8 @@ export class WorkspaceNodes {
     ) as T
   }
   target(owner: string, id: string): GatewayTarget {
+    const runner=this.runnerTarget?.(owner,id)
+    if(runner)return runner
     if (id === 'local') return this.local
     const node = this.store.require<WorkspaceNode>(owner, 'node', id),
       key = `${owner}:${id}`
@@ -94,7 +107,15 @@ export class WorkspaceNodes {
     }
     return target
   }
-  targetForAgent(owner: string, agent: { nodeId: string; remoteAgentId?: string }): GatewayTarget {
+  targetForAgent(owner: string, agent: { id?:string;nodeId: string; remoteAgentId?: string;execution?:string;helperRunnerId?:string;computerEnvironmentId?:string }): GatewayTarget {
+    if(agent.execution==='computer'){
+      if(!agent.id||agent.remoteAgentId)throw new HttpError(409,'隔离电脑需要当前服务器管理的 Agent','computer_agent_required')
+      const target=this.runnerTarget?.(owner,agent.nodeId,{environmentId:agent.computerEnvironmentId??agent.id,agentId:agent.id,ownerKey:createHash('sha256').update(owner).digest('hex')})
+      if(agent.computerEnvironmentId&&this.store.require<import('./sharedComputers.js').SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId).runnerId!==target?.runner?.id)throw new HttpError(409,'共享电脑的原执行节点已变化，请先恢复原节点','shared_runner_changed')
+      if(agent.helperRunnerId&&target?.runner?.id!==agent.helperRunnerId)throw new HttpError(409,'临时助手的原执行节点已变化，请创建新助手','helper_runner_changed')
+      if(!target)throw new HttpError(409,'隔离电脑需要连接执行节点','computer_runner_required')
+      return target
+    }
     const base = this.target(owner, agent.nodeId)
     if (!agent.remoteAgentId) return base
     if (!base.pairedToken) throw new HttpError(409, '引用远端 Agent 需要扫码子节点', 'paired_node_required')
@@ -265,14 +286,16 @@ export class WorkspaceNodes {
 export class WorkspaceGateway {
   private socket?: WebSocket
   private paired?: WorkspacePairedChannel
+  private runner?: {rpc(method:string,params:Record<string,unknown>):Promise<any>;close():void}
   private pending = new Map<
     string,
     { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
   >()
   onEvent: (frame: GatewayFrame) => void = () => {}
   onDisconnect: () => void = () => {}
-  constructor(readonly target: GatewayTarget) {}
+  constructor(readonly target: GatewayTarget,readonly scope?:GatewayExecutionScope) {}
   async connect(): Promise<void> {
+    if(this.target.runner){this.runner=await this.target.runner.open(frame=>this.onEvent(frame),()=>this.onDisconnect(),this.scope);return}
     if (this.target.pairedToken) {
       this.paired = new WorkspacePairedChannel(this.target.url, this.target.pairedToken, this.target.client.fetchImpl,
         frame => this.onEvent(frame), () => this.onDisconnect())
@@ -341,6 +364,7 @@ export class WorkspaceGateway {
     await handshake
   }
   rpc(method: string, params: Record<string, unknown>): Promise<any> {
+    if(this.runner)return this.runner.rpc(method,params)
     if (this.paired) return this.paired.rpc(method, params)
     if (this.socket?.readyState !== WebSocket.OPEN)
       return Promise.reject(new Error('Hermes connection unavailable'))
@@ -363,6 +387,7 @@ export class WorkspaceGateway {
   close(): void {
     this.onDisconnect = () => {}
     this.paired?.close()
+    this.runner?.close()
     this.socket?.close()
   }
 }

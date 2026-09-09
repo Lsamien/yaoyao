@@ -48,6 +48,7 @@ type IconName =
   | 'pin-off'
   | 'globe'
   | 'bell'
+  | 'monitor'
 
 withDefaults(defineProps<{ name: IconName; size?: number }>(), { size: 18 })
 </script>
@@ -65,7 +66,8 @@ withDefaults(defineProps<{ name: IconName; size?: number }>(), { size: 18 })
     stroke-linejoin="round"
     aria-hidden="true"
   >
-    <template v-if="name === 'chat'">
+    <template v-if="name === 'monitor'"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8M12 16v5"/></template>
+    <template v-else-if="name === 'chat'">
       <path d="M8 18h-3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-5l-6 4z" />
       <path d="M8 9h8M8 13h5" />
     </template>

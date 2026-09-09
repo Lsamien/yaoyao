@@ -62,6 +62,11 @@ test('an open Web chat list receives cross-client sessions and real title events
   const sessionId = decodeURIComponent(new URL(pageB.url()).pathname.split('/').at(-1) || '')
   expect(sessionId).not.toMatch(/^draft-/)
   await expect(pageB.locator('.message--assistant')).toContainText('会话独立保存')
+  const cwdCalls = await (await page.request.get('http://127.0.0.1:19120/__calls')).json()
+  const created = cwdCalls.calls.filter((call: { method: string }) => call.method === 'session.create').at(-1)
+  expect(created.params.cwd).toBe('/tmp/hermes-fixture/default')
+  const aligned = cwdCalls.calls.filter((call: { method: string }) => call.method === 'session.cwd.set').at(-1)
+  expect(aligned.params.cwd).toBe('/tmp/hermes-fixture/default')
 
   const sessionRow = page.locator(`.desktop-sidebar .sidebar-item[data-sidebar-id="${sessionId}"]`)
   await expect(sessionRow).toContainText(initialTitle)

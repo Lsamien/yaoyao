@@ -1,4 +1,4 @@
-/** Isolated, deterministic standard-Hermes fixture. It exposes no plugin APIs. */
+/** Isolated, deterministic Hermes fixture. Optional team-tool readiness is only for editor UI tests. */
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,6 +22,7 @@ const sessions = new Map<
     title: string
     messages: Array<{ role: string; content: string; id: string; timestamp: number }>
     running: boolean
+    cwd?: string
   }
 >()
 const latestRuntimeBySession = new Map<string, string>()
@@ -55,6 +56,10 @@ const upstream = createServer((req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${upstreamPort}`)
   res.setHeader('content-type', 'application/json')
   const send = (v: unknown) => res.end(JSON.stringify(v))
+  if (url.pathname === '/api/config') {
+    send({ terminal: { cwd: `/tmp/hermes-fixture/${url.searchParams.get('profile') || 'default'}` } })
+    return
+  }
   if (url.pathname === '/__release' && req.method === 'POST') {
     const held = heldReplies.splice(0)
     for (const complete of held) complete()
@@ -62,6 +67,10 @@ const upstream = createServer((req, res) => {
     return
   }
   if (url.pathname.includes('/plugins/')) {
+    if (process.env.WORKSPACE_FIXTURE_TEAM_TOOLS === '1' && url.pathname === '/api/plugins/yaoyao-bot-bridge/capabilities') {
+      send({ version: 1, ready: true, native_tools: true, in_process: true })
+      return
+    }
     res.statusCode = 404
     send({ error: 'This fixture has no plugins' })
     return
@@ -218,11 +227,16 @@ wss.on('connection', (socket) => {
         stored_session_id: stored.id,
         session_key: stored.id,
         running: stored.running,
-        info: { profile_name: stored.profile },
+        info: { profile_name: stored.profile, cwd: stored.cwd },
       })
       return
     }
     const stored = sessions.get(runtimes.get(f.params.session_id) ?? '')
+    if (f.method === 'session.cwd.set' && stored) {
+      stored.cwd = String(f.params.cwd)
+      respond({ cwd: stored.cwd })
+      return
+    }
     if (f.method === 'prompt.submit' && stored) {
       stored.running = true
       const requestedTitle = /^\[cross-client-title:([^\]\r\n]+)\]/
@@ -317,6 +331,66 @@ if (!existsSync(usersPath)) {
 const auth = new LocalAuthStore(home, false)
 const runtime = createApplication({ config, auth }),
   node = createNodeServer(runtime)
+runtime.app.use((ctx,next) => {
+  if (ctx.path !== '/__test/task-plan' || ctx.method !== 'POST') return next()
+  const owner=auth.require(ctx).id
+  const lead=runtime.workspace.createAgent(owner,{name:'验收负责人',profile:'default',canManageTeam:true})
+  const worker=runtime.workspace.createAgent(owner,{name:'验收研究员',profile:'default'})
+  const team=runtime.workspace.createGroup(owner,{name:'任务分工验收',memberIds:[lead.id,worker.id],administratorId:lead.id})
+  const first=runtime.workspace.tasks(owner,team.id)[0]!
+  runtime.workspace.updateTask(owner,team.id,first.id,{title:'调研任务'})
+  const second=runtime.workspace.createTask(owner,team.id,{title:'独立任务'})
+  const source=runtime.workspace.list<any>(owner,'conversation').find(c=>c.kind==='direct'&&c.memberIds[0]===lead.id)!
+  const goal=runtime.workspaceRuntime.tasks.begin(owner,first,lead,'完成可核对的研究报告',{conversationId:source.id,runId:randomUUID(),agentId:lead.id},['来源可核对'])
+  const temporary=ctx.query.helper==='1'?runtime.workspace.createAgent(owner,{name:'验收研究员（临时）',profile:'default',execution:'computer'},{createdByAgentId:lead.id,createdFromRunId:randomUUID(),temporaryGoalId:goal.id,helperActivation:goal.activation??1,helperRunnerId:randomUUID()}):undefined
+  const assignment={id:randomUUID(),goalId:goal.id,conversationId:team.id,agentId:temporary?.id??worker.id,title:'研究资料',brief:'核对资料',acceptanceCriteria:['来源可核对'],dependsOn:[],status:'review',attempt:1,result:'资料已汇总',artifactIds:[],createdAt:Date.now(),updatedAt:Date.now()}
+  runtime.workspace.put(owner,'assignment',assignment.id,assignment)
+  runtime.workspace.event(owner,'assignment.changed',assignment,team.id)
+  runtime.workspace.saveMessage(owner,{id:randomUUID(),conversationId:source.id,seq:0,role:'system',content:`任务已有结果。[打开任务](/conversations/${team.id}?taskId=${first.id})`,reasoning:'',status:'complete',attachments:[],tools:[],createdAt:Date.now()})
+  ctx.body={conversationId:team.id,firstTaskId:first.id,secondTaskId:second.id,sourceConversationId:source.id}
+})
+const computerFixtures=new Map<string,{mode:string;generation:number;controlId?:string;actions:unknown[]}>()
+const originalComputer=runtime.runners.computer.bind(runtime.runners),originalRunner=runtime.runners.computerRunner.bind(runtime.runners),originalSharedRunner=runtime.runners.sharedComputerRunner.bind(runtime.runners)
+runtime.runners.sharedComputerRunner=(owner,agent)=>computerFixtures.has(agent.id)?{id:'11111111-1111-4111-8111-111111111111'} as any:originalSharedRunner(owner,agent)
+runtime.runners.computerRunner=(owner,agent)=>computerFixtures.has(agent.id)?{id:'11111111-1111-4111-8111-111111111111'} as any:originalRunner(owner,agent)
+runtime.runners.computer=async(owner,agent,op,data,authorize)=>{
+  const state=computerFixtures.get(agent.id);if(!state)return originalComputer(owner,agent,op,data,authorize)
+  authorize()
+  if(op==='detail')return {enabled:agent.execution==='computer',container:state.mode==='off'?'missing':state.mode==='stopped'?'stopped':'running',ready:!['off','stopped'].includes(state.mode),inUse:state.mode==='human',controlMode:state.mode,image:vmFixture.image,mode:agent.computerEnvironmentId?'shared':'per-bot',maxInstances:vmFixture.maxInstances}
+  if(op==='lifecycle'){state.mode=data.action==='remove'?'off':data.action==='stop'?'stopped':'idle';state.generation++;return {ok:true}}
+  if(op==='frame'){const png=readFileSync(process.env.YAOYAO_VM_PREVIEW_PNG||resolve('public/icons/icon-512.png'));return {id:'22222222-2222-4222-8222-222222222222',generation:state.generation,width:png.readUInt32BE(16),height:png.readUInt32BE(20),capturedAt:Date.now(),data:png.toString('base64')}}
+  if(op==='take'){state.controlId=String(data.controlId);state.mode='human';state.generation++}
+  if(op==='input')state.actions.push(data.action)
+  if(op==='giveback'){state.mode='agent';state.controlId=undefined;state.generation++}
+  return {mode:state.mode,generation:state.generation,controlId:state.controlId,canResume:true,ok:true}
+}
+runtime.app.use((ctx,next)=>{
+  if(ctx.path!=='/__test/computer')return next()
+  const owner=auth.require(ctx).id
+  if(ctx.method==='POST'){
+    const agent=runtime.workspace.createAgent(owner,{name:(ctx.query.shared==='1'?'共享电脑主成员':'电脑面板验收')+' '+(computerFixtures.size+1),profile:'default',execution:'computer'})
+    computerFixtures.set(agent.id,{mode:ctx.query.off==='1'?'off':'idle',generation:1,actions:[]})
+    if(ctx.query.shared==='1'){
+      const second=runtime.workspace.createAgent(owner,{name:'可信共享成员',profile:'default',execution:'computer'})
+      computerFixtures.set(second.id,{mode:'off',generation:1,actions:[]})
+      const team=runtime.workspace.createGroup(owner,{name:'共享电脑验收',memberIds:[agent.id,second.id],administratorId:agent.id})
+      ctx.body={agentId:agent.id,secondId:second.id,conversationId:team.id};return
+    }
+    ctx.body={agentId:agent.id,conversationId:runtime.workspace.list<any>(owner,'conversation').find(c=>c.memberIds[0]===agent.id)!.id};return
+  }
+  ctx.body={actions:[...computerFixtures.values()].flatMap(state=>state.actions)}
+})
+const vmFixture={configured:true,runtime:'docker',daemonUp:true,image:false,mode:'per-bot',maxInstances:2,busy:false,job:undefined as any}
+let vmRunnerId=''
+const originalSummary=runtime.runners.summary.bind(runtime.runners),originalLocalVm=runtime.runners.localVm.bind(runtime.runners)
+runtime.runners.summary=record=>record.id===vmRunnerId?{...originalSummary(record),online:true,features:['computer-worker-v1','computer-control-v1','local-vm-v1','image-ready-v1']}:originalSummary(record)
+runtime.runners.localVm=async(owner,id,p)=>{
+ if(id!==vmRunnerId)return originalLocalVm(owner,id,p)
+ if(p.op==='prepare'){vmFixture.image=true;vmFixture.job={id:p.id,state:'complete',message:'本地虚拟机已就绪'}}
+ if(p.op==='policy'){vmFixture.mode=String(p.mode);vmFixture.maxInstances=Number(p.maxInstances)}
+ return {...vmFixture}
+}
+runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/local-vm')return next();const owner=auth.requireAdmin(ctx).id;vmFixture.image=ctx.query.ready==='1';vmFixture.mode='per-bot';vmFixture.maxInstances=2;if(!vmRunnerId){for(const record of runtime.runners.records())if(record.sourceNodeId==='local'&&record.enabled)runtime.runners.remove(record.id);vmRunnerId=runtime.runners.enroll(owner,{name:'本机虚拟机',allowedProfiles:['default']}).runner.id;}ctx.body={runnerId:vmRunnerId}})
 runtime.app.use(serve(resolve('dist')))
 runtime.app.use((ctx) => {
   if (!ctx.path.startsWith('/api/')) {

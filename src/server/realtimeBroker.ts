@@ -3,6 +3,7 @@ import WebSocket from 'ws'
 import { HttpError } from './errors.js'
 import { checkedChatFrame, CHAT_MAX_PAYLOAD, GroupFrameValidator } from './realtimeProtocol.js'
 import { RealtimeReceipts, type CommandReceipt } from './realtimeReceipts.js'
+import { applyWorkingDirectory, type AppliedWorkingDirectory } from './sessionWorkingDirectory.js'
 
 type Frame = Record<string, any>
 export interface RealtimeActivity { kind: 'command' | 'event' | 'group' | 'reset'; name: string; sessionId?: string; roomId?: string }
@@ -16,6 +17,7 @@ export interface RealtimePrincipal {
   valid(): boolean
   authorize?(kind: 'chat' | 'groups', method?: string): void
   canResume?(profile: string, sessionId: string): Promise<boolean>
+  configuredWorkingDirectory?(profile: string): Promise<string | undefined>
   url(channel: 'chat' | 'groups', anchor?: { epoch: string; cursor: number }): Promise<URL>
   observeCommand?(frame: string): void
   observeEvent?(frame: string): void
@@ -27,7 +29,7 @@ export interface RealtimeChannel {
   listeners: Set<(entry: StreamEntry) => void>; touched: number; bytes: number
   group?: { epoch: string; cursor: number }; socket?: WebSocket
 }
-interface Route { profile: string; stored: string; runtime: string; active: boolean; seq: number; observers: Map<string, RealtimePrincipal> }
+interface Route { profile: string; stored: string; runtime: string; active: boolean; seq: number; observers: Map<string, RealtimePrincipal>; cwd?: string; workingDirectory?: AppliedWorkingDirectory }
 interface Pending { resolve(frame: Frame): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 interface Upstream {
   principal: RealtimePrincipal; socket?: WebSocket; connecting?: Promise<void>; ready?: Frame
@@ -41,6 +43,9 @@ interface Upstream {
 
 /** Server-owned WS transports. Downstream detach never tears down an active upstream. */
 export class RealtimeBroker {
+  get idleForUpdate(): boolean {
+    return this.commands.size === 0 && [...this.upstreams.values()].every(upstream => upstream.pending.size === 0 && [...upstream.routes.values()].every(route => !route.active))
+  }
   protectedSession: (id: string) => boolean = () => false
   onNativeEvent: (owner: string, profile: string, storedId: string, frame: Frame) => void = () => {}
   onNativeGlobalEvent: (owner: string, type: string) => void = () => {}
@@ -218,6 +223,24 @@ export class RealtimeBroker {
       await this.connect(u)
       await u.recovery
       if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
+      if (!c.principal.nativeBot && c.principal.configuredWorkingDirectory) {
+        if (method === 'session.create') {
+          const cwd = await c.principal.configuredWorkingDirectory(String(p.profile))
+          // Client cwd is never authoritative, including paired mobile clients.
+          delete p.cwd
+          if (cwd) p.cwd = cwd
+        } else if (route && !route.active && ['prompt.submit', 'file.attach', 'image.attach_bytes', 'pdf.attach'].includes(method)) {
+          const cwd = await c.principal.configuredWorkingDirectory(route.profile)
+          if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
+          route.workingDirectory = await applyWorkingDirectory(async (method, params) => {
+            const response = await this.rpc(u, method, params)
+            if (response.error) throw new HttpError(502, response.error.message || '无法切换到 Agent 工作目录', 'working_directory_rejected')
+            return response.result
+          }, route.runtime, cwd, route.workingDirectory, route.cwd)
+          if (route.workingDirectory) route.cwd = route.workingDirectory.resolved
+        }
+        if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
+      }
       const previouslyActive = route?.active ?? false
       if (route && (method === 'prompt.submit' || method === 'session.steer')) route.active = true
       const nativeOwner = this.nativeOwner(c.principal)
@@ -243,6 +266,9 @@ export class RealtimeBroker {
         u.byRuntime.delete(r.runtime)
         r.runtime = runtime
         r.active = result.running === true || info.running === true
+        // Resume/reconnect may have restored a historical cwd or another runtime.
+        r.workingDirectory = undefined
+        r.cwd = typeof info.cwd === 'string' ? info.cwd : undefined
         u.routes.set(key, r); u.byRuntime.set(runtime, r); c.routes.add(key)
         r.observers.set(c.principal.key, c.principal)
         if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime)
@@ -370,6 +396,10 @@ export class RealtimeBroker {
         if (r.seq > 0 && p.seq > r.seq + 1) this.reset(u, 'upstream_sequence_gap')
         r.seq = p.seq
       }
+      if (p.type === 'session.info' && typeof p.payload?.cwd === 'string') {
+        r.cwd = p.payload.cwd
+        if (r.cwd !== r.workingDirectory?.resolved) r.workingDirectory = undefined
+      }
       if (['message.start', 'approval.request', 'clarify.request'].includes(p.type)) r.active = true
       if (p.type === 'message.complete') r.active = false
       if (p.payload?.request_id) this.interactions.set(`${u.principal.upstreamKey}:${p.payload.request_id}`, sid)
@@ -430,6 +460,8 @@ export class RealtimeBroker {
       for (const r of u.routes.values()) {
         const lastSeen = r.seq
         const resumed = await this.rpc(u, 'session.resume', { session_id: r.stored, profile: r.profile, close_on_disconnect: false, omit_messages: true })
+        r.workingDirectory = undefined
+        r.cwd = typeof resumed.result?.info?.cwd === 'string' ? resumed.result.info.cwd : undefined
         if (typeof resumed.result?.running === 'boolean') r.active = resumed.result.running
         if (!resumed.result || resumed.result.session_id !== r.runtime || changed) {
           if (resumed.result?.session_id) { u.byRuntime.delete(r.runtime); r.runtime = resumed.result.session_id; u.byRuntime.set(r.runtime, r) }
@@ -459,6 +491,13 @@ export class RealtimeBroker {
       }
     }
     for (const c of this.channels.values()) if (c.kind === 'chat' && c.principal.upstreamKey === u.principal.upstreamKey) this.emit(c, 'reset', { reason })
+  }
+  publishServerIdentity(identity: import('../shared/serverIdentity.js').ServerIdentity, instanceKey: string): void {
+    for (const channel of this.channels.values()) {
+      if (channel.principal.valid() && channel.principal.instanceKey === instanceKey) {
+        this.emit(channel, 'frame', { jsonrpc: '2.0', method: 'event', params: { type: 'server.identity.changed', payload: identity } })
+      }
+    }
   }
   private emit(c: RealtimeChannel, event: StreamEntry['event'], value: Frame): void {
     const publicValue = this.withoutProtectedSessions(value)

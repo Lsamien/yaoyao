@@ -1,4 +1,6 @@
-import { computed, ref } from 'vue'
+import type { ServerIdentity } from '@shared/serverIdentity'
+import { fetchServerIdentity, onServerIdentity } from '@/api/serverIdentity'
+import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { AuthStatus, BootstrapResponse, CurrentUser, Profile } from '@shared/types'
 import * as authApi from '@/api/auth'
@@ -10,6 +12,8 @@ function message(error: unknown): string {
 
 export const useAuthStore = defineStore('auth', () => {
   const status = ref<AuthStatus>('checking')
+  const serverIdentity = ref<ServerIdentity>()
+  let identityRequest = 0
   const user = ref<CurrentUser>()
   const profiles = ref<Profile[]>([])
   const activeProfileName = ref('')
@@ -28,7 +32,26 @@ export const useAuthStore = defineStore('auth', () => {
   const isBotOnly = computed(() => Boolean(user.value && user.value.role !== 'admin'))
   const isAuthenticated = computed(() => status.value === 'authenticated')
 
+  function acceptServerIdentity(value: ServerIdentity): void {
+    if (serverIdentity.value?.serverId === value.serverId && serverIdentity.value.revision > value.revision) return
+    if (serverIdentity.value?.serverId === value.serverId && serverIdentity.value.revision === value.revision && serverIdentity.value.name === value.name && serverIdentity.value.displayName === value.displayName) return
+    serverIdentity.value = value
+  }
+  async function refreshServerIdentity(): Promise<void> {
+    if (!isAuthenticated.value) return
+    const generation = ++identityRequest, account = user.value?.id
+    try {
+      const value = await fetchServerIdentity()
+      if (generation === identityRequest && isAuthenticated.value && user.value?.id === account) acceptServerIdentity(value)
+    } catch { /* An older/offline server keeps the last known display name. */ }
+  }
+  const stopIdentity = onServerIdentity(value => { if (isAuthenticated.value) acceptServerIdentity(value) })
+  const refreshIdentityOnFocus = () => { void refreshServerIdentity() }
+  if (typeof window !== 'undefined') window.addEventListener('focus', refreshIdentityOnFocus)
+  onScopeDispose(() => { stopIdentity(); if (typeof window !== 'undefined') window.removeEventListener('focus', refreshIdentityOnFocus) })
+
   function publish(response: BootstrapResponse): void {
+    if (response.serverIdentity) acceptServerIdentity(response.serverIdentity)
     authRequired.value = response.authRequired
     setupRequired.value = Boolean(response.setupRequired)
     csrfToken.value = response.csrfToken
@@ -51,6 +74,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (status.value === 'anonymous' || status.value === 'checking') return
     status.value = 'expired'
     user.value = undefined
+    serverIdentity.value = undefined; identityRequest++
     profiles.value = []
     activeProfileName.value = ''
     csrfToken.value = ''
@@ -98,6 +122,7 @@ export const useAuthStore = defineStore('auth', () => {
     try { await authApi.logout() } catch { /* local state still signs out */ }
     status.value = 'anonymous'
     user.value = undefined
+    serverIdentity.value = undefined; identityRequest++
     profiles.value = []
     activeProfileName.value = ''
     csrfToken.value = ''
@@ -138,6 +163,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
+    serverIdentity, acceptServerIdentity, refreshServerIdentity,
     status, user, profiles, activeProfileName, activeProfile, csrfToken, error, authRequired, setupRequired, insecureLan, groupUploadsEnabled,
     upstreamReady, upstreamError, isAuthenticated, isBotOnly, bootstrap, login, setup, logout, selectProfile, refreshProfiles, refreshProfileAvatars,
     changeCredentials, updateAccountAvatar, expire,

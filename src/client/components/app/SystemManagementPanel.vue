@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
 import AppIcon from '@/components/common/AppIcon.vue'
+import RunnerSettingsPanel from './RunnerSettingsPanel.vue'
 import {
   createUser,
   deleteUser,
@@ -40,6 +41,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
+const runnerSettingsOpen = ref(false)
 const assignedProfiles = ref<string[]>([])
 const userAssignments = ref<Record<string, string[]>>({})
 const users = ref<ManagedUser[]>([])
@@ -450,6 +452,10 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
         <label><span>9119 密码</span><input v-model="upstreamPassword" name="upstream-password" type="password" autocomplete="new-password" :disabled="busy" /></label>
         <button class="solid-button" :disabled="busy || !upstreamUsername.trim() || !upstreamPassword">验证并保存</button>
       </form>
+      <details class="runner-settings" @toggle="runnerSettingsOpen = ($event.target as HTMLDetailsElement).open">
+        <summary>执行节点</summary>
+        <RunnerSettingsPanel v-if="runnerSettingsOpen" />
+      </details>
       <div class="block network-access-block">
         <h3>外网访问地址</h3>
         <p class="network-description">允许通过指定域名或公网 IP 访问 15300。每行填写一个地址，不要包含 <code>http://</code>、端口或路径。</p>
@@ -536,6 +542,8 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
 </template>
 
 <style scoped>
+.runner-settings { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.runner-settings summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
 .system-management-panel { display: grid; }
 .block { min-width: 0; margin: 0; padding: 0; }
 .block + .block { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--line); }

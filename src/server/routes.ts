@@ -1,3 +1,5 @@
+import { readServerIdentity, updateServerIdentity } from './serverIdentity.js'
+import type { ServerIdentity } from '../shared/serverIdentity.js'
 import type Koa from 'koa'
 import type { WorkspaceStore } from './workspaceStore.js'
 import type { WorkspaceConversation } from '../shared/workspace.js'
@@ -51,6 +53,7 @@ import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
+  onServerIdentityChanged?: (identity: ServerIdentity) => void
   onUserAccessChanged?: (owner: string) => Promise<void>
   workspace: WorkspaceStore
   config: ServerConfig
@@ -332,6 +335,23 @@ function nativeSessionsReadOnly(): never {
 function requireWritableOwnedSession(response: UpstreamResponse, locallyOwned = false): void {
   requireSuccess(response)
   if (!locallyOwned) nativeSessionsReadOnly()
+}
+
+function isMissingSessionResponse(response: UpstreamResponse): boolean {
+  if (response.status !== 404) return false
+  try {
+    const payload = parseJson(response)
+    if (payload.code === 'session_not_found') return true
+    const detail = payload.detail
+    const message = [payload.error, payload.message, detail,
+      detail && typeof detail === 'object' && 'message' in detail ? detail.message : undefined]
+      .find(value => typeof value === 'string')
+    return typeof message === 'string'
+      && /^(session not found|session ?不存在|会话不存在)([.!。！]|\s*[:：].*)?$/i
+        .test(message.trim().replace(/\s+/g, ' '))
+  } catch {
+    return false
+  }
 }
 
 function writableSessionPatch(input: JsonObject): JsonObject {
@@ -870,6 +890,7 @@ async function bootstrap(
     status,
     authRequired: true,
     authenticated: true,
+    serverIdentity: readServerIdentity(dependencies.workspace),
     user,
     profiles,
     csrfToken,
@@ -1916,6 +1937,17 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     dependencies.auth.requireAdmin(ctx)
     json(ctx, 200, pushSystemStatus(dependencies))
   })
+  router.get('/api/app/server-identity', (ctx) => {
+    dependencies.auth.require(ctx)
+    ctx.set('Cache-Control', 'no-store')
+    json(ctx, 200, readServerIdentity(dependencies.workspace))
+  })
+  router.put('/api/app/server-identity', (ctx) => {
+    dependencies.auth.requireAdmin(ctx)
+    const identity = updateServerIdentity(dependencies.workspace, body(ctx))
+    dependencies.onServerIdentityChanged?.(identity)
+    json(ctx, 200, identity)
+  })
   router.get('/api/app/system/allowed-hosts', (ctx) => {
     dependencies.auth.requireAdmin(ctx)
     json(ctx, 200, dependencies.allowedHostsConfiguration.snapshot())
@@ -2152,17 +2184,29 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async jar => {
       const profile = search.get('profile') || 'default'
       const owner = dependencies.auth.require(ctx).id
+      const existing = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search })
+      if (isMissingSessionResponse(existing)) {
+        // Only this account's cached copy remains; no upstream mutation is needed.
+        dependencies.chatCache?.store.deleteSession(owner, profile, id)
+        ctx.body = { ok: true }
+        return
+      }
       requireWritableOwnedSession(
-        await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
+        existing,
         dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
       )
       const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'DELETE', search })
-      if (response.status >= 200 && response.status < 300) {
+      const alreadyMissing = isMissingSessionResponse(response)
+      if ((response.status >= 200 && response.status < 300) || alreadyMissing) {
         dependencies.chatCache?.store.deleteSession(
           owner,
           profile,
           id,
         )
+      }
+      if (alreadyMissing) {
+        ctx.body = { ok: true }
+        return
       }
       sendUpstreamResponse(ctx, response, jar)
     })

@@ -40,6 +40,7 @@ function closeRuntime(runtime: NodeServerRuntime): () => Promise<void> {
 describe('HTTP+SSE migration', () => {
   it('lets a QR-paired iOS node use authenticated HTTP+SSE and rejects old tickets', async () => {
     let pairedCookie = ''
+    const cwdReads: Array<{ profile: string | null; cookie: string }> = []
     const pairedFrames: Array<Record<string, unknown>> = []
     const upstream = createServer((request, response) => {
       response.setHeader('Content-Type', 'application/json')
@@ -55,6 +56,10 @@ describe('HTTP+SSE migration', () => {
         response.end(JSON.stringify({ profiles: [{ name: 'default', is_default: true }] }))
       } else if (request.url === '/api/plugins/yaoyao/profiles') {
         response.end(JSON.stringify({ profiles: [{ name: 'default', botName: '竹儿', agentName: '旧插件名称' }] }))
+      } else if (request.url?.startsWith('/api/config?')) {
+        const profile = new URL(request.url, 'http://hermes.test').searchParams.get('profile')
+        cwdReads.push({ profile, cookie: request.headers.cookie ?? '' })
+        response.end(JSON.stringify({ terminal: { cwd: '/Hermes/agent-work' } }))
       } else if (request.url === '/api/auth/providers') {
         response.end(JSON.stringify({ providers: [{ name: 'basic', supports_password: true }] }))
       } else if (request.url === '/auth/password-login' && request.method === 'POST') {
@@ -80,7 +85,8 @@ describe('HTTP+SSE migration', () => {
         client.on('message', data => {
           const frame = JSON.parse(data.toString()) as Record<string, unknown>
           pairedFrames.push(frame)
-          client.send(JSON.stringify({ id: frame.id, result: frame.method === 'session.create' ? { session_id: 'runtime-test', stored_session_id: 'stored-test' } : {} }))
+          client.send(JSON.stringify({ id: frame.id, result: frame.method === 'session.create'
+            ? { session_id: 'runtime-test', stored_session_id: 'stored-test', info: { cwd: '/Hermes/agent-work' } } : {} }))
         })
       })
     })
@@ -154,6 +160,17 @@ describe('HTTP+SSE migration', () => {
     })
     expect(opened.status).toBe(201)
     expect(pairedFrames).toEqual([])
+    const channel = (await opened.json() as { id: string }).id
+    const command = (id: string, method: string, params: object) => fetch(`${claim.serverUrl}/api/realtime/channels/${channel}/commands`, {
+      method: 'POST', headers: { Authorization: authorization, 'Content-Type': 'application/json', 'Idempotency-Key': id },
+      body: JSON.stringify({ method, params }),
+    })
+    const created = await command('ios-create', 'session.create', { profile: 'default', source: 'ios', cwd: '/mobile/override' })
+    expect(await created.json()).toMatchObject({ state: 'confirmed' })
+    expect(pairedFrames.at(-1)).toMatchObject({ method: 'session.create', params: { cwd: '/Hermes/agent-work' } })
+    expect(await (await command('ios-send', 'prompt.submit', { session_id: 'runtime-test', text: 'hello' })).json()).toMatchObject({ state: 'confirmed' })
+    expect(cwdReads).toHaveLength(2)
+    expect(cwdReads.every(r => r.profile === 'default' && r.cookie.includes('paired'))).toBe(true)
     const revoke = await fetch(`${origin}/api/pair/v1/devices/${claim.deviceId}`, {
       method: 'DELETE', headers: { Authorization: authorization },
     })

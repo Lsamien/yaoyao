@@ -199,6 +199,7 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === '/auth/logout' && request.method === 'POST') return json(response, 200, { ok: true }, { 'Set-Cookie': 'fake_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax' })
   if (!authenticated(request)) return json(response, 401, { detail: 'Unauthorized' })
+  if (url.pathname === '/api/config') return json(response, 200, { terminal: { cwd: '/tmp/hermes-fixture' } })
   if (url.pathname === '/api/files/download' && request.method === 'GET') {
     const path = url.searchParams.get('path')
     if (![...profileMediaPaths, ...userProfileMediaPaths].includes(path)) return json(response, 404, { detail: 'File not found' })
@@ -478,6 +479,7 @@ server.on('upgrade', (request, socket, head) => {
       const requestFrame = JSON.parse(raw.toString())
       rpcRequests.push(requestFrame)
       const respond = result => client.send(JSON.stringify({ jsonrpc: '2.0', id: requestFrame.id, result }))
+      if (requestFrame.method === 'session.cwd.set') return respond({ cwd: requestFrame.params.cwd })
       if (requestFrame.method === 'session.resume') return respond({ session_id: 'runtime-demo', stored_session_id: requestFrame.params.session_id, fast: requestFrame.params.session_id === 'session-yaoer', messages: [] })
       if (requestFrame.method === 'session.create') return respond({ session_id: 'runtime-new', stored_session_id: 'session-new', fast: requestFrame.params.fast === true })
       if (requestFrame.method === 'session.usage') return respond({ context_used: 12500, context_max: 114688, total: 12500, input: 9000, output: 3500 })

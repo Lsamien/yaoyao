@@ -30,6 +30,7 @@ type SettingsPage =
   | 'system-push'
   | 'system-nodes'
   | 'system-voice'
+  | 'system-local-vm'
   | 'system-update'
 
 const SIDEBAR_COLLAPSED_KEY = 'hermes-yaoyao:sidebar-collapsed'
@@ -37,6 +38,7 @@ const SIDEBAR_SEARCH_EVENT = 'hermes-yaoyao:sidebar-search'
 const SIDEBAR_SEARCH_CLOSE_EVENT = 'hermes-yaoyao:sidebar-search-close'
 
 const props = withDefaults(defineProps<{
+  serverName?: string
   userName?: string
   userAvatar?: string
   pairingUserName?: string
@@ -58,6 +60,7 @@ const props = withDefaults(defineProps<{
   identityError?: string
   identityResetVersion?: number
 }>(), {
+  serverName: '',
   userName: '',
   userAvatar: '',
   pairingUserName: '',
@@ -350,17 +353,21 @@ watch(() => activeNav.value.key, () => {
   profileMenuOpen.value = false
 })
 
+function showLocalVmSettings(){if(props.isAdmin)openSettings('system-local-vm')}
 onMounted(() => {
+  window.addEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
   try { sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' } catch { /* optional persistence */ }
   document.addEventListener('mousedown', closeMenus)
   document.addEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.addEventListener('keydown', workspaceKeydown)
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
   document.removeEventListener('mousedown', closeMenus)
   document.removeEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.removeEventListener('keydown', workspaceKeydown)
 })
+defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}})
 </script>
 
 <template>
@@ -467,7 +474,7 @@ onBeforeUnmount(() => {
             <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
             <span class="account-copy">
               <strong>{{ applicationWorkspace ? userName : profileTitle(activeProfile) }}</strong>
-              <span>{{ applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择 Agent' }}</span>
+              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择 Agent') }}</span>
             </span>
             <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
@@ -574,7 +581,7 @@ onBeforeUnmount(() => {
             <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
             <span class="account-copy">
               <strong>{{ applicationWorkspace ? userName : profileTitle(activeProfile) }}</strong>
-              <span>{{ applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择 Agent' }}</span>
+              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择 Agent') }}</span>
             </span>
             <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>

@@ -44,6 +44,7 @@ export interface ModelOption {
 }
 
 export interface BootstrapResponse {
+  serverIdentity?: import('./serverIdentity.js').ServerIdentity
   status?: string
   authRequired: boolean
   setupRequired?: boolean

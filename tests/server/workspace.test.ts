@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { defaultAgentIdentity, encodeAgentAvatar, decodeAgentAvatar } from '../../src/shared/agentIdentity'
+import {HttpError} from '../../src/server/errors'
+import {WorkspaceAssets} from '../../src/server/workspaceAssets'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { WorkspaceRuntime, mentionedAgents } from '../../src/server/workspaceRuntime'
 import { WorkspaceNodes } from '../../src/server/workspaceGateway'
@@ -25,6 +27,7 @@ let home: string,
 let requests: Array<{ method: string; params: Record<string, any> }>,
   reply: (socket: WebSocket, params: Record<string, any>) => void
 let nodes: WorkspaceNodes
+let configuredCwds: Map<string, string>
 let rejectPrompt: string | undefined
 let rejectedInterrupts: number
 let recoveryHistory: Array<{ role: string; content: string; tool_calls?: unknown }>
@@ -36,6 +39,7 @@ beforeEach(async () => {
   store = new WorkspaceStore(home)
   uploads = new UploadStore(home)
   requests = []
+  configuredCwds = new Map()
   recoveryHistory = []
   storedByRuntime = new Map(); recoveryByStored = new Map()
   rejectPrompt = undefined
@@ -50,7 +54,9 @@ beforeEach(async () => {
       webSocketCredential: async () => ({ name: 'ticket', value: 'test' }),
       request: async (path: string, options?: {search?: URLSearchParams}) => ({
         status: 200,
-        body: Buffer.from(JSON.stringify({ messages: (() => { const all = recoveryByStored.get(decodeURIComponent(path.split('/')[3]!)) ?? recoveryHistory; const offset = Number(options?.search?.get('offset') ?? 0); return all.slice(Math.max(0,all.length-offset-500), all.length-offset) })() })),
+        body: Buffer.from(JSON.stringify(path === '/api/config'
+          ? { terminal: { cwd: configuredCwds.get(options?.search?.get('profile') ?? '') } }
+          : { messages: (() => { const all = recoveryByStored.get(decodeURIComponent(path.split('/')[3]!)) ?? recoveryHistory; const offset = Number(options?.search?.get('offset') ?? 0); return all.slice(Math.max(0,all.length-offset-500), all.length-offset) })() })),
       }),
     },
   }
@@ -82,6 +88,7 @@ beforeEach(async () => {
         storedByRuntime.set(runtimeId, storedId)
         respond({ session_id: runtimeId, stored_session_id: storedId, running: false, info: { profile_name: frame.params.profile } })
       }
+      else if (frame.method === 'session.cwd.set') respond({ cwd: frame.params.cwd })
       else if (frame.method === 'prompt.submit') {
         if (rejectPrompt) { socket.send(JSON.stringify({id:frame.id,error:{code:4006,message:rejectPrompt}})); return }
         respond({ status: 'streaming' })
@@ -104,6 +111,23 @@ afterEach(async () => {
 function agent(name: string, user = owner) {
   return store.createAgent(user, { name, profile: 'default', instructions: `规则：你是${name}` })
 }
+it('executes a structured assignment on its actual worker and leaves acceptance to its coordinator', async () => {
+  const lead = store.updateAgent(owner, agent('负责人').id, { canManageTeam: true })
+  const worker = agent('研究成员')
+  const source = direct(lead.id)
+  const original = runtime.send(owner, source.id, { requestId: randomUUID(), content: '完成研究' })
+  for (const work of store.list<any>(owner, 'turn').filter(w => w.runId === original.id))
+    store.put(owner, 'turn', work.id, { ...work, status: 'complete', planned: true })
+  original.status = 'complete';store.saveRun(owner, original)
+  const team = store.createGroup(owner, { name: '研究团队', memberIds: [lead.id,worker.id], administratorId: lead.id })
+  const goal = runtime.tasks.begin(owner, store.tasks(owner, team.id)[0]!, lead, '研究事实', { conversationId: source.id, runId: original.id, agentId: lead.id })
+  const assignment = runtime.tasks.createAssignment(owner, lead.id, { requestId: randomUUID(), goalId: goal.id, agentId: worker.id, title: '核对事实', brief: '提交核对结果' })
+  await vi.waitFor(() => expect(store.get<any>(owner,'assignment',assignment.id)?.status).toBe('review'), { timeout: 5000 })
+  const submitted = requests.find(r => r.method === 'prompt.submit' && String(r.params.text).includes('核对事实'))!
+  expect(submitted.params.text).toContain('你是 研究成员')
+  expect(submitted.params.text).toContain('执行子任务')
+  expect(store.get<any>(owner,'goal',goal.id)?.status).not.toBe('complete')
+})
 function direct(id: string, user = owner) {
   return store
     .list<WorkspaceConversation>(user, 'conversation')
@@ -119,6 +143,40 @@ async function finished(id: string) {
   return store.require<WorkspaceRun>(owner, 'run', id)
 }
 describe('Web-owned workspace', () => {
+  it('restores recent user and assistant context when moving a completed conversation to another runner',async()=>{
+    const a=agent('移动成员'),c=direct(a.id)
+    await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'保存研究结论'}).id)
+    const binding=store.list<any>(owner,'binding')[0]!
+    store.put(owner,'binding',binding.id,{...binding,runnerId:'previous-runner'})
+    const before=requests.length
+    await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'继续后续分析'}).id)
+    const next=requests.slice(before)
+    expect(next.some(r=>r.method==='session.resume')).toBe(false)
+    const text=next.find(r=>r.method==='prompt.submit')!.params.text
+    expect(text).toContain('执行节点已切换')
+    expect(text).toContain('保存研究结论')
+    expect(text).toContain('移动成员（complete）：完成')
+    expect(text).toContain('继续后续分析')
+  })
+  it('uses each base profile cwd and replaces historical cwd before the next Bot turn', async () => {
+    configuredCwds.set('default', '/profile/first')
+    configuredCwds.set('other', '/profile/other')
+    const a = agent('主助手'), c = direct(a.id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: 'first' }).id)
+    expect(requests.find(r => r.method === 'session.create')?.params.cwd).toBe('/profile/first')
+    expect(requests.find(r => r.method === 'session.cwd.set')?.params.cwd).toBe('/profile/first')
+    configuredCwds.set('default', '/profile/changed')
+    const before = requests.length
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: 'second' }).id)
+    const next = requests.slice(before)
+    expect(next[0].method).toBe('session.resume')
+    expect(next.find(r => r.method === 'session.cwd.set')?.params.cwd).toBe('/profile/changed')
+    expect(next.findIndex(r => r.method === 'session.cwd.set')).toBeLessThan(next.findIndex(r => r.method === 'prompt.submit'))
+    const b = store.createAgent(owner, { name: '其他 Profile', profile: 'other' })
+    await finished(runtime.send(owner, direct(b.id).id, { requestId: randomUUID(), content: 'third' }).id)
+    expect(requests.filter(r => r.method === 'session.create').at(-1)?.params.cwd).toBe('/profile/other')
+  })
+
   it('flushes a paused delta before completion and cancels pending flush on finish', async () => {
     let upstream: { socket: WebSocket; params: Record<string, any> } | undefined
     reply = (socket, params) => {
@@ -246,7 +304,7 @@ describe('Web-owned workspace', () => {
     }
   })
 
-  it('isolates messages, Hermes sessions, bindings, and context between concurrent group tasks', async () => {
+  it('serializes one Agent across group tasks while keeping messages, sessions and context isolated', async () => {
     const administrator = store.createAgent(owner, { name: '多任务远程管理员', profile: 'remote-profile', nodeId: 'remote-node' }),
       member = agent('多任务成员'),
       conversation = store.createGroup(owner, {
@@ -259,18 +317,23 @@ describe('Web-owned workspace', () => {
     const pending: Array<{ socket: WebSocket; params: Record<string, any> }> = []
     reply = (socket, params) => {
       pending.push({ socket, params })
-      if (pending.length !== 2) return
-      for (const item of pending) {
+    }
+    const complete = (item: typeof pending[number]) => {
         const text = item.params.text.includes('第一项工作') ? '第一项结果' : '第二项结果'
         setTimeout(() => item.socket.send(JSON.stringify({
           method: 'event',
           params: { type: 'message.complete', session_id: item.params.session_id, payload: { text, status: 'complete' } },
         })), 5)
-      }
     }
     const firstRun = runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '第一项工作' }),
       secondRun = runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '第二项工作' })
-    await Promise.all([finished(firstRun.id), finished(secondRun.id)])
+    await vi.waitFor(()=>expect(pending).toHaveLength(1))
+    expect(store.require<WorkspaceRun>(owner,'run',secondRun.id).status).toBe('queued')
+    complete(pending[0]!)
+    await finished(firstRun.id)
+    await vi.waitFor(()=>expect(pending).toHaveLength(2))
+    complete(pending[1]!)
+    await finished(secondRun.id)
     const firstMessages = store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, firstTask.id),
       secondMessages = store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, secondTask.id)
     expect(firstMessages.map(message => message.content)).toEqual(['第一项工作', '第一项结果'])
@@ -326,23 +389,29 @@ describe('Web-owned workspace', () => {
       }),
       firstTask = defaultTask(conversation.id),
       secondTask = store.createTask(owner, conversation.id, {})
-    reply = (socket, params) => setTimeout(() => socket.send(JSON.stringify({
+    const pending: Array<{socket:WebSocket;params:Record<string,any>}> = []
+    reply = (socket, params) => { pending.push({socket,params});setTimeout(() => socket.send(JSON.stringify({
       method: 'event',
       params: {
         type: 'approval.request',
         session_id: params.session_id,
         payload: { request_id: 'same-upstream-id', message: '允许执行吗？' },
       },
-    })), 5)
-    runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '任务甲' })
-    runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '任务乙' })
-    await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction').filter(interaction => !interaction.resolved)).toHaveLength(2))
-    const interactions = store.list<WorkspaceInteraction>(owner, 'interaction'),
-      first = interactions.find(interaction => interaction.conversationTaskId === firstTask.id)!,
-      second = interactions.find(interaction => interaction.conversationTaskId === secondTask.id)!
+    })), 5) }
+    const firstRun=runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '任务甲' })
+    const secondRun=runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '任务乙' })
+    await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction').filter(interaction => !interaction.resolved)).toHaveLength(1))
+    const first=store.list<WorkspaceInteraction>(owner,'interaction').find(i=>i.conversationTaskId===firstTask.id)!
     expect(store.require<any>(owner, 'conversation-task', firstTask.id).activeRunStatus).toBe('waiting')
-    expect(store.require<any>(owner, 'conversation-task', secondTask.id).activeRunStatus).toBe('waiting')
+    expect(store.require<WorkspaceRun>(owner,'run',secondRun.id).status).toBe('queued')
     await runtime.respond(owner, first.id, 'once')
+    pending[0]!.socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:pending[0]!.params.session_id,payload:{text:'任务甲完成',status:'complete'}}}))
+    await finished(firstRun.id)
+    await vi.waitFor(()=>expect(store.list<WorkspaceInteraction>(owner,'interaction')).toHaveLength(2))
+    const second=store.list<WorkspaceInteraction>(owner,'interaction').find(i=>i.conversationTaskId===secondTask.id)!
+    expect(second.id).not.toBe(first.id)
+    expect(store.require<any>(owner, 'conversation-task', secondTask.id).activeRunStatus).toBe('waiting')
+    await runtime.respond(owner,first.id,'once')
     expect(store.require<WorkspaceInteraction>(owner, 'interaction', first.id).resolved).toBe(true)
     expect(store.require<WorkspaceInteraction>(owner, 'interaction', second.id).resolved).toBe(false)
     await Promise.all([runtime.stopTask(owner, conversation.id, firstTask.id), runtime.stopTask(owner, conversation.id, secondTask.id)])
@@ -1148,4 +1217,30 @@ it('keeps active avatar state ahead of queued work and publishes only recent out
   store.put(owner,'turn','result',{id:'result',conversationId:c.id,agentId:a.id,status:'complete',updatedAt:now-3000})
   store.saveRun(owner,run)
   expect(store.require<WorkspaceConversation>(owner,'conversation',c.id).avatarSignals).toEqual({})
+})
+
+it('queues an unsubmitted turn while computer capacity is unavailable and submits it once after recovery',async()=>{
+  const a=agent('等候电脑'),c=direct(a.id),target=nodes.target(owner,'local')
+  vi.spyOn(target.session,'request').mockRejectedValueOnce(new HttpError(429,'资源不足','computer_quota'))
+  const run=runtime.send(owner,c.id,{requestId:randomUUID(),content:'等待资源后执行'})
+  await vi.waitFor(()=>expect(store.list<any>(owner,'turn').find(work=>work.runId===run.id)?.resourceWait).toBe(true))
+  expect(store.require<WorkspaceRun>(owner,'run',run.id).status).toBe('queued')
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',run.id).status).toBe('complete'),{timeout:5000})
+  expect(requests.filter(request=>request.method==='prompt.submit')).toHaveLength(1)
+})
+
+it('forwards a generated artifact to a new task without changing its original provenance',async()=>{
+  const a=agent('产物接收者'),c=direct(a.id)
+  const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'first'})
+  await finished(first.id)
+  const message=store.messages(owner,c.id).find(message=>message.role==='assistant')!
+  const assets=new WorkspaceAssets(store,nodes,home)
+  const file=assets.publish(owner,message,a,'review.txt',Buffer.from('verified artifact'))
+  const sent=runtime.dispatch(owner,c.id,{requestId:randomUUID(),content:'复核附件',fileIds:[file.id]},{agentId:a.id,kind:'task_review'})
+  await finished(sent.id)
+  const attached=requests.find(request=>request.method==='file.attach')!
+  expect(Buffer.from(attached.params.data_url.split(',')[1],'base64').toString()).toBe('verified artifact')
+  expect(store.require<any>(owner,'file',file.id).messageId).toBe(message.id)
+  expect(store.require<WorkspaceMessage>(owner,'message',sent.messageId).attachments.map(file=>file.id)).toEqual([file.id])
+  assets.close()
 })

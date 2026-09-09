@@ -1,5 +1,7 @@
 # 头像 v2 验收
 
+> 以下为初始 OpenMausBot 版本的历史验收记录。当前双眼样式及已更新的对照命令见 [LaoA 三端验收](laoa-avatars.md)。
+
 参考 OpenMausBot 提交 `3a84701`，参考仓库仅作读取。Web 移植为 Vue 与独立 SVG 动画控制器；iOS 移植对应 Swift 绘制代码与数据。没有新增运行服务或图片生成能力。
 
 ## 外观

@@ -1,3 +1,4 @@
+import { serverIdentityValue } from './serverIdentity'
 import type { BootstrapResponse, CurrentUser, JsonValue, Profile } from '@shared/types'
 import { apiRequest, setApiCsrfToken, unwrapData } from './client'
 import { bool, normalizeProfile, normalizeUser, record, string, values } from '@/utils/normalize'
@@ -21,6 +22,7 @@ function normalizeBootstrap(payload: unknown): BootstrapResponse {
     upstreamReady: bool(root.upstreamReady ?? root.upstream_ready),
     upstreamError: string(root.upstreamError ?? root.upstream_error) || undefined,
     serverKind: string(root.serverKind ?? root.server_kind) || undefined,
+    serverIdentity: serverIdentityValue(root.serverIdentity),
   }
   if (rawUser) response.user = normalizeUser(rawUser)
   setApiCsrfToken(csrfToken)

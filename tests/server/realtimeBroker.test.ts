@@ -17,6 +17,7 @@ async function fixture() {
   const commands: any[] = []
   let count = 0
   let seq = 0, truncate = false, dropPrompt = false
+  let cwd = '/old-session', busy = false, rejectCwd = false
   const history: any[] = []
   let peer: WebSocket
   ws.on('connection', socket => {
@@ -33,7 +34,11 @@ async function fixture() {
       } else if (f.method === 'session.branch') {
         socket.send(JSON.stringify({ id: f.id, result: { session_id: 'runtime-branch', stored_session_id: 'stored-branch' } }))
       } else if (f.method === 'session.create' || f.method === 'session.resume') {
-        socket.send(JSON.stringify({ id: f.id, result: { session_id: 'runtime-1', stored_session_id: 'stored-1', running: false } }))
+        if (f.method === 'session.create' && f.params.cwd) cwd = f.params.cwd
+        socket.send(JSON.stringify({ id: f.id, result: { session_id: 'runtime-1', stored_session_id: 'stored-1', running: busy, info: { cwd } } }))
+      } else if (f.method === 'session.cwd.set') {
+        if (rejectCwd) socket.send(JSON.stringify({ id: f.id, error: { message: 'working directory does not exist' } }))
+        else { cwd = f.params.cwd; socket.send(JSON.stringify({ id: f.id, result: { cwd } })) }
       } else {
         setTimeout(() => socket.send(JSON.stringify({ id: f.id, result: { status: 'submitted' } })), 20)
       }
@@ -46,6 +51,7 @@ async function fixture() {
   const principal = (key: string): RealtimePrincipal => ({ key, upstreamKey: 'one-service', paired: false,
     valid: () => true, url: async () => new URL(`ws://127.0.0.1:${(ws.address() as any).port}`) })
   return { home, broker, principal, commands, activities, count: () => count, advance: (n: number) => { now += n },
+    cwd: () => cwd, busy: () => { busy = true }, rejectCwd: () => { rejectCwd = true },
     disconnect: () => peer!.terminate(), truncate: () => { truncate = true }, dropPrompt: () => { dropPrompt = true },
     emit: (type: string, payload: unknown) => {
       const params = { type, session_id: 'runtime-1', seq: ++seq, payload }; history.push(params)
@@ -54,6 +60,81 @@ async function fixture() {
 }
 const resume = { method: 'session.resume', params: { session_id: 'stored-1', profile: 'default' } }
 describe('realtime broker', () => {
+  it.each([
+    { source: 'web', paired: false }, { source: 'ios', paired: false }, { source: 'ios', paired: true },
+  ])('uses the profile terminal.cwd for $source (paired=$paired), ignoring client cwd', async ({ source, paired }) => {
+    const f = await fixture()
+    const read = vi.fn(async (_profile: string) => '/Hermes/配置目录')
+    const principal = { ...f.principal('alice'), paired, configuredWorkingDirectory: read }
+    const channel = await f.broker.create(principal, 'chat')
+    const created = await f.broker.command(channel, 'create', {
+      method: 'session.create', params: { profile: 'work', source, cwd: '/client/override' },
+    })
+    expect(created.state).toBe('confirmed')
+    expect(f.commands[0].params.cwd).toBe('/Hermes/配置目录')
+    const sent = await f.broker.command(channel, 'send', {
+      method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'run' },
+    })
+    expect(sent.state).toBe('confirmed')
+    expect(read.mock.calls.every(([profile]) => profile === 'work')).toBe(true)
+    expect(f.commands.map(x => x.method)).toEqual(['session.create', 'prompt.submit'])
+    expect(f.cwd()).toBe('/Hermes/配置目录')
+  })
+
+  it('corrects an old cwd before attachments and follows config changes on the next turn', async () => {
+    const f = await fixture()
+    let configured = '/configured/first'
+    const channel = await f.broker.create({ ...f.principal('alice'),
+      configuredWorkingDirectory: async () => configured }, 'chat')
+    await f.broker.command(channel, 'resume', resume)
+    expect(f.cwd()).toBe('/old-session')
+    await f.broker.command(channel, 'attach', {
+      method: 'file.attach', params: { session_id: 'runtime-1', data_url: 'data:text/plain;base64,eA==' },
+    })
+    expect(f.cwd()).toBe('/configured/first')
+    await f.broker.command(channel, 'send', { method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'one' } })
+    expect(f.commands.filter(x => x.method === 'session.cwd.set')).toHaveLength(1)
+    configured = '/configured/second'
+    const events: StreamEntry[] = []
+    f.broker.subscribe(channel, undefined, entry => events.push(entry))
+    f.emit('message.complete', {})
+    await vi.waitFor(() => expect(events.some(e => e.data.includes('message.complete'))).toBe(true))
+    await f.broker.command(channel, 'send-next', { method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'two' } })
+    expect(f.cwd()).toBe('/configured/second')
+    expect(f.commands.filter(x => x.method === 'session.cwd.set')).toHaveLength(2)
+    expect(f.commands.some(x => x.method === 'config.set')).toBe(false)
+  })
+
+  it('does not switch a running session when another client resumes or queues a message', async () => {
+    const f = await fixture(); f.busy()
+    const read = vi.fn(async () => '/configured')
+    const channel = await f.broker.create({ ...f.principal('alice'), configuredWorkingDirectory: read }, 'chat')
+    await f.broker.command(channel, 'resume', resume)
+    await f.broker.command(channel, 'queued', { method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'next', queued: true } })
+    expect(read).not.toHaveBeenCalled()
+    expect(f.commands.map(x => x.method)).toEqual(['session.resume', 'prompt.submit'])
+  })
+
+  it('does not submit a prompt when Hermes rejects the configured directory', async () => {
+    const f = await fixture(); f.rejectCwd()
+    const channel = await f.broker.create({ ...f.principal('alice'), configuredWorkingDirectory: async () => '/missing' }, 'chat')
+    await f.broker.command(channel, 'resume', resume)
+    const sent = await f.broker.command(channel, 'send', { method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'run' } })
+    expect(sent).toMatchObject({ state: 'rejected', response: { error: { code: 'working_directory_rejected' } } })
+    expect(f.commands.some(x => x.method === 'prompt.submit')).toBe(false)
+  })
+
+  it('checks revocation again after loading the configured directory', async () => {
+    const f = await fixture()
+    let valid = true
+    const channel = await f.broker.create({ ...f.principal('alice'), valid: () => valid,
+      configuredWorkingDirectory: async () => { valid = false; return '/configured' } }, 'chat')
+    await f.broker.command(channel, 'resume', resume)
+    const sent = await f.broker.command(channel, 'send', { method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'run' } })
+    expect(sent).toMatchObject({ state: 'rejected', response: { error: { code: 'authentication_required' } } })
+    expect(f.commands.map(x => x.method)).toEqual(['session.resume'])
+  })
+
   it('rejects resuming a history-only session before opening an upstream route', async () => {
     const f = await fixture()
     const routes: string[] = []

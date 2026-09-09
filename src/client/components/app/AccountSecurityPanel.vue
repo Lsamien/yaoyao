@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ServerIdentityPanel from './ServerIdentityPanel.vue'
 import { computed, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import AccountInitialAvatar from '@/components/common/AccountInitialAvatar.vue'
@@ -42,7 +43,9 @@ const confirmationState = computed<'empty' | 'match' | 'mismatch'>(() => {
   if (!confirmation.value) return 'empty'
   return passwordsMatch.value ? 'match' : 'mismatch'
 })
+const serverNameDirty = ref(false)
 const dirty = computed(() => (
+  serverNameDirty.value ||
   (isAdmin.value && username.value.trim() !== initialUsername.value)
   || Boolean(currentPassword.value || newPassword.value || confirmation.value)
 ))
@@ -178,6 +181,7 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       <span class="account-badge">{{ auth.user?.username || '当前账号' }}</span>
     </header>
 
+    <ServerIdentityPanel v-if="auth.serverIdentity" @dirty-change="serverNameDirty = $event" />
     <section class="account-avatar-card" aria-label="账号头像">
       <AccountInitialAvatar :name="auth.user?.username || '当前账号'" :image-url="auth.user?.avatar" :size="64" />
       <div><strong>账号头像</strong><small>默认显示用户名首字母。头像只在 Web 修改，iOS 会同步显示。</small></div>

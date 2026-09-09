@@ -55,7 +55,7 @@ onBeforeUnmount(() => window.removeEventListener('focus', refreshOnWindowFocus))
 </script>
 
 <template>
-  <WorkspaceShell
+  <WorkspaceShell :server-name="auth.serverIdentity?.displayName"
     :user-name="userName"
     :user-avatar="auth.user?.avatar"
     :pairing-user-name="auth.user?.username || ''"

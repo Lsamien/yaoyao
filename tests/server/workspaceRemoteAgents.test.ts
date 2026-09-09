@@ -18,7 +18,8 @@ beforeEach(async()=>{
     socket.send(JSON.stringify({method:'event',params:{type:'gateway.ready'}}))
     socket.on('message',raw=>{
       const frame=JSON.parse(String(raw));frames.push(frame)
-      const result=['session.create','session.resume'].includes(frame.method) ? {session_id:randomUUID(),stored_session_id:frame.params.session_id ?? randomUUID(),info:{profile_name:frame.params.profile}} : {ok:true}
+      const result=['session.create','session.resume'].includes(frame.method) ? {session_id:randomUUID(),stored_session_id:frame.params.session_id ?? randomUUID(),info:{profile_name:frame.params.profile}}
+        : frame.method==='session.cwd.set' ? {cwd:frame.params.cwd} : {ok:true}
       socket.send(JSON.stringify({id:frame.id,result}))
     })
   })
@@ -30,6 +31,10 @@ beforeEach(async()=>{
       return Response.json(url.pathname.endsWith('/channels') ? {id:'55555555-5555-4555-8555-555555555555'} : {state:'confirmed',response:{result:{session_id:'runtime',stored_session_id:'stored'}}},{status:url.pathname.endsWith('/channels')?201:200})
     }
     if(url.pathname==='/api/auth/ws-ticket')return Response.json({ticket:'test-ticket'})
+    if(url.pathname==='/api/config') {
+      forwarded.push({path:url.pathname,profile:url.searchParams.get('profile'),headers:new Headers(init.headers)})
+      return Response.json({terminal:{cwd:'/remote/'+url.searchParams.get('profile')}})
+    }
     return Response.json({messages:[],profiles:[{name:'remote-profile'}]})
   }) as typeof fetch})
 })
@@ -74,9 +79,11 @@ describe('referenced remote Bot Agents',()=>{
     const opened=await rpc('session.create',{profile:'wrong-profile',model:'overwrite',cwd:'/different',fast:true,reasoning_effort:'high',messages:[{role:'system',content:'override'}]})
     expect(opened.status).toBe(200)
     const result=opened.body.response.result
-    expect(frames.at(-1).params.profile).toBe('remote-profile');expect(frames.at(-1).params.model).toBeUndefined();expect(frames.at(-1).params.cwd).toBe('');expect(frames.at(-1).params.fast).toBeUndefined();expect(frames.at(-1).params.messages).toBeUndefined()
+    expect(frames.at(-1).params.profile).toBe('remote-profile');expect(frames.at(-1).params.model).toBeUndefined();expect(frames.at(-1).params.cwd).toBe('/remote/remote-profile');expect(frames.at(-1).params.fast).toBeUndefined();expect(frames.at(-1).params.messages).toBeUndefined()
     expect((await rpc('prompt.submit',{session_id:result.session_id,text:'question'})).status).toBe(200)
     expect(frames.at(-1).params.text).toContain('REMOTE RULE V1')
+    expect(frames.find(f=>f.method==='session.cwd.set')?.params.cwd).toBe('/remote/remote-profile')
+    expect(forwarded.filter(f=>f.path==='/api/config').every(f=>f.profile==='remote-profile' && f.headers.get('cookie')?.includes('delegated-native-cookie=test'))).toBe(true)
     runtime.workspace.updateAgent('owner',agent.id,{instructions:'REMOTE RULE V2'})
     expect((await rpc('prompt.submit',{session_id:result.session_id,text:'next question'})).status).toBe(200)
     expect(frames.at(-1).params.text).toContain('REMOTE RULE V2');expect(frames.at(-1).params.text).not.toContain('REMOTE RULE V1')

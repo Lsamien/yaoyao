@@ -522,7 +522,8 @@ export class ChatCacheStore {
       for (const table of ['chat_messages', 'chat_events', 'chat_attachments', 'chat_sessions']) {
         this.db.prepare(`DELETE FROM ${table} WHERE owner=? AND profile=? AND session_id=?`).run(owner, profile, sessionID)
       }
-      this.db.prepare("DELETE FROM chat_snapshots WHERE owner=? AND (session_id=? OR kind='list')").run(owner, sessionID)
+      this.db.prepare("DELETE FROM chat_snapshots WHERE owner=? AND ((profile=? AND session_id=?) OR kind='list')")
+        .run(owner, profile, sessionID)
       this.db.exec('COMMIT')
       for (const asset of assets) {
         const referenced = this.db.prepare('SELECT 1 ok FROM chat_attachments WHERE local_path=? LIMIT 1').get(asset.local_path)

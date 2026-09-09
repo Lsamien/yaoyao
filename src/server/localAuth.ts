@@ -247,6 +247,8 @@ export class LocalAuthStore {
     return Boolean(user && (user.role === 'admin' || (nodeId === 'local' && user.assignedProfiles?.includes(profile))))
   }
 
+  isAdminActive(userID:string):boolean {return this.#users.some(user=>user.id===userID&&user.enabled&&user.role==='admin')}
+
   isUserActive(userID: string): boolean {
     return this.#users.some(user => user.id === userID && user.enabled)
   }

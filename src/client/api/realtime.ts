@@ -1,3 +1,4 @@
+import { publishServerIdentity } from './serverIdentity'
 import type { GroupSocketEnvelope, JsonValue, RealtimeConnectionState, RpcEventFrame } from '@shared/types'
 import { ApiError } from './client'
 import { number, record, string } from '@/utils/normalize'
@@ -69,6 +70,7 @@ export class ChatRpcSocket {
       else this.earlyFrames.push(text)
       return
     }
+    if (type === 'server.identity.changed') publishServerIdentity(params.payload)
     if (type === 'gateway.ready') this.publishState('ready')
     const event: RpcEventFrame['params'] = {
       type, session_id: string(params.session_id) || undefined,

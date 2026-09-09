@@ -48,6 +48,16 @@ function fixture() {
 }
 
 describe('system release contract', () => {
+  it('keeps packaged App updates outside the source service updater', async () => {
+    const {root,config}=fixture()
+    let inspected=false,launched=false
+    const manager=new SystemUpdateManager(config,{projectRoot:root,platform:'darwin',desktopOwned:true,inspectRemote:async()=>{inspected=true;return latestRemote},launchUpdater:()=>{launched=true}})
+    expect(await manager.check()).toMatchObject({installationMode:'desktop',supported:false,canRollback:false})
+    await expect(manager.startUpdate(latest.releaseVersion)).rejects.toThrow('App')
+    expect(()=>manager.startRollback()).toThrow('App')
+    expect(inspected).toBe(false);expect(launched).toBe(false)
+  })
+
   it('maps an HTTPS Git source to the lightweight tagged release manifest', () => {
     expect(releaseManifestURL(
       'https://git.samien.cn/samien/hermes-yaoyao.git',

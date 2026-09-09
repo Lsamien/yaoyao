@@ -10,6 +10,7 @@ import { NodePairingStore } from './pairing.js'
 import { CookieJar, UpstreamClient } from './upstream.js'
 import { CsrfProtection, isAllowedHostHeader, isExactOrigin } from './security.js'
 import { HttpError } from './errors.js'
+import { configuredWorkingDirectory } from './sessionWorkingDirectory.js'
 import { canonicalEpoch, groupCursor } from './realtimeProtocol.js'
 import { CHAT_MAX_PAYLOAD } from './realtimeProtocol.js'
 import { ChatPushRelayObserver, type ChatNotificationResolver, type PushEventCoordinator, type ChatPushTransportFactory } from './pushEvents.js'
@@ -68,6 +69,12 @@ export class RealtimeAPI {
     return {
       key, nativeBot, instanceKey: endpoint.href, upstreamKey: `${endpoint.href}:${device ? key : 'service'}`, paired: Boolean(device), valid, authorize,
       canResume: (profile, sessionId) => this.canResume(profile, sessionId, jar, owner),
+      configuredWorkingDirectory: profile => configuredWorkingDirectory((path, options) => {
+        if (!valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
+        if (exported && endpoint.href !== this.config.upstream.href) return exported.target.session.request(path, options)
+        if (jar) return this.upstream.request(path, jar, options)
+        return this.session.request(path, options)
+      }, profile),
       agent: upstream.directAgent,
       observeCommand: f => observer?.observeClientFrame(f),
       observeEvent: f => observer?.observeUpstreamFrame(Buffer.from(f), false),

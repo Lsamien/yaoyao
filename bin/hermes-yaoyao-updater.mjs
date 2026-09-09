@@ -16,6 +16,9 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const label = 'com.samien.hermes-yaoyao'
+import { LaunchAgentService, updateMutex, recoverTransition, transitionService } from './lib/service-update.mjs'
+import { assertRollbackCompatible } from './lib/service-data.mjs'
+
 const uid = process.getuid?.() ?? 501
 const domain = `gui/${uid}`
 
@@ -249,76 +252,36 @@ function stageRelease(job, jobPath) {
   return { finalRoot, commit }
 }
 
+function serviceOptions(jobPath, job) {
+  const home = job.plan.home || resolve(dirname(jobPath), '..')
+  const options = { home, releaseRoot: job.plan.releaseRoot, port: job.plan.port || Number(process.env.HERMES_YAOYAO_PORT || 15300) }
+  return { ...options, driver: new LaunchAgentService(options), onProgress: message => updateJob(jobPath, { message }) }
+}
+
 async function runUpdate(jobPath, job) {
-  const { plan, target, id } = job
-  if (!target) fail('升级任务缺少目标发布清单')
-  const { finalRoot, commit } = stageRelease(job, jobPath)
-
-  const previousCurrentTarget = currentTarget(plan.releaseRoot)
-  let transitioned = false
-  try {
-    updateJob(jobPath, { state: 'installing', message: `正在切换 Web ${target.webVersion}` })
-    stopService()
-    transitioned = true
-    switchCurrent(plan.releaseRoot, finalRoot, id)
-
-    updateJob(jobPath, { state: 'restarting', message: '正在启动新版本服务' })
-    startService(join(plan.releaseRoot, 'current'), plan, true)
-    updateJob(jobPath, { state: 'verifying', message: '正在验证 Web 服务' })
-    await verifyRuntime()
-    writeJSON(join(dirname(jobPath), 'last-success.json'), {
-      jobId: id,
-      previousCurrentTarget,
-      previousServiceRoot: plan.previousServiceRoot,
-      target,
-      finalRoot,
-      commit,
-    })
-    updateJob(jobPath, { state: 'succeeded', message: `已升级 Web ${target.webVersion}` })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (transitioned) {
-      updateJob(jobPath, { state: 'rolling_back', message: '升级失败，正在自动恢复上一版本', error: message })
-      try {
-        stopService()
-        restorePreviousService({
-          plan,
-          previousCurrentTarget,
-          previousServiceRoot: plan.previousServiceRoot,
-          lifecycleRoot: finalRoot,
-          token: `${id}-rollback`,
-        })
-        await verifyRuntime()
-        updateJob(jobPath, { state: 'failed', message: '升级失败，已自动恢复上一版本', error: message })
-      } catch (rollbackError) {
-        const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-        updateJob(jobPath, { state: 'failed', message: '升级和自动回滚均失败，需要人工处理', error: `${message}; 回滚：${rollbackMessage}` })
-      }
-    } else {
-      updateJob(jobPath, { state: 'failed', message: '升级准备失败，现有服务未被修改', error: message })
-    }
-  }
+  const options = serviceOptions(jobPath, job)
+  await recoverTransition(options)
+  const { finalRoot } = stageRelease(job, jobPath)
+  updateJob(jobPath, { state: 'installing', message: '正在准备切换 Web 服务' })
+  await transitionService({ ...options, finalRoot })
+  updateJob(jobPath, { state: 'succeeded', message: `已升级 Web ${job.target.webVersion}` })
 }
 
 async function runRollback(jobPath, job) {
-  const { plan, id } = job
+  const options = serviceOptions(jobPath, job)
+  await recoverTransition(options)
   const recordPath = join(dirname(jobPath), 'last-success.json')
   if (!existsSync(recordPath)) fail('没有可回滚的上一版本')
   const record = readJSON(recordPath)
-  const lifecycleRoot = currentTarget(plan.releaseRoot)
-  if (!lifecycleRoot) fail('当前发布版本不可用，无法安全执行回滚')
+  // Manual rollback never restores an older snapshot over data written since
+  // the successful upgrade. Schema-changing releases need a separate recovery.
+  assertRollbackCompatible(options.home, record)
+  const finalRoot = record.previousCurrentTarget || record.previousServiceRoot
+  if (!finalRoot || !existsSync(finalRoot)) fail('上一版本的程序目录已不可用')
   updateJob(jobPath, { state: 'rolling_back', message: '正在恢复上一版本' })
-  stopService()
-  restorePreviousService({
-    plan,
-    previousCurrentTarget: record.previousCurrentTarget,
-    previousServiceRoot: record.previousServiceRoot,
-    lifecycleRoot,
-    token: id,
-  })
-  await verifyRuntime()
-  rmSync(recordPath, { force: true })
-  updateJob(jobPath, { state: 'rolled_back', message: '已回滚 Web 服务' })
+  await transitionService({ ...options, finalRoot, rollback: true })
+  rmSync(recordPath)
+  updateJob(jobPath, { state: 'rolled_back', message: '已回滚 Web 服务，保留现有数据' })
 }
 
 async function main() {
@@ -326,6 +289,7 @@ async function main() {
   if (command !== 'run' || flag !== '--job' || !jobPathValue) fail('用法：hermes-yaoyao-updater run --job <path>')
   const jobPath = resolve(jobPathValue)
   const job = readJSON(jobPath)
+  const unlock = updateMutex(job.plan.home || resolve(dirname(jobPath), '..'))
   try {
     if (job.operation === 'update') await runUpdate(jobPath, job)
     else if (job.operation === 'rollback') await runRollback(jobPath, job)
@@ -344,6 +308,7 @@ async function main() {
       try { lockJobID = JSON.parse(raw).jobID } catch { /* legacy lock */ }
       if (lockJobID === job.id) rmSync(lockPath)
     } catch { /* already released */ }
+    unlock()
   }
 }
 

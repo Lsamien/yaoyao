@@ -49,6 +49,10 @@ import {
   HermesChatNotificationResolver,
 } from './pushEvents.js'
 import { ChatCacheCoordinator, ChatCacheStore } from './chatCache.js'
+import {LocalVmService} from './localVm.js'
+import {SharedComputers} from './sharedComputers.js'
+import {ComputerControlService} from './computerControls.js'
+import { RunnerHub } from './runnerHub.js'
 
 export interface ApplicationOptions {
   config?: ServerConfig
@@ -69,6 +73,7 @@ export interface ApplicationOptions {
 }
 
 export interface ApplicationRuntime {
+  runners: RunnerHub
   workspace: WorkspaceStore
   workspaceRuntime: WorkspaceRuntime
   realtime: RealtimeAPI
@@ -90,6 +95,7 @@ export interface ApplicationRuntime {
   pushEventCoordinator: PushCoordinatorEventAdapter
   chatPushJobs: ChatPushJobManager
   chatCache?: ChatCacheCoordinator
+  localVm: LocalVmService
   close(): void
 }
 
@@ -205,8 +211,20 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const workspace = new WorkspaceStore(config.home)
   const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
-  const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner))
+  const runners=new RunnerHub(workspace,auth,workspaceNodes.local)
+  const sharedComputers=new SharedComputers(workspace,auth,workspaceNodes,runners)
+  const computerControls=new ComputerControlService(workspace,auth,workspaceNodes,runners)
+  const localVm=new LocalVmService(workspace,auth,workspaceNodes,runners,sharedComputers,config)
+  runners.localVmAllowed=(id,runnerId)=>localVm.allowed(id,runnerId)
+  runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
+  workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
+  const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0)
+  workspaceRuntime.retireHelper=(owner,helper)=>runners.retireHelper(owner,helper)
+  workspaceRuntime.onTeamCreated = (owner, team) => {
+    try { push.setGroupSubscription(owner, team.id, true, team.lastSeq) } catch { /* Optional notifications do not undo a team. */ }
+  }
   const workspaceAssets = new WorkspaceAssets(workspace, workspaceNodes, config.home)
+  workspaceRuntime.publishArtifact=(owner,message,agent,name,bytes)=>workspaceAssets.publish(owner,message,agent,name,bytes)
   workspaceRuntime.onMessage = (owner, message) => workspaceAssets.archive(owner, message)
   workspaceRuntime.onNotify = (owner, c, run, message, interaction) => {
     if (c.kind === 'group' && !push.isGroupSubscribed(owner,c.id)) return
@@ -288,16 +306,18 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
     await next()
   })
+  app.use(runners.middleware())
   app.use(async (ctx, next) => {
     const user = auth.current(ctx)
     if (user && user.role !== 'admin' && (ctx.path.startsWith('/api/') || ctx.path.startsWith('/node/') || ctx.path.startsWith('/ws/') || ctx.path.startsWith('/Users/') || ctx.path.startsWith('/attachments/'))) {
       const path = ctx.path
       const publicPath = ['/api/status', '/api/auth/providers', '/api/auth/me', '/api/profiles', '/api/app/bootstrap', '/api/app/login', '/api/app/logout'].includes(path)
       const accountPath = ['/api/account/credentials', '/api/app/account/credentials', '/api/app/account/avatar'].includes(path)
-      const workspacePath = /^\/api\/app\/(?:capabilities|agents|conversations|runs|interactions|events|uploads|files|message-files)(?:\/|$)/.test(path)
+      const workspacePath = /^\/api\/app\/(?:capabilities|agents|conversations|runs|interactions|events|uploads|files|message-files|computers)(?:\/|$)/.test(path)
         && path !== '/api/app/agents/remote'
       const pushPath = /^\/api\/(?:app\/)?push\/v1\//.test(path)
-      if (!publicPath && !accountPath && !workspacePath && !pushPath)
+      const identityRead = path === '/api/app/server-identity' && ['GET', 'HEAD'].includes(ctx.method)
+      if (!publicPath && !accountPath && !workspacePath && !pushPath && !identityRead)
         throw new HttpError(403, '子账号只能使用 Bot 模式', 'bot_mode_required')
     }
     await next()
@@ -361,7 +381,11 @@ export function createApplication(options: ApplicationOptions = {}): Application
     } else await next()
   })
 
+  const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
+  const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
+  const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
   const applicationRouter = workspaceRouter(workspace, workspaceRuntime, workspaceNodes, workspaceAssets, uploads, auth, push)
+  app.use(runners.adminRouter().routes())
   app.use(applicationRouter.routes())
   app.use(async (ctx, next) => {
     if (ctx.path.includes('/plugins/yaoyao') || ctx.path.startsWith('/api/app/groups')) throw new HttpError(410, '请使用新版聊天接口', 'retired_plugin_api')
@@ -384,6 +408,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
   })
   const router = createApiRouter({
+    onServerIdentityChanged: identity => realtime.broker.publishServerIdentity(identity, config.upstream.href),
     onUserAccessChanged: async owner => {
       for (const c of workspace.list<{ id: string }>(owner, 'conversation')) await workspaceRuntime.stopConversation(owner, c.id)
     },
@@ -417,6 +442,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
 
   return {
+    runners,
+    localVm,
     workspace,
     workspaceRuntime,
     realtime,
@@ -439,6 +466,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     chatPushJobs,
     chatCache,
     close: () => {
+      runners.close()
       workspaceAssets.close()
       workspaceRuntime.close()
       workspaceNodes.close()
@@ -455,7 +483,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
 
 export interface NodeServerRuntime {
   server: HttpServer
-  close(): Promise<void>
+  close(closeConnections?: boolean): Promise<void>
 }
 
 export function createNodeServer(runtime: ApplicationRuntime): NodeServerRuntime {
@@ -473,16 +501,19 @@ export function createNodeServer(runtime: ApplicationRuntime): NodeServerRuntime
       runtime.chatPushJobs.stop()
     }
   }
+  server.once('listening',()=>{const address=server.address();if(address&&typeof address!=='string')void runtime.localVm.start(`${config.tlsCert?'https':'http'}://127.0.0.1:${address.port}`).catch(error=>console.error('本地虚拟机服务启动失败',error.message))})
   runtime.workspaceRuntime.start()
   synchronizePushObservers()
   const removePushConfigurationListener = runtime.push.onEnabledChange(synchronizePushObservers)
   const removeWebSockets = runtime.realtime.rejectLegacyUpgrades(server)
   return {
     server,
-    close: async () => {
+    close: async (closeConnections = false) => {
+      await runtime.localVm.close()
       removePushConfigurationListener()
       removeWebSockets()
       runtime.realtime.close()
+      if (closeConnections) server.closeAllConnections()
       await new Promise<void>((resolve, reject) => {
         if (!server.listening) {
           resolve()

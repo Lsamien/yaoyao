@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
+import { readBuildIdentity, type BuildIdentity } from './buildIdentity.js'
 import {
   closeSync,
   existsSync,
@@ -47,6 +49,8 @@ export interface UpdateJob {
 }
 
 interface UpdatePlan {
+  home: string
+  port: number
   source: string
   releaseRoot: string
   previousServiceRoot: string
@@ -60,7 +64,8 @@ interface StoredUpdateJob extends UpdateJob {
 
 export interface SystemUpdateStatus {
   current: ReleaseManifest
-  installationMode: 'source' | 'release'
+  build?: BuildIdentity
+  installationMode: 'source' | 'release' | 'desktop'
   latest?: ReleaseManifest
   updateAvailable: boolean
   supported: boolean
@@ -84,6 +89,7 @@ export interface SystemUpdateManagerOptions {
   inspectRemote?: InspectRemote
   launchUpdater?: LaunchUpdater
   platform?: NodeJS.Platform
+  desktopOwned?: boolean
 }
 
 function run(command: string, args: string[], timeout = 30_000): Promise<string> {
@@ -200,6 +206,7 @@ export class SystemUpdateManager {
   private readonly inspectRemote: InspectRemote
   private readonly launchUpdater: LaunchUpdater
   private readonly platform: NodeJS.Platform
+  private readonly desktopOwned: boolean
 
   constructor(private readonly config: ServerConfig, options: SystemUpdateManagerOptions = {}) {
     this.projectRoot = resolve(options.projectRoot ?? process.cwd())
@@ -210,6 +217,7 @@ export class SystemUpdateManager {
     this.releaseSource = config.releaseSource ?? DEFAULT_YAOYAO_RELEASE_SOURCE
     this.inspectRemote = options.inspectRemote ?? inspectGitRemote
     this.platform = options.platform ?? process.platform
+    this.desktopOwned = options.desktopOwned ?? process.env.HERMES_YAOYAO_DESKTOP === '1'
     this.launchUpdater = options.launchUpdater ?? ((jobPath) => {
       const child = spawn(process.execPath, [this.updaterPath, 'run', '--job', jobPath], {
         detached: true,
@@ -257,28 +265,37 @@ export class SystemUpdateManager {
     const job = this.latestJob()
     return {
       current,
-      installationMode: this.projectRoot.startsWith(`${this.releaseRoot}/`) ? 'release' : 'source',
+      build: readBuildIdentity(this.projectRoot),
+      installationMode: this.desktopOwned ? 'desktop' : this.projectRoot.startsWith(`${this.releaseRoot}/`) ? 'release' : 'source',
       latest,
       updateAvailable: Boolean(latest && compareReleaseVersions(latest.releaseVersion, current.releaseVersion) > 0),
-      supported: this.platform === 'darwin',
-      unsupportedReason: this.platform === 'darwin' ? undefined : '容器和非 macOS 环境请通过替换部署镜像升级',
-      canRollback: existsSync(join(this.updateHome, 'last-success.json')),
+      supported: !this.desktopOwned && this.platform === 'darwin',
+      unsupportedReason: this.desktopOwned ? 'App 内置服务随 App 一起更新，请使用夭夭菜单中的 App 更新与回退。' : this.platform === 'darwin' ? undefined : '容器和非 macOS 环境请通过替换部署镜像升级',
+      canRollback: !this.desktopOwned && existsSync(join(this.updateHome, 'last-success.json')),
       job: publicJob(job),
     }
   }
 
   async check(): Promise<SystemUpdateStatus> {
     const current = this.currentManifest()
+    if (this.desktopOwned) return this.status()
     const latest = await this.inspectRemote(this.releaseSource, current)
     return this.status(latest?.manifest)
   }
 
   private acquire(jobID: string): void {
     mkdirSync(this.updateHome, { recursive: true, mode: 0o700 })
+    const mutex = new DatabaseSync(join(this.updateHome, 'mutex.sqlite3'))
+    try { mutex.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE') }
+    catch { mutex.close(); throw new Error('已有系统更新正在执行') }
+    try { this.acquireFileLock(jobID) } finally { mutex.close() }
+  }
+
+  private acquireFileLock(jobID: string): void {
     const lockPath = join(this.updateHome, 'active.lock')
     try {
       const descriptor = openSync(lockPath, 'wx', 0o600)
-      writeFileSync(descriptor, `${JSON.stringify({ jobID })}\n`)
+      writeFileSync(descriptor, `${JSON.stringify({ jobID, pid: process.pid })}\n`)
       closeSync(descriptor)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
@@ -307,7 +324,7 @@ export class SystemUpdateManager {
       }
       rmSync(lockPath, { force: true })
       const descriptor = openSync(lockPath, 'wx', 0o600)
-      writeFileSync(descriptor, `${JSON.stringify({ jobID })}\n`)
+      writeFileSync(descriptor, `${JSON.stringify({ jobID, pid: process.pid })}\n`)
       closeSync(descriptor)
     }
   }
@@ -325,6 +342,8 @@ export class SystemUpdateManager {
       updatedAt: now,
       target,
       plan: {
+        home: this.config.home,
+        port: this.config.port,
         source: this.releaseSource,
         releaseRoot: this.releaseRoot,
         previousServiceRoot: this.projectRoot,
@@ -348,6 +367,7 @@ export class SystemUpdateManager {
   }
 
   async startUpdate(targetVersion: string): Promise<UpdateJob> {
+    if (this.desktopOwned) throw new Error('App 内置服务随 App 一起更新或回退')
     if (this.platform !== 'darwin') throw new Error('当前环境不支持服务内升级')
     const current = this.currentManifest()
     const latest = await this.inspectRemote(this.releaseSource, current)
@@ -359,6 +379,7 @@ export class SystemUpdateManager {
   }
 
   startRollback(): UpdateJob {
+    if (this.desktopOwned) throw new Error('App 内置服务随 App 一起更新或回退')
     if (this.platform !== 'darwin') throw new Error('当前环境不支持服务内回滚')
     if (!existsSync(join(this.updateHome, 'last-success.json'))) throw new Error('没有可回滚的上一版本')
     return publicJob(this.createJob('rollback'))!

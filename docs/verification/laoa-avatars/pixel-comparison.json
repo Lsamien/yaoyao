@@ -1,0 +1,438 @@
+{
+  "ios": {
+    "samples": 53,
+    "maximumMeanRGBDifference": 2.0737,
+    "results": [
+      {
+        "sample": "body-blob",
+        "meanRGBDifference": 1.4665
+      },
+      {
+        "sample": "body-drop",
+        "meanRGBDifference": 1.3388
+      },
+      {
+        "sample": "raw-19",
+        "meanRGBDifference": 1.306
+      },
+      {
+        "sample": "body-hexagon",
+        "meanRGBDifference": 1.3551
+      },
+      {
+        "sample": "face-happy",
+        "meanRGBDifference": 1.3796
+      },
+      {
+        "sample": "shape-hexagon",
+        "meanRGBDifference": 1.5426
+      },
+      {
+        "sample": "raw-24",
+        "meanRGBDifference": 1.25
+      },
+      {
+        "sample": "raw-18",
+        "meanRGBDifference": 1.2566
+      },
+      {
+        "sample": "face-listening",
+        "meanRGBDifference": 1.1323
+      },
+      {
+        "sample": "raw-20",
+        "meanRGBDifference": 1.6207
+      },
+      {
+        "sample": "face-working",
+        "meanRGBDifference": 1.1316
+      },
+      {
+        "sample": "raw-21",
+        "meanRGBDifference": 1.5023
+      },
+      {
+        "sample": "body-squircle",
+        "meanRGBDifference": 0.9068
+      },
+      {
+        "sample": "raw-23",
+        "meanRGBDifference": 1.4092
+      },
+      {
+        "sample": "body-capsule",
+        "meanRGBDifference": 1.3342
+      },
+      {
+        "sample": "shape-capsule",
+        "meanRGBDifference": 1.4596
+      },
+      {
+        "sample": "raw-22",
+        "meanRGBDifference": 1.3703
+      },
+      {
+        "sample": "face-proud",
+        "meanRGBDifference": 1.0016
+      },
+      {
+        "sample": "shape-circle",
+        "meanRGBDifference": 1.3104
+      },
+      {
+        "sample": "face-idle",
+        "meanRGBDifference": 0.9954
+      },
+      {
+        "sample": "raw-3",
+        "meanRGBDifference": 1.4447
+      },
+      {
+        "sample": "raw-2",
+        "meanRGBDifference": 1.5977
+      },
+      {
+        "sample": "body-star",
+        "meanRGBDifference": 1.6651
+      },
+      {
+        "sample": "shape-cloud",
+        "meanRGBDifference": 1.4915
+      },
+      {
+        "sample": "raw-0",
+        "meanRGBDifference": 1.1332
+      },
+      {
+        "sample": "raw-1",
+        "meanRGBDifference": 1.3476
+      },
+      {
+        "sample": "face-curious",
+        "meanRGBDifference": 1.2729
+      },
+      {
+        "sample": "raw-5",
+        "meanRGBDifference": 1.4187
+      },
+      {
+        "sample": "raw-4",
+        "meanRGBDifference": 1.4052
+      },
+      {
+        "sample": "shape-ellipse",
+        "meanRGBDifference": 1.2429
+      },
+      {
+        "sample": "raw-6",
+        "meanRGBDifference": 1.2229
+      },
+      {
+        "sample": "raw-7",
+        "meanRGBDifference": 1.2732
+      },
+      {
+        "sample": "shape-droplet",
+        "meanRGBDifference": 1.333
+      },
+      {
+        "sample": "shape-triangle",
+        "meanRGBDifference": 2.0737
+      },
+      {
+        "sample": "face-drowsy",
+        "meanRGBDifference": 1.2359
+      },
+      {
+        "sample": "face-suspicious",
+        "meanRGBDifference": 1.1495
+      },
+      {
+        "sample": "raw-9",
+        "meanRGBDifference": 1.3334
+      },
+      {
+        "sample": "raw-8",
+        "meanRGBDifference": 1.3118
+      },
+      {
+        "sample": "face-sleeping",
+        "meanRGBDifference": 1.29
+      },
+      {
+        "sample": "body-circle",
+        "meanRGBDifference": 1.4234
+      },
+      {
+        "sample": "raw-13",
+        "meanRGBDifference": 1.4625
+      },
+      {
+        "sample": "body-cursor",
+        "meanRGBDifference": 1.2363
+      },
+      {
+        "sample": "shape-square",
+        "meanRGBDifference": 0.7469
+      },
+      {
+        "sample": "raw-12",
+        "meanRGBDifference": 1.5339
+      },
+      {
+        "sample": "raw-10",
+        "meanRGBDifference": 1.2836
+      },
+      {
+        "sample": "face-thinking",
+        "meanRGBDifference": 1.1352
+      },
+      {
+        "sample": "raw-11",
+        "meanRGBDifference": 1.5155
+      },
+      {
+        "sample": "raw-15",
+        "meanRGBDifference": 1.1644
+      },
+      {
+        "sample": "body-shield",
+        "meanRGBDifference": 1.0854
+      },
+      {
+        "sample": "raw-14",
+        "meanRGBDifference": 1.3333
+      },
+      {
+        "sample": "raw-16",
+        "meanRGBDifference": 1.3854
+      },
+      {
+        "sample": "body-diamond",
+        "meanRGBDifference": 1.5029
+      },
+      {
+        "sample": "raw-17",
+        "meanRGBDifference": 1.2628
+      }
+    ]
+  },
+  "android": {
+    "samples": 53,
+    "maximumMeanRGBDifference": 0.6831,
+    "results": [
+      {
+        "sample": "body-blob",
+        "meanRGBDifference": 0.605
+      },
+      {
+        "sample": "body-drop",
+        "meanRGBDifference": 0.5005
+      },
+      {
+        "sample": "raw-19",
+        "meanRGBDifference": 0.5964
+      },
+      {
+        "sample": "body-hexagon",
+        "meanRGBDifference": 0.4885
+      },
+      {
+        "sample": "face-happy",
+        "meanRGBDifference": 0.5866
+      },
+      {
+        "sample": "shape-hexagon",
+        "meanRGBDifference": 0.6831
+      },
+      {
+        "sample": "raw-24",
+        "meanRGBDifference": 0.5397
+      },
+      {
+        "sample": "raw-18",
+        "meanRGBDifference": 0.5409
+      },
+      {
+        "sample": "face-listening",
+        "meanRGBDifference": 0.5162
+      },
+      {
+        "sample": "raw-20",
+        "meanRGBDifference": 0.6456
+      },
+      {
+        "sample": "face-working",
+        "meanRGBDifference": 0.4851
+      },
+      {
+        "sample": "raw-21",
+        "meanRGBDifference": 0.6067
+      },
+      {
+        "sample": "body-squircle",
+        "meanRGBDifference": 0.377
+      },
+      {
+        "sample": "raw-23",
+        "meanRGBDifference": 0.5663
+      },
+      {
+        "sample": "body-capsule",
+        "meanRGBDifference": 0.6063
+      },
+      {
+        "sample": "shape-capsule",
+        "meanRGBDifference": 0.4368
+      },
+      {
+        "sample": "raw-22",
+        "meanRGBDifference": 0.5611
+      },
+      {
+        "sample": "face-proud",
+        "meanRGBDifference": 0.4526
+      },
+      {
+        "sample": "shape-circle",
+        "meanRGBDifference": 0.5468
+      },
+      {
+        "sample": "face-idle",
+        "meanRGBDifference": 0.4665
+      },
+      {
+        "sample": "raw-3",
+        "meanRGBDifference": 0.6126
+      },
+      {
+        "sample": "raw-2",
+        "meanRGBDifference": 0.65
+      },
+      {
+        "sample": "body-star",
+        "meanRGBDifference": 0.5958
+      },
+      {
+        "sample": "shape-cloud",
+        "meanRGBDifference": 0.5617
+      },
+      {
+        "sample": "raw-0",
+        "meanRGBDifference": 0.5359
+      },
+      {
+        "sample": "raw-1",
+        "meanRGBDifference": 0.5736
+      },
+      {
+        "sample": "face-curious",
+        "meanRGBDifference": 0.5239
+      },
+      {
+        "sample": "raw-5",
+        "meanRGBDifference": 0.5888
+      },
+      {
+        "sample": "raw-4",
+        "meanRGBDifference": 0.5757
+      },
+      {
+        "sample": "shape-ellipse",
+        "meanRGBDifference": 0.6108
+      },
+      {
+        "sample": "raw-6",
+        "meanRGBDifference": 0.5278
+      },
+      {
+        "sample": "raw-7",
+        "meanRGBDifference": 0.561
+      },
+      {
+        "sample": "shape-droplet",
+        "meanRGBDifference": 0.5092
+      },
+      {
+        "sample": "shape-triangle",
+        "meanRGBDifference": 0.6741
+      },
+      {
+        "sample": "face-drowsy",
+        "meanRGBDifference": 0.4987
+      },
+      {
+        "sample": "face-suspicious",
+        "meanRGBDifference": 0.5247
+      },
+      {
+        "sample": "raw-9",
+        "meanRGBDifference": 0.5332
+      },
+      {
+        "sample": "raw-8",
+        "meanRGBDifference": 0.54
+      },
+      {
+        "sample": "face-sleeping",
+        "meanRGBDifference": 0.4992
+      },
+      {
+        "sample": "body-circle",
+        "meanRGBDifference": 0.5808
+      },
+      {
+        "sample": "raw-13",
+        "meanRGBDifference": 0.5723
+      },
+      {
+        "sample": "body-cursor",
+        "meanRGBDifference": 0.5305
+      },
+      {
+        "sample": "shape-square",
+        "meanRGBDifference": 0.4013
+      },
+      {
+        "sample": "raw-12",
+        "meanRGBDifference": 0.6144
+      },
+      {
+        "sample": "raw-10",
+        "meanRGBDifference": 0.5922
+      },
+      {
+        "sample": "face-thinking",
+        "meanRGBDifference": 0.4751
+      },
+      {
+        "sample": "raw-11",
+        "meanRGBDifference": 0.6654
+      },
+      {
+        "sample": "raw-15",
+        "meanRGBDifference": 0.5201
+      },
+      {
+        "sample": "body-shield",
+        "meanRGBDifference": 0.4822
+      },
+      {
+        "sample": "raw-14",
+        "meanRGBDifference": 0.5833
+      },
+      {
+        "sample": "raw-16",
+        "meanRGBDifference": 0.5655
+      },
+      {
+        "sample": "body-diamond",
+        "meanRGBDifference": 0.4791
+      },
+      {
+        "sample": "raw-17",
+        "meanRGBDifference": 0.572
+      }
+    ]
+  }
+}

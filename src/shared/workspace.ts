@@ -4,6 +4,19 @@ export interface WorkspaceAgent {
   name: string
   avatar: string
   instructions: string
+  /** Explicit account-owner grant; absent on older records means disabled. */
+  execution?: 'profile' | 'computer'
+  computerEnvironmentId?:string
+  computerEnvironmentName?:string
+  canManageTeam?: boolean
+  teamAuthorizationVersion?: number
+  temporaryGoalId?:string
+  helperActivation?:number
+  helperRunnerId?:string
+  retiredAt?:number
+  cleanupState?:'pending'|'complete'
+  createdByAgentId?: string
+  createdFromRunId?: string
   nodeId: string
   profile: string
   remoteAgentId?: string
@@ -59,6 +72,7 @@ export interface WorkspaceTask {
   lastMessageAt?: number
   createdAt: number
   updatedAt: number
+  goal?: import('./agentTasks.js').AgentGoal
 }
 export interface WorkspaceFile {
   id: string
@@ -73,12 +87,14 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  execution?:'profile'|'computer'
   id: string
   conversationId: string
   /** User-visible task scope. `taskId` below remains the scheduler turn ID. */
   conversationTaskId?: string
   seq: number
   role: 'user' | 'assistant' | 'system'
+  taskReference?: { conversationId: string; taskId: string }
   agentId?: string
   agentName?: string
   content: string
@@ -103,6 +119,11 @@ export interface WorkspaceRun {
   round: number
   error?: string
   stopRequested?: boolean
+  assignmentId?: string
+  targetAgentId?: string
+  triggerKind?: 'assignment' | 'task_review' | 'task_result'
+  internalInstruction?: string
+  authorizationVersion?: number
   createdAt: number
   updatedAt: number
 }
