@@ -12,6 +12,7 @@ import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import TaskPlan from '@/components/workspace/TaskPlan.vue'
 import type { AgentAssignment } from '@shared/agentTasks'
 import type { WorkspaceTask } from '@shared/workspace'
+import type { WorkspaceLifecycleAction, WorkspaceLifecyclePreview } from '@shared/workspaceLifecycle'
 import FloatingResourceSearch from '@/components/app/FloatingResourceSearch.vue'
 import type { SidebarItem } from '@/components/app/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
@@ -78,7 +79,7 @@ const searchItems = computed<SidebarItem[]>(() => [false, true].map(archived => 
   return { id: archived ? 'archived' : 'unarchived', title: archived ? '已归档' : '未归档', children: items, emptyText: archived ? '没有已归档聊天' : '没有未归档聊天' }
 }))
 const archivedIds = computed(() => new Set(conversations.value.filter(c => c.archived).map(c => c.id)))
-const deletingId = ref(''), deleteError = ref('')
+const lifecycleId = ref(''), searchActionError = ref(''), lifecycleError = ref(''), lifecycleAction = ref<WorkspaceLifecycleAction>()
 const composer = ref<InstanceType<typeof ComposerShell>>()
 const timeline = ref<InstanceType<typeof MessageTimeline>>()
 const quoted = ref<UiMessage | null>(null)
@@ -536,45 +537,55 @@ async function send() {
 async function action(operation: 'pin' | 'archive', id = active.value?.id) {
   const c = conversations.value.find(c => c.id === id)
   if (!c) return
+  if (operation === 'archive') return changeLifecycle(c.archived ? 'restore' : 'archive', c.id)
   try {
-    if (operation === 'pin')
-      await apiRequest(`/api/app/conversations/${c.id}`, {
+    await apiRequest(`/api/app/conversations/${c.id}`, {
         method: 'PATCH',
         body: { pinned: !c.pinned },
       })
-    else
-      await apiRequest(
-        c.kind === 'direct'
-          ? `/api/app/agents/${c.memberIds[0]}`
-          : `/api/app/conversations/${c.id}`,
-        { method: 'PATCH', body: { archived: !c.archived } },
-      )
     await refresh()
     await load()
   } catch (e) {
     error.value = String(e)
   }
 }
-async function deleteArchivedConversation(id: string) {
+async function changeLifecycle(operation: WorkspaceLifecycleAction, id: string, fromSearch = false) {
   const conversation = conversations.value.find(c => c.id === id)
-  if (!conversation?.archived || deletingId.value) return
-  deleteError.value = ''
-  const direct = conversation.kind === 'direct'
-  const message = direct
-    ? `永久删除 Bot「${conversation.name}」及其聊天记录？此操作无法撤销，文件库中的文件会保留。`
-    : `永久删除群聊「${conversation.name}」及其聊天记录？此操作无法撤销，成员 Bot 和文件库中的文件会保留。`
-  if (!confirm(message)) return
-  deletingId.value = id
+  if (!conversation || lifecycleId.value) return
+  const actionError = fromSearch ? searchActionError : lifecycleError
+  actionError.value = ''
+  lifecycleId.value = id
+  lifecycleAction.value = operation
   try {
-    await apiRequest(direct ? `/api/app/agents/${conversation.memberIds[0]}` : `/api/app/conversations/${id}`, { method: 'DELETE' })
-    conversations.value = conversations.value.filter(c => c.id !== id)
-    if (direct) agents.value = agents.value.filter(a => a.id !== conversation.memberIds[0])
-    if (selected.value === id) await router.replace('/conversations')
+    const path = `/api/app/conversations/${id}/lifecycle`
+    let confirmationToken: string | undefined
+    if (operation !== 'restore') {
+      const preview = await apiRequest<WorkspaceLifecyclePreview>(path)
+      const managed = preview.groups.filter(group => group.administrator)
+      if (managed.length) throw new Error(`此 Bot 是群聊${managed.map(group => `「${group.name}」`).join('、')}的管理者，请先转交管理权，再归档或删除。`)
+      const verb = operation === 'delete' ? '永久删除' : '归档'
+      const target = preview.kind === 'direct' ? 'Bot' : '群聊'
+      let message = `${verb} ${target}「${preview.name}」${operation === 'delete' ? '及其聊天记录' : ''}？`
+      if (preview.groups.length) message += `\n此 Bot 已加入群聊：${preview.groups.map(group => `「${group.name}」`).join('、')}。确认后会先从这些群聊移除，再${verb}。`
+      message += operation === 'delete'
+        ? `\n此操作无法撤销，${preview.kind === 'group' ? '成员 Bot 和' : ''}文件库中的文件会保留。`
+        : '\n聊天记录会保留，可在搜索的“已归档”中取消归档。'
+      if (!confirm(message)) return
+      confirmationToken = preview.confirmationToken
+    }
+    await apiRequest(path, { method: 'POST', body: { action: operation, ...(confirmationToken ? { confirmationToken } : {}) } })
+    if (operation === 'delete') {
+      conversations.value = conversations.value.filter(c => c.id !== id)
+      if (conversation.kind === 'direct') agents.value = agents.value.filter(a => a.id !== conversation.memberIds[0])
+      if (selected.value === id) await router.replace('/conversations')
+    }
     await refresh()
+    if (selected.value === id) await load()
   } catch (cause) {
-    deleteError.value = cause instanceof Error ? cause.message : '删除失败，请重试'
+    actionError.value = cause instanceof Error ? cause.message : '操作失败，请重试'
   } finally {
-    deletingId.value = ''
+    lifecycleId.value = ''
+    lifecycleAction.value = undefined
   }
 }
 async function stopMember(id: string) {
@@ -680,10 +691,10 @@ onBeforeUnmount(() => {
     @create-remote-agent="remotePickerOpen = true"
   >
     <template #sidebar
-      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)"
+      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <template #mobile-sidebar
-      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)"
+      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">
@@ -724,14 +735,18 @@ onBeforeUnmount(() => {
     </div>
     <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" auto-take @changed="load()" @close="computerOpen=false" />
     <LocalVmWorkspace ref="vmWorkspace" v-if="twoDesktops&&desktopAgent" :agents="agents.filter(a=>a.execution==='computer'&&!a.archived&&!a.computerEnvironmentId)" :primary="desktopAgent.id" @close="twoDesktops=false" />
-    <FloatingResourceSearch section="groups" label="搜索聊天" :items="searchItems" tabbed @open="deleteError = ''" @select="select">
+    <FloatingResourceSearch section="groups" label="搜索聊天" :items="searchItems" tabbed @open="searchActionError = ''" @select="select">
       <template #item-actions="{ item }">
-        <button v-if="archivedIds.has(item.id)" type="button" class="search-delete" :aria-label="`删除聊天：${item.title}`" :disabled="!!deletingId" :aria-busy="deletingId === item.id" @click="deleteArchivedConversation(item.id)">
-          <AppIcon name="trash" :size="15" />{{ deletingId === item.id ? '删除中…' : '删除' }}
-        </button>
+        <div v-if="archivedIds.has(item.id)" class="search-lifecycle-actions">
+          <button type="button" class="search-restore" :aria-label="`取消归档：${item.title}`" :disabled="!!lifecycleId" @click="changeLifecycle('restore', item.id, true)">{{ lifecycleId === item.id && lifecycleAction === 'restore' ? '恢复中…' : '取消归档' }}</button>
+          <button type="button" class="search-delete" :aria-label="`删除聊天：${item.title}`" :disabled="!!lifecycleId" :aria-busy="lifecycleId === item.id && lifecycleAction === 'delete'" @click="changeLifecycle('delete', item.id, true)">
+            <AppIcon name="trash" :size="15" />{{ lifecycleId === item.id && lifecycleAction === 'delete' ? '删除中…' : '删除' }}
+          </button>
+        </div>
       </template>
-      <template #footer><p v-if="deleteError" class="search-delete-error" role="alert">{{ deleteError }}</p></template>
+      <template #footer><p v-if="searchActionError" class="search-delete-error" role="alert">{{ searchActionError }}</p></template>
     </FloatingResourceSearch>
+    <Teleport to="body"><div v-if="lifecycleError" class="lifecycle-error" role="alert"><span>{{ lifecycleError }}</span><button type="button" aria-label="关闭聊天操作提示" @click="lifecycleError = ''"><AppIcon name="close" :size="16" /></button></div></Teleport>
     <PreviewModal v-if="preview" :item="preview" :items="media" @close="preview = null" />
     <ImagePreviewLightbox v-model="mediaIndex" :images="lightboxMedia" />
     <RemoteAgentPicker v-if="remotePickerOpen && !auth.isBotOnly" @close="remotePickerOpen = false" @added="remoteAdded" />
@@ -940,4 +955,13 @@ onBeforeUnmount(() => {
 .search-delete:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .search-delete:disabled{opacity:.5;cursor:wait}
 .search-delete-error{margin:0;padding:10px 16px 14px;color:var(--danger);font-size:12px;line-height:1.5}
+.search-lifecycle-actions{display:flex;flex:0 0 auto;align-items:center;gap:2px}
+.search-restore{min-height:44px;padding:6px 8px;border:0;border-radius:8px;background:transparent;color:var(--text-secondary);font:12px var(--font-ui);cursor:pointer;white-space:nowrap}
+.search-restore:hover:not(:disabled){background:var(--surface-hover)}
+.search-restore:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.search-restore:disabled{opacity:.5;cursor:wait}
+.lifecycle-error{position:fixed;z-index:220;left:50%;bottom:max(24px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:flex-start;gap:12px;width:max-content;max-width:min(520px,calc(100vw - 32px));padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-raised);box-shadow:var(--shadow-float);color:var(--danger);font-size:13px;line-height:1.6}
+.lifecycle-error button{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:var(--text-secondary);cursor:pointer}
+.lifecycle-error button:hover{background:var(--surface-hover)}
+.lifecycle-error button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>

@@ -89,6 +89,16 @@ describe('system release contract', () => {
 })
 
 describe('SystemUpdateManager', () => {
+  it('keeps old completed job history without showing it as the current upgrade', async () => {
+    const { manager, launched, root } = fixture()
+    const job = await manager.startUpdate(latest.releaseVersion)
+    const stored = JSON.parse(readFileSync(launched[0]!, 'utf8'))
+    writeFileSync(launched[0]!, JSON.stringify({ ...stored, state: 'succeeded', message: '已升级 Web 0.3.0' }))
+    expect(manager.status().job).toBeUndefined()
+    expect(manager.job(job.id)?.state).toBe('succeeded')
+    writeFileSync(join(root, 'release.json'), JSON.stringify(latest))
+    expect(manager.status().job?.id).toBe(job.id)
+  })
   it('uses the migrated source and compares versions rather than mirror commit identities', async () => {
     const { root, config } = fixture()
     let sourceSeen = ''

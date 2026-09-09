@@ -95,6 +95,87 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it.each(['archive', 'delete'] as const)('%s removes a confirmed ordinary member from all groups atomically', async action => {
+    const store = runtime.workspace
+    const lead = store.createAgent('first', { name: '管理者', profile: 'default' })
+    const bot = store.createAgent('first', { name: '待处理成员', profile: 'default' })
+    const direct = store.list<any>('first', 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === bot.id)
+    const group = store.createGroup('first', { name: '设计群', memberIds: [lead.id, bot.id], administratorId: lead.id, autoReplyIds: [bot.id], memberRoles: { [bot.id]: { name: '设计', description: '' } } })
+    const oldGroup = store.createGroup('first', { name: '旧群', memberIds: [lead.id, bot.id], administratorId: lead.id })
+    store.updateConversation('first', oldGroup.id, { archived: true })
+    const path = `/api/app/conversations/${direct.id}/lifecycle`
+    const preview = (await req('get', path).expect(200)).body
+    expect(preview.groups).toEqual(expect.arrayContaining([{ id: group.id, name: '设计群', administrator: false }, { id: oldGroup.id, name: '旧群', administrator: false }]))
+    await req('post', path).send({ action }).expect(409)
+    expect((await req('patch', `/api/app/agents/${bot.id}`).send({ archived: true }).expect(409)).body.code).toBe('agent_in_group')
+    await req('get', path, 'foreign').expect(404)
+    await req('post', path, 'foreign').send({ action, confirmationToken: preview.confirmationToken }).expect(404)
+    await req('post', path).set('X-CSRF-Token', 'invalid').send({ action, confirmationToken: preview.confirmationToken }).expect(403)
+    await req('post', path).send({ action, confirmationToken: preview.confirmationToken }).expect(200)
+    expect(store.require<any>('first', 'conversation', group.id)).toMatchObject({ memberIds: [lead.id], autoReplyIds: [], memberRoles: {}, administratorId: lead.id })
+    expect(store.require<any>('first', 'conversation', oldGroup.id).memberIds).toEqual([lead.id])
+    if (action === 'delete') {
+      expect(store.get('first', 'agent', bot.id)).toBeUndefined()
+      expect(store.get('first', 'conversation', direct.id)).toBeUndefined()
+    } else {
+      expect(store.require<any>('first', 'agent', bot.id).archived).toBe(true)
+      await req('post', path).send({ action: 'restore' }).expect(200)
+      expect(store.require<any>('first', 'conversation', direct.id).archived).toBe(false)
+      expect(store.require<any>('first', 'conversation', group.id).memberIds).toEqual([lead.id])
+    }
+    expect(store.get('first', 'agent', lead.id)).toBeDefined()
+  })
+  it.each(['archive', 'delete'] as const)('blocks %s for a group administrator without removing other memberships', async action => {
+    const store = runtime.workspace
+    const bot = store.createAgent('first', { name: '群管理者', profile: 'default' })
+    const other = store.createAgent('first', { name: '其他成员', profile: 'default' })
+    const direct = store.list<any>('first', 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === bot.id)
+    const regular = store.createGroup('first', { name: '普通群', memberIds: [bot.id, other.id], administratorId: other.id })
+    const managed = store.createGroup('first', { name: '管理群', memberIds: [bot.id, other.id], administratorId: bot.id })
+    const path = `/api/app/conversations/${direct.id}/lifecycle`
+    const preview = (await req('get', path).expect(200)).body
+    const cursor = store.cursor('first')
+    const result = await req('post', path).send({ action, confirmationToken: preview.confirmationToken }).expect(409)
+    expect(result.body.code).toBe('agent_group_administrator')
+    expect(result.body.error).toContain('管理群')
+    expect(store.require<any>('first', 'conversation', regular.id).memberIds).toContain(bot.id)
+    expect(store.require<any>('first', 'conversation', managed.id).administratorId).toBe(bot.id)
+    expect(store.require<any>('first', 'agent', bot.id).archived).toBe(false)
+    expect(store.cursor('first')).toBe(cursor)
+  })
+  it('rejects a stale group confirmation and rolls back membership on a later deletion failure', async () => {
+    const store = runtime.workspace
+    const lead = store.createAgent('first', { name: '负责人', profile: 'default' })
+    const bot = store.createAgent('first', { name: '成员', profile: 'default' })
+    const direct = store.list<any>('first', 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === bot.id)
+    const path = `/api/app/conversations/${direct.id}/lifecycle`
+    const old = (await req('get', path).expect(200)).body
+    const group = store.createGroup('first', { name: '后来加入的群', memberIds: [lead.id, bot.id], administratorId: lead.id })
+    expect((await req('post', path).send({ action: 'delete', confirmationToken: old.confirmationToken }).expect(409)).body.code).toBe('lifecycle_confirmation_stale')
+    const current = (await req('get', path).expect(200)).body
+    store.put('first', 'turn', 'pending', { id: 'pending', agentId: bot.id, conversationId: group.id, status: 'uncertain' })
+    await req('post', path).send({ action: 'archive', confirmationToken: current.confirmationToken }).expect(409)
+    store.remove('first', 'turn', 'pending')
+    const cursor = store.cursor('first')
+    const failure = vi.spyOn(store, 'deleteAgent').mockImplementation(() => { throw new Error('模拟写入失败') })
+    await req('post', path).send({ action: 'delete', confirmationToken: current.confirmationToken }).expect(500)
+    failure.mockRestore()
+    expect(store.require<any>('first', 'conversation', group.id).memberIds).toContain(bot.id)
+    expect(store.require<any>('first', 'agent', bot.id).archived).toBe(false)
+    expect(store.require<any>('first', 'conversation', direct.id).archived).toBe(false)
+    expect(store.cursor('first')).toBe(cursor)
+  })
+  it('deletes an unarchived group while preserving its member Bots', async () => {
+    const store = runtime.workspace
+    const a = store.createAgent('first', { name: '甲', profile: 'default' }), b = store.createAgent('first', { name: '乙', profile: 'default' })
+    const group = store.createGroup('first', { name: '待删除群', memberIds: [a.id, b.id], administratorId: a.id })
+    const path = `/api/app/conversations/${group.id}/lifecycle`
+    const preview = (await req('get', path).expect(200)).body
+    await req('post', path).send({ action: 'delete', confirmationToken: preview.confirmationToken }).expect(200)
+    expect(store.get('first', 'conversation', group.id)).toBeUndefined()
+    expect(store.get('first', 'agent', a.id)).toBeDefined()
+    expect(store.get('first', 'agent', b.id)).toBeDefined()
+  })
   it('deletes only archived owned chats, clears their records, and preserves library files and members', async () => {
     const store = runtime.workspace
     const lead = store.createAgent('first', { name: '负责人', profile: 'default' })

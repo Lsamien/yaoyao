@@ -60,6 +60,24 @@ afterEach(() => {
 })
 
 describe('SystemUpdatePanel', () => {
+  it('hides a previous successful update that does not match the running Web version', async () => {
+    const old = { ...doneJob, target: { ...manifest, webVersion: '0.1.0', releaseVersion: '0.1.0' }, message: '已升级 Web 0.1.0' }
+    api.systemUpdateStatus.mockResolvedValue({ ...readyStatus, job: old })
+    api.checkSystemUpdate.mockResolvedValue({ ...readyStatus, job: old })
+    const wrapper = mount(SystemUpdatePanel, { global: { stubs: { AppIcon: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain(manifest.webVersion)
+    expect(wrapper.text()).not.toContain('已升级 Web 0.1.0')
+    expect(wrapper.text()).toContain('回滚上一版本')
+    wrapper.unmount()
+  })
+  it('clears a finished job when refreshed status no longer includes it', async () => {
+    api.systemUpdateStatus.mockResolvedValue({ ...readyStatus, job: { ...doneJob, target: manifest } })
+    const wrapper = mount(SystemUpdatePanel, { global: { stubs: { AppIcon: true } } })
+    await flushPromises()
+    expect(wrapper.find('.update-progress').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('shows GitHub failures without claiming the installed version is latest', async () => {
     api.systemUpdateStatus.mockResolvedValue({ ...readyStatus, releaseSource: 'https://github.com/Lsamien/hermes-yaoyao.git', releasePageUrl: 'https://github.com/Lsamien/hermes-yaoyao/releases' })
     api.checkSystemUpdate.mockRejectedValue(new Error('GitHub 请求受限，请稍后重试'))

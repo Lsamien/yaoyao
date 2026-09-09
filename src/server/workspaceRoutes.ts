@@ -114,7 +114,13 @@ export function workspaceRouter(
     if ((input.canManageTeam === true && agent.canManageTeam !== true) || input.execution==='computer') await runtime.teamTools.requireAvailable(user, {...agent,...(input.execution?{execution:input.execution}:{})})
     if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
     nodes.requireSource(user, agent)
-    ctx.body = { agent: store.agentSummary(store.updateAgent(user, ctx.params.id, input)) }
+    ctx.body = { agent: store.agentSummary(store.atomic(() => {
+      if (input.archived === true && !agent.temporaryGoalId) {
+        const direct = store.list<WorkspaceConversation>(user, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === agent.id)
+        if (direct) store.changeConversationLifecycle(user, direct.id, 'archive')
+      }
+      return store.updateAgent(user, ctx.params.id, input)
+    })) }
   })
   router.delete('/api/app/agents/:id', (ctx) => {
     store.deleteAgent(owner(ctx), ctx.params.id)
@@ -122,6 +128,16 @@ export function workspaceRouter(
   })
   router.delete('/api/app/conversations/:id', (ctx) => {
     store.deleteConversation(owner(ctx), ctx.params.id)
+    ctx.body = { ok: true }
+  })
+  router.get('/api/app/conversations/:id/lifecycle', ctx => {
+    ctx.body = store.conversationLifecycle(owner(ctx), ctx.params.id)
+  })
+  router.post('/api/app/conversations/:id/lifecycle', ctx => {
+    const input = parse(z.object({ action: z.enum(['archive', 'restore', 'delete']), confirmationToken: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(), body(ctx))
+    if (input.action !== 'restore' && !input.confirmationToken) throw new HttpError(409, '请先确认聊天操作', 'lifecycle_confirmation_required')
+    store.changeConversationLifecycle(owner(ctx), ctx.params.id, input.action, input.confirmationToken)
+    runtime.wake()
     ctx.body = { ok: true }
   })
   router.get('/api/app/conversations', (ctx) => {

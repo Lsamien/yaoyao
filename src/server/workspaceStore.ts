@@ -8,6 +8,7 @@ import { HttpError } from './errors.js'
 import { isVisibleMessageFile } from '../shared/messageFiles.js'
 import type { StoredWorkspaceFile } from './workspaceAssets.js'
 import { notificationPlainText } from './notificationText.js'
+import type { WorkspaceLifecycleAction, WorkspaceLifecyclePreview } from '../shared/workspaceLifecycle.js'
 import { decodeAgentMascotAvatar, isAgentImageAvatar, defaultAgentIdentity, encodeAgentAvatar, normalizeAvatar, randomAgentIdentity, MAX_AVATAR_DESCRIPTOR_LENGTH } from '../shared/agentIdentity.js'
 import type {
   WorkspaceAgent as Agent,
@@ -374,6 +375,63 @@ export class WorkspaceStore {
       return next
     })
   }
+  conversationLifecycle(owner: string, id: string): WorkspaceLifecyclePreview {
+    const conversation = this.require<Conversation>(owner, 'conversation', id)
+    const agent = conversation.kind === 'direct' ? this.require<Agent>(owner, 'agent', conversation.memberIds[0]!) : undefined
+    const groups = agent ? this.list<Conversation>(owner, 'conversation')
+      .filter(group => group.kind === 'group' && group.memberIds.includes(agent.id))
+      .sort((a, b) => a.id.localeCompare(b.id)) : []
+    return {
+      name: conversation.name,
+      kind: conversation.kind,
+      groups: groups.map(group => ({ id: group.id, name: group.name, administrator: group.administratorId === agent?.id })),
+      confirmationToken: createHash('sha256').update(JSON.stringify([
+        conversation.id, conversation.name, conversation.archived, agent?.revision,
+        groups.map(group => [group.id, group.name, group.administratorId, group.memberIds]),
+      ])).digest('hex'),
+    }
+  }
+  private requireConversationIdle(owner: string, id: string): void {
+    if (['run', 'turn'].some(kind => this.list<{ conversationId: string; status: string }>(owner, kind).some(run => run.conversationId === id && !['complete', 'failed', 'interrupted', 'skipped'].includes(run.status))))
+      throw new HttpError(409, '聊天仍有任务未结束，请停止任务后重试', 'conversation_running')
+    if (this.list<{ conversationId: string; origin?: { conversationId: string }; status: string }>(owner, 'goal').some(goal =>
+      (goal.conversationId === id || goal.origin?.conversationId === id) && !['complete', 'blocked', 'cancelled'].includes(goal.status)))
+      throw new HttpError(409, '聊天仍有关联任务未结束，请停止任务后重试', 'conversation_running')
+  }
+  changeConversationLifecycle(owner: string, id: string, action: WorkspaceLifecycleAction, confirmationToken?: string): void {
+    this.atomic(() => {
+      const conversation = this.require<Conversation>(owner, 'conversation', id)
+      const agent = conversation.kind === 'direct' ? this.require<Agent>(owner, 'agent', conversation.memberIds[0]!) : undefined
+      if (action === 'restore') {
+        if (agent) this.updateAgent(owner, agent.id, { archived: false })
+        else this.updateConversation(owner, id, { archived: false })
+        return
+      }
+      const preview = this.conversationLifecycle(owner, id)
+      const managed = preview.groups.filter(group => group.administrator)
+      if (managed.length) throw new HttpError(409, `此 Bot 是群聊${managed.map(group => `「${group.name}」`).join('、')}的管理者，请先转交管理权，再归档或删除`, 'agent_group_administrator')
+      if (confirmationToken !== undefined && confirmationToken !== preview.confirmationToken)
+        throw new HttpError(409, '聊天或群聊成员已变化，请重新确认后操作', 'lifecycle_confirmation_stale')
+      if (preview.groups.length && !confirmationToken)
+        throw new HttpError(409, '此 Bot 仍是群聊成员，请确认退出群聊后再归档或删除', 'agent_in_group')
+      if (agent?.temporaryGoalId) throw new HttpError(409, '临时助手由所属任务管理', 'helper_task_bound')
+      if (agent?.computerEnvironmentId) throw new HttpError(409, '请先解除电脑共享，再归档或删除 Bot', 'shared_computer_active')
+      if (agent && this.list<{ agentId: string; status: string }>(owner, 'turn').some(turn => turn.agentId === agent.id && !['complete', 'failed', 'interrupted', 'skipped'].includes(turn.status)))
+        throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
+      for (const conversationId of [id, ...preview.groups.map(group => group.id)]) this.requireConversationIdle(owner, conversationId)
+      for (const group of preview.groups) {
+        const current = this.require<Conversation>(owner, 'conversation', group.id)
+        this.updateConversation(owner, group.id, { memberIds: current.memberIds.filter(memberId => memberId !== agent!.id) })
+      }
+      if (agent) {
+        this.updateAgent(owner, agent.id, { archived: true })
+        if (action === 'delete') this.deleteAgent(owner, agent.id)
+      } else {
+        this.updateConversation(owner, id, { archived: true })
+        if (action === 'delete') this.deleteConversation(owner, id)
+      }
+    })
+  }
   deleteAgent(owner: string, id: string): void {
     this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
@@ -397,11 +455,7 @@ export class WorkspaceStore {
       if (conversation.kind === 'direct' && !deletingAgent)
         throw new HttpError(400, '请删除对应的 Bot', 'delete_agent_instead')
       if (!conversation.archived) throw new HttpError(409, '请先归档聊天，再删除', 'conversation_not_archived')
-      if (['run', 'turn'].some(kind => this.list<{ conversationId: string; status: string }>(owner, kind).some(run => run.conversationId === id && !['complete', 'failed', 'interrupted'].includes(run.status))))
-        throw new HttpError(409, '聊天仍有任务未结束，请停止任务后重试', 'conversation_running')
-      if (this.list<{ conversationId: string; origin?: { conversationId: string }; status: string }>(owner, 'goal').some(goal =>
-        (goal.conversationId === id || goal.origin?.conversationId === id) && !['complete', 'blocked', 'cancelled'].includes(goal.status)))
-        throw new HttpError(409, '聊天仍有关联任务未结束，请停止任务后重试', 'conversation_running')
+      this.requireConversationIdle(owner, id)
       const taskIds = new Set(this.list<Task>(owner, 'conversation-task').filter(task => task.conversationId === id).map(task => task.id))
       for (const taskId of taskIds) {
         this.remove(owner, 'context', taskId)

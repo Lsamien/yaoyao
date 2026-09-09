@@ -281,7 +281,7 @@ export class SystemUpdateManager {
       supported: !this.desktopOwned && this.platform === 'darwin',
       unsupportedReason: this.desktopOwned ? 'App 内置服务随 App 一起更新，请使用夭夭菜单中的 App 更新与回退。' : this.platform === 'darwin' ? undefined : '容器和非 macOS 环境请通过替换部署镜像升级',
       canRollback: !this.desktopOwned && existsSync(join(this.updateHome, 'last-success.json')),
-      job: publicJob(job),
+      job: job?.state === 'succeeded' && job.target && (job.target.webVersion !== current.webVersion || job.target.releaseVersion !== current.releaseVersion) ? undefined : publicJob(job),
     }
   }
 

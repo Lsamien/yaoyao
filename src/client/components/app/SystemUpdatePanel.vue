@@ -29,6 +29,11 @@ const terminal = computed(() => job.value && ['succeeded', 'failed', 'rolled_bac
 const jobRunning = computed(() => Boolean(job.value && !terminal.value))
 const locked = computed(() => operationStarting.value || (jobRunning.value && !trackingTimedOut.value))
 const canApply = computed(() => Boolean(status.value?.supported && status.value.updateAvailable && status.value.latest && !jobRunning.value && !busy.value))
+const displayedJob = computed(() => {
+  const current = status.value?.current, value = job.value
+  if (value?.state === 'succeeded' && value.target && current && (value.target.webVersion !== current.webVersion || value.target.releaseVersion !== current.releaseVersion)) return undefined
+  return value
+})
 
 function stopPolling() { pollToken += 1 }
 function reloadPage() { window.location.reload() }
@@ -39,7 +44,7 @@ async function refresh(checkRemote = false): Promise<SystemUpdateStatus | undefi
   try {
     status.value = checkRemote ? await checkSystemUpdate() : await systemUpdateStatus()
     if (checkRemote) remoteChecked.value = true
-    if (status.value.job) job.value = status.value.job
+    job.value = status.value.job
     return status.value
   } catch (cause) {
     if (checkRemote) remoteChecked.value = false
@@ -160,13 +165,13 @@ onBeforeUnmount(() => { lifecycleToken += 1; operationStarting.value = false; st
     <p v-if="status?.installationMode === 'source'" class="mode-note">首次升级会把运行服务迁移到可回滚的版本目录；Git 工作区不会被覆盖。</p>
     <p v-if="status && !status.supported" class="mode-note">{{ status.unsupportedReason }}</p>
 
-    <section v-if="job" class="update-progress" :class="`update-progress--${job.state}`" aria-live="polite">
-      <span class="progress-icon"><AppIcon :name="job.state === 'succeeded' || job.state === 'rolled_back' ? 'check' : job.state === 'failed' ? 'alert' : 'refresh'" :size="18" /></span>
-      <span><strong>{{ job.message }}</strong><small v-if="job.error">{{ job.error }}</small></span>
+    <section v-if="displayedJob" class="update-progress" :class="`update-progress--${displayedJob.state}`" aria-live="polite">
+      <span class="progress-icon"><AppIcon :name="displayedJob.state === 'succeeded' || displayedJob.state === 'rolled_back' ? 'check' : displayedJob.state === 'failed' ? 'alert' : 'refresh'" :size="18" /></span>
+      <span><strong>{{ displayedJob.message }}</strong><small v-if="displayedJob.error">{{ displayedJob.error }}</small></span>
     </section>
 
     <footer>
-      <button v-if="job?.state === 'succeeded' || job?.state === 'rolled_back'" class="quiet-button" type="button" @click="reloadPage"><AppIcon name="refresh" :size="16" />刷新页面</button>
+      <button v-if="displayedJob?.state === 'succeeded' || displayedJob?.state === 'rolled_back'" class="quiet-button" type="button" @click="reloadPage"><AppIcon name="refresh" :size="16" />刷新页面</button>
       <button v-else-if="status?.canRollback && !jobRunning" class="quiet-button danger" type="button" :disabled="busy" @click="rollback">回滚上一版本</button>
       <button class="quiet-button" type="button" :disabled="checking || busy || operationStarting || jobRunning" @click="refresh(true)"><AppIcon name="refresh" :size="16" />{{ checking ? '检查中…' : '检查更新' }}</button>
       <button class="solid-button" type="button" :disabled="!canApply || !!error || !remoteChecked" @click="applyUpdate"><AppIcon name="download" :size="16" />{{ jobRunning ? '升级中…' : error ? '暂无法检查' : !remoteChecked ? '待检查更新' : status?.updateAvailable ? '升级 Web' : '已是最新版本' }}</button>
