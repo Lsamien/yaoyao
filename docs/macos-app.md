@@ -19,6 +19,8 @@ App、Web 服务、Vue 界面和 Runner 同仓维护。正式 App 在每个构�
 
 ## 更新与回退
 
+App 新增“检查 App 更新…”窗口，直接从官方 GitHub 检查稳定版本、下载并校验 DMG，由用户手动安装。它不依赖 Web 或 9119 在线，详见 [GitHub 版本升级](github-updates.md)。
+
 正式 App 的同步在安装/更新后的**首次启动**执行；复制 App 文件本身不执行服务操作。详见 [App 与 Web 版本同步](app-web-sync.md)。
 
 - 同步仅针对当前用户、相同数据目录和端口的本机 LaunchAgent；保留已有服务的地址、TLS、上游及通知配置。
@@ -38,7 +40,7 @@ npm run desktop:build
 npm run desktop:test
 npm run desktop:pack
 codesign --verify --deep --strict desktop-release/mac-arm64/夭夭.app
-hdiutil verify desktop-release/Yaoyao-0.4.1-arm64.dmg
+hdiutil verify desktop-release/Yaoyao-0.4.2-arm64.dmg
 ```
 
 开发 App 的 6 项测试通过：真实内置服务启动、账号与 Runner 连接、关闭窗口保持运行、服务崩溃恢复、外部客户端不误停服务、退出清理、加密配置再次启动、偏好保存及手动重新打开、版本不符拒绝、钥匙串失败保护。另有更新器 14 项定向测试通过，包含 App 禁用源码更新及回退。
@@ -56,4 +58,4 @@ Electron 初始化时设置其钥匙串项目名称（[v43.4.0 源码](https://g
 
 最终实际签名 App 的完整 Runner 导入、加密保存、服务崩溃恢复、窗口关闭保持连接、退出清理和再次打开自动连接均已通过；另有独立的核心服务生命周期测试通过。新加密助手在实际签名 App 中验证所属路径和签名团队。安装包经挂载检查，开发专用助手没有进入分发包。
 
-v0.4.1 同时发布 Web 与 macOS Apple Silicon DMG，见 [发布说明](releases/v0.4.1.md)。正式 App 首次启动按上文同步规则升级较旧的本机 Web；已有更新版本保留。独立预览应指定独立 `HERMES_YAOYAO_HOME` 和 `HERMES_YAOYAO_DESKTOP_PORT`。
+v0.4.2 同时发布 Web 与 macOS Apple Silicon DMG，见 [发布说明](releases/v0.4.2.md)。正式 App 首次启动按上文同步规则升级较旧的本机 Web；已有更新版本保留。独立预览应指定独立 `HERMES_YAOYAO_HOME` 和 `HERMES_YAOYAO_DESKTOP_PORT`。

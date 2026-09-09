@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { normalizeReleaseSource } from './lib/release-source.mjs'
 
 const label = 'com.samien.hermes-yaoyao'
 const sourceProjectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -58,7 +59,8 @@ function environment(env = process.env) {
     'HERMES_YAOYAO_FCM_PACKAGE_NAME',
     'HERMES_YAOYAO_SERVICE_ROOT',
   ]
-  return Object.fromEntries(allowed.flatMap(key => env[key] ? [[key, env[key]]] : []))
+  return { ...Object.fromEntries(allowed.flatMap(key => env[key] ? [[key, env[key]]] : [])),
+    HERMES_YAOYAO_RELEASE_SOURCE: normalizeReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE) }
 }
 
 export function launchAgentPlist(options = {}) {

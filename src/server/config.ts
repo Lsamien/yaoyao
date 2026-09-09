@@ -1,4 +1,5 @@
 import { isIP } from 'node:net'
+import { normalizeReleaseSource } from '../../bin/lib/release-source.mjs'
 import { homedir } from 'node:os'
 import { basename, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -61,7 +62,7 @@ export interface ServerConfig {
   chatCacheMode?: ChatCacheMode
 }
 
-export const DEFAULT_YAOYAO_RELEASE_SOURCE = 'https://git.samien.cn/samien/hermes-yaoyao.git'
+export { DEFAULT_RELEASE_SOURCE as DEFAULT_YAOYAO_RELEASE_SOURCE } from '../../bin/lib/release-source.mjs'
 
 function flag(value: string | undefined): boolean {
   return value === '1' || value?.toLowerCase() === 'true'
@@ -96,13 +97,13 @@ function parseUpstream(value: string | undefined): URL {
 }
 
 function parseReleaseSource(value: string | undefined): string {
-  const source = value?.trim() || DEFAULT_YAOYAO_RELEASE_SOURCE
+  const source = normalizeReleaseSource(value)
   if (source.length > 2_048 || /[\u0000-\u001f\u007f]/.test(source)) {
     throw new Error('HERMES_YAOYAO_RELEASE_SOURCE is invalid')
   }
-  if (source.startsWith('https://')) {
+  if (source.startsWith('https://') || source.startsWith('ssh://')) {
     const url = new URL(source)
-    if (url.username || url.password || url.search || url.hash) {
+    if ((url.protocol === 'https:' && url.username) || url.password || url.search || url.hash) {
       throw new Error('HERMES_YAOYAO_RELEASE_SOURCE must not contain credentials, query, or fragment')
     }
   } else if (!source.startsWith('git@') && !source.startsWith('ssh://')) {

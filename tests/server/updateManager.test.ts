@@ -89,6 +89,18 @@ describe('system release contract', () => {
 })
 
 describe('SystemUpdateManager', () => {
+  it('uses the migrated source and compares versions rather than mirror commit identities', async () => {
+    const { root, config } = fixture()
+    let sourceSeen = ''
+    const manager = new SystemUpdateManager({ ...config, releaseSource: 'https://git.samien.cn/samien/hermes-yaoyao.git' }, {
+      projectRoot: root, platform: 'darwin', inspectRemote: async source => {
+        sourceSeen = source; return { manifest: current, commit: 'd'.repeat(40) }
+      },
+    })
+    expect(await manager.check()).toMatchObject({ updateAvailable: false, releaseSource: 'https://github.com/Lsamien/hermes-yaoyao.git' })
+    expect(sourceSeen).toBe('https://github.com/Lsamien/hermes-yaoyao.git')
+    await expect(manager.startUpdate(current.releaseVersion)).rejects.toThrow('最新版本')
+  })
   it('reports the current Web release and discovers a newer fixed release', async () => {
     const { manager } = fixture()
     const status = await manager.check()

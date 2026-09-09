@@ -18,6 +18,8 @@ import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { ServerConfig } from './config.js'
 import { DEFAULT_YAOYAO_RELEASE_SOURCE } from './config.js'
+import { normalizeReleaseSource } from '../../bin/lib/release-source.mjs'
+import { githubReleasePage, inspectGitHubRelease } from './githubReleases.js'
 import {
   compareReleaseVersions,
   parseReleaseManifest,
@@ -63,6 +65,8 @@ interface StoredUpdateJob extends UpdateJob {
 }
 
 export interface SystemUpdateStatus {
+  releaseSource: string
+  releasePageUrl?: string
   current: ReleaseManifest
   build?: BuildIdentity
   installationMode: 'source' | 'release' | 'desktop'
@@ -75,6 +79,7 @@ export interface SystemUpdateStatus {
 }
 
 export interface RemoteRelease {
+  releasePageUrl?: string
   manifest: ReleaseManifest
   commit: string
 }
@@ -147,6 +152,8 @@ function exactTagCommit(output: string): string | undefined {
 }
 
 export async function inspectGitRemote(source: string, current: ReleaseManifest): Promise<RemoteRelease | undefined> {
+  source = normalizeReleaseSource(source)
+  if (source === DEFAULT_YAOYAO_RELEASE_SOURCE) return inspectGitHubRelease(source)
   const output = await run('git', ['ls-remote', '--tags', source, 'refs/tags/v*'])
   const byVersion = new Map<string, { version: string; commit: string; peeled: boolean }>()
   for (const line of output.split('\n')) {
@@ -214,7 +221,7 @@ export class SystemUpdateManager {
     this.updaterPath = resolve(options.updaterPath ?? join(this.projectRoot, 'bin', 'hermes-yaoyao-updater.mjs'))
     this.updateHome = join(config.home, 'updates')
     this.releaseRoot = resolve(config.releaseRoot ?? join(homedir(), '.local', 'share', 'hermes-yaoyao'))
-    this.releaseSource = config.releaseSource ?? DEFAULT_YAOYAO_RELEASE_SOURCE
+    this.releaseSource = normalizeReleaseSource(config.releaseSource ?? DEFAULT_YAOYAO_RELEASE_SOURCE)
     this.inspectRemote = options.inspectRemote ?? inspectGitRemote
     this.platform = options.platform ?? process.platform
     this.desktopOwned = options.desktopOwned ?? process.env.HERMES_YAOYAO_DESKTOP === '1'
@@ -265,6 +272,8 @@ export class SystemUpdateManager {
     const job = this.latestJob()
     return {
       current,
+      releaseSource: this.releaseSource,
+      releasePageUrl: githubReleasePage(this.releaseSource),
       build: readBuildIdentity(this.projectRoot),
       installationMode: this.desktopOwned ? 'desktop' : this.projectRoot.startsWith(`${this.releaseRoot}/`) ? 'release' : 'source',
       latest,
@@ -280,7 +289,7 @@ export class SystemUpdateManager {
     const current = this.currentManifest()
     if (this.desktopOwned) return this.status()
     const latest = await this.inspectRemote(this.releaseSource, current)
-    return this.status(latest?.manifest)
+    return { ...this.status(latest?.manifest), releasePageUrl: latest?.releasePageUrl ?? githubReleasePage(this.releaseSource) }
   }
 
   private acquire(jobID: string): void {

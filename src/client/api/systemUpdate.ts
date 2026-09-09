@@ -32,6 +32,8 @@ export interface UpdateJob {
 }
 
 export interface SystemUpdateStatus {
+  releaseSource?: string
+  releasePageUrl?: string
   current: ReleaseManifest
   build?: { commit: string; buildNumber: number; dirty: boolean; artifactDigest?: string }
   installationMode: 'source' | 'release' | 'desktop'

@@ -134,7 +134,7 @@ describe('server security boundary', () => {
     expect(value.host).toBe('127.0.0.1')
     expect(value.insecureLan).toBe(false)
     expect(value).not.toHaveProperty('yaoyaoPluginSource')
-    expect(value.releaseSource).toBe('https://git.samien.cn/samien/hermes-yaoyao.git')
+    expect(value.releaseSource).toBe('https://github.com/Lsamien/hermes-yaoyao.git')
     expect(value.allowRemoteUpdate).toBe(false)
   })
 
@@ -145,5 +145,10 @@ describe('server security boundary', () => {
     expect(() => loadServerConfig(isolatedEnv({
       HERMES_YAOYAO_RELEASE_SOURCE: 'https://user:secret@git.example/hermes-yaoyao.git',
     }))).toThrow(/must not contain credentials/)
+    expect(() => loadServerConfig(isolatedEnv({
+      HERMES_YAOYAO_RELEASE_SOURCE: 'ssh://git:secret@git.example/hermes-yaoyao.git',
+    }))).toThrow(/must not contain credentials/)
+    expect(loadServerConfig(isolatedEnv({ HERMES_YAOYAO_RELEASE_SOURCE: 'ssh://git@git.example/hermes-yaoyao.git' })).releaseSource)
+      .toBe('ssh://git@git.example/hermes-yaoyao.git')
   })
 })

@@ -40,6 +40,7 @@ COPY --chown=node:node package.json package-lock.json release.json ./
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/dist-server ./dist-server
+COPY --chown=node:node --from=builder /app/bin ./bin
 COPY --chown=node:node --from=builder /app/build-info.json /app/runner-bundle.tar.gz ./
 
 USER node

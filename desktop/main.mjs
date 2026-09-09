@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, utilityProcess, powerMonitor, systemPreferences, dialog, safeStorage } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, utilityProcess, powerMonitor, systemPreferences, dialog, safeStorage, net } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
@@ -8,6 +8,7 @@ import { DesktopRunnerManager } from './runner-manager.mjs'
 import { DesktopPreferences } from './preferences.mjs'
 import { DesktopCredentials } from './credentials.mjs'
 import { synchronizeLocalService, stopLocalService } from './service-sync.mjs'
+import { DesktopUpdateManager } from './update-manager.mjs'
 
 const desktopRoot = dirname(fileURLToPath(import.meta.url))
 const fixtureHome = process.env.HERMES_YAOYAO_DESKTOP_TEST_HOME
@@ -17,6 +18,8 @@ app.setName('夭夭')
 if (!app.requestSingleInstanceLock()) { app.quit() }
 else {
   let window, tray, manager, runnerManager, quitting = false, closing = false, timer
+  let updateWindow, updater
+  const updateURL = pathToFileURL(join(desktopRoot, 'update.html')).href
   const bootURL = pathToFileURL(join(desktopRoot, 'boot.html')).href
   const root = app.isPackaged ? join(process.resourcesPath, 'runtime') : join(app.getAppPath(), '.desktop-build')
   const logRoot = join(app.getPath('logs'), fixtureHome ? 'verification' : 'service')
@@ -43,6 +46,36 @@ else {
     if (!trustedBoot(event)) throw new Error('不允许此页面读取日志')
     shell.showItemInFolder(logFile)
   })
+  const trustedUpdate = event => event.sender === updateWindow?.webContents
+    && event.senderFrame === updateWindow.webContents.mainFrame && event.senderFrame.url === updateURL
+  for (const action of ['state', 'check', 'download', 'cancel', 'open', 'folder', 'release']) {
+    ipcMain.handle(`desktop-update:${action}`, async event => {
+      if (!trustedUpdate(event) || closing || quitting) throw new Error('不允许此页面操作 App 更新')
+      if (action === 'state') return updater.snapshot()
+      if (action === 'check') return updater.check()
+      if (action === 'download') return updater.download()
+      if (action === 'cancel') { updater.cancel(); return updater.snapshot() }
+      if (action === 'release') { safeExternal(updater.snapshot().releasePageUrl || 'https://github.com/Lsamien/hermes-yaoyao/releases'); return }
+      const path = await updater.verifiedFile()
+      if (closing || quitting || !trustedUpdate(event)) return
+      if (action === 'folder') shell.showItemInFolder(path)
+      else { const error = await shell.openPath(path); if (error) throw new Error(error) }
+    })
+  }
+  function showUpdates() {
+    if (closing || quitting) return
+    if (updateWindow && !updateWindow.isDestroyed()) { updateWindow.show(); updateWindow.focus(); return }
+    updateWindow = new BrowserWindow({ title: 'App 更新 · 夭夭', width: 640, height: 620, minWidth: 360, minHeight: 440, show: false,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
+        preload: join(desktopRoot, 'update-preload.cjs') } })
+    updateWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    updateWindow.webContents.on('will-navigate', event => event.preventDefault())
+    updateWindow.webContents.on('will-redirect', event => event.preventDefault())
+    updateWindow.webContents.on('will-attach-webview', event => event.preventDefault())
+    updateWindow.on('closed', () => { updater.cancel(); updateWindow = undefined })
+    updateWindow.once('ready-to-show', () => updateWindow?.show())
+    void updateWindow.loadURL(updateURL)
+  }
 
   function show() {
     if (closing || quitting) return
@@ -116,6 +149,7 @@ else {
   function requestQuit(stopBackground = false) {
     if (closing || quitting) return
     closing = true; clearInterval(timer)
+    updater?.cancel(); updateWindow?.close()
     window?.hide()
     // Native Cmd+Q can enter before-quit from Cocoa's termination callback.
     // Both cleanup and the final quit must run after that callback unwinds.
@@ -152,6 +186,10 @@ else {
     startHidden = preferences.value.backgroundAtLogin && app.getLoginItemSettings().wasOpenedAtLogin
     const packageVersion = JSON.parse(readFileSync(join(root, 'release.json'), 'utf8')).webVersion
     const buildInfo=JSON.parse(readFileSync(join(root,'build-info.json'),'utf8'))
+    const releases = await import(pathToFileURL(join(root, 'github-release.mjs')).href)
+    updater = new DesktopUpdateManager({ version: packageVersion, cacheRoot: join(home, 'updates', 'desktop-downloads'),
+      source: releases.DEFAULT_RELEASE_SOURCE, inspect: releases.inspectGitHubRelease, compare: releases.compareReleaseVersions,
+      fetchImpl: (...args) => net.fetch(...args) })
     app.setAboutPanelOptions({applicationName:'夭夭',applicationVersion:packageVersion,version:`${String(buildInfo.commit).slice(0,12)}${buildInfo.dirty?' · 工作区快照':''}`})
     manager = new DesktopServiceManager({ home, port, version: packageVersion, log, onState: stateChanged,
       stopBackground: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
@@ -199,7 +237,8 @@ else {
           click:async item=>{try{app.setLoginItemSettings({openAtLogin:item.checked});item.checked=app.getLoginItemSettings().openAtLogin}catch(error){item.checked=app.getLoginItemSettings().openAtLogin;await dialog.showMessageBox(window,{type:'error',message:'无法修改登录启动设置',detail:error.message})}} },
         { id:'desktop-background', label:'登录启动时仅驻留菜单栏', type:'checkbox', checked:preferences.value.backgroundAtLogin,
           click:async item=>{try{await preferences.setBackgroundAtLogin(item.checked)}catch(error){item.checked=preferences.value.backgroundAtLogin;await dialog.showMessageBox(window,{type:'error',message:error.message})}} },
-        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n当前 Web：${manager.state.version||'尚未就绪'}${manager.state.build?.commit?' · '+manager.state.build.commit.slice(0,12):''}${manager.state.external?'（独立后台服务）':'（开发模式）'}\n\n安装或更新 App 后首次启动，会将较旧的本机 Web 同步到配套构建。已有更新的 Web 会保留；同一个 App 构建不会重复同步。\n\nWeb 可以继续自行升级。独立 Web 服务在退出 App 后继续运行；App 管理的执行节点会停止。\n\n降级通过 Web 的回滚入口单独处理。数据库结构不兼容时，需要独立的数据恢复流程。\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
+        { id:'desktop-update-check', label:'检查 App 更新…', click:showUpdates },
+        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n当前 Web：${manager.state.version||'尚未就绪'}${manager.state.build?.commit?' · '+manager.state.build.commit.slice(0,12):''}${manager.state.external?'（独立后台服务）':'（开发模式）'}\n\n通过“检查 App 更新”从 GitHub 下载并校验 DMG，手动拖入应用程序安装。开发签名包尚未公证，请遵循 macOS 的安装提示。\n\n安装后首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 可以独立升级，退出 App 保留独立后台服务。\n\n降级通过 Web 的回滚入口处理；数据库结构不兼容时不能直接降级。\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
         { type: 'separator' },
         { role: 'hide', label: '隐藏夭夭' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' },
         { type: 'separator' },

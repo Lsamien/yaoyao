@@ -1,6 +1,6 @@
 # 夭夭 Web
 
-当前 Web 与 macOS 桌面发布版本：**v0.4.1**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.1.md)。
+当前 Web 与 macOS 桌面发布版本：**v0.4.2**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.2.md)。
 
 夭夭 Web 为网页、iOS 和安卓提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
 
@@ -36,7 +36,7 @@ Web 数据默认保存在 `~/.hermes-yaoyao`，可用 `HERMES_YAOYAO_HOME` 指�
 
 ## macOS 桌面版
 
-在 [v0.4.1 发布页](https://github.com/Lsamien/hermes-yaoyao/releases/tag/v0.4.1) 下载 `Yaoyao-0.4.1-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
+在 [v0.4.2 发布页](https://github.com/Lsamien/hermes-yaoyao/releases/tag/v0.4.2) 下载 `Yaoyao-0.4.2-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
 
 此 DMG 使用 Apple Development 开发签名，未做 Apple 公证。
 
@@ -60,6 +60,8 @@ docker compose --env-file docker.env up -d --build
 iOS 统一连接 Web 地址，通过设置中的手机登录二维码或账号密码登录。不能再直接填写 9119 地址；旧 15300 Web 账号和本机聊天缓存继续保留。
 
 ## 数据与升级
+
+Web 默认从 [GitHub Releases](https://github.com/Lsamien/hermes-yaoyao/releases) 检查稳定版本；桌面菜单“检查 App 更新…”可下载并校验 DMG 后手动安装。旧官方发布源会自动归一化为 GitHub，自定义仓库保留。详见 [GitHub 版本升级](docs/github-updates.md)。
 
 发布版本由 `release.json` 记录。macOS 本机服务支持在系统设置中升级 Web 或回滚到上一个版本；其他源码部署更新代码、重新构建并重启服务，Docker 部署通过重新构建镜像并重建容器更新。升级前备份 Web 数据目录，客户端版本要求见对应发布说明。
 

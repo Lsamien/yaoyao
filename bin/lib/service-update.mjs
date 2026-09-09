@@ -8,6 +8,7 @@ import { request as httpsRequest } from 'node:https'
 import { DatabaseSync } from 'node:sqlite'
 import { readJSON, readRuntime, syncDecision, verifyRuntimePackage } from './runtime-release.mjs'
 import { backupData, databaseSchema, legacyDataIdle, restoreData } from './service-data.mjs'
+import { normalizeReleaseSource } from './release-source.mjs'
 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 export const alive = pid => { try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' } }
@@ -160,6 +161,8 @@ export class LaunchAgentService {
       throw new Error('后台服务尚未完全停止，操作未完成')
   }
   writePlist(plist) {
+    plist.EnvironmentVariables ??= {}
+    plist.EnvironmentVariables.HERMES_YAOYAO_RELEASE_SOURCE = normalizeReleaseSource(plist.EnvironmentVariables.HERMES_YAOYAO_RELEASE_SOURCE)
     mkdirSync(dirname(this.plistPath), { recursive: true })
     const xml = command('/usr/bin/plutil', ['-convert', 'xml1', '-o', '-', '--', '-'], JSON.stringify(plist))
     const temporary = `${this.plistPath}.${randomUUID()}`

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { syncDecision, sealRuntime, verifyRuntimePackage } from '../../bin/lib/runtime-release.mjs'
 import { assertRollbackCompatible, backupData, databaseSchema } from '../../bin/lib/service-data.mjs'
-import { currentRelease, reserveUpdate, switchRelease, synchronizeDesktop, stopDesktopService, transitionService, updateMutex, writeJSON, recoverTransition } from '../../bin/lib/service-update.mjs'
+import { currentRelease, reserveUpdate, switchRelease, synchronizeDesktop, stopDesktopService, transitionService, updateMutex, writeJSON, recoverTransition, LaunchAgentService } from '../../bin/lib/service-update.mjs'
+import { execFileSync } from 'node:child_process'
 import { RunnerHub } from '../../src/server/runnerHub'
 
 const homes: string[] = []
@@ -20,6 +21,16 @@ function runtime(root: string, commit = 'b'.repeat(40), version = '0.3.32', ance
   sealRuntime(root); return verifyRuntimePackage(root)
 }
 const clean = (commit: string, ancestors: string[] = [], version = '0.3.32') => ({ commit, ancestors, version, dirty: false })
+
+it.skipIf(process.platform !== 'darwin')('persists official source migration while preserving custom sources and other service settings', () => {
+  const home = temporary(), plistPath = join(home, 'fixture.plist')
+  const driver = new LaunchAgentService({ home, port: 18899, releaseRoot: join(home, 'releases'), label: 'fixture', plistPath })
+  for (const [source, expected] of [['https://git.samien.cn/samien/hermes-yaoyao.git', 'https://github.com/Lsamien/hermes-yaoyao.git'], ['https://private.example/fork.git', 'https://private.example/fork.git']]) {
+    driver.writePlist({ Label: 'fixture', EnvironmentVariables: { HERMES_YAOYAO_RELEASE_SOURCE: source, HERMES_YAOYAO_TLS_CERT: '/fixture/cert', CUSTOM_SETTING: 'preserve' } })
+    const restored = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath], { encoding: 'utf8' }))
+    expect(restored.EnvironmentVariables).toEqual({ HERMES_YAOYAO_RELEASE_SOURCE: expected, HERMES_YAOYAO_TLS_CERT: '/fixture/cert', CUSTOM_SETTING: 'preserve' })
+  }
+})
 
 it('stops only a verified managed service and refuses to race an update',async()=>{
  const home=temporary(),calls:string[]=[]

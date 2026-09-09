@@ -23,6 +23,7 @@ extraResources:
       - guest_proxy.py
       - release.json
       - build-info.json
+      - github-release.mjs
       - keychain-helper
       - ui/**/*
       - web-service/**/*

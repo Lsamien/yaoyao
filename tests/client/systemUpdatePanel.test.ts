@@ -60,6 +60,17 @@ afterEach(() => {
 })
 
 describe('SystemUpdatePanel', () => {
+  it('shows GitHub failures without claiming the installed version is latest', async () => {
+    api.systemUpdateStatus.mockResolvedValue({ ...readyStatus, releaseSource: 'https://github.com/Lsamien/hermes-yaoyao.git', releasePageUrl: 'https://github.com/Lsamien/hermes-yaoyao/releases' })
+    api.checkSystemUpdate.mockRejectedValue(new Error('GitHub 请求受限，请稍后重试'))
+    const wrapper = mount(SystemUpdatePanel, { global: { stubs: { AppIcon: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('GitHub 请求受限')
+    expect(wrapper.text()).not.toContain('已是最新版本')
+    expect(wrapper.get('.solid-button').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('a').attributes('href')).toBe('https://github.com/Lsamien/hermes-yaoyao/releases')
+    wrapper.unmount()
+  })
   it('allows Web updates with unknown plugin state and explains the offline boundary', async () => {
     const offlineStatus = { ...readyStatus, installedPluginVersion: undefined, versionsMatch: false, updateAvailable: true,
       latest: { ...manifest, releaseVersion: '0.3.0', webVersion: '0.3.0', gitTag: 'v0.3.0' } }

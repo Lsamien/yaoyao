@@ -14,6 +14,8 @@ await build({ entryPoints: [resolve(root, 'src/server/index.ts')], outfile: reso
   define: { 'process.env.NODE_ENV': '"production"' }, sourcemap: true,
 })
 await buildRunner(out)
+await build({ entryPoints: [resolve(root, 'src/server/githubReleases.ts')], outfile: resolve(out, 'github-release.mjs'),
+  bundle: true, platform: 'node', format: 'esm', target: 'node24' })
 const swiftTarget=process.arch==='arm64'?'arm64-apple-macosx12.0':'x86_64-apple-macosx12.0'
 execFileSync('xcrun',['swiftc','-O','-target',swiftTarget,resolve(root,'desktop/keychain-helper.swift'),'-o',resolve(out,'keychain-helper')],{stdio:'inherit'})
 execFileSync('xcrun',['swiftc','-O','-target',swiftTarget,'-D','DEVELOPMENT_HELPER',resolve(root,'desktop/keychain-helper.swift'),'-o',resolve(out,'keychain-helper-dev')],{stdio:'inherit'})

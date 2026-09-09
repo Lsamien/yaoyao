@@ -31,6 +31,7 @@ services:
       HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
       HERMES_YAOYAO_COMPOSE_DESKTOPS: "[{\"id\":\"160fe7cd-e530-4ac5-a97f-26c19a362b11\",\"name\":\"共享桌面 1\",\"socketPath\":\"/run/yaoyao-desktops/desktop-1/desktop.sock\"},{\"id\":\"eba5caaf-744e-4f27-bcdd-1f1f35d05a42\",\"name\":\"共享桌面 2\",\"socketPath\":\"/run/yaoyao-desktops/desktop-2/desktop.sock\"}]"
       HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
+      HERMES_YAOYAO_RELEASE_SOURCE: "${HERMES_YAOYAO_RELEASE_SOURCE:-https://github.com/Lsamien/hermes-yaoyao.git}"
       HERMES_YAOYAO_HOME: /var/lib/hermes-yaoyao
       HERMES_YAOYAO_APNS_KEY_FILE: "${HERMES_YAOYAO_APNS_KEY_FILE:-}"
       HERMES_YAOYAO_APNS_KEY_ID: "${HERMES_YAOYAO_APNS_KEY_ID:-}"

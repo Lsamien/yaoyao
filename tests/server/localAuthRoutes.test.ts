@@ -3,14 +3,24 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createApplication, createNodeServer, type ApplicationRuntime, type NodeServerRuntime } from '../../src/server/app.js'
+import { createApplication, type ApplicationRuntime } from '../../src/server/app.js'
+import type { Server } from 'node:http'
 import type { ServerConfig } from '../../src/server/config.js'
 
 const roots: string[] = []
 const runtimes: ApplicationRuntime[] = []
-const nodeRuntimes: NodeServerRuntime[] = []
+const servers: Server[] = []
+async function listen(runtime: ApplicationRuntime) {
+  // Keep one listener for the whole scenario. Repeated implicit Supertest
+  // listen/close cycles can race pooled HTTP connections on recent Node versions.
+  const server = runtime.app.listen(0, '127.0.0.1'); servers.push(server)
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  return server
+}
 afterEach(async () => {
-  for (const runtime of nodeRuntimes.splice(0)) await runtime.close()
+  for (const server of servers.splice(0)) await new Promise<void>((resolve, reject) => {
+    server.closeAllConnections(); server.close(error => error ? reject(error) : resolve())
+  })
   for (const runtime of runtimes.splice(0)) runtime.close()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
@@ -37,7 +47,8 @@ describe('15300 local authentication routes', () => {
       return Response.json({ profiles: [{ name: 'default', is_default: true, display_name: '丫头' }] })
     }) as typeof fetch }); runtimes.push(runtime)
     expect(runtime.auth.upstreamCredentials()).toBeUndefined()
-    const agent = request.agent(runtime.app.callback()), origin = 'http://127.0.0.1:15300'
+    const server = await listen(runtime)
+    const agent = request.agent(server), origin = 'http://127.0.0.1:15300'
     await agent.get('/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(401)
     const boot = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
     expect(boot.body).toMatchObject({ authRequired: true, setupRequired: true })
@@ -61,7 +72,7 @@ describe('15300 local authentication routes', () => {
     await agent.put('/api/app/account/avatar').set('Host', '127.0.0.1:15300').set('Origin', origin)
       .set('X-CSRF-Token', ready.body.csrfToken).send({ avatar: 'https://example.test/avatar.png' }).expect(400)
     await agent.post('/api/realtime/channels').set('Host', '127.0.0.1:15300').set('Origin', origin).send({ channel: 'chat' }).expect(403)
-    await request(runtime.app.callback()).get('/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(401)
+    await request(server).get('/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(401)
   })
   it('creates an explicit administrator, then serves shared profiles through the service account', async () => {
     const home = mkdtempSync(join(tmpdir(), 'yaoyao-local-routes-'))
@@ -95,7 +106,8 @@ describe('15300 local authentication routes', () => {
     }) as typeof fetch
     const runtime = createApplication({ config, fetchImpl })
     runtimes.push(runtime)
-    const agent = request.agent(runtime.app.callback())
+    const server = await listen(runtime)
+    const agent = request.agent(server)
     const initial = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
     const setup = await agent.post('/api/app/setup')
       .set('Host', '127.0.0.1:15300').set('Origin', 'http://127.0.0.1:15300')
@@ -130,18 +142,18 @@ describe('15300 local authentication routes', () => {
       .set('X-CSRF-Token', ready.body.csrfToken).send({}).expect(201)
     const loginCode = new URL(accountPairing.body.qrPayload)
     expect(loginCode.hostname).toBe('login')
-    const scanned = request.agent(runtime.app.callback())
+    const scanned = request.agent(server)
     await scanned.post('/api/account-pair/v1/claim').set('Host', '127.0.0.1:15300')
       .send({ pairingId: loginCode.searchParams.get('id'), secret: loginCode.searchParams.get('secret') })
       .expect(201)
     const scannedIdentity = await scanned.get('/api/auth/me').set('Host', '127.0.0.1:15300').expect(200)
     expect(scannedIdentity.body).toMatchObject({ username: 'owner', role: 'admin' })
-    await request(runtime.app.callback()).post('/api/account-pair/v1/claim')
+    await request(server).post('/api/account-pair/v1/claim')
       .set('Host', '127.0.0.1:15300')
       .send({ pairingId: loginCode.searchParams.get('id'), secret: loginCode.searchParams.get('secret') })
       .expect(409)
 
-    const native = request.agent(runtime.app.callback())
+    const native = request.agent(server)
     await native.get('/api/status').set('Host', '127.0.0.1:15300').expect(200, /yaoyao-web/)
     await native.post('/auth/password-login').set('Host', '127.0.0.1:15300')
       .send({ provider: 'basic', username: 'owner', password: 'new-password', next: '' }).expect(200)

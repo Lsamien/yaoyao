@@ -18,6 +18,7 @@ const status = ref<SystemUpdateStatus>()
 const job = ref<UpdateJob>()
 const busy = ref(false)
 const checking = ref(false)
+const remoteChecked = ref(false)
 const error = ref('')
 const trackingTimedOut = ref(false)
 const operationStarting = ref(false)
@@ -37,9 +38,11 @@ async function refresh(checkRemote = false): Promise<SystemUpdateStatus | undefi
   checking.value = checkRemote
   try {
     status.value = checkRemote ? await checkSystemUpdate() : await systemUpdateStatus()
+    if (checkRemote) remoteChecked.value = true
     if (status.value.job) job.value = status.value.job
     return status.value
   } catch (cause) {
+    if (checkRemote) remoteChecked.value = false
     error.value = cause instanceof Error ? cause.message : '无法读取系统版本'
   } finally {
     checking.value = false
@@ -134,6 +137,7 @@ watch(() => props.active, active => {
     return
   }
   job.value = undefined
+  remoteChecked.value = false
   busy.value = true
   void loadAndResume(token)
     .finally(() => { if (token === lifecycleToken) busy.value = false })
@@ -149,9 +153,10 @@ onBeforeUnmount(() => { lifecycleToken += 1; operationStarting.value = false; st
 
     <section v-if="status" class="version-grid" aria-label="版本信息">
       <article><small>当前 Web</small><strong>{{ status.current.webVersion }}</strong></article>
-      <article><small>最新 Web</small><strong>{{ status.latest?.webVersion || status.current.webVersion }}</strong></article>
+      <article><small>最新 Web</small><strong>{{ error ? '检查失败' : !remoteChecked ? '待检查' : status.latest?.webVersion || status.current.webVersion }}</strong></article>
     </section>
 
+    <p v-if="status?.releaseSource" class="mode-note">发布源：{{ status.releaseSource }} <a v-if="status.releasePageUrl" :href="status.releasePageUrl" target="_blank" rel="noopener noreferrer">查看发布说明</a></p>
     <p v-if="status?.installationMode === 'source'" class="mode-note">首次升级会把运行服务迁移到可回滚的版本目录；Git 工作区不会被覆盖。</p>
     <p v-if="status && !status.supported" class="mode-note">{{ status.unsupportedReason }}</p>
 
@@ -164,7 +169,7 @@ onBeforeUnmount(() => { lifecycleToken += 1; operationStarting.value = false; st
       <button v-if="job?.state === 'succeeded' || job?.state === 'rolled_back'" class="quiet-button" type="button" @click="reloadPage"><AppIcon name="refresh" :size="16" />刷新页面</button>
       <button v-else-if="status?.canRollback && !jobRunning" class="quiet-button danger" type="button" :disabled="busy" @click="rollback">回滚上一版本</button>
       <button class="quiet-button" type="button" :disabled="checking || busy || operationStarting || jobRunning" @click="refresh(true)"><AppIcon name="refresh" :size="16" />{{ checking ? '检查中…' : '检查更新' }}</button>
-      <button class="solid-button" type="button" :disabled="!canApply" @click="applyUpdate"><AppIcon name="download" :size="16" />{{ jobRunning ? '升级中…' : status?.updateAvailable ? '升级 Web' : '已是最新版本' }}</button>
+      <button class="solid-button" type="button" :disabled="!canApply || !!error || !remoteChecked" @click="applyUpdate"><AppIcon name="download" :size="16" />{{ jobRunning ? '升级中…' : error ? '暂无法检查' : !remoteChecked ? '待检查更新' : status?.updateAvailable ? '升级 Web' : '已是最新版本' }}</button>
     </footer>
   </section>
 </template>
@@ -181,7 +186,7 @@ onBeforeUnmount(() => { lifecycleToken += 1; operationStarting.value = false; st
 .version-grid article:nth-last-child(-n+2) { border-bottom: 0; }
 .version-grid small { color: var(--text-muted); font-size: 12px; }
 .version-grid strong { font-size: 20px; letter-spacing: -.02em; }
-.mode-note { margin: -4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.mode-note { margin: -4px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
 .update-progress { display: flex; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
 .progress-icon { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 50%; background: var(--surface-raised); color: var(--text-secondary); }
 .update-progress > span:last-child { display: grid; gap: 4px; min-width: 0; }
