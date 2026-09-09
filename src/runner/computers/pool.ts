@@ -107,7 +107,7 @@ export class ComputerPool {
     })
   }
   authorize(lease:ComputerLease){this.assert(lease)}
-  renew(lease:ComputerLease):void{this.assert(lease);const entry=this.require(lease);entry.expiresAt=this.now()+this.limits.ttlMs;this.save(entry)}
+  renew(lease:ComputerLease):void{this.assert(lease);const entry=this.require(lease);entry.expiresAt=this.now()+this.limits.ttlMs;this.save(entry);void this.provider.renewFence?.(entry.spec).catch(()=>{try{this.invalidate(this.require(lease))}catch{}})}
   use<T>(lease:ComputerLease,action:(context:{signal:AbortSignal;authorize():void})=>Promise<T>):Promise<T>{
     this.assert(lease)
     const active=this.active.get(lease.id)!
@@ -120,6 +120,7 @@ export class ComputerPool {
       this.assert(lease)
       const entry=this.require(lease),active=this.active.get(lease.id)!
       if(active.operations.size)throw new ComputerError('computer_busy','电脑仍有未结束操作，暂不能进入空闲状态')
+      if(this.provider.releaseFence)await this.provider.releaseFence(entry.spec,true)
       active.detach();active.controller.abort();this.active.delete(lease.id)
       entry.status='idle';entry.generation++;entry.lease=undefined;entry.expiresAt=0;this.save(entry)
     })

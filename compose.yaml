@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: hermes-yaoyao:local
+    image: "${HERMES_YAOYAO_IMAGE:-hermes-yaoyao:local}"
     restart: unless-stopped
     init: true
     read_only: true
@@ -27,6 +27,7 @@ services:
       HERMES_YAOYAO_ALLOWED_HOSTS: "localhost,127.0.0.1,${HERMES_YAOYAO_ALLOWED_HOSTS:-}"
       HERMES_YAOYAO_ALLOW_INSECURE_LAN: "1"
       HERMES_YAOYAO_SUPERVISE_DASHBOARD: "0"
+      HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
       HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
       HERMES_YAOYAO_HOME: /var/lib/hermes-yaoyao
       HERMES_YAOYAO_APNS_KEY_FILE: "${HERMES_YAOYAO_APNS_KEY_FILE:-}"

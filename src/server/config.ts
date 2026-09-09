@@ -10,6 +10,8 @@ import {
   type AllowedHostsConfigurationSnapshot,
 } from './allowedHostsConfiguration.js'
 import type { ChatCacheMode } from './chatCache.js'
+import {parseComposeDesktops} from './composeDesktops.js'
+import type {ComposeDesktop} from '../shared/composeDesktops.js'
 export { DEFAULT_APNS_TOPIC } from './apnsConfiguration.js'
 
 export interface APNsProviderConfig {
@@ -42,6 +44,8 @@ export interface ServerConfig {
   insecureLan: boolean
   production: boolean
   superviseDashboard?: boolean
+  localVmHost?: 'server' | 'runner'
+  composeDesktops?: ComposeDesktop[]
   releaseSource?: string
   releaseRoot?: string
   allowRemoteUpdate?: boolean
@@ -162,6 +166,8 @@ export function loadServerConfig(
   const allowInsecureLan = flag(env.HERMES_YAOYAO_ALLOW_INSECURE_LAN)
   const production = env.NODE_ENV === 'production'
   const superviseDashboard = flag(env.HERMES_YAOYAO_SUPERVISE_DASHBOARD)
+  const localVmHost = env.HERMES_YAOYAO_LOCAL_VM_HOST?.trim() || 'server'
+  if(localVmHost!=='server'&&localVmHost!=='runner')throw new Error('HERMES_YAOYAO_LOCAL_VM_HOST must be server or runner')
   const chatCacheMode = parseChatCacheMode(env.HERMES_YAOYAO_CHAT_CACHE_MODE)
   const releaseSource = parseReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE)
   const releaseRoot = resolve(env.HERMES_YAOYAO_RELEASE_ROOT?.trim() || `${homedir()}/.local/share/hermes-yaoyao`)
@@ -200,6 +206,8 @@ export function loadServerConfig(
     insecureLan,
     production,
     superviseDashboard,
+    localVmHost,
+    composeDesktops:parseComposeDesktops(env.HERMES_YAOYAO_COMPOSE_DESKTOPS),
     chatCacheMode,
     releaseSource,
     releaseRoot,

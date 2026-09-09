@@ -37,11 +37,12 @@ export class ComputerControls {
     const state=this.state(meta)
     if(state)return {mode:state.mode,controlId:state.id,generation:state.lease?.generation,canResume:!!state.gateway,error:state.error}
     const resource=this.runtime.pool.status(meta.ownerKey).find(item=>item.environmentId===meta.environmentId)
+    if(this.runtime.provider.fixedCapacity&&(!resource||['free','idle'].includes(resource.status))){const state=await this.runtime.provider.inspect({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.config.imageId});return {mode:state?.running?'idle':'off',generation:resource?.generation??0}}
     return {mode:resource?.status==='active'?'agent':resource?.status==='idle'?'idle':'off',generation:resource?.generation}
   }
   async frame(meta:ComputerTarget,authorize:()=>void):Promise<ComputerFrame>{
     this.runtime.assertTarget(meta);authorize()
-    const spec=this.runtime.pool.definition(meta.ownerKey,meta.environmentId)
+    const spec=this.runtime.pool.definition(meta.ownerKey,meta.environmentId)??(this.runtime.provider.fixedCapacity?{id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.config.imageId}:undefined)
     if(!spec)throw new HttpError(409,'电脑尚未启动','computer_not_running')
     const status=await this.status(meta),cached=this.frames.get(meta.environmentId)?.at(-1)
     if(cached&&cached.generation===status.generation&&Date.now()-cached.capturedAt<700)return cached

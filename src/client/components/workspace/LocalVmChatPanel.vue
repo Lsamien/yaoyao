@@ -9,6 +9,25 @@ const props=defineProps<{agents:WorkspaceAgent[];isAdmin:boolean;active?:boolean
 const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent];workspace:[agent:WorkspaceAgent]}>()
 const selected=ref(''),state=ref<LocalVmInstance&{enabled:boolean;controlMode?:string}>(),frame=ref<ComputerFrame>(),error=ref(''),busy=ref(false),loading=ref(true)
 const agent=computed(()=>props.agents.find(a=>a.id===selected.value))
+const computerTabs=ref<HTMLElement>()
+const computerChoice=computed(()=>state.value?.fixedCapacity?(state.value.desktopId??'off'):state.value?.enabled?'vm':'off')
+const computerChoices=computed(()=>[
+ {value:'off',label:'不使用电脑',disabled:false},
+ ...(state.value?.fixedCapacity?(state.value.desktops??[]).map(desktop=>({value:desktop.id,label:desktop.name+(desktop.ready?'':' · 未就绪'),disabled:desktop.available===false})):[{value:'vm',label:'本地虚拟机',disabled:false}]),
+])
+const computerChoiceDisabled=computed(()=>loading.value||!state.value||busy.value||state.value.inUse||!!agent.value?.remoteAgentId||!!agent.value?.temporaryGoalId)
+function selectComputer(value:string){
+ if(computerChoiceDisabled.value||value===computerChoice.value||!computerChoices.value.some(option=>option.value===value&&!option.disabled))return
+ choose(value)
+}
+function moveComputerTab(event:KeyboardEvent){
+ const tabs=[...(computerTabs.value?.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)')??[])]
+ const index=tabs.indexOf(event.target as HTMLButtonElement)
+ if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return
+ event.preventDefault()
+ const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length
+ tabs[next]?.focus()
+}
 let timer:ReturnType<typeof setTimeout>|undefined,closed=false,revision=0
 const base=()=>`/api/app/agents/${encodeURIComponent(selected.value)}/local-vm`
 async function refresh(){
@@ -21,7 +40,10 @@ async function refresh(){
  }catch(e){if(version===revision)error.value=e instanceof Error?e.message:'无法读取电脑画面'}finally{if(version===revision)loading.value=false}
 }
 async function run(work:()=>Promise<unknown>){if(busy.value)return;busy.value=true;error.value='';try{await work();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'电脑操作未完成'}finally{busy.value=false;await refresh()}}
-function choose(value:string){void run(()=>apiRequest(base(),{method:'PUT',body:{enabled:value==='vm'}}))}
+function choose(value:string){
+ if(state.value?.fixedCapacity&&value!=='off'&&value!==state.value.desktopId&&!confirm('连接这台共享桌面？同一桌面的成员会共用文件和浏览器登录。'))return
+ void run(()=>apiRequest(base(),{method:'PUT',body:state.value?.fixedCapacity?{enabled:value!=='off',...(value!=='off'?{desktopId:value}:{})}:{enabled:value==='vm'}}))
+}
 function action(value:LocalVmAction){
  if(value==='recreate'&&!confirm('重建这台虚拟机？当前桌面程序将关闭，工作文件和浏览器资料会保留。'))return
  void run(()=>apiRequest(base()+'/'+value,{method:'POST',body:{}}))
@@ -46,25 +68,40 @@ onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
      <span v-if="frame" class="open-badge"><AppIcon name="external" :size="12"/>打开桌面</span>
     </button>
     <p v-if="error||state?.problem" class="problem" role="alert">{{error||state?.problem}}</p>
-    <label class="computer-select">此 Agent 使用的电脑<select aria-label="此 Agent 使用的电脑" :value="state?.enabled?'vm':'off'" :disabled="busy||state?.inUse||!!agent.remoteAgentId||!!agent.temporaryGoalId" @change="choose(($event.target as HTMLSelectElement).value)"><option value="off">不使用电脑</option><option value="vm">本地虚拟机</option></select></label>
+    <div class="computer-select">
+     <span>此 Agent 使用的电脑</span>
+     <div ref="computerTabs" class="computer-tabs" role="tablist" aria-label="此 Agent 使用的电脑" @keydown="moveComputerTab">
+      <button v-for="option in computerChoices" :id="`computer-tab-${selected}-${option.value}`" :key="option.value" type="button" role="tab" :aria-selected="computerChoice===option.value" :aria-controls="`computer-options-${selected}`" :tabindex="computerChoice===option.value?0:-1" :disabled="computerChoiceDisabled||option.disabled" @click="selectComputer(option.value)">{{option.label}}</button>
+     </div>
+    </div>
+    <div :id="`computer-options-${selected}`" class="computer-options" role="tabpanel" :aria-labelledby="`computer-tab-${selected}-${computerChoice}`">
     <template v-if="state?.enabled">
      <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此 Agent 的独立虚拟机'}}</p>
      <button v-if="!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">设置本地虚拟机</button>
-     <button v-else-if="state.container==='missing'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('create')">创建 {{agent.name}} 的虚拟机</button>
-     <button v-else-if="state.container==='stopped'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动虚拟机</button>
+     <button v-else-if="!state.fixedCapacity&&state.container==='missing'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('create')">创建 {{agent.name}} 的虚拟机</button>
+     <button v-else-if="!state.fixedCapacity&&state.container==='stopped'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动虚拟机</button>
      <template v-else-if="state.container==='running'">
       <button class="primary" :disabled="!state.ready||busy" @click="emit('desktop',agent)">打开桌面</button>
       <button v-if="state.mode==='per-bot'" :disabled="busy" @click="emit('workspace',agent)"><AppIcon name="panel"/>打开双桌面</button>
       <p class="control-state">{{state.controlMode==='human'?'你或其他操作者正在控制电脑':state.inUse?'Agent 正在操作':'仅查看 · 虚拟机空闲'}}</p>
      </template>
-     <div v-if="state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button></div>
-     <p class="hint">重建会保留工作目录和浏览器资料。虚拟机空闲 5 分钟后自动停止。</p>
+     <div v-if="!state.fixedCapacity&&state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button></div>
+     <p class="hint">{{state.fixedCapacity?'桌面由 Compose 创建，数量固定。这里只连接已有共享桌面；工作目录为 /home/cua/workspace。':'重建会保留工作目录和浏览器资料。虚拟机空闲 5 分钟后自动停止。'}}</p>
      <button v-if="isAdmin" class="settings-link" @click="emit('settings')"><AppIcon name="settings" :size="14"/>本地虚拟机设置</button>
     </template>
+    </div>
    </template>
   </div>
  </aside>
 </template>
 <style scoped>
 .local-vm-chat-panel{width:400px;min-width:320px;max-width:46%;height:100%;border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;color:var(--text-primary)}header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}header button{border:0;min-height:32px;padding:5px}.panel-body{overflow:auto;display:flex;flex-direction:column;gap:14px;padding:18px 20px}.screen-caption{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:var(--text-secondary)}.preview{flex:none;position:relative;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;border:0;border-radius:12px;overflow:hidden;padding:0;background:#14181e;color:#dce1e7;width:100%}.preview:disabled{opacity:1;cursor:default}.preview img{width:100%;height:100%;object-fit:contain}.empty{display:grid;justify-items:center;gap:12px;font-size:13px}.open-badge{position:absolute;right:8px;top:8px;display:flex;align-items:center;gap:4px;padding:5px 7px;background:#000b;color:white;border-radius:6px;font-size:11px}p{margin:0;font-size:13px;line-height:1.65;color:var(--text-secondary)}label{display:grid;gap:7px;font-size:13px}button,select{font:inherit;background:var(--surface-raised);color:inherit;border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 12px}button{cursor:pointer;display:inline-flex;gap:7px;align-items:center;justify-content:center}button:disabled,select:disabled{opacity:.45;cursor:default}.primary{background:var(--accent);color:var(--text-on-solid)}.vm-actions{display:flex;gap:8px}.vm-actions button{flex:1;font-size:12px}.hint{font-size:12px;color:var(--text-muted)}.problem{color:var(--danger)}.settings-link{border:0;background:transparent;align-self:flex-start;padding-left:0;font-size:12px}.control-state{padding:10px;border-radius:8px;background:var(--surface-soft)}button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}@media(max-width:900px){.local-vm-chat-panel{position:fixed;inset:0 0 0 auto;width:min(400px,100vw);max-width:100%;z-index:35;box-shadow:-20px 0 60px #0002}}
+.computer-select{display:grid;gap:7px;font-size:13px;min-width:0}
+.computer-tabs{display:flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft);overflow-x:auto}
+.computer-tabs button{flex:1 0 auto;min-height:40px;padding:8px 12px;border:0;border-radius:7px;background:transparent;color:var(--text-secondary);font-size:12px;white-space:nowrap}
+.computer-tabs button[aria-selected="true"]{background:var(--surface);color:var(--text-primary);font-weight:600;box-shadow:0 1px 3px #00000014}
+.computer-tabs button:hover:not(:disabled):not([aria-selected="true"]){background:var(--surface-hover)}
+.computer-tabs button:focus-visible{outline-offset:-2px}
+.computer-options{display:flex;flex-direction:column;gap:14px}
+.computer-options:empty{display:none}
 </style>

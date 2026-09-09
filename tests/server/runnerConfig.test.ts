@@ -1,6 +1,8 @@
 // @vitest-environment node
 import {expect,it} from 'vitest'
 import {randomUUID} from 'node:crypto'
+import {homedir} from 'node:os'
+import {join} from 'node:path'
 import {parseRunnerConfiguration} from '../../src/runner/config'
 const config={protocol:1,runnerId:randomUUID(),token:'secret-fixture-'.repeat(3),serverURL:'https://example.invalid',hermesURL:'http://127.0.0.1:9119',allowedProfiles:['default'],artifactRoots:[]}
 it.each([
@@ -26,4 +28,10 @@ it('keeps existing computer configurations offline unless public access is expli
   expect(parseRunnerConfiguration({...config,computers}).computers?.network).toBe('none')
   expect(parseRunnerConfiguration({...config,computers:{...computers,network:'public-proxy'}}).computers?.network).toBe('public-proxy')
   expect(()=>parseRunnerConfiguration({...config,computers:{...computers,network:'host'}})).toThrow()
+})
+it('resolves optional Hermes paths on the execution host while preserving explicit installation paths',()=>{
+ const computers={runtime:'docker',imageId:'sha256:'+'0'.repeat(64)}
+ expect(parseRunnerConfiguration({...config,computers}).computers).toMatchObject({hermesHome:join(homedir(),'.hermes'),hermesSource:join(homedir(),'.hermes','hermes-agent'),python:join(homedir(),'.hermes','hermes-agent','venv','bin','python')})
+ expect(parseRunnerConfiguration({...config,computers:{...computers,hermesHome:'/custom/hermes',hermesSource:'/custom/source',python:''}}).computers?.python).toBe('/custom/source/venv/bin/python')
+ expect(()=>parseRunnerConfiguration({...config,computers:{...computers,hermesHome:'relative'}})).toThrow()
 })

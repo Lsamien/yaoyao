@@ -12,11 +12,14 @@ COPY tsconfig.json tsconfig.client.json tsconfig.client.build.json tsconfig.serv
 COPY index.html ./
 COPY public ./public
 COPY scripts ./scripts
+COPY bin ./bin
 COPY deploy ./deploy
 COPY third-party ./third-party
 COPY src ./src
 
 RUN npm run build \
+  && npm run runner:build \
+  && tar -C .runner-build -czf runner-bundle.tar.gz . \
   && npm prune --omit=dev
 
 FROM node:24-bookworm-slim AS runtime
@@ -26,7 +29,8 @@ ENV NODE_ENV=production \
     HERMES_YAOYAO_PORT=15300 \
     HERMES_YAOYAO_HOME=/var/lib/hermes-yaoyao \
     HERMES_YAOYAO_CHAT_CACHE_MODE=prefer-local \
-    HERMES_YAOYAO_SUPERVISE_DASHBOARD=0
+    HERMES_YAOYAO_SUPERVISE_DASHBOARD=0 \
+    HERMES_YAOYAO_LOCAL_VM_HOST=runner
 
 WORKDIR /app
 
@@ -36,6 +40,7 @@ COPY --chown=node:node package.json package-lock.json release.json ./
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/dist-server ./dist-server
+COPY --chown=node:node --from=builder /app/build-info.json /app/runner-bundle.tar.gz ./
 
 USER node
 

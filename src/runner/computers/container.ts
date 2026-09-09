@@ -34,6 +34,8 @@ export type ComputerSpecification=z.input<typeof schema>
 type Spec=z.output<typeof schema>
 export interface ComputerState {id:string;containerId:string;running:boolean;workspace:string;isolation:'container'|'vm'}
 export interface ComputerProvider {
+  releaseFence?(spec:ComputerSpecification,keepRunning?:boolean):Promise<void>
+  renewFence?(spec:ComputerSpecification):Promise<void>
   validateSpecification(spec:ComputerSpecification):ComputerSpecification
   readonly capabilities:{isolation:'container'|'vm';shell:boolean;desktop:boolean;persistentWorkspace:boolean;sharedDesktop:boolean;snapshots:boolean;network:'none'|'public-proxy'}
   inspect(spec:ComputerSpecification):Promise<ComputerState|undefined>
@@ -50,6 +52,7 @@ const capabilities=(values:unknown)=>Array.isArray(values)?values.map(value=>Str
 /** A private container per environment. No tools, filesystem operations or
  * process execution fall back to the host. Remote hosts run their own Runner. */
 export class ContainerComputerProvider implements ComputerProvider {
+  readonly fixedCapacity:boolean=false
   private queue=new Map<string,Promise<unknown>>()
   readonly capabilities={isolation:'container',shell:true,desktop:true,persistentWorkspace:true,sharedDesktop:false,snapshots:false,network:'none'} as const
   constructor(readonly runtime:'docker'|'podman',readonly runnerId:string,readonly home:string,readonly run:ContainerCommand=command,readonly environment:NodeJS.ProcessEnv=process.env) {

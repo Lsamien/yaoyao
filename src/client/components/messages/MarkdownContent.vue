@@ -15,8 +15,9 @@ const props = withDefaults(defineProps<{
   plain?: boolean
   mentionNames?: string[]
   fileCards?: boolean
+  processContent?: boolean
   outlinePrefix?: string
-}>(), { streaming: false, legacyMedia: false, plain: false, fileCards: false, outlinePrefix: '' })
+}>(), { streaming: false, legacyMedia: false, plain: false, fileCards: false, processContent: false, outlinePrefix: '' })
 
 const emit = defineEmits<{ fileLink: [name: string, url: string]; rendered: [] }>()
 
@@ -88,13 +89,19 @@ const md = new MarkdownIt({
 // Dashboard 规范：保留原文引号，不做智能引号替换。
 md.disable('smartquotes')
 
+const defaultImage = md.renderer.rules.image!
+md.renderer.rules.image = (tokens, index, options, env, self) => {
+  if (props.processContent) return escapeHtml(tokens[index].content || tokens[index].attrGet('src') || '图片')
+  return defaultImage(tokens, index, options, env, self)
+}
+
 const defaultLinkOpen = md.renderer.rules.link_open ?? ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options))
 md.renderer.rules.link_open = (tokens, index, options, env, self) => {
   const token = tokens[index]
   // Some assistants wrap real Hermes workspace paths in a sandbox: URI.
   // Resolve only this known file route before sanitizing the Markdown.
   const href = token.attrGet('href') || ''
-  if (props.fileCards && /^sandbox:\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/i.test(href)) {
+  if (!props.processContent && props.fileCards && /^sandbox:\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/i.test(href)) {
     token.attrSet('href', href.slice('sandbox:'.length))
   }
   token.attrSet('target', '_blank')
@@ -176,7 +183,7 @@ function decorateCopyButtons() {
 }
 
 function decorateFileLinks() {
-  if (!props.fileCards || !root.value) return
+  if (props.processContent || !props.fileCards || !root.value) return
   root.value.querySelectorAll<HTMLAnchorElement>('a').forEach(link => {
     if (link.dataset.fileCard) return
     let url: URL
@@ -199,7 +206,7 @@ function decorateFileLinks() {
 }
 
 function decorateMediaPreviews() {
-  if (!props.fileCards || !root.value) return
+  if (props.processContent || !props.fileCards || !root.value) return
   root.value.querySelectorAll<HTMLImageElement>('img').forEach(image => {
     if (image.dataset.mediaPreview) return
     let url: URL

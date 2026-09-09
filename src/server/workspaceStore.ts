@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { EventEmitter } from 'node:events'
 import { z } from 'zod'
 import { HttpError } from './errors.js'
+import { isVisibleMessageFile } from '../shared/messageFiles.js'
+import type { StoredWorkspaceFile } from './workspaceAssets.js'
 import { notificationPlainText } from './notificationText.js'
 import { decodeAgentMascotAvatar, isAgentImageAvatar, defaultAgentIdentity, encodeAgentAvatar, normalizeAvatar, randomAgentIdentity, MAX_AVATAR_DESCRIPTOR_LENGTH } from '../shared/agentIdentity.js'
 import type {
@@ -235,7 +237,7 @@ export class WorkspaceStore {
         .prepare('INSERT INTO workspace_events(owner,type,conversation_id,data) VALUES(?,?,?,?)')
         .run(owner, type, conversationId ?? null, JSON.stringify(data)).lastInsertRowid,
     )
-    const event = { seq, type, conversationId, data }
+    const event = { seq, type, conversationId, data: this.eventDataForDisplay(owner, type, data) }
     if (this.transactionEvents) this.transactionEvents.push({ owner, event })
     else this.publish(owner, event)
     return seq
@@ -248,7 +250,7 @@ export class WorkspaceStore {
         seq: Number(r.seq),
         type: String(r.type),
         conversationId: r.conversation_id ? String(r.conversation_id) : undefined,
-        data: JSON.parse(String(r.data)),
+        data: this.eventDataForDisplay(owner, String(r.type), JSON.parse(String(r.data))),
       }))
   }
   cursor(owner: string): number {
@@ -725,8 +727,25 @@ export class WorkspaceStore {
         `SELECT data FROM workspace_entities WHERE owner=? AND kind='message' AND json_extract(data,'$.conversationId')=? ${taskClause} AND json_extract(data,'$.seq')<? ${includeHidden ? '' : "AND coalesce(json_extract(data,'$.visible'),1) != 0"} ORDER BY json_extract(data,'$.seq') DESC LIMIT ?`,
       )
       .all(...(conversationTaskId ? [owner, conversationId, conversationTaskId, before, limit] : [owner, conversationId, before, limit]))
-      .map((r) => JSON.parse(String(r.data)) as Message)
+      .map((r) => this.messageForDisplay(owner, JSON.parse(String(r.data)) as Message))
       .reverse()
+  }
+  nativeMessageForFile?: (owner: string, file: StoredWorkspaceFile) => Message | undefined
+  visibleFiles(owner: string): StoredWorkspaceFile[] {
+    const messages = new Map(this.list<Message>(owner, 'message').map(message => [message.id, message]))
+    return this.list<StoredWorkspaceFile>(owner, 'file').filter(file =>
+      isVisibleMessageFile(file, messages.get(file.messageId ?? '') ?? this.nativeMessageForFile?.(owner, file)))
+  }
+  messageForDisplay(owner: string, message: Message): Message {
+    const attachments = message.role === 'user' || message.role === 'assistant'
+      ? message.attachments.filter(file => isVisibleMessageFile(
+        this.get<StoredWorkspaceFile>(owner, 'file', file.id) ?? file, message))
+      : []
+    return { ...message, attachments }
+  }
+  private eventDataForDisplay(owner: string, type: string, data: unknown): unknown {
+    if (type === 'message.changed') return this.messageForDisplay(owner, data as Message)
+    return data
   }
   saveMessage(owner: string, message: Message): void {
     this.atomic(() => {

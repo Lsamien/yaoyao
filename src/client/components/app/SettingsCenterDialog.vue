@@ -32,7 +32,7 @@ type SettingsPage =
   | 'system-local-vm'
   | 'system-update'
 
-type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh'
+type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'monitor' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh'
 type ThemePreference = 'light' | 'dark' | 'system'
 
 interface NavigationItem {
@@ -106,7 +106,7 @@ const accountItems = computed<NavigationItem[]>(() => [
   { key: 'appearance', label: '外观', icon: 'sun' },
 ])
 const systemItems: NavigationItem[] = [
-  { key: 'system-local-vm', label: '本地虚拟机', icon: 'panel' },
+  { key: 'system-local-vm', label: '本地虚拟机', icon: 'monitor' },
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
   { key: 'system-users', label: '用户与权限', icon: 'users' },
   { key: 'system-connection', label: 'Hermes 连接', icon: 'link' },

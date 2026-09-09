@@ -1,13 +1,18 @@
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import { z } from 'zod'
 import type { RunnerConfiguration } from '../shared/runner.js'
 
+const localPath=z.string().refine(value=>!value||isAbsolute(value),'路径必须为绝对路径').default('')
 const schema=z.object({
   protocol:z.literal(1),serverURL:z.string().url(),runnerId:z.string().uuid(),token:z.string().min(32).max(4096),
   hermesURL:z.string().url().default('http://127.0.0.1:9119'),
   allowedProfiles:z.array(z.string().trim().min(1).max(256).regex(/^[^/\\\u0000-\u001f]+$/)).min(1).max(256),
   artifactRoots:z.array(z.string().refine(isAbsolute,'产物目录必须为绝对路径')).max(64).default([]),
-  computers:z.object({network:z.enum(['none','public-proxy']).default('none'),runtime:z.enum(['docker','podman']),imageId:z.string().regex(/^sha256:[a-f0-9]{64}$/),python:z.string().refine(isAbsolute),hermesSource:z.string().refine(isAbsolute),hermesHome:z.string().refine(isAbsolute),maxConcurrent:z.number().int().min(1).max(8).optional()}).strict().optional(),
+  computers:z.object({managedBy:z.literal('compose').optional(),network:z.enum(['none','public-proxy']).default('none'),runtime:z.enum(['docker','podman']),imageId:z.string().regex(/^sha256:[a-f0-9]{64}$/),python:localPath,hermesSource:localPath,hermesHome:localPath,maxConcurrent:z.number().int().min(1).max(8).optional()}).strict().transform(value=>{
+    const hermesHome=value.hermesHome||join(homedir(),'.hermes'),hermesSource=value.hermesSource||join(hermesHome,'hermes-agent')
+    return {...value,hermesHome,hermesSource,python:value.python||join(hermesSource,'venv','bin','python')}
+  }).optional(),
   allowInsecureLan:z.boolean().optional(),hermesCredentials:z.object({username:z.string().max(256),password:z.string().max(4096)}).strict().optional(),
 }).strict()
 export function parseRunnerConfiguration(value:unknown):RunnerConfiguration {

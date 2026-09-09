@@ -11,6 +11,8 @@ import {UNCONFIGURED_COMPUTER_IMAGE} from '../../shared/runner.js'
 import type {RunnerConfiguration} from '../../shared/runner.js'
 import {ContainerComputerProvider,COMPUTER_WORKSPACE,CUA_DRIVER,CUA_SOCKET,type ComputerSpecification} from '../computers/container.js'
 import {ComputerPool,type ComputerLease} from '../computers/pool.js'
+import {ComposeComputerProvider} from '../computers/compose.js'
+import {COMPOSE_DESKTOP_IMAGE,type DesktopRelay} from '../../shared/composeDesktops.js'
 import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
 import {HermesWorkerProcess,type WorkerModel,type WorkerTool,type WorkerFrame} from './process.js'
@@ -40,12 +42,16 @@ export class ComputerRuntime {
   readonly workers=new Map<string,{environmentId:string;ownerKey:string;process:HermesWorkerProcess}>()
   readonly script:string
   readonly proxyScript:string
-  constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string){
+  constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,relay?:DesktopRelay){
     if(!config.computers)throw new HttpError(409,'执行节点尚未配置隔离电脑','computer_unavailable')
     this.config=config.computers
     this.script=script??join(dirname(fileURLToPath(import.meta.url)),'hermes_worker.py')
     this.proxyScript=existsSync(join(dirname(this.script),'guest_proxy.py'))?join(dirname(this.script),'guest_proxy.py'):join(dirname(this.script),'../network/guest_proxy.py')
-    this.provider=new ContainerComputerProvider(this.config.runtime,config.runnerId,home)
+    if(this.config.managedBy==='compose'){
+      if(!relay)throw new HttpError(409,'缺少 Compose 桌面连接','compose_desktop_unavailable')
+      this.config.imageId=COMPOSE_DESKTOP_IMAGE;this.config.network='none'
+      this.provider=new ComposeComputerProvider(config.runnerId,home,relay)
+    }else this.provider=new ContainerComputerProvider(this.config.runtime,config.runnerId,home)
     this.pool=new ComputerPool(db,this.provider,{concurrent:this.config.maxConcurrent??2,environments:32,ttlMs:30000})
     db.exec('CREATE TABLE IF NOT EXISTS retired_computers(id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,spec TEXT)')
     db.exec('CREATE TABLE IF NOT EXISTS computer_sessions(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
@@ -86,9 +92,10 @@ export class ComputerRuntime {
   private async resolveProfile(profile:string,mode:'resolve'|'resolve-workspace',signal?:AbortSignal){
     const resolver=new HermesWorkerProcess(this.config.python,this.script,{mode,profile,defaultCwd:COMPUTER_WORKSPACE,hermesSource:this.config.hermesSource,hermesHome:this.config.hermesHome})
     const abort=()=>{void resolver.close()};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort()
-    try{return await resolver.wait('resolved')}finally{signal?.removeEventListener('abort',abort);await resolver.close()}
+    try{const result=await resolver.wait('resolved');return this.provider.fixedCapacity?{...result,cwd:COMPUTER_WORKSPACE}:result}finally{signal?.removeEventListener('abort',abort);await resolver.close()}
   }
   async desktop(meta:ComputerTarget,profile:string,action:'create'|'start'|'stop'|'recreate'|'remove',authorize:()=>void){
+    if(this.provider.fixedCapacity)throw new HttpError(409,'桌面由 Compose 创建和管理，不能在界面增删或重建','compose_desktop_managed')
     this.assertTarget(meta);authorize()
     // Stopping/removing an existing desktop must remain possible even when
     // its Profile or model was removed or is temporarily misconfigured.

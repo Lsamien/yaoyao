@@ -351,7 +351,7 @@ export function workspaceRouter(
   })
   router.get('/api/app/files', (ctx) => {
     const files = store
-      .list<StoredWorkspaceFile>(owner(ctx), 'file')
+      .visibleFiles(owner(ctx))
       .filter(
         (f) =>
           (!ctx.query.search ||
@@ -372,7 +372,7 @@ export function workspaceRouter(
     }
   })
   router.get('/api/app/files/stats', (ctx) => {
-    const files = store.list<StoredWorkspaceFile>(owner(ctx), 'file')
+    const files = store.visibleFiles(owner(ctx))
     ctx.body = { count: files.length, totalBytes: files.reduce((sum, f) => sum + f.size, 0) }
   })
   router.post('/api/app/message-files/query', (ctx) => {
@@ -380,7 +380,7 @@ export function workspaceRouter(
       z.object({ messageIds: z.array(z.union([z.string(), z.number()])).max(500) }),
       body(ctx),
     ).messageIds.map(String)
-    const files = store.list<StoredWorkspaceFile>(owner(ctx), 'file')
+    const files = store.visibleFiles(owner(ctx))
     ctx.body = {
       messages: Object.fromEntries(
         ids.map((id) => [

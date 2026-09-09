@@ -179,7 +179,7 @@ export const useArtifactsStore = defineStore('artifacts', () => {
         } catch {
           failedSessionCount.value += 1
           loadedSessionCount.value += 1
-          return cached?.artifacts ?? []
+          return cached?.extractorVersion === ARTIFACT_EXTRACTOR_VERSION ? cached.artifacts : []
         }
       })
       artifacts.value = enrichPreview(batches.flat(), files).sort((a, b) => b.timestamp - a.timestamp)

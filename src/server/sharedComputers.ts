@@ -8,11 +8,11 @@ import {HttpError} from './errors.js'
 import type {WorkspaceNodes} from './workspaceGateway.js'
 import type {RunnerHub} from './runnerHub.js'
 import type {LocalAuthStore} from './localAuth.js'
-export interface SharedComputer {managedLocalVm?:boolean;id:string;name:string;memberIds:string[];nodeId:string;profile:string;runnerId:string;archived:boolean;createdAt:number}
+export interface SharedComputer {managedCompose?:boolean;managedLocalVm?:boolean;id:string;name:string;memberIds:string[];nodeId:string;profile:string;runnerId:string;archived:boolean;createdAt:number}
 export function requireSharedComputer(store:WorkspaceStore,owner:string,agent:{id?:string;nodeId:string;profile:string;computerEnvironmentId?:string}){
   if(!agent.computerEnvironmentId)return
   const shared=store.require<SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId)
-  if(shared.archived||!agent.id||!shared.memberIds.includes(agent.id)||shared.nodeId!==agent.nodeId||shared.profile!==agent.profile)throw new HttpError(403,'当前成员没有这台共享电脑的授权','shared_computer_forbidden')
+  if(shared.archived||!agent.id||!shared.memberIds.includes(agent.id)||shared.nodeId!==agent.nodeId||(!shared.managedCompose&&shared.profile!==agent.profile))throw new HttpError(403,'当前成员没有这台共享电脑的授权','shared_computer_forbidden')
 }
 export class SharedComputers {
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly hub:RunnerHub){}
@@ -28,6 +28,18 @@ export class SharedComputers {
   }
   private localVmAgents(owner:string){return this.store.list<WorkspaceAgent>(owner,'agent').filter(a=>a.nodeId==='local'&&!a.archived&&!a.remoteAgentId&&!a.temporaryGoalId&&(a.execution==='computer'||!!a.computerEnvironmentId))}
   assertLocalVmIdle(owner:string,ids?:string[]){this.idle(owner,ids??this.localVmAgents(owner).map(a=>a.id))}
+  bindCompose(owner:string,agent:WorkspaceAgent,desktop:{id:string;name:string},runnerId:string,persist=true){
+    this.idle(owner,[agent.id])
+    const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',desktop.id)
+    if(claim&&(claim.owner!==owner||claim.runnerId!==runnerId))throw new HttpError(403,'这台共享桌面已分配给其他账号或执行节点','compose_desktop_forbidden')
+    if(agent.computerEnvironmentId&&agent.computerEnvironmentId!==desktop.id)this.detachLocalVm(owner,agent)
+    const group=this.store.get<SharedComputer>(owner,'shared-computer',desktop.id)??{id:desktop.id,name:desktop.name,nodeId:'local',profile:'*',runnerId,memberIds:[],archived:false,createdAt:Date.now(),managedCompose:true}
+    group.archived=false;if(!group.memberIds.includes(agent.id))group.memberIds.push(agent.id)
+    this.store.put('_system','compose-desktop-owner',desktop.id,{owner,runnerId})
+    this.store.put(owner,'shared-computer',group.id,group)
+    agent.execution='computer';agent.computerEnvironmentId=desktop.id;agent.computerEnvironmentName=desktop.name
+    if(persist){agent.revision++;agent.updatedAt=Date.now();this.store.put(owner,'agent',agent.id,agent);this.store.event(owner,'agent.changed',agent)}
+  }
   attachLocalVm(owner:string,agent:WorkspaceAgent,runnerId:string){
     if(agent.nodeId!=='local'||agent.execution!=='computer'||agent.temporaryGoalId||agent.remoteAgentId||agent.computerEnvironmentId)return
     this.nodes.requireSource(owner,agent)

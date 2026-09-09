@@ -2,7 +2,7 @@
 
 Runner 在运行 Hermes 的电脑上主动连接夭夭服务。用于 Web 位于 Docker、另一台电脑或远程服务器时，将 Bot 会话和本轮组队工具交给 Hermes 所在电脑执行。Runner 源码、构建入口和管理页面均位于 hermes-yaoyao。
 
-普通执行方式继续使用原有 Hermes。配置电脑 Worker 后，Agent 可选择隔离电脑执行，模型工具不会退回宿主。具体链路与验证边界见 `docs/computer-worker.md`；公网代理已接入；屏幕接管与共享环境仍待完成。
+普通执行方式继续使用原有 Hermes。配置电脑 Worker 后，Agent 可选择隔离电脑执行，模型工具不会退回宿主。公网代理、屏幕接管和共享环境均已接入，使用流程见 `docs/local-vm.md`。Docker 部署与程序包下载见 `docs/docker-install.md`。
 
 ## 启用
 
@@ -12,7 +12,7 @@ Runner 在运行 Hermes 的电脑上主动连接夭夭服务。用于 Web 位于
 4. 将配置放到执行电脑，执行 `chmod 600 /完整路径/runner.json`。
 5. 在项目目录执行 `npm run build`，然后执行 `npm run runner -- --config /完整路径/runner.json`。
 
-也可执行 `npm run runner:build`，将 `.runner-build/runner.mjs` 复制到执行电脑，以 Node.js 24 或更高版本运行：
+也可执行 `npm run runner:build`，将整个 `.runner-build/` 目录复制到执行电脑，以 Node.js 24 或更高版本运行。不要只复制单个 `runner.mjs`，虚拟桌面还需要同目录的 Worker 和桌面资源：
 
 ```sh
 node runner.mjs --config /完整路径/runner.json

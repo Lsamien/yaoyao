@@ -1,6 +1,9 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import Router from '@koa/router'
 import type Koa from 'koa'
+import {createReadStream,existsSync} from 'node:fs'
+import {dirname,resolve} from 'node:path'
+import {fileURLToPath} from 'node:url'
 import { z } from 'zod'
 import { HttpError } from './errors.js'
 import { parse, type WorkspaceStore } from './workspaceStore.js'
@@ -9,16 +12,19 @@ import type { GatewayFrame, GatewayTarget } from './workspaceGateway.js'
 import type { UpstreamRequestOptions, UpstreamResponse } from './upstream.js'
 import type { LeaseInput, WorkspaceToolLease } from './workspaceToolLease.js'
 import { RUNNER_PROTOCOL, type RunnerCommand, type RunnerRecord } from '../shared/runner.js'
+import {ComposeDesktops} from './composeDesktops.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+const runnerBundle=()=>[resolve(dirname(fileURLToPath(import.meta.url)),'runner-bundle.tar.gz'),resolve(dirname(fileURLToPath(import.meta.url)),'../../runner-bundle.tar.gz')].find(existsSync)
 const input = z.object({ name:z.string().trim().min(1).max(100),sourceNodeId:z.string().min(1).max(100).default('local'),
   allowedProfiles:z.array(z.string().min(1).max(100)).min(1).max(256) }).strict()
 interface Pending { command:RunnerCommand; resolve(value:any):void; reject(error:Error):void; timer:ReturnType<typeof setTimeout>; nextDelivery:number; valid():boolean }
-interface GatewayConnection { runnerId:string;cleanupOnly?:boolean;publishArtifact?:(name:string,bytes:Buffer)=>Promise<unknown>; valid():boolean; onEvent(frame:GatewayFrame):void; onDisconnect():void }
+interface GatewayConnection { runnerId:string;computer?:{environmentId:string;ownerKey:string;agentId:string};cleanupOnly?:boolean;publishArtifact?:(name:string,bytes:Buffer)=>Promise<unknown>; valid():boolean; onEvent(frame:GatewayFrame):void; onDisconnect():void }
 interface Lease { runnerId:string; input:LeaseInput; calls:Map<string,{fingerprint:string;result:Promise<unknown>}> }
 
 /** Outbound-only machine transport. Browser auth and machine auth remain separate. */
 export class RunnerHub {
+  composeDesktops=new ComposeDesktops([])
   get idleForUpdate(): boolean { return this.localVmActivity.size === 0 && [...this.pending.values()].every(commands => commands.size === 0) && [...this.artifacts.values()].every(upload => upload.result !== undefined) }
   private localVmActivity = new Map<string, { owner: string; runnerId: string }>()
   private localVmChecks = new Set<string>()
@@ -109,6 +115,11 @@ export class RunnerHub {
       if(!this.auth.canUseSource(owner,sourceNodeId,profile)||!record.allowedProfiles.includes(profile))throw new HttpError(403,'执行节点未授权这个基础 Profile','runner_profile_forbidden')
     }
     const requireComputer=()=>{
+      if(computer&&this.composeDesktops.desktops.length){
+        if(!this.online.get(record.id)?.features.includes('compose-desktops-v1'))throw new HttpError(409,'当前部署需要 Compose 桌面执行节点','compose_runner_required')
+        const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',computer.environmentId)
+        if(!this.composeDesktops.desktops.some(d=>d.id===computer.environmentId)||claim?.owner!==owner||claim.runnerId!==record.id)throw new HttpError(409,'请先为 Agent 选择已有 Compose 共享桌面','compose_desktop_required')
+      }
       if(computer&&!this.online.get(record.id)?.features.includes('computer-worker-v1'))throw new HttpError(409,'执行节点未提供隔离 Worker 能力，请检查配置或更新 Runner','computer_unavailable')
       if(computer&&computer.environmentId!==computer.agentId&&!this.online.get(record.id)?.features.includes('shared-computer-v1'))throw new HttpError(409,'执行节点不支持共享电脑，请更新 Runner','shared_computer_unavailable')
     }
@@ -134,7 +145,7 @@ export class RunnerHub {
           if(computer&&!scope)throw new HttpError(403,'隔离执行缺少任务授权','computer_scope_required')
           const version=this.auth.pushAuthorizationVersion(owner)
           const valid=()=>{try{scope?.authorize();return (scope?.cleanupOnly||(this.auth.isUserActive(owner)&&this.auth.pushAuthorizationVersion(owner)===version))&&this.store.get<RunnerRecord>('_system','runner',record.id)?.enabled===true}catch{return false}}
-          const id=randomUUID();this.connections.set(id,{runnerId:record.id,valid,onEvent,onDisconnect,publishArtifact:scope?.publishArtifact,cleanupOnly:scope?.cleanupOnly})
+          const id=randomUUID();this.connections.set(id,{runnerId:record.id,computer,valid,onEvent,onDisconnect,publishArtifact:scope?.publishArtifact,cleanupOnly:scope?.cleanupOnly})
           try {await this.request(record.id,'gateway.open',{connectionId:id,computer,workId:scope?.workId,cleanupOnly:scope?.cleanupOnly})} catch(error){this.connections.delete(id);void this.request(record.id,'gateway.close',{connectionId:id}).catch(()=>{});throw error}
           let closed=false
           return {rpc:async(method,params)=>{
@@ -168,6 +179,7 @@ export class RunnerHub {
   computerRunner(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent){
     const record=this.records().find(record=>record.enabled&&record.sourceNodeId===agent.nodeId&&(record.sourceOwner==='_system'||record.sourceOwner===owner))
     if(!record||!this.online.get(record.id)?.features.includes('computer-control-v1'))throw new HttpError(409,'执行节点不支持电脑查看与控制，请更新 Runner','computer_control_unavailable')
+    if(this.composeDesktops.desktops.length&&!this.online.get(record.id)?.features.includes('compose-desktops-v1'))throw new HttpError(409,'当前部署需要 Compose 桌面执行节点','compose_runner_required')
     if(!record.allowedProfiles.includes(agent.profile)||!this.auth.canUseSource(owner,agent.nodeId,agent.profile))throw new HttpError(403,'电脑 Profile 未授权','computer_profile_forbidden')
     return record
   }
@@ -190,14 +202,15 @@ export class RunnerHub {
   }
   adminRouter():Router {
     const router=new Router()
-    router.get('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body={protocol:RUNNER_PROTOCOL,runners:this.records().map(r=>this.summary(r)),sources:[{id:'local',name:'本地来源'},...this.store.list<import('./workspaceGateway.js').WorkspaceNode>(actor.id,'node').filter(n=>n.transport!=='paired-web').map(n=>({id:n.id,name:n.name}))]}})
+    router.get('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body={protocol:RUNNER_PROTOCOL,fixedDesktops:this.composeDesktops.desktops.length>0,bundleAvailable:!!runnerBundle(),runners:this.records().map(r=>this.summary(r)),sources:[{id:'local',name:'本地来源'},...this.store.list<import('./workspaceGateway.js').WorkspaceNode>(actor.id,'node').filter(n=>n.transport!=='paired-web').map(n=>({id:n.id,name:n.name}))]}})
+    router.get('/api/app/admin/runners/bundle',ctx=>{this.auth.requireAdmin(ctx);const path=runnerBundle();if(!path)throw new HttpError(404,'当前服务未打包执行节点程序，请使用配套 App 或从源码构建 Runner','runner_bundle_missing');ctx.set('Cache-Control','no-store');ctx.attachment('yaoyao-runner.tar.gz');ctx.type='application/gzip';ctx.body=createReadStream(path)})
     router.post('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body=this.enroll(actor.id,(ctx.request as any).body);ctx.status=201})
     router.delete('/api/app/admin/runners/:id',ctx=>{this.auth.requireAdmin(ctx);this.remove(ctx.params.id);ctx.body={ok:true}})
     return router
   }
   middleware():Koa.Middleware {
     return async(ctx,next)=>{
-      const match=/^\/api\/runner\/v1\/([0-9a-f-]{36})\/(poll|admit|result|event|tool|check|artifact|control-check|local-vm-check)$/.exec(ctx.path)
+      const match=/^\/api\/runner\/v1\/([0-9a-f-]{36})\/(poll|admit|result|event|tool|check|artifact|control-check|local-vm-check|desktop)$/.exec(ctx.path)
       if(!match)return next()
       const record=this.store.get<RunnerRecord>('_system','runner',match[1]!),token=ctx.get('authorization').replace(/^Bearer /,'')
       if(ctx.get('origin')||!record?.enabled||!ctx.get('authorization').startsWith('Bearer ')||!timingSafeEqual(Buffer.from(record.tokenHash),Buffer.from(hash(token))))
@@ -214,7 +227,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-ready-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')
@@ -231,10 +244,23 @@ export class RunnerHub {
       }
       if(ctx.method!=='POST')throw new HttpError(405,'仅允许 POST','method_not_allowed')
       let size=0;const chunks:Buffer[]=[]
-      for await(const chunk of ctx.req){size+=chunk.length;if(size>16*1024*1024)throw new HttpError(413,'执行节点响应过大','runner_payload_limit');chunks.push(Buffer.from(chunk))}
+      for await(const chunk of ctx.req){size+=chunk.length;if(size>(match[2]==='desktop'?40:16)*1024*1024)throw new HttpError(413,'执行节点响应过大','runner_payload_limit');chunks.push(Buffer.from(chunk))}
       let body:any
       try {body=JSON.parse(Buffer.concat(chunks).toString())}catch{throw new HttpError(400,'JSON 无效','invalid_json')}
       if(!body||typeof body!=='object'||Array.isArray(body))throw new HttpError(400,'请求必须是对象','invalid_json')
+      if(match[2]==='desktop'){
+        if(record.sourceNodeId!=='local'||record.sourceOwner!=='_system'||!state.features.includes('compose-desktops-v1'))throw new HttpError(403,'该节点不能访问 Compose 桌面','compose_desktop_forbidden')
+        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute']),ownerKey:z.string().optional()}).passthrough(),body)
+        if(operation==='list'){ctx.body=await this.composeDesktops.status();return}
+        const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',id)
+        if(!claim||claim.runnerId!==record.id||hash(claim.owner)!==ownerKey)throw new HttpError(403,'没有该共享桌面的使用权限','compose_desktop_forbidden')
+        const valid=()=>this.auth.isUserActive(claim.owner)&&this.store.list<import('../shared/workspace.js').WorkspaceAgent>(claim.owner,'agent').some(a=>!a.archived&&a.computerEnvironmentId===id&&this.auth.canUseSource(claim.owner,a.nodeId,a.profile))
+        const active=()=>[...this.connections.values()].some(c=>c.runnerId===record.id&&c.computer?.environmentId===id&&c.computer.ownerKey===ownerKey&&c.valid())||this.store.list<any>('_system','computer-control').some(g=>g.owner===claim.owner&&g.runnerId===record.id&&g.environmentId===id&&this.controlAllowed(g.id,record.id))
+        if(operation!=='release'&&(!valid()||(!['health','frame'].includes(operation)&&!active())))throw new HttpError(403,'桌面操作缺少当前任务或接管授权','compose_desktop_forbidden')
+        const result=await this.composeDesktops.call(id,operation,{...payload,owner:ownerKey})
+        if(operation==='acquire'&&(!valid()||!active())){await this.composeDesktops.call(id,'release',{...result,cancel:true}).catch(()=>{});throw new HttpError(410,'桌面操作已取消','computer_control_expired')}
+        ctx.body=result;return
+      }
       if(match[2]==='local-vm-check'){ctx.body={allowed:typeof body.id==='string'&&this.localVmAllowed(body.id,record.id)};return}
       if(match[2]==='control-check'){ctx.body={allowed:typeof body.controlId==='string'&&this.controlAllowed(body.controlId,record.id)};return}
       if(match[2]==='artifact'){

@@ -24,7 +24,7 @@ export interface RunnerConfiguration {
   allowedProfiles: string[]
   artifactRoots: string[]
   allowInsecureLan?: boolean
-  computers?: {network?:'none'|'public-proxy';runtime:'docker'|'podman';imageId:string;python:string;hermesSource:string;hermesHome:string;maxConcurrent?:number}
+  computers?: {managedBy?:'compose';network?:'none'|'public-proxy';runtime:'docker'|'podman';imageId:string;python:string;hermesSource:string;hermesHome:string;maxConcurrent?:number}
   hermesCredentials?: {username:string;password:string}
 }
 export const UNCONFIGURED_COMPUTER_IMAGE='sha256:'+'0'.repeat(64)

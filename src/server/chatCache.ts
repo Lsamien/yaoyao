@@ -501,6 +501,12 @@ export class ChatCacheStore {
       .run(owner, sessionID)
   }
 
+  fileSourceMessage(owner: string, profile: string, sessionID: string, messageID: string): Record<string, unknown> | undefined {
+    const row = this.db.prepare('SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?')
+      .get(owner, profile, sessionID, messageID)
+    return row ? JSON.parse(String(row.data)) : undefined
+  }
+
   markListsStale(owner: string): void {
     this.db.prepare("UPDATE chat_snapshots SET sync_state='stale' WHERE owner=? AND kind='list'").run(owner)
   }

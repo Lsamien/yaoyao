@@ -11,6 +11,7 @@ import {WorkspaceStore} from '../../src/server/workspaceStore'
 import {LocalVmService} from '../../src/server/localVm'
 import {SharedComputers} from '../../src/server/sharedComputers'
 import {HttpError} from '../../src/server/errors'
+import {loadServerConfig} from '../../src/server/config'
 
 it('protects preparation, removes the old catalog API and scopes sharing to the account and profile',async()=>{
  const home=mkdtempSync(join(tmpdir(),'local-vm-routes-')),store=new WorkspaceStore(home)
@@ -18,7 +19,7 @@ it('protects preparation, removes the old catalog API and scopes sharing to the 
  const auth:any={require:(ctx:any)=>({id:ctx.get('x-owner')||'alice'}),requireAdmin:(ctx:any)=>{if(ctx.get('x-admin')!=='yes'||!active)throw new HttpError(403,'需要管理员权限','admin_required');return {id:'alice'}},isAdminActive:()=>active,pushAuthorizationVersion:()=>version}
  const runner={id:randomUUID(),enabled:true,sourceNodeId:'local',sourceOwner:'_system'}
  const nodes:any={requireSource:vi.fn()}
- const hub:any={records:()=>[runner],summary:()=>({online:true}),localVm:vi.fn(async()=>({configured:true,daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false})),computer:vi.fn(async()=>({container:'running',ready:true}))}
+ const hub:any={records:()=>[runner],summary:()=>({online:true,features:['local-vm-v1']}),localVm:vi.fn(async()=>({configured:true,daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false})),computer:vi.fn(async()=>({container:'running',ready:true}))}
  const shared=new SharedComputers(store,auth,nodes,hub),service=new LocalVmService(store,auth,nodes,hub,shared,{home} as any),app=new Koa()
  app.use(async(ctx,next)=>{try{await next()}catch(e){ctx.status=(e as any).status||500;ctx.body={error:String(e)}}});app.use(bodyParser());app.use(service.router().routes())
  try{
@@ -57,4 +58,29 @@ it('protects preparation, removes the old catalog API and scopes sharing to the 
   await request(app.callback()).post(`/api/app/agents/${helper.id}/local-vm/create`).send({}).expect(409)
   active=false;expect(service.allowed(id,runner.id)).toBe(false)
  }finally{store.close();rmSync(home,{recursive:true,force:true})}
+})
+it('uses the external Runner in Docker and reports missing, offline and incompatible nodes without probing the Web container',async()=>{
+ const home=mkdtempSync(join(tmpdir(),'local-vm-docker-')),store=new WorkspaceStore(home)
+ let records:any[]=[],online=false,features:string[]=[]
+ const auth:any={requireAdmin:()=>({id:'alice'})},nodes:any={open:vi.fn(),requireSource:vi.fn()}
+ const hub:any={records:()=>records,summary:()=>({online,features}),localVm:vi.fn(async()=>({configured:true,runtime:'docker',daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false})),enroll:vi.fn()}
+ const config=loadServerConfig({HERMES_YAOYAO_HOME:home,HERMES_YAOYAO_LOCAL_VM_HOST:'runner'})
+ const shared=new SharedComputers(store,auth,nodes,hub),service=new LocalVmService(store,auth,nodes,hub,shared,config)
+ const discover=vi.spyOn(service as any,'discover')
+ const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(e){ctx.status=(e as any).status||500;ctx.body={code:(e as any).code}}});app.use(bodyParser());app.use(service.router().routes())
+ try{
+  expect((await service.status('alice'))).toMatchObject({configured:false,executionHost:'runner',setupRequired:'runner'})
+  await request(app.callback()).post('/api/app/admin/local-vm/prepare').send({requestId:randomUUID()}).expect(409,{code:'local_vm_runner_required'})
+  expect(hub.enroll).not.toHaveBeenCalled()
+  records=[{id:randomUUID(),name:'Hermes 所在电脑',enabled:true,sourceNodeId:'local',sourceOwner:'_system'}]
+  expect(await service.status('alice')).toMatchObject({setupRequired:'runner',runnerName:'Hermes 所在电脑'})
+  online=true
+  expect(await service.status('alice')).toMatchObject({setupRequired:'worker'})
+  features=['local-vm-v1']
+  expect(await service.status('alice')).toMatchObject({executionHost:'runner',image:true,daemonUp:true})
+  // Migrated desktop state must not launch a host-specific Python path in Docker.
+  store.put('_system','local-vm-managed','local',{sealed:'unusable-desktop-config'})
+  await service.start('http://127.0.0.1:15300')
+  expect(nodes.open).not.toHaveBeenCalled();expect(discover).not.toHaveBeenCalled()
+ }finally{await service.close();store.close();rmSync(home,{recursive:true,force:true})}
 })

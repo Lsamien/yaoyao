@@ -1,6 +1,6 @@
 # 夭夭 Web
 
-当前 Web 与 macOS 桌面发布版本：**v0.4.0**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.0.md)。
+当前 Web 与 macOS 桌面发布版本：**v0.4.1**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.1.md)。
 
 夭夭 Web 为网页、iOS 和安卓提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
 
@@ -36,7 +36,7 @@ Web 数据默认保存在 `~/.hermes-yaoyao`，可用 `HERMES_YAOYAO_HOME` 指�
 
 ## macOS 桌面版
 
-在 [v0.4.0 发布页](http://192.168.153.8:3000/samien/hermes-yaoyao/releases/tag/v0.4.0) 下载 `Yaoyao-0.4.0-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
+在 [v0.4.1 发布页](https://github.com/Lsamien/hermes-yaoyao/releases/tag/v0.4.1) 下载 `Yaoyao-0.4.1-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
 
 此 DMG 使用 Apple Development 开发签名，未做 Apple 公证。
 

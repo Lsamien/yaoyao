@@ -46,3 +46,14 @@ it('composes real member avatars and refreshes them without changing group membe
   expect(wrapper.find('.sidebar-item .agent-avatar--waiting').exists()).toBe(true)
   wrapper.unmount()
 })
+
+
+it('keeps inline thinking in the process trace and its media out of the message body', () => {
+  const messages = workspaceMessagesToUi([{
+    id: 'inline-thinking', conversationId: 'chat', seq: 1, role: 'assistant',
+    content: '<think>![过程图](/tmp/process.png)</think>[报告](/tmp/report.pdf)',
+    reasoning: '', status: 'complete', attachments: [], tools: [], createdAt: 1,
+  }])
+  expect(messages[0].content).toBe('[报告](/tmp/report.pdf)')
+  expect(messages[0].reasoning).toBe('![过程图](/tmp/process.png)')
+})

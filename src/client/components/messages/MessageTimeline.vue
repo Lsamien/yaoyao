@@ -284,25 +284,25 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
             <template v-if="message.timelineKind === 'delegation-complete'">
               <details class="delegation-event">
                 <summary><AppIcon name="groups" :size="14" /><span><strong>子任务已完成</strong><small>{{ delegationSummary(message.timelineMetadata) }}</small></span></summary>
-                <MarkdownContent v-if="message.content" :content="message.content" />
+                <MarkdownContent process-content v-if="message.content" :content="message.content" />
               </details>
             </template>
             <template v-else-if="message.timelineKind === 'background-process'">
               <details class="system-event background-process-event">
                 <summary><AppIcon name="tools" :size="13" /><span>{{ backgroundProcessSummary(message.timelineMetadata) }}</span></summary>
-                <MarkdownContent v-if="message.content" :content="message.content" />
+                <MarkdownContent process-content v-if="message.content" :content="message.content" />
               </details>
             </template>
             <template v-else-if="message.timelineKind === 'system' && isCompactionEvent(message)">
               <details class="delegation-event compaction-event">
                 <summary><AppIcon name="archive" :size="14" /><span><strong>上下文已压缩</strong><small>压缩摘要已归档 · 点击查看</small></span></summary>
-                <MarkdownContent v-if="message.content" :content="message.content" />
+                <MarkdownContent process-content v-if="message.content" :content="message.content" />
               </details>
             </template>
             <template v-else-if="message.timelineKind === 'system'">
               <details class="system-event">
                 <summary><AppIcon name="settings" :size="13" /><span>{{ systemSummary(message.content) }}</span></summary>
-                <MarkdownContent v-if="message.content" :content="message.content" />
+                <MarkdownContent process-content v-if="message.content" :content="message.content" />
               </details>
             </template>
             <template v-else>
@@ -315,7 +315,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 
             <details v-if="message.reasoning" class="message__reasoning">
               <summary><AppIcon name="brain" :size="13" />思考过程 · {{ message.reasoning.length }} 字</summary>
-              <MarkdownContent :content="message.reasoning" :streaming="message.status === 'streaming'" @rendered="onMarkdownRendered" />
+              <MarkdownContent process-content :content="message.reasoning" :streaming="message.status === 'streaming'" @rendered="onMarkdownRendered" />
             </details>
 
             <div v-if="message.role === 'user' && message.attachments?.length" class="message__attachments">
@@ -334,7 +334,8 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
                 :plain="message.role === 'user'"
                 :mention-names="mentionNames"
                 :outline-prefix="message.role === 'assistant' ? `outline-${message.id}` : ''"
-                file-cards
+                :file-cards="message.role === 'user' || message.role === 'assistant'"
+                :process-content="message.role !== 'user' && message.role !== 'assistant'"
                 @rendered="onMarkdownRendered"
                 @file-link="(name, url) => emit('previewFile', { name, url })"
               />
@@ -351,7 +352,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
               {{ deliveryLabel(message.status) }}
             </div>
 
-            <div v-if="message.role !== 'user' && message.attachments?.length" class="message__attachments">
+            <div v-if="message.role === 'assistant' && message.attachments?.length" class="message__attachments">
               <button v-for="attachment in message.attachments" :key="attachment.id" type="button" @click="emit('preview', attachment)">
                 <img v-if="attachment.kind === 'image' && attachment.url" :src="attachment.url" :alt="attachment.name" />
                 <span v-else><AppIcon :name="attachment.kind || 'file'" :size="17" /></span>

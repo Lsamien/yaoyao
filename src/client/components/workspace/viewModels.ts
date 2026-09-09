@@ -1,3 +1,4 @@
+import { visibleMessageText, messageReasoningText } from '@shared/messageFiles'
 import type {
   ApprovalRequest,
   ChatMessage,
@@ -122,8 +123,8 @@ export function chatMessageToUi(message: ChatMessage, agentNameFor?: (profile?: 
     id: message.id,
     role: message.role,
     author: message.role === 'assistant' ? agentNameFor?.(message.profile) || message.profile : undefined,
-    content: message.content,
-    reasoning: message.reasoning,
+    content: message.role === 'assistant' ? visibleMessageText(message.content) : message.content,
+    reasoning: message.role === 'assistant' ? messageReasoningText(message.content, message.reasoning) : message.reasoning,
     createdAt: message.timestamp < 10_000_000_000 ? message.timestamp * 1000 : message.timestamp,
     status: message.isStreaming ? 'streaming' : message.stage,
     error: message.error,
@@ -258,7 +259,7 @@ export function groupMessageToUi(message: GroupMessage, agents: GroupAgent[] = [
         : `node:${sender.nodeId}:${sender.profile}`
       : undefined,
     content,
-    reasoning: message.reasoning,
+    reasoning: message.senderKind === 'agent' ? messageReasoningText(message.content, message.reasoning) : message.reasoning,
     createdAt: message.createdAt < 10_000_000_000 ? message.createdAt * 1000 : message.createdAt,
     status: message.status === 'completed' ? 'settled' : message.status === 'queued' ? 'pending' : message.status === 'streaming' ? 'streaming' : message.status === 'failed' ? 'failed' : message.status === 'unknown' ? 'unknown-receipt' : 'settled',
     error: message.error,
@@ -369,11 +370,11 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
   return messages.filter(message => message.visible !== false).map(message => ({
     id: message.id, role: message.role, author: message.agentName,
     profile: message.agentId, createdAt: message.createdAt,
-    content: message.content.replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
+    content: (message.role === 'assistant' ? visibleMessageText(message.content) : message.content).replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
       const file = message.attachments.find(file => file.sourcePath === path)
       return file ? `${label}(/api/app/files/${file.id}/${label.startsWith('!') ? 'preview' : 'download'})` : whole
     }),
-    reasoning: message.reasoning,
+    reasoning: message.role === 'assistant' ? messageReasoningText(message.content, message.reasoning) : message.reasoning,
     status: message.status === 'complete' || message.status === 'interrupted' ? 'settled'
       : message.status === 'uncertain' ? 'unknown-receipt'
       : message.status === 'queued' ? 'pending' : message.status,

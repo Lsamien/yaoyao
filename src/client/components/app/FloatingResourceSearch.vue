@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import TeamAvatar from '@/components/common/TeamAvatar.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
@@ -93,6 +93,10 @@ function containFocus(event: KeyboardEvent) {
   if (event.shiftKey && document.activeElement === elements[0]) { event.preventDefault(); elements.at(-1)?.focus() }
   else if (!event.shiftKey && document.activeElement === elements.at(-1)) { event.preventDefault(); elements[0]?.focus() }
 }
+watch(results, async () => {
+  await nextTick()
+  if (open.value && document.activeElement === document.body) input.value?.focus()
+})
 onMounted(() => { document.addEventListener(SIDEBAR_SEARCH_EVENT, show); document.addEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, close) })
 onBeforeUnmount(() => { document.removeEventListener(SIDEBAR_SEARCH_EVENT, show); document.removeEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, close) })
 </script>
@@ -124,10 +128,11 @@ onBeforeUnmount(() => { document.removeEventListener(SIDEBAR_SEARCH_EVENT, show)
           </nav>
           <section :id="`${section}-search-results`" class="floating-resource-search__result-pane" :role="tabbed ? 'tabpanel' : undefined" :aria-label="tabbed ? activeParent?.title : undefined">
             <div v-if="activeParent && !tabbed" class="floating-resource-search__context"><strong>{{ activeParent.title }}</strong><span>{{ activeParent.subtitle }}</span></div>
-            <div class="floating-resource-search__results" role="listbox" aria-label="搜索结果">
+            <div class="floating-resource-search__results" :role="$slots['item-actions'] ? 'list' : 'listbox'" aria-label="搜索结果">
               <template v-for="row in resultRows" :key="row.item.id">
                 <div v-if="row.showSection" class="floating-resource-search__section">{{ row.item.section }}</div>
-                <button type="button" role="option" :aria-haspopup="row.hasChildren ? 'listbox' : undefined" @click="choose(row.item)">
+                <div class="floating-resource-search__row" :role="$slots['item-actions'] ? 'listitem' : 'presentation'">
+                <button class="floating-resource-search__select" type="button" :role="$slots['item-actions'] ? undefined : 'option'" :aria-haspopup="row.hasChildren ? 'listbox' : undefined" @click="choose(row.item)">
                   <span v-if="row.item.avatar !== undefined || row.item.avatarMembers?.length" class="floating-resource-search__icon floating-resource-search__icon--avatar">
                     <AgentAvatar v-if="row.item.avatarKind === 'agent'" :name="row.item.title" :avatar="row.item.avatar" :state="row.item.avatarState" :size="30" />
                     <TeamAvatar v-else :name="row.item.title" :avatar="row.item.avatar || ''" :members="row.item.avatarMembers || []" :fallback-key="row.item.avatarFallbackKey || row.item.id" :size="30" />
@@ -136,11 +141,14 @@ onBeforeUnmount(() => { document.removeEventListener(SIDEBAR_SEARCH_EVENT, show)
                   <span class="floating-resource-search__copy"><strong>{{ row.item.title }}</strong><small v-if="row.item.subtitle">{{ row.item.subtitle }}</small></span>
                   <small v-if="row.item.meta">{{ row.item.meta }}</small>
                 </button>
+                <slot name="item-actions" :item="row.item" />
+                </div>
               </template>
               <p v-if="!results.length">{{ activeParent?.emptyText || (activeParent ? `暂无${activeParent.title}内容` : '没有匹配结果') }}</p>
             </div>
           </section>
         </div>
+        <slot name="footer" />
       </section>
     </div>
   </Teleport>
@@ -155,4 +163,8 @@ onBeforeUnmount(() => { document.removeEventListener(SIDEBAR_SEARCH_EVENT, show)
 .floating-resource-search__tabs button{display:flex;align-items:center;justify-content:center;gap:9px;min-height:34px;padding:6px 18px;border:0;border-radius:8px;background:transparent;color:var(--text-secondary);font:13px var(--font-ui);cursor:pointer}
 .floating-resource-search__tabs button[aria-selected="true"]{background:var(--surface-hover);color:var(--text-primary);font-weight:650}
 .floating-resource-search__tabs small{color:var(--text-muted);font-size:11px}
+.floating-resource-search__row{display:flex;align-items:center;gap:8px}
+.floating-resource-search__row .floating-resource-search__select{flex:1;min-width:0}
+.floating-resource-search__select>small{flex-shrink:0;color:var(--text-muted);font-size:10px}
+.floating-resource-search__select:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 </style>

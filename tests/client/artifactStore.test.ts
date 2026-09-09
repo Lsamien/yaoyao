@@ -30,12 +30,21 @@ describe('artifact extractor', () => {
     expect(artifacts[0].attachment?.id).toBe('attachment-1')
   })
 
-  it('extracts hinted tool result paths and deduplicates within a session', () => {
+  it('excludes files mentioned only in tool results', () => {
     const artifacts = extractArtifacts(session, [row('tool', 'tool', '{"output_path":"/tmp/result.pdf"}', {
       toolCalls: [{ id: 'tool-1', name: 'write', status: 'completed', result: { output_path: '/tmp/result.pdf' } }],
     })])
-    expect(artifacts).toHaveLength(1)
-    expect(artifacts[0]).toMatchObject({ kind: 'file', value: '/tmp/result.pdf', label: 'result.pdf' })
+    expect(artifacts).toEqual([])
+  })
+
+  it('collects the delivered body while ignoring reasoning and attached tool details', () => {
+    const artifacts = extractArtifacts(session, [row('assistant', 'assistant',
+      '<think>[过程](/tmp/private.pdf)</think>[交付](/tmp/result.pdf)', {
+        reasoning: '![过程图片](/tmp/process.png)',
+        toolCalls: [{ id: 'tool', name: 'read', status: 'completed', arguments: { path: '/tmp/input.pdf' }, result: { path: '/tmp/result.pdf' }, preview: '/tmp/preview.pdf' }],
+      })])
+    expect(artifacts.map(item => item.value)).toEqual(['/tmp/result.pdf'])
+    expect(artifacts[0].messageId).toBe('assistant')
   })
 
   it('keeps the same artifact path when it was produced by distinct messages', () => {

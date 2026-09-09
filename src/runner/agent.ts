@@ -46,18 +46,21 @@ export class RunnerAgent {
     this.target={url:hermes,client,session:new UpstreamServiceSession(client,()=>config.hermesCredentials)}
     this.db=new DatabaseSync(join(home,'runner-commands.sqlite3'))
     this.db.exec('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created INTEGER NOT NULL)')
-    if(config.computers){this.computers=new ComputerRuntime(this.db,config,home);this.localVm=new LocalVmImages(this.computers,this.db)}
+    if(config.computers){this.computers=new ComputerRuntime(this.db,config,home,undefined,(id,operation,body)=>this.api('desktop',{id,operation,...body}));this.localVm=new LocalVmImages(this.computers,this.db)}
     this.compactReceipts()
   }
   private async api(path:string,body?:unknown):Promise<any> {
     const url=new URL(`/api/runner/v1/${this.config.runnerId}/${path}`,this.config.serverURL)
     if(url.hostname==='localhost')url.hostname='127.0.0.1'
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
-      method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'computer-worker-v1,artifact-chunks-v1,helper-retirement-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:25000)]),
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
-    if(!response.ok)throw new HttpError(response.status,`执行节点连接被拒绝（HTTP ${response.status}）`,response.status===403?'runner_unauthorized':'runner_request_failed')
+    if(!response.ok){
+      if(path==='desktop'){const error=await response.json().catch(()=>({})) as {error?:string;code?:string};throw new HttpError(response.status,error.error?.slice(0,300)||'Compose 桌面连接失败',error.code||'compose_desktop_error')}
+      throw new HttpError(response.status,`执行节点连接被拒绝（HTTP ${response.status}）`,response.status===403?'runner_unauthorized':'runner_request_failed')
+    }
     const reader=response.body?.getReader();const chunks:Uint8Array[]=[];let bytes=0
     if(!reader)throw new Error('执行节点响应为空')
     try{for(;;){const part=await reader.read();if(part.done)break;bytes+=part.value.length;if(bytes>40*1024*1024)throw new Error('执行节点响应超过大小限制');chunks.push(part.value)}}finally{await reader.cancel()}
@@ -112,12 +115,12 @@ export class RunnerAgent {
       const authorize=()=>{if(!this.connected||!this.active||Date.now()>command.expiresAt)throw new HttpError(403,'电脑请求已失效','computer_control_expired')}
       await this.computers.ready
       if(input.op==='detail'){
-        const vm=await this.localVm!.status(),spec=this.computers.pool.definition(input.target.ownerKey,input.target.environmentId)
+        const vm=await this.localVm!.status(),spec=this.computers.pool.definition(input.target.ownerKey,input.target.environmentId)??(this.computers.provider.fixedCapacity?{id:input.target.environmentId,ownerKey:input.target.ownerKey,imageId:this.computers.config.imageId}:undefined)
         const state=await this.computers.controls.status(input.target)
         const actual=spec?await this.computers.provider.inspect(spec):undefined
         let ready=false
         if(actual?.running)try{await this.computers.provider.health(spec!,authorize);ready=true}catch{}
-        return {...state,container:actual?.running?'running':spec?'stopped':'missing',ready,inUse:['agent','pausing','human','resuming'].includes(state.mode),mode:vm.mode,maxInstances:vm.maxInstances,image:vm.image,controlMode:state.mode}
+        return {...state,container:actual?.running?'running':spec?'stopped':'missing',ready,inUse:['agent','pausing','human','resuming'].includes(state.mode),mode:vm.mode,maxInstances:vm.maxInstances,image:vm.image,controlMode:state.mode,fixedCapacity:vm.fixedCapacity}
       }
       if(input.op==='lifecycle'){
         const action=z.enum(['create','start','stop','recreate','remove']).parse(input.action)

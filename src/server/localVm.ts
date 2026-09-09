@@ -28,16 +28,23 @@ export class LocalVmService {
   private problem?:string
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,
     readonly hub:RunnerHub,readonly shared:SharedComputers,readonly config:ServerConfig) {
-    store.prepareAgent=(owner,agent)=>{const record=this.record();if(record&&this.mode(owner)==='shared')this.shared.attachLocalVm(owner,agent,record.id)}
+    store.prepareAgent=(owner,agent)=>{
+      const record=this.record()
+      if(this.fixed){const parent=agent.createdByAgentId?store.get<WorkspaceAgent>(owner,'agent',agent.createdByAgentId):undefined,desktop=this.config.composeDesktops?.find(d=>d.id===parent?.computerEnvironmentId);if(record&&desktop&&agent.execution==='computer'){if(agent.nodeId!=='local')throw new HttpError(409,'Compose 桌面成员须使用当前 Web 的 Hermes 来源','compose_source_required');this.shared.bindCompose(owner,agent,desktop,record.id,false)}return}
+      if(record&&this.mode(owner)==='shared')this.shared.attachLocalVm(owner,agent,record.id)
+    }
   }
+  private get fixed(){return !!this.config.composeDesktops?.length}
+  private assertManaged(){if(this.fixed)throw new HttpError(409,'桌面由 Compose 创建和管理，数量和镜像不能在界面修改','compose_desktop_managed')}
   allowed(id:string,runnerId:string){
     const grant=this.store.get<Grant>('_system','local-vm-grant',id)
     return !!grant&&grant.runnerId===runnerId&&grant.expiresAt>Date.now()&&this.auth.isAdminActive(grant.owner)&&this.auth.pushAuthorizationVersion(grant.owner)===grant.version
   }
-  private mode(owner:string):LocalVmMode { return this.store.get<{mode:LocalVmMode}>(owner,'local-vm-preferences','local')?.mode??'per-bot' }
+  private mode(owner:string):LocalVmMode { return this.fixed?'shared':this.store.get<{mode:LocalVmMode}>(owner,'local-vm-preferences','local')?.mode??'per-bot' }
   private record(){return this.hub.records().find(r=>r.enabled&&r.sourceNodeId==='local'&&r.sourceOwner==='_system')}
   async start(url:string) {
     this.url=url
+    if(this.fixed||this.config.localVmHost==='runner')return
     const stored=this.store.get<{sealed:string}>('_system','local-vm-managed','local')
     if(!stored||this.managed)return
     const config=this.nodes.open<RunnerConfiguration>(stored.sealed)
@@ -70,6 +77,7 @@ export class LocalVmService {
       if(this.url&&!this.managed)await this.start(this.url)
       return this.record()!
     }
+    if(this.config.localVmHost==='runner')throw new HttpError(409,'Docker 版需要先连接运行 Hermes 的执行节点，并启用虚拟桌面。请在本页打开执行节点设置。','local_vm_runner_required')
     this.starting=(async()=>{
       if(!this.url)throw new HttpError(503,'本机 Web 服务尚未启动','local_vm_unavailable')
       const detected=await this.discover()
@@ -98,19 +106,29 @@ export class LocalVmService {
   }
   async status(owner:string):Promise<LocalVmStatus> {
     const record=this.record()
+    if(this.fixed){
+      const desktops=(await this.hub.composeDesktops.status()).map(d=>{const claim=this.store.get<{owner:string}>('_system','compose-desktop-owner',d.id);return {...d,available:!claim||claim.owner===owner}})
+      const runner=record?this.hub.summary(record):undefined,connected=runner?.online&&runner.features.includes('compose-desktops-v1')
+      return {configured:!!connected,executionHost:'runner',runnerName:record?.name,fixedCapacity:true,desktops,daemonUp:true,image:desktops.some(d=>d.ready),mode:'shared',maxInstances:desktops.length,busy:false,...(!connected?{setupRequired:'runner' as const,problem:'Compose 桌面数量已固定。请连接启用 Compose 桌面模式的 Hermes 执行节点。'}:{})}
+    }
+    const executionHost=this.config.localVmHost==='runner'||(record&&!this.store.get('_system','local-vm-managed','local'))?'runner':'server'
     if(record){
       if(this.url&&!this.managed)await this.start(this.url)
-      if(!this.hub.summary(record).online){
+      const summary=this.hub.summary(record)
+      if(!summary.online){
+        if(executionHost==='runner')return {configured:true,executionHost,runnerName:record.name,setupRequired:'runner',daemonUp:false,image:false,mode:this.mode(owner),maxInstances:2,busy:false,problem:`执行节点「${record.name}」尚未连接，请在运行 Hermes 的电脑上启动 Runner。`}
         const detected=await this.discover()
         return {configured:true,...detected,image:false,mode:this.mode(owner),maxInstances:2,busy:false,problem:this.problem??'本机执行环境正在连接，请稍后重新检查'}
       }
+      if(!summary.features?.includes('local-vm-v1'))return {configured:true,executionHost,runnerName:record.name,setupRequired:'worker',daemonUp:false,image:false,mode:this.mode(owner),maxInstances:2,busy:false,problem:'执行节点已连接，但未启用虚拟桌面或版本过旧。请启用隔离电脑 Worker 并使用配套版本的 Runner。'}
       const state=await this.hub.localVm(owner,record.id,{op:'status'}) as LocalVmStatus
       const agents=this.store.list<WorkspaceAgent>(owner,'agent'),groups=this.store.list<{id:string;name:string}>(owner,'shared-computer')
-      return {...state,mode:this.mode(owner),instances:state.instances?.map(instance=>{
+      return {...state,executionHost,runnerName:record.name,mode:this.mode(owner),instances:state.instances?.map(instance=>{
         const agent=agents.find(a=>!a.archived&&(a.computerEnvironmentId??a.id)===instance.id&&a.execution==='computer')
         return {...instance,name:agent?.computerEnvironmentName??agent?.name??groups.find(g=>g.id===instance.id)?.name??'保留的虚拟机',orphaned:!agent}
       })}
     }
+    if(executionHost==='runner')return {configured:false,executionHost,setupRequired:'runner',daemonUp:false,image:false,mode:this.mode(owner),maxInstances:2,busy:false,problem:'Docker 版通过执行节点提供虚拟桌面。请在运行 Hermes 的电脑上连接执行节点。'}
     const detected=await this.discover()
     return {configured:false,...detected,image:false,mode:this.mode(owner),maxInstances:2,busy:false,problem:this.problem}
   }
@@ -118,11 +136,13 @@ export class LocalVmService {
     const router=new Router()
     router.get('/api/app/admin/local-vm',async ctx=>{ctx.body=await this.status(this.auth.requireAdmin(ctx).id)})
     router.post('/api/app/admin/local-vm/prepare',async ctx=>{
+      this.auth.requireAdmin(ctx);this.assertManaged()
       const actor=this.auth.requireAdmin(ctx),body=parse(z.object({requestId:z.string().uuid()}).strict(),(ctx.request as any).body)
       const record=await this.ensure(actor.id);this.grant(actor.id,body.requestId,record.id)
       ctx.body=await this.hub.localVm(actor.id,record.id,{op:'prepare',id:body.requestId})
     })
     router.put('/api/app/admin/local-vm/policy',async ctx=>{
+      this.auth.requireAdmin(ctx);this.assertManaged()
       const owner=this.auth.requireAdmin(ctx).id,body=parse(z.object({requestId:z.string().uuid(),mode:z.enum(['shared','per-bot']),maxInstances:z.number().int().min(1).max(4)}).strict(),(ctx.request as any).body)
       const record=await this.ensure(owner);this.shared.assertLocalVmIdle(owner)
       this.grant(owner,body.requestId,record.id)
@@ -132,6 +152,7 @@ export class LocalVmService {
       ctx.body=await this.status(owner)
     })
     router.post('/api/app/admin/local-vm/instances/:id/:action',async ctx=>{
+      this.auth.requireAdmin(ctx);this.assertManaged()
       const owner=this.auth.requireAdmin(ctx).id,id=parse(z.string().uuid(),ctx.params.id),action=parse(z.enum(['stop','remove']),ctx.params.action)
       const body=parse(z.object({requestId:z.string().uuid()}).strict(),(ctx.request as any).body),record=this.record()
       if(!record)throw new HttpError(409,'本地虚拟机尚未配置','local_vm_unavailable')
@@ -141,23 +162,32 @@ export class LocalVmService {
     router.get('/api/app/agents/:id/local-vm',async ctx=>{
       const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id)
       this.nodes.requireSource(owner,agent)
-      if(agent.execution!=='computer'){ctx.body={enabled:false,agent};return}
-      try { ctx.body={enabled:true,agent,...await this.hub.computer(owner,agent,'detail',{},()=>this.nodes.requireSource(owner,agent)),mode:agent.computerEnvironmentId?'shared':'per-bot'} }
-      catch(error){ctx.body={enabled:true,agent,container:'missing',ready:false,image:false,problem:error instanceof Error?error.message:'本地虚拟机不可用'}}
+      const fixed=this.fixed?{fixedCapacity:true,desktopId:agent.computerEnvironmentId,desktops:(await this.status(owner)).desktops}:{}
+      if(agent.execution!=='computer'||(this.fixed&&!agent.computerEnvironmentId)){ctx.body={enabled:false,agent,...fixed};return}
+      try { ctx.body={enabled:true,agent,...await this.hub.computer(owner,agent,'detail',{},()=>this.nodes.requireSource(owner,agent)),mode:agent.computerEnvironmentId?'shared':'per-bot',...fixed} }
+      catch(error){ctx.body={enabled:true,agent,container:'missing',ready:false,image:false,problem:error instanceof Error?error.message:'本地虚拟机不可用',...fixed}}
     })
     router.put('/api/app/agents/:id/local-vm',ctx=>{
-      const owner=this.auth.require(ctx).id,body=parse(z.object({enabled:z.boolean()}).strict(),(ctx.request as any).body)
+      const owner=this.auth.require(ctx).id,body=parse(z.object({enabled:z.boolean(),desktopId:z.string().uuid().optional()}).strict(),(ctx.request as any).body)
       const agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);this.nodes.requireSource(owner,agent)
       if(agent.remoteAgentId||agent.temporaryGoalId)throw new HttpError(409,'请在该 Agent 所属的电脑上设置虚拟机','local_vm_remote')
       this.shared.assertLocalVmIdle(owner,[agent.id])
+      if(this.fixed&&body.enabled){
+        if(agent.nodeId!=='local')throw new HttpError(409,'Compose 桌面成员须使用当前 Web 的 Hermes 来源','compose_source_required')
+        const desktop=this.config.composeDesktops!.find(d=>d.id===body.desktopId),record=this.record()
+        if(!desktop)throw new HttpError(400,'请选择 Compose 中已有的共享桌面','compose_desktop_required')
+        if(!record||!this.hub.summary(record).features.includes('compose-desktops-v1'))throw new HttpError(409,'请连接启用 Compose 桌面模式的执行节点','compose_runner_required')
+        ctx.body=this.store.atomic(()=>{this.shared.bindCompose(owner,agent,desktop,record.id);return {agent:this.store.agentSummary(agent)}});return
+      }
       ctx.body=this.store.atomic(()=>{
         if(!body.enabled)this.shared.detachLocalVm(owner,agent)
         this.store.updateAgent(owner,agent.id,{execution:body.enabled?'computer':'profile'})
-        if(body.enabled&&this.mode(owner)==='shared'){const record=this.record();if(record)this.shared.setLocalVmMode(owner,'shared',record.id)}
+        if(body.enabled&&!this.fixed&&this.mode(owner)==='shared'){const record=this.record();if(record)this.shared.setLocalVmMode(owner,'shared',record.id)}
         return {agent:this.store.agentSummary(this.store.require<WorkspaceAgent>(owner,'agent',agent.id))}
       })
     })
     router.post('/api/app/agents/:id/local-vm/:action',async ctx=>{
+      this.auth.require(ctx);this.assertManaged()
       const owner=this.auth.require(ctx).id,action=parse(z.enum(['create','start','stop','recreate','remove']),ctx.params.action)
       const agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id)
       if(agent.temporaryGoalId)throw new HttpError(409,'临时助手的虚拟机由当前任务管理','helper_task_bound')

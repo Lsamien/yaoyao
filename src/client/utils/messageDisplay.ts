@@ -1,3 +1,5 @@
+import { visibleMessageText } from '@shared/messageFiles'
+
 const ATTACHED_CONTEXT_MARKER_RE = /(?:^|\n)--- Attached Context ---\s*\n/
 const CONTEXT_WARNINGS_MARKER_RE = /(?:^|\n)--- Context Warnings ---[\s\S]*$/
 const CONTEXT_REF_RE = /@(file|folder|url|image|tool|terminal):(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|\S+)/g
@@ -11,6 +13,7 @@ const CONTEXT_REF_RE = /@(file|folder|url|image|tool|terminal):(?:"[^"\n]+"|'[^'
  * apply this projection only at display/copy boundaries.
  */
 export function displayContentForMessage(role: string, content: string): string {
+  if (role === 'assistant') return visibleMessageText(content)
   if (role !== 'user') return content
 
   const marker = content.match(ATTACHED_CONTEXT_MARKER_RE)

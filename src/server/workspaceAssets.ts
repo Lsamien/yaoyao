@@ -3,16 +3,17 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import {HttpError} from './errors.js'
 import { lookup } from 'mime-types'
+import { messageFileReferences, type MessageFileOrigin } from '../shared/messageFiles.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
 import type { WorkspaceAgent, WorkspaceFile, WorkspaceMessage } from '../shared/workspace.js'
-export interface StoredWorkspaceFile extends WorkspaceFile {
+export interface StoredWorkspaceFile extends WorkspaceFile, MessageFileOrigin {
   path: string
   digest?: string
   sourceNodeId?:string
 }
 export function publicFile(f: StoredWorkspaceFile): WorkspaceFile {
-  const { path: _path, digest: _digest, ...result } = f
+  const { path: _path, digest: _digest, messageFileSource: _source, ...result } = f
   return result
 }
 export function libraryFile(
@@ -94,16 +95,16 @@ export class WorkspaceAssets {
     const dir=join(this.home,'workspace-files',owner);mkdirSync(dir,{recursive:true,mode:0o700})
     const path=join(dir,digest)
     try{writeFileSync(path,bytes,{mode:0o600,flag:'wx'})}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error}
-    const file:StoredWorkspaceFile={id:randomUUID(),name,mimeType:lookup(name)||'application/octet-stream',path,digest,size:bytes.length,sender:'agent',profile:agent.profile,sourceNodeId:agent.nodeId,conversationId:message.conversationId,messageId:message.id,createdAt:Date.now()}
+    const file:StoredWorkspaceFile={id:randomUUID(),name,mimeType:lookup(name)||'application/octet-stream',path,digest,size:bytes.length,sender:'agent',messageFileSource:'attachment',profile:agent.profile,sourceNodeId:agent.nodeId,conversationId:message.conversationId,messageId:message.id,createdAt:Date.now()}
     this.store.atomic(()=>{this.store.put(owner,'file',file.id,file);this.store.event(owner,'files.changed',publicFile(file),message.conversationId)})
     return publicFile(file)
   }
   async archive(owner: string, message: WorkspaceMessage): Promise<void> {
-    if (!message.agentId) return
+    if (!message.agentId || message.role !== 'assistant' || message.visible === false) return
     const agent = this.store.require<WorkspaceAgent>(owner, 'agent', message.agentId)
     await this.archiveText(
       owner,
-      message.content + '\n' + JSON.stringify(message.tools),
+      message.content,
       agent.nodeId,
       agent.profile,
       message.conversationId,
@@ -113,10 +114,10 @@ export class WorkspaceAssets {
     )
     if (this.stopped) return
     const attachments = this.store
-      .list<StoredWorkspaceFile>(owner, 'file')
+      .visibleFiles(owner)
       .filter((f) => f.messageId === message.id)
       .map(publicFile)
-    if (attachments.length) {
+    if (attachments.length || message.attachments.length) {
       message.attachments = attachments
       this.store.saveMessage(owner, message)
     }
@@ -134,11 +135,13 @@ export class WorkspaceAssets {
     if (this.stopped) return
     const message=this.store.get<WorkspaceMessage>(owner,'message',messageId)
     if(message?.execution==='computer'||(!message?.execution&&message?.agentId&&this.store.get<WorkspaceAgent>(owner,'agent',message.agentId)?.execution==='computer'))return
-    const paths = new Set<string>()
-    for (const m of text.matchAll(
-      /(?:MEDIA:\s*|\]\(<?|"(?:path|file_path|output_path)"\s*:\s*")((?:\/|~\/)[^\n"<>)]{1,4096})/g,
-    ))
-      paths.add(m[1]!.replace(/\\n.*$/, '').trim())
+    const paths = new Set([...messageFileReferences(text)].filter(path => /^(?:\/|~\/)/.test(path)))
+    // User attachment staging is explicit upload metadata, not a tool result.
+    if (sender === 'user') {
+      for (const match of text.matchAll(/"(?:path|file_path|output_path)"\s*:\s*"((?:\/|~\/)[^"\n<>]+)"/g)) {
+        paths.add(match[1]!)
+      }
+    }
     for (const path of [...paths].slice(0, 8)) {
       const key = createHash('sha256')
         .update(JSON.stringify([nodeId, profile, messageId, path]))
@@ -164,6 +167,7 @@ export class WorkspaceAssets {
         const file: StoredWorkspaceFile = {
           id,
           sourcePath: path,
+          messageFileSource: 'reference',
           path: saved,
           digest,
           name,

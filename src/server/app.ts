@@ -1,3 +1,4 @@
+import { nativeMessageFileText } from '../shared/messageFiles.js'
 import { hermesBotRelay } from './hermesBotRelay.js'
 import { remoteAgentExports } from './workspaceRemoteAgents.js'
 import { randomBytes, createHash } from 'node:crypto'
@@ -212,6 +213,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
   const runners=new RunnerHub(workspace,auth,workspaceNodes.local)
+  runners.composeDesktops.desktops.push(...(config.composeDesktops??[]))
   const sharedComputers=new SharedComputers(workspace,auth,workspaceNodes,runners)
   const computerControls=new ComputerControlService(workspace,auth,workspaceNodes,runners)
   const localVm=new LocalVmService(workspace,auth,workspaceNodes,runners,sharedComputers,config)
@@ -239,10 +241,20 @@ export function createApplication(options: ApplicationOptions = {}): Application
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
     if (owner.startsWith('device:')) return
-    if (!['message.complete', 'tool.complete', 'tool.completed', 'attachment.staged'].includes(frame.type)) return
-    const data = frame.payload ?? {}, text = JSON.stringify(data)
+    if (!['message.complete', 'attachment.staged'].includes(frame.type)) return
+    const data = frame.payload ?? {}, text = frame.type === 'attachment.staged' ? JSON.stringify(data) : nativeMessageFileText(data)
     const messageId = String(data.row_id ?? data.message_id ?? data.id ?? createHash('sha256').update(text).digest('hex'))
     void workspaceAssets.archiveText(owner, text, 'local', profile, storedId, messageId, frame.type === 'attachment.staged' ? 'user' : 'agent').catch(() => {})
+  }
+  workspace.nativeMessageForFile = (owner, file) => {
+    const message = chatCache?.store.fileSourceMessage(owner, file.profile ?? 'default', file.conversationId ?? '', file.messageId ?? '')
+    if (!message) return undefined
+    return {
+      id: file.messageId!, conversationId: file.conversationId!, seq: 0,
+      role: message.role === 'assistant' ? 'assistant' : message.role === 'user' ? 'user' : 'system',
+      content: nativeMessageFileText(message), reasoning: '', status: 'complete',
+      attachments: [], tools: [], createdAt: file.createdAt,
+    }
   }
   realtime.broker.onNativeGlobalEvent = (owner, type) => chatCache?.observeGlobal(owner, type)
   chatCache.onSynchronized = (owner, profile, sessionID) => {

@@ -1,6 +1,7 @@
-import type { ChatMessage, ConversationArtifact, JsonValue, SessionSummary } from '@shared/types'
+import { visibleMessageText } from '@shared/messageFiles'
+import type { ChatMessage, ConversationArtifact, SessionSummary } from '@shared/types'
 
-export const ARTIFACT_EXTRACTOR_VERSION = 2
+export const ARTIFACT_EXTRACTOR_VERSION = 3
 
 const markdownImage = /!\[([^\]]*)\]\(([^)\s]+)\)/gi
 const markdownLink = /(?<!!)\[([^\]]+)\]\(([^)\s]+)\)/gi
@@ -8,7 +9,7 @@ const rawUrl = /https?:\/\/[^\s<>"')]+/gi
 const localPath = /(?:^|[\s(："'`])((?:\/|~\/|\.\.?\/)[^\s"'`<>]+(?:\.[a-z0-9]{1,8})?)/gim
 const imageExtensions = new Set(['avif', 'bmp', 'gif', 'heic', 'heif', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp'])
 const fileExtensions = new Set([...imageExtensions, 'pdf', 'txt', 'json', 'md', 'csv', 'zip', 'tar', 'gz', 'mp3', 'wav', '3gp', 'avi', 'm4v', 'mkv', 'mov', 'mp4', 'mpeg', 'mpg', 'webm', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'])
-const keyHints = ['path', 'file', 'url', 'image', 'artifact', 'output', 'download', 'result', 'target']
+
 
 interface Candidate { value: string; label?: string; mimeType?: string; attachment?: ConversationArtifact['attachment'] }
 
@@ -58,42 +59,20 @@ function textCandidates(text: string): Candidate[] {
   return result
 }
 
-function collectStringValues(value: JsonValue, keyPath: string, output: Candidate[]): void {
-  if (typeof value === 'string') {
-    const normalized = normalize(value)
-    if ((keyHints.some(hint => keyPath.toLowerCase().includes(hint)) || looksLikePathOrUrl(normalized)) && looksLikeArtifact(normalized)) {
-      output.push({ value: normalized })
-    }
-    return
-  }
-  if (Array.isArray(value)) return value.forEach((child, index) => collectStringValues(child, `${keyPath}.${index}`, output))
-  if (value && typeof value === 'object') {
-    for (const key of Object.keys(value).sort()) collectStringValues(value[key], `${keyPath}.${key}`, output)
-  }
-}
-
 function candidates(message: ChatMessage): Candidate[] {
-  const result = textCandidates(message.content)
+  const result = textCandidates(visibleMessageText(message.content))
   for (const attachment of message.attachments ?? []) {
     const value = attachment.path || attachment.url
     if (value) result.push({ value, mimeType: attachment.mimeType, attachment })
   }
-  for (const call of message.toolCalls ?? []) {
-    if (call.arguments !== undefined) collectStringValues(call.arguments, 'tool.arguments', result)
-    if (call.result !== undefined) collectStringValues(call.result, 'tool.result', result)
-    if (call.preview) result.push(...textCandidates(call.preview))
-  }
-  if (message.role === 'tool') {
-    try { collectStringValues(JSON.parse(message.content) as JsonValue, 'tool.result', result) } catch { /* plain tool text is already scanned */ }
-  }
   return result
 }
 
-/** Extracts assistant/tool artifacts and intentionally ignores user rows. */
+/** Extracts files delivered in assistant messages, never execution details. */
 export function extractArtifacts(session: SessionSummary, messages: ChatMessage[]): ConversationArtifact[] {
   const found = new Map<string, ConversationArtifact>()
   for (const message of messages) {
-    if (message.role !== 'assistant' && message.role !== 'tool') continue
+    if (message.role !== 'assistant' || Boolean(message.displayKind)) continue
     for (const candidate of candidates(message)) {
       const value = normalize(candidate.value)
       if (!value || !looksLikeArtifact(value)) continue

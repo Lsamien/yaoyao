@@ -165,3 +165,18 @@ describe('streaming Markdown', () => {
     wrapper.unmount()
   })
 })
+
+it('renders process media as text while retaining message media previews', async () => {
+  const content = '![过程图](/tmp/process.png) [过程文件](/Users/test/Agents/process.pdf)'
+  const process = mount(MarkdownContent, { props: { content, processContent: true, fileCards: true } })
+  await nextTick()
+  expect(process.find('img').exists()).toBe(false)
+  expect(process.find('.file-link-card').exists()).toBe(false)
+  expect(process.text()).toContain('过程图')
+  const message = mount(MarkdownContent, { props: { content, fileCards: true } })
+  await nextTick()
+  expect(message.find('img').exists()).toBe(true)
+  expect(message.find('.file-link-card').exists()).toBe(true)
+  process.unmount()
+  message.unmount()
+})

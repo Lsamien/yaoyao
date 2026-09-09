@@ -17,6 +17,8 @@
 !third-party/**
 !scripts/
 !scripts/**
+!bin/
+!bin/**
 !src/
 !src/**
 

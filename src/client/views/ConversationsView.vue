@@ -77,6 +77,8 @@ const searchItems = computed<SidebarItem[]>(() => [false, true].map(archived => 
   const items = conversations.value.filter(c => c.archived === archived).map(c => workspaceConversationItem(c, agents.value))
   return { id: archived ? 'archived' : 'unarchived', title: archived ? '已归档' : '未归档', children: items, emptyText: archived ? '没有已归档聊天' : '没有未归档聊天' }
 }))
+const archivedIds = computed(() => new Set(conversations.value.filter(c => c.archived).map(c => c.id)))
+const deletingId = ref(''), deleteError = ref('')
 const composer = ref<InstanceType<typeof ComposerShell>>()
 const timeline = ref<InstanceType<typeof MessageTimeline>>()
 const quoted = ref<UiMessage | null>(null)
@@ -553,6 +555,28 @@ async function action(operation: 'pin' | 'archive', id = active.value?.id) {
     error.value = String(e)
   }
 }
+async function deleteArchivedConversation(id: string) {
+  const conversation = conversations.value.find(c => c.id === id)
+  if (!conversation?.archived || deletingId.value) return
+  deleteError.value = ''
+  const direct = conversation.kind === 'direct'
+  const message = direct
+    ? `永久删除 Bot「${conversation.name}」及其聊天记录？此操作无法撤销，文件库中的文件会保留。`
+    : `永久删除群聊「${conversation.name}」及其聊天记录？此操作无法撤销，成员 Bot 和文件库中的文件会保留。`
+  if (!confirm(message)) return
+  deletingId.value = id
+  try {
+    await apiRequest(direct ? `/api/app/agents/${conversation.memberIds[0]}` : `/api/app/conversations/${id}`, { method: 'DELETE' })
+    conversations.value = conversations.value.filter(c => c.id !== id)
+    if (direct) agents.value = agents.value.filter(a => a.id !== conversation.memberIds[0])
+    if (selected.value === id) await router.replace('/conversations')
+    await refresh()
+  } catch (cause) {
+    deleteError.value = cause instanceof Error ? cause.message : '删除失败，请重试'
+  } finally {
+    deletingId.value = ''
+  }
+}
 async function stopMember(id: string) {
   if (!active.value) return
   try {
@@ -683,9 +707,7 @@ onBeforeUnmount(() => {
             <select v-if="active.kind === 'group' && tasks.length" class="task-picker" aria-label="当前任务" :value="activeTask?.id" @change="router.push({query:{...route.query,taskId:($event.target as HTMLSelectElement).value}})">
               <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
             </select>
-            <button class="icon-button" :aria-label="active.pinned ? '取消置顶' : '置顶聊天'" :title="active.pinned ? '取消置顶' : '置顶聊天'" @click="action('pin')"><AppIcon :name="active.pinned ? 'pin-off' : 'pin'" /></button>
             <button class="icon-button" aria-label="聊天设置" title="聊天设置" @click="openDialog(active.kind === 'direct' ? 'editAgent' : 'editGroup')"><AppIcon name="settings" /></button>
-            <button class="icon-button" :aria-label="active.archived ? '恢复聊天' : '归档聊天'" :title="active.archived ? '恢复聊天' : '归档聊天'" @click="action('archive')"><AppIcon name="archive" /></button>
           </div>
         </template>
       </MessageTimeline>
@@ -702,7 +724,14 @@ onBeforeUnmount(() => {
     </div>
     <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" auto-take @changed="load()" @close="computerOpen=false" />
     <LocalVmWorkspace ref="vmWorkspace" v-if="twoDesktops&&desktopAgent" :agents="agents.filter(a=>a.execution==='computer'&&!a.archived&&!a.computerEnvironmentId)" :primary="desktopAgent.id" @close="twoDesktops=false" />
-    <FloatingResourceSearch section="groups" label="搜索聊天" :items="searchItems" tabbed @select="select" />
+    <FloatingResourceSearch section="groups" label="搜索聊天" :items="searchItems" tabbed @open="deleteError = ''" @select="select">
+      <template #item-actions="{ item }">
+        <button v-if="archivedIds.has(item.id)" type="button" class="search-delete" :aria-label="`删除聊天：${item.title}`" :disabled="!!deletingId" :aria-busy="deletingId === item.id" @click="deleteArchivedConversation(item.id)">
+          <AppIcon name="trash" :size="15" />{{ deletingId === item.id ? '删除中…' : '删除' }}
+        </button>
+      </template>
+      <template #footer><p v-if="deleteError" class="search-delete-error" role="alert">{{ deleteError }}</p></template>
+    </FloatingResourceSearch>
     <PreviewModal v-if="preview" :item="preview" :items="media" @close="preview = null" />
     <ImagePreviewLightbox v-model="mediaIndex" :images="lightboxMedia" />
     <RemoteAgentPicker v-if="remotePickerOpen && !auth.isBotOnly" @close="remotePickerOpen = false" @added="remoteAdded" />
@@ -906,4 +935,9 @@ onBeforeUnmount(() => {
   margin-top: 8px;
 }
 .workspace-list-back{display:none}@media(max-width:900px){.workspace-list-back{display:grid}}
+.search-delete{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;gap:5px;min-width:64px;min-height:44px;margin-right:4px;padding:6px 9px;border:0;border-radius:8px;background:transparent;color:var(--danger);font:12px var(--font-ui);cursor:pointer}
+.search-delete:hover:not(:disabled){background:var(--surface-hover)}
+.search-delete:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.search-delete:disabled{opacity:.5;cursor:wait}
+.search-delete-error{margin:0;padding:10px 16px 14px;color:var(--danger);font-size:12px;line-height:1.5}
 </style>

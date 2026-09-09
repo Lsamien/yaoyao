@@ -6,6 +6,8 @@ import { ComputerError } from './container.js'
 import { UNCONFIGURED_COMPUTER_IMAGE } from '../../shared/runner.js'
 import type { LocalVmMode, LocalVmStatus } from '../../shared/localVm.js'
 import type { ComputerRuntime } from '../worker/gateway.js'
+import {ComposeComputerProvider} from './compose.js'
+import {COMPOSE_DESKTOP_IMAGE} from '../../shared/composeDesktops.js'
 
 type State = { imageId: string; mode: LocalVmMode; maxInstances: number; job?: LocalVmStatus['job'] }
 
@@ -22,8 +24,9 @@ export class LocalVmImages {
     db.exec('CREATE TABLE IF NOT EXISTS local_vm_runtime(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL)')
     const row = db.prepare('SELECT value FROM local_vm_runtime WHERE id=1').get() as {value:string}|undefined
     this.state = row ? JSON.parse(row.value) : {imageId:runtime.config.imageId,mode:'per-bot',maxInstances:runtime.config.maxConcurrent ?? 2}
+    if(runtime.provider.fixedCapacity)this.state={imageId:COMPOSE_DESKTOP_IMAGE,mode:'shared',maxInstances:2}
     // Preserve an already selected image when migrating; old archives and workspaces are untouched.
-    if (!row && db.prepare("SELECT name FROM sqlite_master WHERE name='managed_image_selection'").get()) {
+    if (!runtime.provider.fixedCapacity && !row && db.prepare("SELECT name FROM sqlite_master WHERE name='managed_image_selection'").get()) {
       const old = db.prepare('SELECT value FROM managed_image_selection WHERE id=1').get() as {value:string}|undefined
       if (old) this.state.imageId = JSON.parse(old.value).active ?? this.state.imageId
     }
@@ -50,6 +53,11 @@ export class LocalVmImages {
   }
   async status(owner?:string): Promise<LocalVmStatus> {
     await this.ready
+    if(this.runtime.provider instanceof ComposeComputerProvider){
+      const desktops=await this.runtime.provider.inventory()
+      this.runtime.pool.limits.concurrent=Math.max(1,desktops.length)
+      return {configured:true,executionHost:'runner',fixedCapacity:true,desktops,daemonUp:true,image:desktops.some((d:any)=>d.ready),imageId:COMPOSE_DESKTOP_IMAGE,mode:'shared',maxInstances:desktops.length,busy:false}
+    }
     if(this.releaseMaintenance&&!this.pending&&this.state.job?.state==='failed') {
       try{await this.cleanup(this.state.job.id);this.releaseMaintenance();this.releaseMaintenance=undefined}catch{}
     }
@@ -64,6 +72,7 @@ export class LocalVmImages {
       instances:owner?this.runtime.pool.status(owner).map(row=>({id:row.environmentId,status:row.status})):[]}
   }
   async policy(mode:LocalVmMode,maxInstances:number) {
+    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面数量与共享方式由 Compose 固定，不能在界面修改')
     await this.ready
     // Sharing changes future Agent bindings; an idle desktop can keep running.
     // Image preparation still requires every desktop to be stopped.
@@ -73,6 +82,7 @@ export class LocalVmImages {
     return this.status()
   }
   async prepare(id:string,check:()=>Promise<void>) {
+    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面镜像由 Compose 配置，无需在界面准备')
     await this.ready;await check()
     if(this.state.job?.id===id)return this.status()
     if(this.pending||this.closed)throw new ComputerError('local_vm_busy','本地虚拟机正在准备，请稍后查看')

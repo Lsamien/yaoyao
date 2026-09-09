@@ -261,6 +261,11 @@ wss.on('connection', (socket) => {
       const markdownFinal = `${markdownPrefix}\n\x60\x60\x60\n\n| 名称 | 数量 |\n| --- | --- |\n| 项目 | 2 |\n\n最终完整标记`
       const text = markdownStream ? markdownFinal : `我是${name}。已按角色规则处理这条消息。\n\n- 会话独立保存\n- 可以继续交流\n\n[报告](/tmp/workspace-report.txt)${delegates ? `\n请${requested}处理任务。` : ''}`
       event('message.start', {}, f.params.session_id)
+      if (String(f.params.text).includes('[message-files]')) {
+        event('reasoning.delta', { text: '![过程图](/tmp/process.png)' }, f.params.session_id)
+        event('tool.start', { tool_id: 'process-file', name: 'read_file', arguments: { path: '/tmp/input.pdf' } }, f.params.session_id)
+        event('tool.complete', { tool_id: 'process-file', name: 'read_file', result: { path: '/tmp/process.pdf' } }, f.params.session_id)
+      }
       if (crossClientRun) event('tool.start', { tool_id: 'cross-client-tool', name: 'read_file' }, f.params.session_id)
       else setTimeout(() => event('message.delta', { text: markdownStream ? markdownPrefix : text.slice(0, 12) }, f.params.session_id), 80)
       const complete = () => {

@@ -42,3 +42,7 @@ iOS/Android 没有全局虚拟桌面清单、镜像设置或执行环境选择�
 本轮验收结果：787 项单元/集成测试通过；7 项环境限定测试跳过。7 项浏览器流程、iOS 3 项界面流程、Android 2 项界面流程通过。真实 Hermes Worker + Docker 流程 2 项通过；自动准备本机 Runner、真实桌面键盘输入及快捷键、重启保留文件、双桌面控制切换的完整界面流程通过。
 
 截图：[本地虚拟机设置](screenshots/local-vm/settings.png)、[Agent 聊天右侧电脑面板](screenshots/local-vm/agent-panel.png)、[交互桌面](screenshots/local-vm/interactive-desktop.png)、[双桌面工作区](screenshots/local-vm/two-desktops.png)、[手机聊天入口](screenshots/local-vm/phone-chat-entry.png)。
+
+## Docker Web 的固定桌面
+
+Docker Web 使用配套 `compose.desktops.yaml` 时，桌面由 Compose 预先创建。数量固定为部署清单中的数量，全部作为已有共享桌面供 Agent 选择。页面和 API 都不提供数量修改、镜像准备或桌面增删；每个桌面独立保留工作数据。此模式不会改变 macOS 本机的动态虚拟机流程。部署步骤见 [Docker 部署](docker-install.md)。
