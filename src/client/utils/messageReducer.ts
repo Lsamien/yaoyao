@@ -236,6 +236,15 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
   if (eventSessionId(event, state.route.sessionId) !== state.route.sessionId) return state
   const next: ChatRouteState = { ...state, error: undefined }
   switch (event.type) {
+    case 'run.peer_user_message':
+    case 'peer.user.message': {
+      const id=string(payload.message_id),clientMessageId=string(payload.client_message_id ?? payload.queue_id)
+      const existing=state.messages.find(m=>m.id===id||m.clientMessageId===clientMessageId)
+      const stage=payload.status==='failed'?'failed':payload.status==='accepted'?'accepted':existing?.stage??'pending'
+      next.messages=mergeChatMessages(state.messages,[{...existing,id,clientMessageId,sessionId:state.route.sessionId,profile:state.route.profile,
+        role:'user',content:string(payload.text ?? payload.content),timestamp:existing?.timestamp??number(payload.timestamp,Date.now()/1000),stage}])
+      break
+    }
     case 'message.start':
     case 'run.started':
       next.messages = updateStreamingMessage(state, payload, 'start')

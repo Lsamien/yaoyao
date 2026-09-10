@@ -1,0 +1,22 @@
+{
+  "environment": "local macOS SQLite microbenchmark; not model/network/device latency",
+  "list_sessions": 1000,
+  "event_persistence": {
+    "count": 500,
+    "p50_ms": 0.172333999999978,
+    "p95_ms": 0.22904199999999264,
+    "max_ms": 7.481750000000005
+  },
+  "local_list": {
+    "count": 200,
+    "p50_ms": 1.856583999999998,
+    "p95_ms": 1.9892500000000837,
+    "max_ms": 3.2977500000000077
+  },
+  "diagnostics": {
+    "localReads": 200,
+    "recoveryAttempts": 0,
+    "recoveryFailures": 0,
+    "recoveryCompleted": 0
+  }
+}

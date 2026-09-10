@@ -341,6 +341,7 @@ test('created roles and editable teams share a durable chat list without plugin 
   await page.getByRole('button',{name:'查看来源',exact:true}).first().click()
   await expect(page).toHaveURL(groupURL)
   await groupRow.click({ button: 'right' })
+  page.once('dialog', dialog => dialog.accept())
   await page.getByRole('menuitem', { name: '归档聊天', exact: true }).click()
   await expect(page.locator('.desktop-sidebar .sidebar-item')).toHaveCount(3)
   await page.locator('.desktop-sidebar .sidebar-search-trigger').click()
@@ -445,7 +446,7 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   await settings.locator('input[name=managed-temporary-password]').fill('temporary-pass')
   await settings.getByRole('listbox', { name: '新子账号的基础机器人' }).selectOption('default')
   await settings.getByRole('button', { name: '创建用户', exact: true }).click()
-  await expect(settings.getByRole('listbox', { name: `分配给 ${username} 的基础 Agent`, exact: true })).toHaveValues(['default'])
+  await expect(settings.getByRole('listbox', { name: `分配给 ${username} 的基础机器人`, exact: true })).toHaveValues(['default'])
   await page.screenshot({ path: testInfo.outputPath('admin-agent-allocation.png'), fullPage: true })
 
   const childContext = await browser.newContext({ viewport: { width: 1280, height: 800 } })

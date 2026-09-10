@@ -10,6 +10,7 @@ const sessionsApi = vi.hoisted(() => ({
   getSession: vi.fn(),
   getMessages: vi.fn(),
   getSessions: vi.fn(),
+  requestHistorySync: vi.fn(),
 }))
 
 vi.mock('@/api/realtime', () => {
@@ -29,6 +30,7 @@ vi.mock('@/api/sessions', () => ({
   getMessages: sessionsApi.getMessages,
   getSession: sessionsApi.getSession,
   getSessions: sessionsApi.getSessions,
+  requestHistorySync: sessionsApi.requestHistorySync,
   getSessionUnread: vi.fn(),
   markSessionRead: vi.fn(),
   updateSession: vi.fn(),
@@ -49,6 +51,7 @@ describe('chat model realtime synchronization', () => {
     realtime.eventHandler = undefined
     realtime.request.mockReset().mockResolvedValue({})
     sessionsApi.getMessages.mockReset()
+    sessionsApi.requestHistorySync.mockReset().mockResolvedValue(undefined)
     sessionsApi.getSession.mockReset()
     sessionsApi.getSessions.mockReset().mockResolvedValue({ items: [], nextCursor: null })
     setActivePinia(createPinia())
@@ -242,8 +245,10 @@ describe('chat model realtime synchronization', () => {
       { id: 'new', sessionId: 'session-1', role: 'assistant', content: 'authoritative', timestamp: 1, stage: 'settled' },
     ], returned: 1, total: 1, hasMore: false })
     await chat.forceRefreshHistory()
-    expect(sessionsApi.getMessages).toHaveBeenCalledWith('session-1', 0, 150, 'alpha', true)
-    expect(chat.messages.map(message => message.id)).toEqual(['new', 'unsent'])
+    expect(sessionsApi.requestHistorySync).toHaveBeenCalledWith('session-1','alpha')
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
+    expect(chat.messages.map(message => message.id)).toEqual(['old', 'unsent'])
+    expect(chat.routes[key].error).toContain('后台补齐')
   })
 
 })

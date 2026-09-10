@@ -116,6 +116,8 @@ describe('durable source=web chat cache', () => {
     const load = vi.fn(async () => response({ sessions: [
       { id: 'unowned-history', profile, source: 'web', title: 'Private native history' }, ...sessions,
     ] }))
+    // Existing installations have registered sessions whose metadata has not been imported.
+    f.store.db.prepare('UPDATE chat_sessions SET metadata_complete=0').run()
     const first = await f.coordinator.read(owner, 'first', 'list', profile, undefined, load, true, { limit: 100 })
     const firstPage = JSON.parse(first.response.body.toString())
     expect(firstPage.sessions[0]).toMatchObject({ id: 'owned-102', last_active: sessions[102]!.last_active_at })
@@ -391,10 +393,10 @@ describe('durable source=web chat cache', () => {
     expect(route.runtime_id).toBe('runtime-1')
     const fallback = await f.coordinator.read(owner, key, 'detail', profile, sessionID,
       async () => { throw new Error('9119 offline') })
-    expect(fallback).toMatchObject({ source: 'local', state: 'stale' })
+    expect(fallback).toMatchObject({ source: 'local', state: 'current' })
     const serverFailure = await f.coordinator.read(owner, key, 'detail', profile, sessionID,
       async () => response({ error: 'unavailable' }, 503))
-    expect(serverFailure).toMatchObject({ source: 'local', state: 'stale' })
+    expect(serverFailure).toMatchObject({ source: 'local', state: 'current' })
     f.store.close()
   })
 
@@ -644,6 +646,7 @@ describe('local history and bounded tail synchronization', () => {
     const rows = [...f.rows, { id: 'new-user', role: 'user', content: 'next' }, { id: 'new-answer', role: 'assistant', content: 'answer' }]
     const { coordinator, request } = upstreamFor(f, rows)
     coordinator.observe(owner, profile, sessionID, { type: 'message.complete', seq: 1 })
+    await coordinator.reconcile(owner, profile, sessionID)
     const page = await coordinator.messages(owner, 'last', profile, sessionID, 0, 10, async () => { throw new Error('unexpected read') })
     expect(JSON.parse(page.response.body.toString()).messages.at(-1).id).toBe('new-answer')
     expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(1)
@@ -711,8 +714,8 @@ describe('local history and bounded tail synchronization', () => {
       if (path.endsWith('/messages')) f.store.recordEvent(owner, profile, sessionID, { type: 'message.delta', seq: 2, payload: { delta: 'newer' } })
       return result
     })
-    await coordinator.reconcile(owner, profile, sessionID)
-    expect(f.store.localDetail(owner, profile, sessionID)?.state).toBe('stale')
+    await expect(coordinator.reconcile(owner, profile, sessionID)).rejects.toThrow('Conversation changed')
+    expect(JSON.parse(f.store.messagePage(owner,profile,sessionID,0,1)!.response.body.toString()).messages[0].content).toBe('newer')
     f.store.close()
   })
 
@@ -738,7 +741,9 @@ describe('local history and bounded tail synchronization', () => {
     f.store.recordEvent(owner, profile, sessionID, { type: 'message.complete', seq: 2 })
     const latestSync = coordinator.reconcile(owner, profile, sessionID)
     release()
-    await Promise.all([firstSync, latestSync])
+    const results = await Promise.allSettled([firstSync, latestSync])
+    expect(results[0].status).toBe('rejected')
+    expect(results[1].status).toBe('fulfilled')
     expect(published).toHaveBeenCalledTimes(1)
     expect(request).toHaveBeenCalledTimes(4)
     expect(f.store.localDetail(owner, profile, sessionID)?.state).toBe('current')

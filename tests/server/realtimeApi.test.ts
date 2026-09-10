@@ -74,7 +74,7 @@ describe('native Hermes chat and history are separated on 15300', () => {
       .send({ title: '不能修改' })
       .expect(410)
     expect(pairedWrite.body.code).toBe('native_sessions_read_only')
-    expect(upstreamCalls).toBeGreaterThan(beforeWrites)
+    expect(upstreamCalls).toBe(beforeWrites) // Ownership checks do not read Hermes.
     expect(upstreamWrites).toBe(beforeUpstreamWrites)
 
     const unownedWeb = await agent.patch('/api/app/sessions/session-web?profile=default')
@@ -115,6 +115,6 @@ describe('native Hermes chat and history are separated on 15300', () => {
     expect(await ownershipGate.canResume('default', 'session-web', undefined, owner)).toBe(true)
     await agent.patch('/api/app/sessions/session-web?profile=default').set('Host', '127.0.0.1:15300')
       .set('Origin', origin).set('X-CSRF-Token', csrf).send({ title: '可修改的聊天' }).expect(200)
-    expect(upstreamWrites).toBe(beforeUpstreamWrites + 1)
+    expect(upstreamWrites).toBe(beforeUpstreamWrites)
   })
 })

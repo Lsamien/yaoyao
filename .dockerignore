@@ -3,6 +3,11 @@
 !package.json
 !package-lock.json
 !release.json
+!LICENSE
+!NOTICE
+!THIRD_PARTY_NOTICES.md
+!licenses/
+!licenses/**
 !tsconfig.json
 !tsconfig.client.json
 !tsconfig.client.build.json

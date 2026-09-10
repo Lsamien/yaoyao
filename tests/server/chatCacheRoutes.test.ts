@@ -167,9 +167,10 @@ describe('source=web chat cache routes', () => {
     const ownedDetail = await agent.get('/api/app/sessions/owned-session?profile=default')
       .set('Host', host).expect(200)
     expect(ownedDetail.body).toMatchObject({ id: 'owned-session', source: 'ios', owned: true })
-    const historyDetail = await agent.get('/api/app/sessions/history-only?profile=default')
+    const historyDetail = await agent.get('/api/app/sessions/history-only?profile=default&view=history')
       .set('Host', host).expect(200)
     expect(historyDetail.body).toMatchObject({ id: 'history-only', source: 'ios', owned: false })
+    await runtime.chatCache!.reconcile(String(setup.body.user.id), 'default', 'owned-session')
     const ownedMessages = await agent
       .get('/api/app/sessions/owned-session/messages?profile=default&offset=0&limit=100')
       .set('Host', host).expect(200)
@@ -231,11 +232,7 @@ describe('source=web chat cache routes', () => {
       .send({ title: 'Web 可继续管理' })
       .expect(200)
     const patchCalls = fetchImpl.mock.calls.filter(([, init]) => init?.method === 'PATCH')
-    expect(patchCalls).toHaveLength(1)
-    expect(JSON.parse(String(patchCalls[0]?.[1]?.body))).toEqual({
-      title: 'Web 可继续管理',
-      profile: 'default',
-    })
+    expect(patchCalls).toHaveLength(0) // Ordinary presentation state is owned by Web.
     const immediateRenamedDetail = await agent
       .get('/api/app/sessions/owned-session?profile=default')
       .set('Host', host)
@@ -386,13 +383,14 @@ describe('source=web chat cache routes', () => {
     first.chatCache!.store.recordRoute(owner, 'default', 'session-web', 'runtime-web')
     first.chatCache!.store.recordCommand(owner, 'default', 'session-web', 'session.create', { source: 'web' })
 
+    await first.chatCache!.reconcile(owner,'default','session-web')
     const listPath = '/api/app/sessions?view=chat&profile=default&limit=100'
-    await agent.get(listPath).set('Host', host).expect('X-Yaoyao-Data-Source', 'upstream').expect(200)
+    await agent.get(listPath).set('Host', host).expect('X-Yaoyao-Data-Source', 'local').expect(200)
     await agent.get(listPath).set('Host', host).expect('X-Yaoyao-Data-Source', 'local').expect(200)
     await agent.get(listPath).set('Host', host).set('X-Yaoyao-Cache', 'bypass')
-      .expect('X-Yaoyao-Data-Source', 'upstream').expect(200)
+      .expect('X-Yaoyao-Data-Source', 'local').expect(200)
     const messagesPath = '/api/app/sessions/session-web/messages?profile=default&offset=0&limit=100'
-    await agent.get(messagesPath).set('Host', host).expect('X-Yaoyao-Data-Source', 'upstream').expect(200)
+    await agent.get(messagesPath).set('Host', host).expect('X-Yaoyao-Data-Source', 'local').expect(200)
     const cachedMessages = await agent.get(messagesPath).set('Host', host)
       .expect('X-Yaoyao-Data-Source', 'local').expect(200)
     expect(cachedMessages.body.messages[0].content).toContain('持久消息')
@@ -405,7 +403,7 @@ describe('source=web chat cache routes', () => {
     expect(Buffer.from(rangedMedia.body).toString()).toBe('png')
     await agent.get('/api/app/sessions?view=history').set('Host', host).expect(200)
     await agent.get('/api/app/sessions?view=history').set('Host', host).expect(200)
-    expect(counts).toMatchObject({ list: 2, messages: 1, history: 1, media: 1 })
+    expect(counts).toMatchObject({ list: 0, messages: 1, history: 1, media: 1 })
     const historySnapshots = first.chatCache!.store.db.prepare("SELECT COUNT(*) count FROM chat_snapshots WHERE kind='history'").get() as { count: number }
     expect(historySnapshots.count).toBe(0)
 

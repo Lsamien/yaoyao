@@ -72,6 +72,7 @@ export async function getMessages(
   limit = 150,
   profile?: string,
   forceRefresh = false,
+  view: 'chat' | 'history' = 'chat',
 ): Promise<MessagePage> {
   const safeOffset = Math.max(0, Math.trunc(offset))
   const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)))
@@ -81,6 +82,7 @@ export async function getMessages(
     order: 'latest',
     include_compacted: true,
     profile,
+    ...(view === 'history' ? {view} : {}),
   })
   const payload = unwrapData(await apiRequest<unknown>(url, forceRefresh ? { headers: { 'X-Yaoyao-Cache': 'bypass' } } : {}))
   const source = record(payload)
@@ -126,6 +128,10 @@ export async function updateSession(
 
 export async function deleteSession(id: string, profile?: string): Promise<void> {
   await apiRequest(apiUrl(`/api/app/sessions/${encodeURIComponent(id)}`, { profile }), { method: 'DELETE' })
+}
+
+export async function requestHistorySync(sessionId:string,profile?:string):Promise<void>{
+  await apiRequest(apiUrl(`/api/app/sessions/${encodeURIComponent(sessionId)}/sync`,{profile}),{method:'POST',body:{}})
 }
 
 export async function getSessionUnread(profile?: string): Promise<Record<string, number>> {

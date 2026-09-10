@@ -53,6 +53,7 @@ import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
+  onChatListChanged?: (owner:string,profile:string,id:string)=>void
   onServerIdentityChanged?: (identity: ServerIdentity) => void
   onUserAccessChanged?: (owner: string) => Promise<void>
   workspace: WorkspaceStore
@@ -762,58 +763,14 @@ async function cachedChatRead(
   if (!dependencies.chatCache) {
     throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
   }
-  if (ctx.get('x-yaoyao-cache').toLowerCase() === 'bypass') {
-    if (options.kind === 'messages' && options.sessionID
-      && dependencies.chatCache.mode !== 'upstream-only'
-      && dependencies.chatCache.store.ownsSession(user.id, options.profile, options.sessionID)) {
-      await dependencies.chatCache.reconcile(user.id, options.profile, options.sessionID, true)
-      const page = dependencies.chatCache.store.messagePage(user.id, options.profile, options.sessionID, options.offset ?? 0, options.limit ?? 100)
-      if (!page) throw new HttpError(503, 'History refresh is incomplete', 'chat_refresh_incomplete')
-      ctx.set('X-Yaoyao-Data-Source', 'upstream')
-      ctx.set('X-Yaoyao-Sync-State', page.state)
-      sendUpstreamResponse(ctx, page.response, dependencies.upstreamSession.jar)
-      return
-    }
-    const requestStartedAt = Date.now()
-    const upstreamResponse = await load()
-    const response = options.kind === 'list' && options.ownedList
-      ? dependencies.chatCache.store.mergeOwnedSessionsIntoList(
-          user.id,
-          options.profile,
-          upstreamResponse,
-          { offset: options.offset, limit: options.limit, archived: options.archived },
-        )
-      : upstreamResponse
-    dependencies.chatCache.store.putSnapshot(
-      user.id, options.key, options.kind, options.profile,
-      options.sessionID, response, options.ownedList, requestStartedAt, upstreamResponse,
-    )
-    ctx.set('X-Yaoyao-Data-Source', 'upstream')
-    ctx.set('X-Yaoyao-Sync-State', 'current')
-    sendUpstreamResponse(
-      ctx,
-      options.sessionID
-        ? dependencies.chatCache.store.markSessionOwnership(
-            user.id,
-            options.profile,
-            options.sessionID,
-            response,
-          )
-        : response,
-      dependencies.upstreamSession.jar,
-    )
+  // Explicit native history browsing retains its independent upstream path.
+  if(ctx.query.view==='history' || ctx.state.hermesBotNative || !ctx.path.startsWith('/api/app/')){
+    const response=await load()
+    sendUpstreamResponse(ctx,options.sessionID?dependencies.chatCache.store.markSessionOwnership(user.id,options.profile,options.sessionID,response):response,dependencies.upstreamSession.jar)
     return
   }
-  const result = options.kind === 'messages' && options.sessionID
-    ? await dependencies.chatCache.messages(
-      user.id, options.key, options.profile, options.sessionID,
-      options.offset ?? 0, options.limit ?? 100, load,
-    )
-    : await dependencies.chatCache.read(
-      user.id, options.key, options.kind, options.profile,
-      options.sessionID, load, options.ownedList,
-      { offset: options.offset, limit: options.limit, archived: options.archived },
-    )
+  const result = dependencies.chatCache.readLocal(user.id, options.kind, options.profile, options.sessionID,
+    {offset:options.offset,limit:options.limit,archived:options.archived},ctx.get('x-yaoyao-cache').toLowerCase()==='bypass')
   ctx.set('X-Yaoyao-Data-Source', result.source)
   ctx.set('X-Yaoyao-Sync-State', result.state)
   sendUpstreamResponse(
@@ -1194,7 +1151,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     json(ctx, 200, {
       ok: true,
       chatCache: dependencies.chatCache
-        ? { available: true, mode: dependencies.chatCache.mode, ...dependencies.chatCache.store.stats() }
+        ? { available: true, mode: dependencies.chatCache.mode, ...dependencies.chatCache.store.stats(), reads: dependencies.chatCache.diagnostics }
         : { available: false, mode: dependencies.config.chatCacheMode ?? 'upstream-only' },
     })
   })
@@ -2051,29 +2008,25 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   router.get('/api/app/sessions/search', async (ctx) => {
     await searchSessions(ctx, dependencies)
   })
-  router.get('/api/app/sessions/unread', async (ctx) => {
-    const search = searchFrom(ctx, ['profile'])
-    await proxyOptionalUnread(
-      ctx,
-      dependencies.upstream,
-      '/api/session-unread',
-      { search },
-      { profile: search.get('profile') || '', total_unread: 0, sessions: [], supported: false },
-    )
+  router.get('/api/app/sessions/pins', ctx => {
+    const owner=dependencies.auth.require(ctx).id
+    ctx.body={session_ids:dependencies.chatCache!.store.pins(owner,String(ctx.query.profile??''))}
   })
-  router.patch('/api/app/sessions/unread/:sessionID', async (ctx) => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    await proxyOptionalUnread(
-      ctx,
-      dependencies.upstream,
-      `/api/session-unread/${encodeURIComponent(id)}`,
-      {
-        method: 'PATCH',
-        search: searchFrom(ctx, ['profile']),
-        requestBody: body(ctx),
-      },
-      { ok: true, supported: false },
-    )
+  router.get('/api/app/sessions/unread', ctx => {
+    const owner=dependencies.auth.require(ctx).id
+    ctx.body=dependencies.chatCache!.store.unread(owner,String(ctx.query.profile??''))
+  })
+  router.patch('/api/app/sessions/unread/:sessionID', ctx => {
+    const owner=dependencies.auth.require(ctx).id,profile=String(ctx.query.profile??'default'),id=safeIdentifier(ctx.params.sessionID,'session ID')
+    const input=body(ctx) as Record<string,unknown>,value=input.readMessageCount??input.read_message_count
+    ctx.body=dependencies.chatCache!.store.markRead(owner,profile,id,typeof value==='number'&&Number.isFinite(value)?value:undefined)
+    dependencies.onChatListChanged?.(owner,profile,id)
+  })
+  router.post('/api/app/sessions/:sessionID/sync',ctx=>{
+    const owner=dependencies.auth.require(ctx).id,profile=String(ctx.query.profile??'default'),id=safeIdentifier(ctx.params.sessionID,'session ID')
+    dependencies.chatCache!.store.requireOwned(owner,profile,id)
+    dependencies.chatCache!.schedule(owner,profile,id,true)
+    ctx.status=202;ctx.body={sync_state:'syncing'}
   })
   router.get('/api/app/sessions', async (ctx) => {
     const view = ctx.query.view === 'history' || ctx.query.view === 'chat' ? ctx.query.view : undefined
@@ -2152,6 +2105,14 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   router.patch('/api/app/sessions/:sessionID', async (ctx) => {
     const id = safeIdentifier(ctx.params.sessionID, 'session ID')
     const search = searchFrom(ctx, ['profile'])
+    const localPatch=writableSessionPatch(body(ctx))
+    if(Object.keys(localPatch).every(key=>['title','pinned','archived'].includes(key))){
+      const owner=dependencies.auth.require(ctx).id,profile=search.get('profile')||'default'
+      if(!dependencies.chatCache!.store.ownsSession(owner,profile,id))throw new HttpError(410,'原生历史只读','native_sessions_read_only')
+      dependencies.chatCache!.store.patchLocal(owner,profile,id,localPatch)
+      dependencies.onChatListChanged?.(owner,profile,id)
+      ctx.body={ok:true};return
+    }
     await withJar(ctx, async jar => {
       const profile = search.get('profile') || 'default'
       const owner = dependencies.auth.require(ctx).id

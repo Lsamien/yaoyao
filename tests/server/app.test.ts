@@ -252,12 +252,13 @@ describe('15300 BFF', () => {
       .get('/api/app/sessions/unread?profile=yaoer')
       .set('Host', '127.0.0.1:15300')
       .expect(200)
-    expect(unread.body).toEqual({ profile: 'yaoer', total_unread: 0, sessions: [], supported: false })
+    expect(unread.body).toEqual({ profile: 'yaoer', total_unread: 0, sessions: [], supported: true })
 
     const bootstrap = await request(runtime.app.callback())
       .get('/api/app/bootstrap')
       .set('Host', '127.0.0.1:15300')
       .expect(200)
+    runtime.chatCache!.store.recordCommand(String(bootstrap.body.user.id),'yaoer','session-1','session.create',{})
     const marked = await request(runtime.app.callback())
       .patch('/api/app/sessions/unread/session-1?profile=yaoer')
       .set('Host', '127.0.0.1:15300')
@@ -266,7 +267,7 @@ describe('15300 BFF', () => {
       .set('X-CSRF-Token', bootstrap.body.csrfToken)
       .send({ readMessageCount: 12 })
       .expect(200)
-    expect(marked.body).toEqual({ ok: true, supported: false })
+    expect(marked.body).toMatchObject({session_id:'session-1',read_message_count:0,unread_count:0})
   })
 
   it('requires exact Origin and CSRF on local login without forwarding credentials upstream', async () => {
@@ -316,7 +317,7 @@ describe('15300 BFF', () => {
     expect(records.at(-1)?.search.get('exclude_sources')).toBe('cron,ios_group,yaoyao_workspace')
 
     await request(runtime.app.callback())
-      .get('/api/app/sessions/session-1/messages?offset=3&limit=50&order=oldest&include_compacted=false&profile=default')
+      .get('/api/app/sessions/session-1/messages?view=history&offset=3&limit=50&order=oldest&include_compacted=false&profile=default')
       .set('Host', '127.0.0.1:15300')
       .expect(200)
     const history = records.at(-1)!

@@ -48,7 +48,7 @@ export class RealtimeBroker {
   }
   protectedSession: (id: string) => boolean = () => false
   onNativeEvent: (owner: string, profile: string, storedId: string, frame: Frame) => void = () => {}
-  onNativeGlobalEvent: (owner: string, type: string) => void = () => {}
+  onNativeGlobalEvent: (owner: string, type: string, upstreamInvalidation?: boolean) => void = () => {}
   onNativeCommand: (owner: string, profile: string, storedId: string, method: string, params: Frame) => void = () => {}
   onNativeRoute: (owner: string, profile: string, storedId: string, runtimeId: string) => void = () => {}
   readonly epoch = randomUUID()
@@ -156,7 +156,7 @@ export class RealtimeBroker {
     const existing = this.receipts.reserve(c.principal.key, requestId, fingerprint)
     const key = `${c.principal.key}:${requestId}`
     if (existing) return this.commands.get(key) ?? Promise.resolve(this.completed.get(key)?.receipt ?? existing)
-    const work = this.perform(c, frame).then(response => {
+    const work = this.perform(c, frame, requestId).then(response => {
       const state = response.error ? 'rejected' : 'confirmed'
       this.receipts.finish(c.principal.key, requestId, state, response)
       return { requestId, state, response } as CommandReceipt
@@ -178,7 +178,7 @@ export class RealtimeBroker {
     return work
   }
 
-  private async perform(c: RealtimeChannel, frame: Frame): Promise<Frame> {
+  private async perform(c: RealtimeChannel, frame: Frame, deliveryID: string): Promise<Frame> {
     const u = this.upstream(c.principal)
     const p = frame.params as Frame
     if (p.session_id && this.protectedSession(String(p.session_id))) throw new HttpError(404, '会话不存在', 'session_not_found')
@@ -241,16 +241,28 @@ export class RealtimeBroker {
         }
         if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
       }
+      const submittedAt = this.now()/1000
       const previouslyActive = route?.active ?? false
       if (route && (method === 'prompt.submit' || method === 'session.steer')) route.active = true
       const nativeOwner = this.nativeOwner(c.principal)
       if (nativeOwner && route && ['prompt.submit', 'session.steer'].includes(method)) {
-        this.onNativeCommand(nativeOwner, route.profile, route.stored, method, p)
+        this.onNativeCommand(nativeOwner, route.profile, route.stored, method, {...p,_delivery_id:deliveryID})
+        const peer={jsonrpc:'2.0',method:'event',params:{type:'run.peer_user_message',session_id:route.runtime,profile:route.profile,
+          payload:{message_id:`user:${deliveryID}`,queue_id:deliveryID.replace(/^(web|ios):prompt:/,''),client_message_id:deliveryID.replace(/^(web|ios):prompt:/,''),text:p.text??'',timestamp:submittedAt}}}
+        for(const channel of this.channels.values())if(channel.routes.has(this.routeKey(route.profile,route.stored))&&channel.principal.valid()&&this.nativeOwner(channel.principal)===nativeOwner)this.emit(channel,'frame',peer)
       }
       const activity: RealtimeActivity = { kind: 'command', name: method, sessionId: route?.stored }
       this.onActivity(activity)
       const response = await this.rpc(u, method, p, f => c.principal.observeEvent?.(JSON.stringify(f)), f => c.principal.observeCommand?.(JSON.stringify(f)))
         .finally(() => this.onActivity(activity))
+      if (nativeOwner && route && ['prompt.submit','session.steer'].includes(method)) {
+        this.onNativeEvent(nativeOwner,route.profile,route.stored,{type:response.error?'command.rejected':'command.confirmed',
+          delivery_id:`command-result:${deliveryID}`,payload:{delivery_id:deliveryID,error:response.error?.message}})
+        const peer={jsonrpc:'2.0',method:'event',params:{type:'run.peer_user_message',session_id:route.runtime,profile:route.profile,
+          payload:{message_id:`user:${deliveryID}`,queue_id:deliveryID.replace(/^(web|ios):prompt:/,''),client_message_id:deliveryID.replace(/^(web|ios):prompt:/,''),text:p.text??'',status:response.error?'failed':'accepted',timestamp:submittedAt}}}
+        for(const channel of this.channels.values())if(channel.routes.has(this.routeKey(route.profile,route.stored))&&channel.principal.valid()&&this.nativeOwner(channel.principal)===nativeOwner)this.emit(channel,'frame',peer)
+
+      }
       if (response.error && route && (method === 'prompt.submit' || method === 'session.steer')) route.active = previouslyActive
       if (!response.error && route && (method === 'prompt.submit' || method === 'session.steer')) route.active = true
       if ((opening || method === 'session.branch') && response.result) {
@@ -273,7 +285,7 @@ export class RealtimeBroker {
         r.observers.set(c.principal.key, c.principal)
         if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime)
         if (nativeOwner && (method === 'session.create' || method === 'session.branch')) {
-          this.onNativeCommand(nativeOwner, profile, stored, method, p)
+          this.onNativeCommand(nativeOwner, profile, stored, method, {...p,_delivery_id:deliveryID})
         }
         for (const pending of [result.pending_approval, result.pending_clarify, result.inflight?.pending_approval, result.inflight?.pending_clarify]) {
           if (pending?.request_id) this.interactions.set(`${u.principal.upstreamKey}:${pending.request_id}`, runtime)
@@ -396,6 +408,22 @@ export class RealtimeBroker {
         if (r.seq > 0 && p.seq > r.seq + 1) this.reset(u, 'upstream_sequence_gap')
         r.seq = p.seq
       }
+      if(p.type==='session.info'){
+        const stored=p.payload?.stored_session_id??p.payload?.session_key??p.payload?.info?.stored_session_id
+        if(typeof stored==='string'&&stored&&stored!==r.stored){
+          const oldKey=this.routeKey(r.profile,r.stored),newKey=this.routeKey(r.profile,stored)
+          if(!u.routes.has(newKey)){
+            this.routeOwners.delete(JSON.stringify([u.principal.instanceKey??u.principal.upstreamKey,r.profile,r.stored]));
+            this.routeOwners.set(JSON.stringify([u.principal.instanceKey??u.principal.upstreamKey,r.profile,stored]),u.principal.upstreamKey);
+            u.routes.delete(oldKey);r.stored=stored;u.routes.set(newKey,r)
+            for(const channel of this.channels.values())if(channel.principal.upstreamKey===u.principal.upstreamKey&&channel.routes.delete(oldKey))channel.routes.add(newKey)
+            for(const principal of r.observers.values()){
+              const owner=this.nativeOwner(principal)
+              if(owner&&principal.valid())this.onNativeRoute(owner,r.profile,r.stored,r.runtime)
+            }
+          }
+        }
+      }
       if (p.type === 'session.info' && typeof p.payload?.cwd === 'string') {
         r.cwd = p.payload.cwd
         if (r.cwd !== r.workingDirectory?.resolved) r.workingDirectory = undefined
@@ -405,11 +433,13 @@ export class RealtimeBroker {
       if (p.payload?.request_id) this.interactions.set(`${u.principal.upstreamKey}:${p.payload.request_id}`, sid)
       while (this.interactions.size > 10_000) this.interactions.delete(this.interactions.keys().next().value!)
     }
+    const deliveryID = Number.isSafeInteger(p.seq) ? `${this.epoch}:${sid}:${p.seq}` : randomUUID()
+    const persistedOwners = new Set<string>()
     if (r) for (const principal of r.observers.values()) {
       if (principal.valid()) {
         principal.observeEvent?.(JSON.stringify(f))
         const owner = this.nativeOwner(principal)
-        if (owner) this.onNativeEvent(owner, r.profile, r.stored, p)
+        if (owner && !persistedOwners.has(owner)) { persistedOwners.add(owner); const projected={...p,delivery_id:deliveryID,epoch:this.epoch}; this.onNativeEvent(owner, r.profile, r.stored, projected); p.payload=projected.payload }
       }
     }
     if (!r && p.type === 'sessions.changed') {
@@ -417,7 +447,7 @@ export class RealtimeBroker {
         const owner = this.nativeOwner(channel.principal)
         return owner && channel.principal.valid() ? [owner] : []
       }))
-      for (const owner of owners) this.onNativeGlobalEvent(owner, p.type)
+      for (const owner of owners) this.onNativeGlobalEvent(owner, p.type, true)
     }
     for (const c of this.channels.values()) {
       if (c.kind !== 'chat' || c.principal.upstreamKey !== u.principal.upstreamKey || !c.principal.valid()) continue

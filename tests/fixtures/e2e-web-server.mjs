@@ -50,6 +50,10 @@ for (const [sessionID, profile] of ownedSessions) {
     source: 'web',
   })
 }
+// These are existing Hermes histories, not empty sessions created by this build.
+// Exercise the durable background import, never a blocking list fallback.
+registry.db.exec('UPDATE chat_sessions SET metadata_complete=0,complete=0,message_total=NULL')
+registry.db.exec('INSERT OR IGNORE INTO chat_recovery_jobs(owner,profile,session_id) SELECT owner,profile,session_id FROM chat_sessions WHERE owned_at IS NOT NULL')
 registry.close()
 
 Object.assign(process.env, {

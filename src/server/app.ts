@@ -258,6 +258,10 @@ export function createApplication(options: ApplicationOptions = {}): Application
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
+    if(/^(message\.(start|delta|interim|complete)|reasoning\.|tool\.|run\.(completed|failed))/.test(frame.type)){
+      const id=chatCache?.store.projectedMessageID(owner,profile,storedId)
+      if(id)frame.payload={...frame.payload,message_id:id}
+    }
     if (owner.startsWith('device:')) return
     if (!['message.complete', 'attachment.staged'].includes(frame.type)) return
     const data = frame.payload ?? {}, text = frame.type === 'attachment.staged' ? JSON.stringify(data) : nativeMessageFileText(data)
@@ -274,7 +278,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       attachments: [], tools: [], createdAt: file.createdAt,
     }
   }
-  realtime.broker.onNativeGlobalEvent = (owner, type) => chatCache?.observeGlobal(owner, type)
+  realtime.broker.onNativeGlobalEvent = (owner, type, upstreamInvalidation) => chatCache?.observeGlobal(owner, type, upstreamInvalidation)
   chatCache.onSynchronized = (owner, profile, sessionID) => {
     realtime.broker.publishOwnerSessionsChanged(owner, 'cache.synced', profile, sessionID)
   }
@@ -439,6 +443,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
   })
   const router = createApiRouter({
+    onChatListChanged: (owner,profile,id) => realtime.broker.publishOwnerSessionsChanged(owner,'local-state',profile,id),
     onServerIdentityChanged: identity => realtime.broker.publishServerIdentity(identity, config.upstream.href),
     onUserAccessChanged: async owner => {
       for (const c of workspace.list<{ id: string }>(owner, 'conversation')) await workspaceRuntime.stopConversation(owner, c.id)
@@ -513,6 +518,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       push.close()
       uploads.close()
       workspace.close()
+      chatCache?.close()
       chatCache?.store.close()
     },
   }

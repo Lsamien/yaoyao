@@ -4,7 +4,7 @@ import type {
   ChatAttachment, ChatMessage, ChatRouteState, JsonValue, ModelOption, RealtimeConnectionState, SessionSummary,
 } from '@shared/types'
 import {
-  deleteSession as deleteSessionApi, getMessages, getSession, getSessions, getSessionUnread, markSessionRead, updateSession,
+  deleteSession as deleteSessionApi, getMessages, getSession, getSessions, getSessionUnread, markSessionRead, updateSession, requestHistorySync,
 } from '@/api/sessions'
 import { getModels } from '@/api/profiles'
 import { ChatRpcSocket, RpcError } from '@/api/realtime'
@@ -303,6 +303,11 @@ export const useChatStore = defineStore('chat', () => {
     if (event.type === 'gateway.ready') return
     const payload = record(event.payload)
     if (event.type === 'sessions.changed') {
+      if(payload.reason==='cache.synced'){
+        const state=activeRouteState.value
+        if(state && state.route.profile===payload.profile && state.route.sessionId===payload.session_id && !state.isLoadingHistory)
+          void loadHistory(state).catch(()=>{})
+      }
       scheduleSessionListRefresh()
       return
     }
@@ -492,7 +497,7 @@ export const useChatStore = defineStore('chat', () => {
       state.loadedMessageCount = cached.messages.length
     }
     try {
-      const page = await getMessages(state.route.sessionId, 0, 150, state.route.profile, forceRefresh)
+      const page = await getMessages(state.route.sessionId, 0, 150, state.route.profile, false, sessionView)
       if (generation !== state.generation) return
       if (forceRefresh && routes[routeKey(state.route.profile, state.route.sessionId)]?.isStreaming) {
         throw new Error('正在回复，请结束后再刷新历史')
@@ -510,6 +515,7 @@ export const useChatStore = defineStore('chat', () => {
       await historyCache.set(scope, state.route.sessionId, { messages: state.messages, total: page.total, savedAt: Date.now() })
     } catch (cause) {
       if (generation === state.generation) state.error = errorMessage(cause)
+      if(cause instanceof ApiError && cause.code==='CHAT_HISTORY_SYNC_PENDING')return
       throw cause
     } finally {
       if (generation === state.generation) state.isLoadingHistory = false
@@ -541,7 +547,9 @@ export const useChatStore = defineStore('chat', () => {
   async function forceRefreshHistory(): Promise<void> {
     const state = activeRouteState.value
     if (!state || state.isLoadingHistory || state.isStreaming || state.isQueued || state.pendingApproval || state.pendingClarification || state.route.sessionId.startsWith('draft-')) return
-    await loadHistory(state, true)
+    if(sessionView==='history'){await loadHistory(state);return}
+    await requestHistorySync(state.route.sessionId,state.route.profile)
+    state.error='历史正在后台补齐，完成后会自动更新'
   }
 
   async function loadOlder(): Promise<void> {
@@ -550,7 +558,7 @@ export const useChatStore = defineStore('chat', () => {
     const generation = state.generation
     state.isLoadingHistory = true
     try {
-      const page = await getMessages(state.route.sessionId, state.loadedMessageCount, 150, state.route.profile)
+      const page = await getMessages(state.route.sessionId, state.loadedMessageCount, 150, state.route.profile, false, sessionView)
       if (generation !== state.generation) return
       state.messages = mergeChatMessages(state.messages, page.messages, 'prepend')
       state.loadedMessageCount += page.returned
