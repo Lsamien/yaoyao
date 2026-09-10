@@ -10,16 +10,16 @@ const commit = 'a'.repeat(40), tagObject = 'b'.repeat(40)
 const gitCalls = vi.hoisted(() => ({ execFile: vi.fn() }))
 vi.mock('node:child_process', async original => ({ ...await original<typeof import('node:child_process')>(), execFile: gitCalls.execFile }))
 const manifest = { schemaVersion: 1, releaseVersion: '0.4.2', webVersion: '0.4.2', gitTag: 'v0.4.2' }
-const api = 'https://api.github.com/repos/Lsamien/hermes-yaoyao'
+const api = 'https://api.github.com/repos/Lsamien/yaoyao'
 function fixture(overrides: Record<string, unknown> = {}) {
   const documents: Record<string, unknown> = {
     [`${api}/releases/latest`]: { draft: false, prerelease: false, tag_name: 'v0.4.2', body: 'Release notes', assets: [
-      { name: 'Yaoyao-0.4.2-arm64.dmg', size: 10, state: 'uploaded', browser_download_url: 'https://github.com/Lsamien/hermes-yaoyao/releases/download/v0.4.2/Yaoyao-0.4.2-arm64.dmg' },
+      { name: 'Yaoyao-0.4.2-arm64.dmg', size: 10, state: 'uploaded', browser_download_url: 'https://github.com/Lsamien/yaoyao/releases/download/v0.4.2/Yaoyao-0.4.2-arm64.dmg' },
       { name: 'bad.dmg', size: 10, state: 'uploaded', browser_download_url: 'https://evil.test/bad.dmg' },
     ] },
     [`${api}/git/ref/tags/v0.4.2`]: { object: { type: 'tag', sha: tagObject } },
     [`${api}/git/tags/${tagObject}`]: { object: { type: 'commit', sha: commit } },
-    [`https://raw.githubusercontent.com/Lsamien/hermes-yaoyao/${commit}/release.json`]: manifest,
+    [`https://raw.githubusercontent.com/Lsamien/yaoyao/${commit}/release.json`]: manifest,
     ...overrides,
   }
   return vi.fn(async (url: string | URL | Request) => {
@@ -30,10 +30,10 @@ function fixture(overrides: Record<string, unknown> = {}) {
 afterEach(() => { vi.unstubAllGlobals(); gitCalls.execFile.mockReset() })
 describe('GitHub release source', () => {
   it('migrates only known official sources and leaves user forks unchanged', () => {
-    for (const source of [undefined, '', 'https://git.samien.cn/samien/hermes-yaoyao.git', 'http://192.168.153.8:3000/samien/hermes-yaoyao/', 'git@git.samien.cn:samien/hermes-yaoyao.git']) expect(normalizeReleaseSource(source)).toBe(DEFAULT_RELEASE_SOURCE)
+    for (const source of [undefined, '', 'https://github.com/Lsamien/hermes-yaoyao', 'https://github.com/Lsamien/hermes-yaoyao.git/', 'git@github.com:Lsamien/hermes-yaoyao.git', 'https://git.samien.cn/samien/hermes-yaoyao.git', 'http://192.168.153.8:3000/samien/hermes-yaoyao/', 'git@git.samien.cn:samien/hermes-yaoyao.git']) expect(normalizeReleaseSource(source)).toBe(DEFAULT_RELEASE_SOURCE)
     for (const source of ['https://git.samien.cn/other/fork.git', 'https://private.example/repo.git', 'git@private.example:fork.git', 'https://github.com/other/fork.git']) expect(normalizeReleaseSource(source)).toBe(source)
     expect(normalizeReleaseSource('https://github.com/lsamien/Hermes-Yaoyao')).toBe(DEFAULT_RELEASE_SOURCE)
-    expect(githubRepository('https://github.com/Lsamien/hermes-yaoyao/')).toBe('Lsamien/hermes-yaoyao')
+    expect(githubRepository('https://github.com/Lsamien/yaoyao/')).toBe('Lsamien/yaoyao')
     expect(loadServerConfig({ HERMES_YAOYAO_RELEASE_SOURCE: 'https://git.samien.cn/samien/hermes-yaoyao.git' }).releaseSource).toBe(DEFAULT_RELEASE_SOURCE)
     const plist = launchAgentPlist({ environment: { HERMES_YAOYAO_RELEASE_SOURCE: 'https://git.samien.cn/samien/hermes-yaoyao.git' } })
     expect(plist).toContain(DEFAULT_RELEASE_SOURCE)
@@ -42,9 +42,9 @@ describe('GitHub release source', () => {
   it('selects a published stable release, peels annotated tags and reads an immutable manifest', async () => {
     const fetchImpl = fixture()
     const result = await inspectGitHubRelease(DEFAULT_RELEASE_SOURCE, fetchImpl)
-    expect(result).toMatchObject({ manifest, commit, notes: 'Release notes', releasePageUrl: 'https://github.com/Lsamien/hermes-yaoyao/releases/tag/v0.4.2' })
+    expect(result).toMatchObject({ manifest, commit, notes: 'Release notes', releasePageUrl: 'https://github.com/Lsamien/yaoyao/releases/tag/v0.4.2' })
     expect(result.assets).toHaveLength(1)
-    expect(fetchImpl).toHaveBeenCalledWith(`https://raw.githubusercontent.com/Lsamien/hermes-yaoyao/${commit}/release.json`, expect.anything())
+    expect(fetchImpl).toHaveBeenCalledWith(`https://raw.githubusercontent.com/Lsamien/yaoyao/${commit}/release.json`, expect.anything())
   })
   it('uses the GitHub adapter instead of cloning or contacting 9119', async () => {
     const fetchImpl = fixture(); vi.stubGlobal('fetch', fetchImpl)
@@ -67,7 +67,7 @@ describe('GitHub release source', () => {
     await expect(inspectGitHubRelease(DEFAULT_RELEASE_SOURCE, fixture({ [`${api}/releases/latest`]: { draft: false, prerelease: false, tag_name: 'v0.4.2', ...patch } }))).rejects.toThrow('稳定')
   })
   it('rejects mismatching manifests and invalid tags', async () => {
-    await expect(inspectGitHubRelease(DEFAULT_RELEASE_SOURCE, fixture({ [`https://raw.githubusercontent.com/Lsamien/hermes-yaoyao/${commit}/release.json`]: { ...manifest, gitTag: 'v0.4.1' } }))).rejects.toThrow()
+    await expect(inspectGitHubRelease(DEFAULT_RELEASE_SOURCE, fixture({ [`https://raw.githubusercontent.com/Lsamien/yaoyao/${commit}/release.json`]: { ...manifest, gitTag: 'v0.4.1' } }))).rejects.toThrow()
     await expect(inspectGitHubRelease(DEFAULT_RELEASE_SOURCE, fixture({ [`${api}/git/ref/tags/v0.4.2`]: { object: { type: 'tree', sha: commit } } }))).rejects.toThrow('标签提交')
   })
   it('reports network failure and cancellation explicitly', async () => {

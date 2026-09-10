@@ -593,7 +593,7 @@ export class ChatPushRelayObserver {
         profile: job.profile,
         sessionID: job.storedSessionID,
         requestID: requestIDValue,
-        title: clarification ? 'Agent 需要补充信息' : 'Agent 请求审批',
+        title: clarification ? '机器人需要补充信息' : '机器人请求审批',
         body: summary(payload.question ?? payload.message ?? payload.prompt, clarification ? '请打开夭夭继续处理' : '请打开夭夭审批'),
         collapseID: collapseID('chat-interaction', `${job.storedSessionID ?? runtimeSessionID}:${requestIDValue}`),
         data: notificationData(eventID, kind, job.localUserID, {
@@ -697,8 +697,8 @@ function terminalGroupCandidate(
       error: error || undefined,
       occurredAt: eventTimestamp(payload.updatedAt ?? payload.updated_at ?? payload.createdAt ?? payload.created_at),
       title: status === 'completed'
-        ? `${string(payload.senderName ?? payload.sender_name) || 'Agent'} 已回复`
-        : `${string(payload.senderName ?? payload.sender_name) || 'Agent'} 执行失败`,
+        ? `${string(payload.senderName ?? payload.sender_name) || '机器人'} 已回复`
+        : `${string(payload.senderName ?? payload.sender_name) || '机器人'} 执行失败`,
       body: summary(error || content, status === 'completed' ? '打开夭夭查看团队消息' : '打开夭夭查看失败详情'),
       collapseID: collapseID('group-message', messageID),
     }
@@ -723,7 +723,7 @@ function terminalGroupCandidate(
     interactionKind,
     content: content || undefined,
     occurredAt: eventTimestamp(payload.updatedAt ?? payload.updated_at ?? payload.createdAt ?? payload.created_at),
-    title: interactionKind === 'clarification' ? '团队 Agent 需要补充信息' : '团队 Agent 请求审批',
+    title: interactionKind === 'clarification' ? '团队机器人需要补充信息' : '团队机器人请求审批',
     body: summary(content, '请打开夭夭继续处理'),
     collapseID: collapseID('group-interaction', interactionID),
   }
@@ -990,7 +990,7 @@ function chatInteractionCandidate(
     profile: job.profile,
     sessionID: job.storedSessionID,
     requestID: requestIDValue,
-    title: clarification ? 'Agent 需要补充信息' : 'Agent 请求审批',
+    title: clarification ? '机器人需要补充信息' : '机器人请求审批',
     body: summary(payload.question ?? payload.message ?? payload.prompt, clarification ? '请打开夭夭继续处理' : '请打开夭夭审批'),
     collapseID: collapseID('chat-interaction', `${job.storedSessionID ?? job.runtimeSessionID}:${requestIDValue}`),
     data: notificationData(eventID, kind, job.localUserID, {

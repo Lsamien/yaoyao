@@ -113,7 +113,7 @@ export class LocalVmImages {
           image=await this.images.prepare(recipe)
         }
         await check();this.state.imageId=image.imageId;this.runtime.config.imageId=image.imageId
-        this.state.job={id,state:'complete',message:'本地虚拟机已就绪，可在 Agent 的电脑面板中创建桌面'};this.save()
+        this.state.job={id,state:'complete',message:'本地虚拟机已就绪，可在机器人的电脑面板中创建桌面'};this.save()
       } catch(error) {
         this.state.job={id,state:'failed',message:error instanceof Error?error.message.slice(0,240):'本地虚拟机准备失败'};this.save()
       } finally {

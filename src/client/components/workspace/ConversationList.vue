@@ -26,7 +26,7 @@ function action(kind: 'pin' | 'archive' | 'delete') {
 <template>
   <div class="conversation-list">
     <ResourceSidebar :items="rows" :active-id="selected" :searchable="false" :avatar-size="44" external-search
-      empty-title="还没有聊天" empty-description="创建 Agent，或选择成员新建群聊。"
+      empty-title="还没有聊天" empty-description="创建机器人，或选择成员新建群聊。"
       @select="emit('select', $event)" @more="openMenu" @context-menu="openMenu" />
     <Teleport to="body">
       <div v-if="menuConversation" class="conversation-menu-dismiss" @pointerdown.self="menuId = ''" @keydown.esc="menuId = ''">

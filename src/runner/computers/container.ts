@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdir, realpath, chmod, lstat, rm } from 'node:fs/promises'
-import { join, resolve, posix } from 'node:path'
+import { mkdir, realpath, chmod, lstat, rm, readFile } from 'node:fs/promises'
+import { join, resolve, posix, dirname, basename } from 'node:path'
 import { z } from 'zod'
 import {recoverWorkspace} from './workspaceRecovery.js'
 
@@ -126,9 +126,24 @@ export class ContainerComputerProvider implements ComputerProvider {
     if(Object.values(detail.NetworkSettings?.Ports??{}).some(bindings=>Array.isArray(bindings)&&bindings.length))throw new ComputerError('computer_viewer_unsafe','电脑环境不能发布网络端口')
     return {id:spec.id,containerId:detail.Id,running:detail.State?.Running===true,workspace,isolation:'container'}
   }
+  private async migratedContainer(spec:Spec,detail:any,workspace:string) {
+    if(!detail || detail.Mounts?.every((mount:any)=>mount.Source===workspace))return detail
+    let root=resolve(this.home)
+    while(dirname(root)!==root&&basename(root)!=='.yaoyao')root=dirname(root)
+    if(basename(root)!=='.yaoyao')return detail
+    let migration
+    try{migration=JSON.parse(await readFile(join(root,'.data-home-migration.json'),'utf8'))}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return detail;throw error}
+    if(migration.phase!=='complete'||migration.target!==root||migration.source!==join(dirname(root),'.hermes-yaoyao'))return detail
+    const oldWorkspace=migration.source+workspace.slice(root.length)
+    this.assertConfiguration(spec,detail,oldWorkspace)
+    if(detail.State?.Running)throw new ComputerError('computer_migration_busy','旧目录的虚拟机仍在运行，请停止后再迁移')
+    // Preserve the old writable layer as a stopped backup; only the verified name changes.
+    await this.run(this.runtime,['rename',detail.Id,`${this.name(spec)}-before-data-move-${detail.Id.slice(0,8)}`])
+    return undefined
+  }
   async inspect(value:ComputerSpecification):Promise<ComputerState|undefined> {
     await this.verifyRuntime()
-    const spec=this.validateSpecification(value),workspace=await this.workspace(spec),detail=await this.inspectRaw(this.name(spec))
+    const spec=this.validateSpecification(value),workspace=await this.workspace(spec),detail=await this.migratedContainer(spec,await this.inspectRaw(this.name(spec)),workspace)
     return detail?this.state(spec,detail,workspace):undefined
   }
   private args(spec:Spec,workspace:string) {
@@ -148,7 +163,7 @@ export class ContainerComputerProvider implements ComputerProvider {
     return this.serial(spec,async()=>{
       authorize();await this.verifyRuntime();authorize()
       const workspace=await this.workspace(spec)
-      let detail=await this.inspectRaw(this.name(spec))
+      let detail=await this.migratedContainer(spec,await this.inspectRaw(this.name(spec)),workspace)
       if(!detail) {
         const image=JSON.parse((await this.run(this.runtime,['image','inspect',spec.imageId])).stdout)[0]
         if(image?.Id!==spec.imageId||image.Config?.Labels?.['com.openmausbot.cua-driver']!=='0.20.0'||image.Config?.Labels?.['com.openmausbot.image-layer']!=='5')

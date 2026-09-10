@@ -39,6 +39,8 @@ export const agentInput = z
     avatar: avatar.default(''),
     instructions: z.string().max(24_000).default(''),
     execution:z.enum(['profile','computer']).default('profile'),
+    computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
+    browserProfile:z.enum(['persistent','temporary']).optional(),
     canManageTeam: z.boolean().default(false),
     nodeId: z.string().default('local'),
     profile: z.string().min(1).max(256),
@@ -50,6 +52,10 @@ export const agentPatch = z
     avatar: avatar.optional(),
     instructions: z.string().max(24_000).optional(),
     execution:z.enum(['profile','computer']).optional(),
+    computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
+    browserProfile:z.enum(['persistent','temporary']).optional(),
+    nodeId:z.string().min(1).max(256).optional(),
+    profile:z.string().min(1).max(256).optional(),
     canManageTeam: z.boolean().optional(),
     archived: z.boolean().optional(),
   })
@@ -301,7 +307,7 @@ export class WorkspaceStore {
           (a) => a.name.toLocaleLowerCase() === body.name.toLocaleLowerCase(),
         )
       )
-        throw new HttpError(409, 'Agent 名称已存在', 'duplicate_agent_name')
+        throw new HttpError(409, '机器人名称已存在', 'duplicate_agent_name')
       const now = Date.now(),
         id = randomUUID()
       const agent: Agent = {
@@ -348,22 +354,30 @@ export class WorkspaceStore {
     if (patch.avatar !== undefined) patch.avatar = normalizeAvatar(patch.avatar)
     return this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
+      const sourceChanged=(patch.nodeId!==undefined&&patch.nodeId!==agent.nodeId)||(patch.profile!==undefined&&patch.profile!==agent.profile)
+      const destinationChanged=(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
+      if(sourceChanged||destinationChanged){
+        if(this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['queued','running','waiting','uncertain','cancelling'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再修改机器人来源或电脑','agent_execution_busy')
+        if(this.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(grant.agentId===id||grant.environmentId===(agent.computerEnvironmentId??id))))throw new HttpError(409,'请先交还电脑控制权','agent_execution_busy')
+        if(sourceChanged&&agent.computerEnvironmentId){const shared=this.require<{nodeId:string;profile:string;managedLocalVm?:boolean;managedCompose?:boolean}>(owner,'shared-computer',agent.computerEnvironmentId);if((patch.nodeId??agent.nodeId)!==shared.nodeId||(!shared.managedLocalVm&&!shared.managedCompose&&shared.profile!=='*'&&(patch.profile??agent.profile)!==shared.profile))throw new HttpError(409,'请先解除电脑共享，再切换到其他来源','shared_computer_active')}
+      }
       if(agent.temporaryGoalId&&(Object.keys(patch).some(key=>key!=='archived')||patch.archived===false))throw new HttpError(409,'临时助手由所属任务管理，不能修改权限或恢复为持久成员','helper_task_bound')
       if(agent.computerEnvironmentId&&patch.execution==='profile')throw new HttpError(409,'请先解除电脑共享，再切换执行环境','shared_computer_active')
       if(patch.execution&&patch.execution!==(agent.execution??'profile')&&this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['running','waiting','uncertain'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再切换执行环境','agent_execution_busy')
       if (agent.remoteAgentId && Object.keys(patch).some(key => key !== 'archived'))
-        throw new HttpError(409, '引用 Agent 的配置由远端管理', 'remote_agent_read_only')
+        throw new HttpError(409, '引用机器人的配置由远端管理', 'remote_agent_read_only')
       if (
         patch.name &&
         this.list<Agent>(owner, 'agent').some(
           (a) => a.id !== id && a.name.toLocaleLowerCase() === patch.name!.toLocaleLowerCase(),
         )
       )
-        throw new HttpError(409, 'Agent 名称已存在', 'duplicate_agent_name')
+        throw new HttpError(409, '机器人名称已存在', 'duplicate_agent_name')
       const next = { ...agent, ...patch, revision: agent.revision + 1, updatedAt: Date.now() }
       if (patch.canManageTeam !== undefined && patch.canManageTeam !== (agent.canManageTeam === true))
         next.teamAuthorizationVersion = (agent.teamAuthorizationVersion ?? 0) + 1
       this.put(owner, 'agent', id, next)
+      if(sourceChanged)for(const binding of this.list<{id:string}>(owner,'binding').filter(binding=>binding.id.endsWith(`:${id}`))){this.put(owner,'binding-reset',binding.id,{id:binding.id});this.remove(owner,'binding',binding.id)}
       this.event(owner, 'agent.changed', next)
       for (const c of this.list<Conversation>(owner, 'conversation').filter(
         (c) => c.kind === 'direct' && c.memberIds[0] === id,
@@ -445,6 +459,7 @@ export class WorkspaceStore {
         throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
       for (const conversation of conversations.filter(c => c.kind === 'direct' && c.memberIds[0] === id))
         this.deleteConversation(owner, conversation.id, true)
+      for(const kind of ['routine','routine-run'])for(const item of this.list<{id:string;agentId:string}>(owner,kind).filter(item=>item.agentId===id))this.remove(owner,kind,item.id)
       this.remove(owner, 'agent', id)
       this.event(owner, 'agent.deleted', { id })
     })
@@ -471,6 +486,7 @@ export class WorkspaceStore {
       this.db.prepare("DELETE FROM workspace_entities WHERE owner=? AND kind IN ('message','run','turn','interaction','interaction-binding','binding','conversation-task','goal','assignment') AND json_extract(data,'$.conversationId')=?").run(owner, id)
       this.db.prepare("DELETE FROM workspace_commands WHERE owner=? AND json_extract(result,'$.conversationId')=?").run(owner, id)
       this.remove(owner, 'context', id)
+      if(this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_inspector'").get())this.db.prepare('DELETE FROM workspace_inspector WHERE owner=? AND conversation_id=?').run(owner,id)
       this.remove(owner, 'conversation', id)
       this.event(owner, 'conversation.deleted', { id }, id)
     })
@@ -488,7 +504,7 @@ export class WorkspaceStore {
     for (const id of ids){
       const agent=this.require<Agent>(owner,'agent',id)
       if(agent.temporaryGoalId)throw new HttpError(409,'临时助手不能加入持久团队','helper_task_bound')
-      if(agent.archived)throw new HttpError(409,'已归档 Agent 不能加入新群','agent_archived')
+      if(agent.archived)throw new HttpError(409,'已归档机器人不能加入新群','agent_archived')
     }
     const now = Date.now()
     const c: Conversation = {
@@ -735,7 +751,7 @@ export class WorkspaceStore {
     const patch = parse(conversationPatch, input),
       c = this.require<Conversation>(owner, 'conversation', id)
     if (c.kind === 'direct' && Object.keys(patch).some((k) => k !== 'pinned'))
-      throw new HttpError(400, '请编辑 Agent 资料', 'edit_agent_instead')
+      throw new HttpError(400, '请编辑机器人资料', 'edit_agent_instead')
     const memberIds = patch.memberIds ?? c.memberIds
     const members = new Set(memberIds)
     if (!members.has(c.administratorId))
@@ -751,7 +767,7 @@ export class WorkspaceStore {
       const agent = this.require<Agent>(owner, 'agent', memberId)
       if(agent.temporaryGoalId)throw new HttpError(409,'临时助手不能加入其他群聊','helper_task_bound')
       if (!c.memberIds.includes(memberId) && agent.archived)
-        throw new HttpError(409, '已归档 Agent 不能加入群聊', 'agent_archived')
+        throw new HttpError(409, '已归档机器人不能加入群聊', 'agent_archived')
     }
     const next = {
       ...c, ...patch, memberIds,

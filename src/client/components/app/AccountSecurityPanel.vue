@@ -230,7 +230,7 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       <p v-else-if="notice" class="form-message form-message--success" role="status">{{ notice }}</p>
 
       <footer v-if="showActions" class="form-actions">
-        <span>保存后不会修改 Agent、Provider 或系统服务配置。</span>
+        <span>保存后不会修改机器人、Provider 或系统服务配置。</span>
         <button class="solid-button" type="submit" :disabled="!canSave">{{ busy ? '正在保存…' : '保存修改' }}</button>
       </footer>
     </form>

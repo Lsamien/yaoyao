@@ -6,7 +6,7 @@ import { useRoute, useRouter, onBeforeRouteUpdate, onBeforeRouteLeave } from 'vu
 import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
 import RemoteAgentPicker from '@/components/workspace/RemoteAgentPicker.vue'
 import ConversationList from '@/components/workspace/ConversationList.vue'
-import LocalVmChatPanel from '@/components/workspace/LocalVmChatPanel.vue'
+import WorkspaceBotPanel from '@/components/workspace/WorkspaceBotPanel.vue'
 import LocalVmWorkspace from '@/components/workspace/LocalVmWorkspace.vue'
 import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import TaskPlan from '@/components/workspace/TaskPlan.vue'
@@ -90,7 +90,7 @@ const uiMessages = computed(() => workspaceMessagesToUi(messages.value))
 const media = computed(() => mediaItemsFromMessages(uiMessages.value))
 const lightboxMedia = computed(() => media.value.filter(item => item.kind === 'image' || item.kind === 'video').map(item => ({ url: item.previewUrl || item.downloadUrl || '', name: item.name, type: item.kind as 'image' | 'video' })))
 const reference = computed<ComposerReference | null>(() => quoted.value ? { id: quoted.value.id, content: quoted.value.content, author: quoted.value.author } : null)
-const avatarProfile = computed(() => ({ name: editingId.value || 'Agent', displayName: form.name || 'Agent', agentName: form.name || 'Agent', agentAvatar: form.avatar, isDefault: false, isRunning: true }))
+const avatarProfile = computed(() => ({ name: editingId.value || '机器人', displayName: form.name || '机器人', agentName: form.name || '机器人', agentAvatar: form.avatar, isDefault: false, isRunning: true }))
 function openPreview(file: {name: string; url?: string; kind?: string}) {
   let path = file.url || ''
   try { path = decodeURIComponent(new URL(path, window.location.origin).pathname) } catch { /* preserve the supplied URL */ }
@@ -192,6 +192,10 @@ const selected = computed(() => (typeof route.params.id === 'string' ? route.par
 const selectedTask = computed(() => typeof route.query.taskId === 'string' ? route.query.taskId : '')
 const shell=ref<InstanceType<typeof WorkspaceShell>>(),vmWorkspace=ref<InstanceType<typeof LocalVmWorkspace>>(),desktopViewer=ref<InstanceType<typeof ComputerPanel>>()
 const computerOpen=ref(false),computerDockOpen=ref(false),twoDesktops=ref(false),desktopAgent=ref<Agent>()
+async function openComputer(agent:Agent){
+  if(window.yaoyaoDesktop?.openComputer){try{await window.yaoyaoDesktop.openComputer(agent.id)}catch(cause){error.value=cause instanceof Error?cause.message:'无法打开电脑窗口'}return}
+  desktopAgent.value=agent;computerOpen.value=true
+}
 async function leaveComputer(){
   if(twoDesktops.value&&vmWorkspace.value&&!await vmWorkspace.value.close())return false
   if(computerOpen.value&&desktopViewer.value){try{await desktopViewer.value.releaseControl();computerOpen.value=false}catch{return false}}
@@ -213,7 +217,7 @@ async function saveProfileIdentity(input: ProfileIdentityInput) {
     await auth.refreshProfileAvatars()
     identityResetVersion.value += 1
   } catch (cause) {
-    identityError.value = cause instanceof Error ? cause.message : '保存 Agent 身份失败'
+    identityError.value = cause instanceof Error ? cause.message : '保存机器人身份失败'
   } finally {
     identityBusy.value = false
   }
@@ -377,7 +381,7 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
   selectedPresetId.value = 'custom'
   Object.assign(form, {
     name: '',
-    avatar: kind === 'agent' ? encodeAgentAvatar(randomAgentIdentity('new-agent', 'Agent')) : '',
+    avatar: kind === 'agent' ? encodeAgentAvatar(randomAgentIdentity('new-agent', '机器人')) : '',
     instructions: '',
     execution: 'profile' as 'profile'|'computer',
   canManageTeam: false,
@@ -390,7 +394,7 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
     maxReplyRounds: 3,
   })
   try {
-    if (kind === 'agent') {
+    if (kind === 'agent' || kind === 'editAgent') {
       const s = await apiRequest<{ sources: Source[] }>('/api/app/agents/sources')
       sources.value = s.sources
       form.source = s.sources[0] ? JSON.stringify([s.sources[0].nodeId, s.sources[0].profile]) : ''
@@ -400,6 +404,7 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
       if (!a) return
       editingId.value = a.id
       Object.assign(form, a)
+      form.source=JSON.stringify([a.nodeId,a.profile])
       if(a.remoteAgentId){
         const remote=(await apiRequest<{agents:Agent[]}>(`/api/app/nodes/${a.nodeId}/agents`)).agents.find(candidate=>candidate.id===a.remoteAgentId)
         if(remote)Object.assign(form,remote)
@@ -442,7 +447,7 @@ async function save() {
       const [nodeId, profile] = JSON.parse(form.source)
       const result = await apiRequest<{ agent: Agent }>('/api/app/agents', {
         method: 'POST',
-        body: { ...fields, nodeId, profile },
+        body: { ...fields, nodeId, profile, computer: 'auto' },
       })
       await refresh()
       const c = conversations.value.find(
@@ -450,7 +455,7 @@ async function save() {
       )
       if (c) await select(c.id)
     } else if (dialog.value === 'editAgent')
-      await apiRequest(`/api/app/agents/${editingId.value}`, { method: 'PATCH', body: fields })
+      await apiRequest(`/api/app/agents/${editingId.value}`, { method: 'PATCH', body: { ...fields, ...(form.source?{nodeId:JSON.parse(form.source)[0],profile:JSON.parse(form.source)[1]}:{}) } })
     else {
       const payload = {
         ...fields,
@@ -706,7 +711,7 @@ onBeforeUnmount(() => {
         :agent-states="Object.fromEntries(members.map(a => [a.id, workspaceAvatarState(active, a.id)]))"
         :mention-names="members.map(a => a.name)"
         :empty-title="active ? '开始一段新对话' : '还没有聊天'"
-        :empty-description="active ? '从下方输入框发送消息。' : '创建 Agent，或选择成员新建群聊。'"
+        :empty-description="active ? '从下方输入框发送消息。' : '创建机器人，或选择成员新建群聊。'"
         :interaction="interactions[0] ? { id: interactions[0].id, kind: interactions[0].kind, prompt: interactions[0].message, options: interactions[0].choices } : null"
         @load-older="loadOlder" @quote="quoted = $event" @preview="openPreview" @preview-file="openPreview"
         @approve="interactions[0] && respond(interactions[0], $event ? 'once' : 'deny')"
@@ -714,7 +719,7 @@ onBeforeUnmount(() => {
         <template #header-leading><button v-if="active" class="workspace-list-back icon-button" aria-label="返回 Bot 列表" @click="router.push('/conversations')"><AppIcon name="chevron-left" /></button></template>
         <template #header-actions>
           <div v-if="active" class="header-actions">
-            <button type="button" class="icon-button" aria-label="电脑" title="电脑" @click="computerDockOpen=!computerDockOpen"><AppIcon name="monitor"/></button>
+            <button type="button" class="icon-button" :aria-label="active.kind==='group'?'Inspector':'电脑与定时任务'" :title="active.kind==='group'?'Inspector':'电脑与定时任务'" @click="computerDockOpen=!computerDockOpen"><AppIcon :name="active.kind==='group'?'tools':'monitor'"/></button>
             <select v-if="active.kind === 'group' && tasks.length" class="task-picker" aria-label="当前任务" :value="activeTask?.id" @change="router.push({query:{...route.query,taskId:($event.target as HTMLSelectElement).value}})">
               <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
             </select>
@@ -722,7 +727,7 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </MessageTimeline>
-      <p v-if="run?.status === 'queued'" class="task-queue-status" role="status">正在等待可用 Agent</p>
+      <p v-if="run?.status === 'queued'" class="task-queue-status" role="status">正在等待可用机器人</p>
       <TaskPlan :goal="activeTask?.goal" :assignments="assignments" :agents="agents" @stop="stopTask" @resume="resumeTask" />
       <p v-if="error" class="error" role="alert">{{ error }}<button class="icon-button" @click="error = ''" aria-label="关闭错误"><AppIcon name="close" /></button></p>
       <ComposerShell v-if="active" :key="composerKey" ref="composer" mode="group" :draft-key="composerKey"
@@ -731,7 +736,7 @@ onBeforeUnmount(() => {
         :mention-options="active.kind === 'group' ? members.map(a => ({id:a.id,label:a.name,insertText:`@${a.name} `})) : []"
         @send="sendFromComposer" @stop="control('stop')" @tool-trace-toggle="showThinking = !showThinking" @clear-reference="quoted = null" @error="error = $event" />
     </section>
-    <LocalVmChatPanel v-if="computerDockOpen" :active="!twoDesktops" :agents="computerCandidates" :is-admin="auth.user?.role === 'admin'" @close="computerDockOpen=false" @changed="refresh()" @settings="shell?.openLocalVm()" @desktop="desktopAgent=$event;computerOpen=true" @workspace="desktopAgent=$event;twoDesktops=true" />
+    <WorkspaceBotPanel v-if="computerDockOpen&&active" :conversation-id="active.id" :task-id="activeTask?.id" :group="active.kind==='group'" :active="!twoDesktops" :agents="computerCandidates" :is-admin="auth.user?.role === 'admin'" @close="computerDockOpen=false" @changed="refresh()" @settings="shell?.openLocalVm()" @desktop="openComputer" @workspace="desktopAgent=$event;twoDesktops=true" />
     </div>
     <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" auto-take @changed="load()" @close="computerOpen=false" />
     <LocalVmWorkspace ref="vmWorkspace" v-if="twoDesktops&&desktopAgent" :agents="agents.filter(a=>a.execution==='computer'&&!a.archived&&!a.computerEnvironmentId)" :primary="desktopAgent.id" @close="twoDesktops=false" />
@@ -754,22 +759,22 @@ onBeforeUnmount(() => {
       <form @submit.prevent="save">
         <header>
           <h2>
-            {{ dialog === 'agent' ? '创建 Agent' : dialog === 'group' ? '创建群聊' : '编辑资料' }}
+            {{ dialog === 'agent' ? '创建机器人' : dialog === 'group' ? '创建群聊' : '编辑资料' }}
           </h2>
           <button type="button" aria-label="关闭" @click="closeDialog">×</button>
         </header>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
         <TeamPresetPicker v-if="dialog === 'group'" :selected="selectedPresetId" :available="agents.filter(a => !a.archived && !a.temporaryGoalId).length" @select="choosePreset" />
         <label>名称<input v-model="form.name" :readonly="isRemoteAgent" required maxlength="100" /></label>
-        <p v-if="isRemoteAgent">引用的 Agent 配置由远端管理，请在远端修改名称、头像和角色规则。</p>
+        <p v-if="isRemoteAgent">引用的机器人配置由远端管理，请在远端修改名称、头像和角色规则。</p>
         <AgentIdentityPanel v-if="isAgentDialog && !isRemoteAgent" :key="`${dialog}:${editingId}`" :profile="avatarProfile" embedded :show-name="false" :show-default-model="false" :show-actions="false" @avatar-change="form.avatar = $event" />
         <div v-else-if="!isAgentDialog" class="team-avatar-settings">
           <TeamAvatar :name="form.name" :members="workspaceAvatarMembers(form.memberIds, agents, dialog === 'editGroup' ? active : undefined)" :size="64" />
           <small>群聊头像由成员头像自动组合，随成员头像更新。</small>
         </div>
         <label
-          v-if="dialog === 'agent'"
-          >基础 Agent<select v-model="form.source" required>
+          v-if="isAgentDialog&&!isRemoteAgent"
+          >基础机器人<select v-model="form.source" required>
             <option
               v-for="s in sources"
               :key="`${s.nodeId}:${s.profile}`"
@@ -778,7 +783,7 @@ onBeforeUnmount(() => {
               {{ s.name }} · {{ s.nodeId === 'local' ? '当前服务' : s.nodeId }}
             </option></select
           ><small v-if="!sources.length"
-            >{{ auth.isBotOnly ? '暂无可用的已分配 Agent，请联系管理员分配或检查连接。' : '没有可用的基础 Agent，请检查 Web 的 Hermes 连接。' }}</small
+            >{{ auth.isBotOnly ? '暂无可用的已分配机器人，请联系管理员分配或检查连接。' : '没有可用的基础机器人，请检查 Web 的 Hermes 连接。' }}</small
           ></label
         ><label
           >{{ isAgentDialog ? '角色提示词与规则' : '群规则'
@@ -796,19 +801,19 @@ onBeforeUnmount(() => {
         </label>
         <label v-if="isAgentDialog && !isRemoteAgent" class="team-management-permission">
           <span><input v-model="form.canManageTeam" type="checkbox" aria-label="允许组建团队" aria-describedby="team-management-help" />允许组建团队</span>
-          <small id="team-management-help">允许自主创建成员、组建团队并启动任务。仅使用当前账号获准的基础 Agent，新成员默认不获得此权限。发起者需使用已启用工具桥的同机 Hermes，或支持团队工具的 Runner。隔离发起者新建的成员也使用隔离电脑。</small>
+          <small id="team-management-help">允许自主创建成员、组建团队并启动任务。仅使用当前账号获准的基础机器人，新成员默认不获得此权限。发起者需使用已启用工具桥的同机 Hermes，或支持团队工具的 Runner。隔离发起者新建的成员也使用隔离电脑。</small>
         </label>
-        <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" @click="remotePickerOpen = true">添加远程 Agent</button>
+        <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" @click="remotePickerOpen = true">添加远程机器人</button>
         <fieldset v-if="selectedPreset" class="preset-role-mapping">
           <legend>角色分配</legend>
           <label v-for="(role, index) in selectedPreset.roles" :key="role.name">
             {{ role.name }}{{ role.host ? ' · 管理员' : '' }}
-            <select :value="form.memberIds[index]" :aria-label="`${role.name}对应的 Agent`" @change="assignPresetRole(index, ($event.target as HTMLSelectElement).value)">
+            <select :value="form.memberIds[index]" :aria-label="`${role.name}对应的机器人`" @change="assignPresetRole(index, ($event.target as HTMLSelectElement).value)">
               <option v-for="a in agents.filter(a => !a.archived && !a.temporaryGoalId)" :key="a.id" :value="a.id">{{ a.name }}</option>
             </select>
             <small>{{ role.description }}</small>
           </label>
-          <small>角色分工仅在本群生效，聊天中保留 Agent 的名称和头像。</small>
+          <small>角色分工仅在本群生效，聊天中保留机器人的名称和头像。</small>
         </fieldset>
         <fieldset v-else-if="!isAgentDialog">
           <legend>选择成员</legend>
@@ -824,7 +829,7 @@ onBeforeUnmount(() => {
               :disabled="busy || (dialog === 'editGroup' && (a.id === active?.administratorId || a.id === form.administratorId)) || (!form.memberIds.includes(a.id) && form.memberIds.length >= 8)"
             />{{ a.name }}</label
           ><small v-if="dialog === 'group' && agents.filter((a) => !a.archived && !a.temporaryGoalId).length < 2"
-            >至少需要两个 Agent 才能创建群聊。</small
+            >至少需要两个机器人才能创建群聊。</small
           >
           <small v-if="dialog === 'editGroup'">可增减成员，最多 8 位。当前管理员不能移除；如需移除，请先更换管理员并保存。</small>
           <button v-for="a in agents.filter(a => active?.activeAgentStates?.[a.id])" :key="`stop:${a.id}`" type="button" @click="stopMember(a.id)">停止 {{ a.name }}</button>

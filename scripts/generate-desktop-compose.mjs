@@ -9,7 +9,7 @@ const q=JSON.stringify
 const targets=entries.map(d=>({id:d.id,name:d.name,socketPath:`/run/yaoyao-desktops/${d.service}/desktop.sock`}))
 const base=readFileSync(resolve(root,'compose.yaml'),'utf8')
   .replace('      HERMES_YAOYAO_LOCAL_VM_HOST: "runner"','      HERMES_YAOYAO_LOCAL_VM_HOST: "runner"\n      HERMES_YAOYAO_COMPOSE_DESKTOPS: '+q(JSON.stringify(targets)))
-  .replace('      - yaoyao-data:/var/lib/hermes-yaoyao','      - yaoyao-data:/var/lib/hermes-yaoyao\n'+entries.map(d=>`      - ${d.service}-ipc:/run/yaoyao-desktops/${d.service}:ro`).join('\n'))
+  .replace('      - yaoyao-data:/home/node/.yaoyao','      - yaoyao-data:/home/node/.yaoyao\n'+entries.map(d=>`      - ${d.service}-ipc:/run/yaoyao-desktops/${d.service}:ro`).join('\n'))
 const volumesAt=base.indexOf('\nvolumes:')
 if(volumesAt<0||!base.includes('HERMES_YAOYAO_COMPOSE_DESKTOPS'))throw new Error('compose.yaml 模板结构已变化')
 let yaml='# Generated from compose.yaml and deploy/compose-desktops.json.\n'+base.slice(0,volumesAt)+'\n'

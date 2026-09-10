@@ -1,3 +1,5 @@
+import {DESKTOP_ENVIRONMENT_TOOLS,DESKTOP_ENVIRONMENT_RULES,type DesktopEnvironments} from './desktopEnvironments.js'
+import {GROK_COMPUTER_TOOLS,GROK_COMPUTER_RULES,type GrokCloud} from './grokCloud.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -63,6 +65,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   get idleForUpdate(): boolean {
     return this.live.size === 0 && this.executing.size === 0 && !this.store.db.prepare("SELECT 1 FROM workspace_entities WHERE kind IN ('run','turn') AND COALESCE(json_extract(data,'$.status'),'unknown') NOT IN ('complete','failed','interrupted') LIMIT 1").get()
   }
+  desktopEnvironments?:DesktopEnvironments
+  cloud?:GrokCloud
+  inspector?:import('./workspaceInspector.js').WorkspaceInspector
   private live = new Map<string, LiveTurn>()
   readonly teamTools: WorkspaceTeamTools
   readonly tasks: WorkspaceTaskCoordinator
@@ -190,10 +195,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     },authorize:()=>{
       this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
       const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id),conversation=this.store.require<Conversation>(owner,'conversation',c.id)
-      if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId||(latest.execution??'profile')!==(agent.execution??'profile')||latest.teamAuthorizationVersion!==agent.teamAuthorizationVersion)throw new HttpError(403,'本轮 Agent 或任务授权已结束','run_authorization_revoked')
+      if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId||(latest.execution??'profile')!==(agent.execution??'profile')||latest.teamAuthorizationVersion!==agent.teamAuthorizationVersion)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
     }})
+    gateway.onTrace=entry=>this.inspector?.record(owner,c.id,{...entry,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
-    const movedRunner=!!binding&&(binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile'))
+    const movedRunner=!!this.store.get(owner,'binding-reset',key)||!!binding&&(binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile'))
     if(movedRunner) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
       binding=undefined
@@ -301,6 +307,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       finish(completedEvidence ? undefined : new Error('Hermes 连接断开'))
     gateway.onEvent = (frame: GatewayFrame) => {
       if (settled || !runtimeId || frame.session_id !== runtimeId) return
+      this.inspector?.record(owner,c.id,{direction:'event',method:frame.type,data:frame.payload,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
       const p = frame.payload ?? {},
         type = frame.type
       if(type==='computer.paused'||type==='computer.resumed'){const current=this.getWork(owner,run.id);current.status=type==='computer.paused'?'waiting':'running';this.saveWork(owner,current);return}
@@ -535,22 +542,29 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       } else {
         if (opened.running) throw new HttpError(409, '上游会话仍在运行', 'session_busy')
         this.nodes.requireSource(owner, agent)
-        // Only explicit grants mount the bridge; ordinary Bot turns never query plugins.
-        if (agent.canManageTeam === true && !this.store.require<Run>(owner, 'run', run.runId).assignmentId) {
-          const granted = this.getWork(owner, run.id)
-          granted.teamManagementRevision = agent.revision
-          this.saveWork(owner, granted)
-          await this.teamTools.requireAvailable(owner, agent)
-          toolLease = await createWorkspaceToolLease({
-            target, profile: agent.profile, workId: run.id, signal: toolController.signal,
-            session: () => ({ runtimeId, storedId: binding!.storedId }),
-            assertActive: () => { if (settled || this.closing) throw new Error('运行已停止'); this.teamTools.assertTurn(owner, run.id) },
-            catalog: () => this.teamTools.catalog(owner, run.id),
-            call: (toolId, args) => this.teamTools.call(owner, run.id, toolId, args),
-            onFailure: error => { if (!settled) void gateway.rpc('session.interrupt', { session_id: runtimeId }).catch(() => {}).finally(() => finish(error)) },
+        const team=agent.canManageTeam===true&&!this.store.require<Run>(owner,'run',run.runId).assignmentId
+        const cloud=!!this.cloud?.selected(owner,agent)
+        const desktop=this.desktopEnvironments?.selected(owner,agent),desktopEpoch=this.desktopEnvironments?.epoch??''
+        if(team||cloud||desktop){
+          if(team){
+            const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)
+            await this.teamTools.requireAvailable(owner,agent)
+          }
+          if(desktop)await this.desktopEnvironments!.requireAvailable(owner,agent,target)
+          if(cloud)await this.cloud!.requireAvailable(owner,agent,target)
+          const assertActive=()=>{
+            if(settled||this.closing||toolController.signal.aborted)throw new Error('运行已停止')
+            this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,this.store.require<Agent>(owner,'agent',agent.id))
+            if(team)this.teamTools.assertTurn(owner,run.id)
+          }
+          toolLease=await createWorkspaceToolLease({
+            target,profile:agent.profile,workId:run.id,signal:toolController.signal,
+            session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
+            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.filter(t=>desktop==='browser'||t.id!=='desktop_browser'):[])],
+            call:async(toolId,args)=>{assertActive();return toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,desktop!,desktopEpoch):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):this.teamTools.call(owner,run.id,toolId,args)},
+            onFailure:error=>{if(!settled)void gateway.rpc('session.interrupt',{session_id:runtimeId}).catch(()=>{}).finally(()=>finish(error))},
           })
-          await toolLease.bind()
-          if (settled) return await completion
+          await toolLease.bind();if(settled)return await completion
         }
         await applyWorkingDirectory((method, params) => gateway.rpc(method, params), runtimeId, cwd, undefined, opened.info?.cwd)
         const trigger = this.store.require<Message>(owner, 'message', run.messageId)
@@ -576,7 +590,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const goal = run.conversationTaskId ? this.store.get<import('../shared/agentTasks.js').AgentGoal>(owner, 'goal', run.conversationTaskId) : undefined
         const assignmentId = this.store.require<Run>(owner, 'run', run.runId).assignmentId
         const rules = [
-          `你是 ${agent.name}。以下是用户为这个独立 Agent 配置的角色与规则（版本 ${agent.revision}）：\n${agent.remoteAgentId ? '配置由远端 Agent 管理。' : agent.instructions}`,
+          `你是 ${agent.name}。以下是用户为这个独立机器人配置的角色与规则（版本 ${agent.revision}）：\n${agent.remoteAgentId ? '配置由远端机器人管理。' : agent.instructions}`,
           c.kind === 'group' && Object.keys(c.memberRoles ?? {}).length
             ? `本群角色分工（仅在本群生效）：\n${members.flatMap(member => {
                 const role = c.memberRoles?.[member.id]
@@ -592,7 +606,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           this.store.require<Run>(owner, 'run', run.runId).internalInstruction || '',
           goal ? `当前团队目标 ID：${goal.id}。目标：${goal.objective.slice(0,8000)}\n验收要求：${goal.acceptanceCriteria.join('；')}\n${assignmentId ? `你在执行子任务 ${assignmentId}，请完成分派并提交结果，不要扩大团队或再次委派。` : '优先使用 workspace_assign_task 进行有依赖和验收要求的结构化分派；成员结果需要通过 workspace_review_assignment 复核。最终使用 workspace_finish_team_task 记录完成、受阻或等待用户。不要将一次模型回复结束当作目标完成。'}` : '',
           agent.temporaryGoalId ? `你是当前任务的临时助手，任务 ID：${agent.temporaryGoalId}。仅处理分派工作，使用 computer_export 回传产物。任务结束后会退役；不要创建团队或改变自身权限。` : '',
-          toolLease ? TEAM_TOOL_RULES : '',
+          team ? TEAM_TOOL_RULES : '',
+          desktop ? DESKTOP_ENVIRONMENT_RULES : '',
+          cloud ? GROK_COMPUTER_RULES : '',
           `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
         ]
           .filter(Boolean)
@@ -617,6 +633,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             ...(target.runner?.computer?{workMarker:`[yaoyao-run:${run.runId}:${resultMessage.id}]`}:{}),
             text: `${rules}\n\n${text}\n${attachmentRefs.join('\n')}`,
           })
+          this.store.remove(owner,'binding-reset',key)
           binding.contextSeq = Math.max(binding.contextSeq ?? 0, admission.contextThroughSeq)
           this.store.put(owner, 'binding', key, binding)
         } catch (error) {

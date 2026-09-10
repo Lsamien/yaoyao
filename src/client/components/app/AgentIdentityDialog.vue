@@ -21,9 +21,9 @@ watch(() => [props.open, props.profile] as const, () => {
   <Teleport to="body">
     <Transition name="identity-fade">
       <div v-if="open && profile" class="identity-layer" @mousedown.self="emit('close')">
-        <section class="identity-dialog" role="dialog" aria-modal="true" aria-label="Agent 管理">
+        <section class="identity-dialog" role="dialog" aria-modal="true" aria-label="机器人管理">
           <header><div><small>AGENT 管理</small><h2>{{ profile.agentName || profile.displayName || profile.name }}</h2></div><button class="icon-button" type="button" aria-label="关闭" :disabled="busy" @click="emit('close')"><AppIcon name="close" /></button></header>
-          <nav v-if="isAdmin" class="management-tabs" aria-label="Agent 管理分类"><button type="button" :class="{ active: activeTab === 'identity' }" @click="activeTab = 'identity'">身份</button><button type="button" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型服务</button><button type="button" :class="{ active: activeTab === 'voice' }" @click="activeTab = 'voice'">双流语音</button></nav>
+          <nav v-if="isAdmin" class="management-tabs" aria-label="机器人管理分类"><button type="button" :class="{ active: activeTab === 'identity' }" @click="activeTab = 'identity'">身份</button><button type="button" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型服务</button><button type="button" :class="{ active: activeTab === 'voice' }" @click="activeTab = 'voice'">双流语音</button></nav>
           <AgentIdentityPanel v-if="activeTab === 'identity'" :profile="profile" :busy="busy" :error="error" @save="emit('save', $event)">
             <template #actions>
               <button class="quiet-button" type="button" :disabled="busy" @click="emit('close')">取消</button>

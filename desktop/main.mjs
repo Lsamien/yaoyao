@@ -7,8 +7,11 @@ import { DesktopServiceManager } from './service-manager.mjs'
 import { DesktopRunnerManager } from './runner-manager.mjs'
 import { DesktopPreferences } from './preferences.mjs'
 import { DesktopCredentials } from './credentials.mjs'
-import { synchronizeLocalService, stopLocalService } from './service-sync.mjs'
+import { synchronizeLocalService, stopLocalService, migrateLocalData } from './service-sync.mjs'
+import { resolveDataHome } from './data-home.mjs'
+import { DesktopEnvironmentHost } from './environment-host.mjs'
 import { DesktopUpdateManager } from './update-manager.mjs'
+import { installComputerViewer } from './computer-viewer.mjs'
 
 const desktopRoot = dirname(fileURLToPath(import.meta.url))
 const fixtureHome = process.env.HERMES_YAOYAO_DESKTOP_TEST_HOME
@@ -18,7 +21,10 @@ app.setName('夭夭')
 if (!app.requestSingleInstanceLock()) { app.quit() }
 else {
   let window, tray, manager, runnerManager, quitting = false, closing = false, timer
-  let updateWindow, updater
+  let updateWindow, updater, environmentHost
+  const closeComputerViewer = installComputerViewer({ owner: () => window, origin: () => manager?.state.url,
+    preload: join(desktopRoot, 'preload.cjs'), quitting: () => quitting })
+  app.on('will-quit', closeComputerViewer)
   const updateURL = pathToFileURL(join(desktopRoot, 'update.html')).href
   const bootURL = pathToFileURL(join(desktopRoot, 'boot.html')).href
   const root = app.isPackaged ? join(process.resourcesPath, 'runtime') : join(app.getAppPath(), '.desktop-build')
@@ -26,7 +32,7 @@ else {
   mkdirSync(logRoot, { recursive: true })
   const logFile = join(logRoot, 'server.log')
   const log = text => appendFileSync(logFile, `${new Date().toISOString()} ${text.trim()}\n`, { mode: 0o600 })
-  const home = fixtureHome || process.env.HERMES_YAOYAO_HOME || join(homedir(), '.hermes-yaoyao')
+  const home = fixtureHome || resolveDataHome(process.env.YAOYAO_HOME || process.env.HERMES_YAOYAO_HOME)
   const preferences = new DesktopPreferences(home)
   let startHidden = false
   const port = Number(process.env.HERMES_YAOYAO_DESKTOP_PORT || 15300)
@@ -55,7 +61,7 @@ else {
       if (action === 'check') return updater.check()
       if (action === 'download') return updater.download()
       if (action === 'cancel') { updater.cancel(); return updater.snapshot() }
-      if (action === 'release') { safeExternal(updater.snapshot().releasePageUrl || 'https://github.com/Lsamien/hermes-yaoyao/releases'); return }
+      if (action === 'release') { safeExternal(updater.snapshot().releasePageUrl || 'https://github.com/Lsamien/yaoyao/releases'); return }
       const path = await updater.verifiedFile()
       if (closing || quitting || !trustedUpdate(event)) return
       if (action === 'folder') shell.showItemInFolder(path)
@@ -111,8 +117,10 @@ else {
       catch { return false }
     }
     window.webContents.session.setPermissionCheckHandler((contents, permission, origin) =>
-      trustedService(contents, origin) && ['media', 'notifications', 'clipboard-sanitized-write'].includes(permission))
+      closeComputerViewer.owns(contents) ? ['fullscreen', 'clipboard-sanitized-write'].includes(permission)
+        : trustedService(contents, origin) && ['media', 'notifications', 'clipboard-sanitized-write'].includes(permission))
     window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+      if (closeComputerViewer.owns(contents)) { callback(['fullscreen', 'clipboard-sanitized-write'].includes(permission)); return }
       if (!trustedService(contents, details.requestingUrl)) { callback(false); return }
       if (permission === 'media' && details.mediaTypes?.length && details.mediaTypes.every(type => type === 'audio')) {
         void systemPreferences.askForMediaAccess('microphone').then(callback, () => callback(false))
@@ -155,6 +163,7 @@ else {
     // Both cleanup and the final quit must run after that callback unwinds.
     setImmediate(() => { void (async()=>{
       try {
+        await environmentHost?.close()
         await runnerManager?.stop()
         if (stopBackground) await manager?.stopBackground()
         else await manager?.stop()
@@ -192,6 +201,7 @@ else {
       fetchImpl: (...args) => net.fetch(...args) })
     app.setAboutPanelOptions({applicationName:'夭夭',applicationVersion:packageVersion,version:`${String(buildInfo.commit).slice(0,12)}${buildInfo.dirty?' · 工作区快照':''}`})
     manager = new DesktopServiceManager({ home, port, version: packageVersion, log, onState: stateChanged,
+      prepareHome: !fixtureHome ? onProgress => migrateLocalData({ home, port, root, onProgress }) : undefined,
       stopBackground: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
         ? onProgress => stopLocalService({home,port,root,fixture:Boolean(fixtureHome),onProgress}) : undefined,
       synchronize: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
@@ -210,9 +220,9 @@ else {
         return utilityProcess.fork(join(root, 'server.mjs'), [], { cwd: root, env, stdio: 'pipe' })
       },
     })
+    environmentHost=new DesktopEnvironmentHost({manager,root,dataRoot:app.getPath('userData')})
     const { parseRunnerConfiguration } = await import(pathToFileURL(join(root,'runner-config.mjs')).href)
-    mkdirSync(home,{recursive:true,mode:0o700})
-    const credentials=new DesktopCredentials({home:realpathSync(home),helper:join(root,app.isPackaged?'keychain-helper':'keychain-helper-dev'),legacyDecrypt:async bytes=>(await safeStorage.decryptStringAsync(bytes)).result})
+    const credentials=new DesktopCredentials({home,helper:join(root,app.isPackaged?'keychain-helper':'keychain-helper-dev'),legacyDecrypt:async bytes=>(await safeStorage.decryptStringAsync(bytes)).result})
     runnerManager = new DesktopRunnerManager({home,validate:parseRunnerConfiguration,
       encrypt:value=>credentials.encrypt(value),
       decrypt:bytes=>credentials.decrypt(bytes),
@@ -242,6 +252,7 @@ else {
         { type: 'separator' },
         { role: 'hide', label: '隐藏夭夭' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' },
         { type: 'separator' },
+        {label:'撤销本机控制授权',click:()=>environmentHost.revoke()},
         { id:'desktop-quit',label:'退出夭夭（后台继续运行）',accelerator:'CommandOrControl+Q',click:()=>requestQuit() },
         { id:'desktop-stop-and-quit',label:'停止后台服务并退出',click:()=>requestQuit(true) }] },
       {label:'执行节点',submenu:[{id:'runner-status',label:'未配置执行节点',enabled:false},{type:'separator'},
@@ -260,6 +271,7 @@ else {
     powerMonitor.on('resume', () => { if(!closing&&!quitting)void manager.check() })
     timer = setInterval(() => { void manager.check() }, 10_000); timer.unref()
     await manager.start().catch(error => log(error.message))
-    if(!closing)await runnerManager.start().catch(error=>{runnerManager.publish(error.message)})
+    if(!closing)environmentHost.start()
+    if(!closing&&manager.state.phase==='ready')await runnerManager.start().catch(error=>{runnerManager.publish(error.message)})
   }).catch(error => { log(error.stack || error.message); quitting = true; app.quit() })
 }

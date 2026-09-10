@@ -137,7 +137,7 @@ export class ComputerPool {
       if(!this.ready||this.closing||this.maintenance)throw new ComputerError('computer_busy','本地虚拟机正在维护')
       let entry=this.get(spec.id)
       if(entry?.spec.ownerKey!==undefined&&entry.spec.ownerKey!==spec.ownerKey)throw new ComputerError('computer_owner_mismatch','虚拟机归属不匹配')
-      if(entry&&!['free','idle'].includes(entry.status))throw new ComputerError('computer_busy','请先停止 Agent 任务并交还控制权')
+      if(entry&&!['free','idle'].includes(entry.status))throw new ComputerError('computer_busy','请先停止机器人任务并交还控制权')
       const starts=['create','start','recreate'].includes(action)
       if(starts&&this.rows().filter(row=>row.status!=='free'&&row.spec.id!==spec.id).length>=this.limits.concurrent)throw new ComputerError('computer_quota','本地虚拟机数量已达上限，请先停止另一台桌面')
       if(!entry&&!starts)return

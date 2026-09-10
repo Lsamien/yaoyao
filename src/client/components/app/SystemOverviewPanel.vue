@@ -71,7 +71,7 @@ watch(() => props.active, active => { if (active) void refresh() }, { immediate:
 <template>
   <section class="system-overview-panel" aria-label="系统概览">
     <div class="overview-toolbar">
-      <p>影响整个夭夭安装及所有 Agent，仅管理员可见。</p>
+      <p>影响整个夭夭安装及所有机器人，仅管理员可见。</p>
       <button type="button" :disabled="checking" @click="refresh"><AppIcon name="refresh" :size="16" />{{ checking ? '检查中…' : '检查系统状态' }}</button>
     </div>
     <p v-if="error" class="overview-warning" role="status">{{ error }}</p>

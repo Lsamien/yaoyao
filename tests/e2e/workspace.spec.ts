@@ -32,7 +32,7 @@ test('separates writable Web chats from read-only Hermes history', async ({ page
   await expect(page).toHaveURL(/\/history/)
   await expect(page.getByText('选择历史记录', { exact: true })).toBeVisible()
   await expect(sidebar.getByText('Hermes 外部历史', { exact: true })).toBeVisible()
-  await expect(sidebar.getByText('夭夭 Web 验收会话', { exact: true })).toHaveCount(0)
+  await expect(sidebar.getByText('夭夭 AI 验收会话', { exact: true })).toHaveCount(0)
   await sidebar.getByText('Hermes 外部历史', { exact: true }).click()
   await expect(page).toHaveURL(/\/history\/session-history-only/)
   await expect(page.locator('.composer-shell')).toHaveCount(0)
@@ -86,7 +86,7 @@ test.skip('navigates every 9119 workspace without blank transitions', async ({ p
   const consoleErrors: string[] = []
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()) })
 
-  await expect(page.getByRole('option').first()).toContainText('夭夭 Web 验收会话')
+  await expect(page.getByRole('option').first()).toContainText('夭夭 AI 验收会话')
   await expect(page.getByRole('option').first()).toContainText('夭夭')
   await expect(page.locator('.desktop-sidebar').getByText('已置顶 1', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '团队' }).click()
@@ -142,7 +142,7 @@ test.skip('navigates every 9119 workspace without blank transitions', async ({ p
 
 test.skip('uses the active session or group title in the browser title', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
-  await expect(page).toHaveTitle('夭夭 Web 验收会话 · 夭夭')
+  await expect(page).toHaveTitle('夭夭 AI 验收会话 · 夭夭')
 
   await page.goto('/groups/group-demo')
   await expect(page).toHaveTitle('设计与工程协作 · 夭夭')
@@ -337,7 +337,7 @@ test('previews an octet-stream Markdown file from the file library', async ({ pa
             size: 48,
             modifiedAt: Date.now() / 1000,
             exists: true,
-            origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 Web 验收会话' }],
+            origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 AI 验收会话' }],
           }, {
             id: 'empty-markdown-file',
             path: '/tmp/空白说明.md',
@@ -347,7 +347,7 @@ test('previews an octet-stream Markdown file from the file library', async ({ pa
             size: 0,
             modifiedAt: Date.now() / 1000,
             exists: true,
-            origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 Web 验收会话' }],
+            origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 AI 验收会话' }],
           }],
           nextCursor: null,
           total: 2,
@@ -401,7 +401,7 @@ test('keeps DOCX body at 36px inset with zero canvas margin', async ({ page }) =
             size: 1024,
             modifiedAt: Date.now() / 1000,
             exists: true,
-            origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 Web 验收会话' }],
+            origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 AI 验收会话' }],
           }],
           nextCursor: null,
           total: 1,
@@ -491,7 +491,7 @@ test('keeps pins first and loads the next session page at the list bottom', asyn
   const sidebar = page.locator('.desktop-sidebar')
   const items = sidebar.locator('.sidebar-list [role="option"]')
   await expect(items).toHaveCount(100)
-  await expect(items.first()).toContainText('夭夭 Web 验收会话')
+  await expect(items.first()).toContainText('夭夭 AI 验收会话')
   await expect(sidebar.getByRole('button', { name: '继续加载会话' })).toBeVisible()
 
   const list = sidebar.locator('.sidebar-list')
@@ -989,7 +989,7 @@ test('uses the unified Grok-style sidebar, search trigger, and persistent collap
   await expect(sidebar.locator('.sidebar-search')).toHaveCount(0)
   const originalSessionCount = await sidebar.getByRole('option').count()
   await search.fill('验收')
-  const sessionResult = searchDialog.getByRole('option', { name: /夭夭 Web 验收会话/ })
+  const sessionResult = searchDialog.getByRole('option', { name: /夭夭 AI 验收会话/ })
   await expect(sessionResult).toBeVisible()
   await expect(sidebar.getByRole('option')).toHaveCount(originalSessionCount)
   await sessionResult.click()

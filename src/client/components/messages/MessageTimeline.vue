@@ -307,7 +307,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
             </template>
             <template v-else>
             <div v-if="message.role !== 'assistant' || showAssistantIdentity" class="message__meta">
-              <strong><AppIcon v-if="message.isRemoteAgent" class="message__remote-agent" name="globe" :size="12" />{{ message.role === 'user' ? '你' : message.author || message.profile || (message.role === 'assistant' ? 'Agent' : '系统') }}</strong>
+              <strong><AppIcon v-if="message.isRemoteAgent" class="message__remote-agent" name="globe" :size="12" />{{ message.role === 'user' ? '你' : message.author || message.profile || (message.role === 'assistant' ? '机器人' : '系统') }}</strong>
               <span v-if="message.metadata" class="message__execution">{{ message.metadata }}</span>
               <time>{{ formatTime(message.createdAt) }}</time>
               <span v-if="message.status && !['settled', 'streaming'].includes(message.status)">{{ { preparing: '准备中', attached: '附件已就绪', pending: '等待回执', accepted: '已接收', streaming: '生成中', settled: '已完成', failed: '发送失败', 'unknown-receipt': '回执未知' }[message.status] }}</span>

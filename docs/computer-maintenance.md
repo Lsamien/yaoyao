@@ -30,7 +30,7 @@ node .runner-build/runner-maintenance.mjs restore --config /安全目录/runner.
 node .runner-build/runner-maintenance.mjs rebuild --config /安全目录/runner.json --environment UUID
 ```
 
-CLI 默认数据目录为配置旁的 `state/<runnerId>`。App 托管节点的数据目录是 `~/.hermes-yaoyao/runner-state/<runnerId>`，维护时用 `--home` 显式指定该目录，并使用原始私有配置文件；App 加密配置不能直接当作 JSON 读取。
+CLI 默认数据目录为配置旁的 `state/<runnerId>`。App 托管节点的数据目录是 `~/.yaoyao/runner-state/<runnerId>`，维护时用 `--home` 显式指定该目录，并使用原始私有配置文件；App 加密配置不能直接当作 JSON 读取。
 
 备份包含工作文件及持久浏览器资料，不包含运行中的内存、进程、模型密钥、Runner 身份或整个宿主 HOME。目录设为仅当前用户访问，浏览器资料仍可能包含登录状态，应作为私有数据保存。每份备份有账号/环境归属和逐文件校验；普通文件、目录、符号链接保留，不复制运行时 socket。上限为 20 GiB、20 万项。
 

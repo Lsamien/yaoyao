@@ -1,4 +1,4 @@
-# Docker 部署夭夭 Web
+# Docker 部署夭夭 AI
 
 ## 准备
 
@@ -94,14 +94,14 @@ node yaoyao-runner/runner.mjs --config /完整路径/runner.json
 
 ## 数据与备份
 
-Compose 使用 `yaoyao-data` 命名卷，挂载到 `/var/lib/hermes-yaoyao`。账号、SQLite 数据库、聊天缓存、文件及密钥随数据卷持久保存。固定桌面部署还必须备份每台桌面的 `desktop-*-workspace` 卷；`desktop-*-ipc` 卷只是连接通道。
+Compose 使用 `yaoyao-data` 命名卷，挂载到 `/home/node/.yaoyao`。账号、SQLite 数据库、聊天缓存、文件及密钥随数据卷持久保存。固定桌面部署还必须备份每台桌面的 `desktop-*-workspace` 卷；`desktop-*-ipc` 卷只是连接通道。
 
 备份时先停止 Web，然后复制完整数据目录，再启动服务：
 
 ```sh
 mkdir -p backups
 docker compose --env-file docker.env stop web
-docker compose --env-file docker.env cp web:/var/lib/hermes-yaoyao/. ./backups/
+docker compose --env-file docker.env cp web:/home/node/.yaoyao/. ./backups/
 docker compose --env-file docker.env start web
 ```
 

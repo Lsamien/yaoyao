@@ -152,12 +152,12 @@ function create() {
         <section class="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-group-title">
           <header><div><small>9119 团队</small><h2 id="create-group-title">新建团队</h2></div><button class="icon-button" type="button" aria-label="关闭" @click="emit('close')"><AppIcon name="close" /></button></header>
           <section class="preset-picker" aria-labelledby="team-preset-label">
-            <div class="preset-picker__heading"><span id="team-preset-label">团队预设</span><small>选择后自动分配现有 Agent</small></div>
+            <div class="preset-picker__heading"><span id="team-preset-label">团队预设</span><small>选择后自动分配现有机器人</small></div>
             <div class="preset-grid">
               <button type="button" :class="{ selected: selectedPresetId === 'custom' }" @click="choosePreset()">
-                <strong>自定义团队</strong><small>手动选择 Agent 和协作配置</small><em>自由配置</em>
+                <strong>自定义团队</strong><small>手动选择机器人和协作配置</small><em>自由配置</em>
               </button>
-              <button v-for="preset in TEAM_PRESETS" :key="preset.id" type="button" :class="{ selected: selectedPresetId === preset.id }" :disabled="presetShortage(preset) > 0" :aria-label="`${preset.name}，${preset.roles.length} 人${presetShortage(preset) ? `，还缺 ${presetShortage(preset)} 个 Agent` : ''}`" @click="choosePreset(preset)">
+              <button v-for="preset in TEAM_PRESETS" :key="preset.id" type="button" :class="{ selected: selectedPresetId === preset.id }" :disabled="presetShortage(preset) > 0" :aria-label="`${preset.name}，${preset.roles.length} 人${presetShortage(preset) ? `，还缺 ${presetShortage(preset)} 个机器人` : ''}`" @click="choosePreset(preset)">
                 <strong>{{ preset.name }}</strong><small>{{ preset.summary }}</small><em>{{ presetShortage(preset) ? `还缺 ${presetShortage(preset)} 人` : `${preset.roles.length} 人` }}</em>
               </button>
             </div>
@@ -169,22 +169,22 @@ function create() {
             <input ref="avatarInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" @change="chooseAvatar" />
           </section>
           <p v-if="avatarError" class="avatar-error" role="alert">{{ avatarError }}</p>
-          <label v-if="roomInstructionsEnabled" class="field room-instructions"><span>说明 <small>供所有 Agent 查阅的规则和形式准则</small></span><textarea v-model="instructions" maxlength="4000" rows="4" placeholder="例如：先确认事实；结论使用中文；涉及发布必须等待确认。" /></label>
+          <label v-if="roomInstructionsEnabled" class="field room-instructions"><span>说明 <small>供所有机器人查阅的规则和形式准则</small></span><textarea v-model="instructions" maxlength="4000" rows="4" placeholder="例如：先确认事实；结论使用中文；涉及发布必须等待确认。" /></label>
           <section v-if="selectedPreset" class="role-mapping" aria-labelledby="role-mapping-label">
-            <div class="role-mapping__heading"><span id="role-mapping-label">角色分配</span><small>{{ selectedPreset.roles.length }} 个角色已对应当前 Agent</small></div>
+            <div class="role-mapping__heading"><span id="role-mapping-label">角色分配</span><small>{{ selectedPreset.roles.length }} 个角色已对应当前机器人</small></div>
             <label v-for="(role, index) in selectedPreset.roles" :key="role.name">
               <span><strong>{{ role.name }}<em v-if="hostEnabled && role.host">管理员</em></strong><small>{{ role.description }}</small></span>
-              <select :value="selected[index]" :aria-label="`${role.name}对应的 Agent`" @change="assignRole(index, ($event.target as HTMLSelectElement).value)">
+              <select :value="selected[index]" :aria-label="`${role.name}对应的机器人`" @change="assignRole(index, ($event.target as HTMLSelectElement).value)">
                 <option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.displayName }} · {{ profile.nodeLabel }}</option>
               </select>
             </label>
           </section>
           <div v-else class="agent-picker">
-            <div class="agent-picker__heading"><span>选择 Agent</span><small>{{ selected.length }}/8</small></div>
+            <div class="agent-picker__heading"><span>选择机器人</span><small>{{ selected.length }}/8</small></div>
             <button v-for="profile in profiles" :key="profile.id" type="button" :class="{ selected: selected.includes(profile.id) }" :disabled="!selected.includes(profile.id) && selected.length >= 8" @click="toggle(profile)">
               <AgentAvatar :name="profile.displayName" :avatar="profile.avatar || ''" :size="28" /><strong>{{ profile.displayName }}<small>{{ profile.profile }} · {{ profile.nodeLabel }}</small></strong><AppIcon v-if="selected.includes(profile.id)" name="check" :size="15" />
             </button>
-            <p v-if="!profiles.length">当前没有可用 Agent，请先在 Hermes 配置 Profile。</p>
+            <p v-if="!profiles.length">当前没有可用机器人，请先在 Hermes 配置 Profile。</p>
           </div>
           <label v-if="hostEnabled && !selectedPreset" class="host-picker">
             <span>管理员<small>用户没有明确 @ 时，管理员始终负责回应。</small></span>

@@ -46,7 +46,7 @@ function readProfileEntries(value: JsonValue): Record<string, JsonValue>[] {
 function validateIdentity(input: ProfileIdentityInput): ProfileIdentityInput {
   const title = input.title.trim().replace(/\s+/g, ' ')
   if (!title || title.length > MAX_AGENT_NAME_LENGTH || /[\u0000-\u001f\u007f]/.test(title)) {
-    throw new Error(`Agent 名称应为 1 至 ${MAX_AGENT_NAME_LENGTH} 个字符`)
+    throw new Error(`机器人名称应为 1 至 ${MAX_AGENT_NAME_LENGTH} 个字符`)
   }
   const avatarDataURL = input.avatarDataURL === undefined ? undefined : input.avatarDataURL?.trim() || null
   if (avatarDataURL && (avatarDataURL.length > MAX_AGENT_AVATAR_LENGTH || !avatarDataURLPattern.test(avatarDataURL))) {
@@ -79,7 +79,7 @@ export async function updateProfileIdentity(profile: Profile, input: ProfileIden
   try {
     const listed = await control.request('profiles.list', { include_sessions: false })
     const current = readProfileEntries(listed).find(item => String(item.name ?? '') === profile.name)
-    if (!current) throw new Error('该 Agent 已不存在，请刷新后重试')
+    if (!current) throw new Error('该机器人已不存在，请刷新后重试')
     const revisions = jsonObject(current.ui_meta_revisions)
     const revision = typeof revisions[YAOYAO_AGENT_IDENTITY_NAMESPACE] === 'number'
       ? revisions[YAOYAO_AGENT_IDENTITY_NAMESPACE] as number

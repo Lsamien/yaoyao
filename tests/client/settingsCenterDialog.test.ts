@@ -5,7 +5,7 @@ import type { Profile } from '@shared/types'
 import SettingsCenterDialog from '@/components/app/SettingsCenterDialog.vue'
 
 const profiles: Profile[] = [
-  { name: 'ops:blue/team', agentName: '运维 Agent', isDefault: false },
+  { name: 'ops:blue/team', agentName: '运维机器人', isDefault: false },
   { name: 'default', agentName: '丫头', isDefault: true },
 ]
 
@@ -85,7 +85,7 @@ describe('Settings center dialog', () => {
     const wrapper = mountSettings()
 
     expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual([
-      '当前 Agent',
+      '当前机器人',
       '账号',
       '系统 · 仅管理员',
     ])
@@ -94,7 +94,7 @@ describe('Settings center dialog', () => {
     expect(navigationButton(wrapper, '模型与 Provider').attributes('aria-current')).toBe('page')
     const modelPanel = wrapper.get('[data-testid="model-services"]')
     expect(modelPanel.attributes('data-profile')).toBe('ops:blue/team')
-    expect(wrapper.get('.settings-content__header').text()).toContain('正在设置：运维 Agent / ops:blue/team')
+    expect(wrapper.get('.settings-content__header').text()).toContain('正在设置：运维机器人 / ops:blue/team')
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
@@ -114,7 +114,7 @@ describe('Settings center dialog', () => {
     const wrapper = mountSettings({ isAdmin: false, initialPage: 'system-update' })
     const navigation = wrapper.get('.settings-sidebar nav')
 
-    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['当前 Agent', '账号'])
+    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['当前机器人', '账号'])
     expect(navigation.text()).not.toContain('模型与 Provider')
     expect(navigation.text()).not.toContain('系统 · 仅管理员')
     expect(navigation.text()).not.toContain('系统概览')

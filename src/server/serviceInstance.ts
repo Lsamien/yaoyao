@@ -60,9 +60,9 @@ export function acquireServiceInstance(home: string, version: string, desktopOwn
       } catch { /* Never remove a lock that can no longer be identified. */ }
       finally { lock.close() }
     },
-    middleware(shutdown: () => Promise<void>, idle: () => boolean = () => true): Koa.Middleware {
+    middleware(shutdown: () => Promise<void>, idle: () => boolean = () => true, environment?: (ctx:Koa.Context)=>Promise<void>): Koa.Middleware {
       return async (ctx, next) => {
-        const control = ctx.path === '/desktop/service' || ctx.path === '/desktop/service/quiesce'
+        const control = ctx.path === '/desktop/environment' || ctx.path === '/desktop/service' || ctx.path === '/desktop/service/quiesce'
         if (!control) {
           if(stopping){ctx.status=503;ctx.body={error:'后台服务正在停止',code:'service_stopping'};return}
           if (quiesced() && !['/healthz', '/readyz', '/api/status'].includes(ctx.path)) {
@@ -79,6 +79,7 @@ export function acquireServiceInstance(home: string, version: string, desktopOwn
         const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ctx.req.socket.remoteAddress ?? '')
         if (!local || ctx.get('origin') || !timingSafeEqual(received, expected)) { ctx.status = 403; ctx.body = { error: '桌面服务授权无效' }; return }
         ctx.set('Cache-Control', 'no-store')
+        if(ctx.path==='/desktop/environment'){if(environment){try{await environment(ctx)}catch(error){ctx.status=(error as any).status??500;ctx.body={error:ctx.status<500?(error as Error).message:'桌面连接请求失败',code:(error as any).code??'desktop_error'}}}else ctx.status=404;return}
         if (ctx.path.endsWith('/quiesce')) {
           if (ctx.method === 'POST') {
             if (pendingMutations || !idle()) { ctx.status = 409; ctx.body = { error: '正在等待任务完成', code: 'service_busy' }; return }

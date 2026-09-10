@@ -25,7 +25,7 @@ const clean = (commit: string, ancestors: string[] = [], version = '0.3.32') => 
 it.skipIf(process.platform !== 'darwin')('persists official source migration while preserving custom sources and other service settings', () => {
   const home = temporary(), plistPath = join(home, 'fixture.plist')
   const driver = new LaunchAgentService({ home, port: 18899, releaseRoot: join(home, 'releases'), label: 'fixture', plistPath })
-  for (const [source, expected] of [['https://git.samien.cn/samien/hermes-yaoyao.git', 'https://github.com/Lsamien/hermes-yaoyao.git'], ['https://private.example/fork.git', 'https://private.example/fork.git']]) {
+  for (const [source, expected] of [['https://git.samien.cn/samien/hermes-yaoyao.git', 'https://github.com/Lsamien/yaoyao.git'], ['https://private.example/fork.git', 'https://private.example/fork.git']]) {
     driver.writePlist({ Label: 'fixture', EnvironmentVariables: { HERMES_YAOYAO_RELEASE_SOURCE: source, HERMES_YAOYAO_TLS_CERT: '/fixture/cert', CUSTOM_SETTING: 'preserve' } })
     const restored = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath], { encoding: 'utf8' }))
     expect(restored.EnvironmentVariables).toEqual({ HERMES_YAOYAO_RELEASE_SOURCE: expected, HERMES_YAOYAO_TLS_CERT: '/fixture/cert', CUSTOM_SETTING: 'preserve' })

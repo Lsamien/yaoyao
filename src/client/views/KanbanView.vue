@@ -101,7 +101,7 @@ async function deleteTask(): Promise<void> {
 }
 
 async function dispatchNow(): Promise<void> {
-  if (!window.confirm('立即运行一次看板调度？就绪任务可能马上启动 Agent。')) return
+  if (!window.confirm('立即运行一次看板调度？就绪任务可能马上启动机器人。')) return
   try { await kanban.dispatch() } catch { /* store exposes the error */ }
 }
 
@@ -188,7 +188,7 @@ onBeforeUnmount(() => kanban.reset())
 
         <div class="kanban-filters">
           <label class="kanban-search"><AppIcon name="search" :size="14" /><input v-model="kanban.search" type="search" placeholder="搜索标题、描述或任务 ID" /></label>
-          <label><span>Agent</span><select v-model="kanban.assignee"><option value="">全部</option><option v-for="value in kanban.snapshot?.assignees || []" :key="value" :value="value">{{ value }}</option></select></label>
+          <label><span>机器人</span><select v-model="kanban.assignee"><option value="">全部</option><option v-for="value in kanban.snapshot?.assignees || []" :key="value" :value="value">{{ value }}</option></select></label>
           <label><span>租户</span><select v-model="kanban.tenant"><option value="">全部</option><option v-for="value in kanban.snapshot?.tenants || []" :key="value" :value="value">{{ value }}</option></select></label>
           <label class="kanban-archived-toggle"><input :checked="kanban.includeArchived" type="checkbox" @change="kanban.setIncludeArchived(($event.target as HTMLInputElement).checked)" /><span>显示归档</span></label>
           <span class="kanban-filter-count">{{ visibleTaskCount }} 项</span>

@@ -237,7 +237,7 @@ export class LocalAuthStore {
 
   validateAssignedProfiles(value: unknown): string[] {
     if (!Array.isArray(value) || value.length > 256 || value.some(p => typeof p !== 'string' || !p.trim() || p.length > 256 || /[\/\\\u0000-\u001f]/.test(p))) {
-      throw new HttpError(400, '分配的基础 Agent 无效', 'invalid_assigned_profiles')
+      throw new HttpError(400, '分配的基础机器人无效', 'invalid_assigned_profiles')
     }
     return [...new Set(value.map(p => p.trim()))]
   }

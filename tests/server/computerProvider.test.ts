@@ -1,14 +1,14 @@
 // @vitest-environment node
 import {afterEach,expect,it} from 'vitest'
 import {randomUUID} from 'node:crypto'
-import {mkdtemp,rm,symlink,mkdir} from 'node:fs/promises'
+import {mkdtemp,rm,symlink,mkdir,rename,writeFile,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {ContainerComputerProvider,type ContainerCommand,type ComputerSpecification} from '../../src/runner/computers/container'
 const homes:string[]=[]
 afterEach(async()=>{await Promise.all(homes.splice(0).map(home=>rm(home,{recursive:true,force:true})))})
 async function fixture(runtime:'docker'|'podman'='docker'){
-  const home=await mkdtemp(join(tmpdir(),'yaoyao-computer-unit-'));homes.push(home)
+  const home=await realpath(await mkdtemp(join(tmpdir(),'yaoyao-computer-unit-')));homes.push(home)
   const spec:ComputerSpecification={id:randomUUID(),ownerKey:randomUUID(),imageId:`sha256:${'a'.repeat(64)}`}
   let detail:any
   const calls:string[][]=[]
@@ -88,4 +88,26 @@ it('checks authority again after asynchronous inspection, before a guest command
   },{})
   await expect(provider.execute(f.spec,['true'],{authorize:()=>{if(!active)throw new Error('revoked')}})).rejects.toThrow('revoked')
   expect(f.calls.some(args=>args[0]==='exec')).toBe(false)
+})
+
+it('recreates a migrated mount while retaining the stopped original container and persistent workspace',async()=>{
+  const f=await fixture(),oldRoot=join(f.home,'.hermes-yaoyao'),newRoot=join(f.home,'.yaoyao')
+  const oldHome=join(oldRoot,'runner-state/r1'),newHome=join(newRoot,'runner-state/r1')
+  await mkdir(oldHome,{recursive:true})
+  const provider=new ContainerComputerProvider('docker',f.provider.runnerId,oldHome,f.run,{})
+  await provider.ensure(f.spec,()=>{});await provider.stop(f.spec)
+  await writeFile(join(oldHome,'computer-workspaces',f.spec.id,'keep.txt'),'keep workspace')
+  await rename(oldRoot,newRoot)
+  await writeFile(join(newRoot,'.data-home-migration.json'),JSON.stringify({source:oldRoot,target:newRoot,phase:'complete'}))
+  let renamed=false
+  const next=new ContainerComputerProvider('docker',f.provider.runnerId,newHome,async(runtime,args,options)=>{
+    if(args[0]==='rename'){renamed=true;expect(args[1]).toBe(f.detail.Id);expect(args[2]).toContain('-before-data-move-');return {stdout:'',stderr:''}}
+    if(args[0]==='inspect'&&renamed&&args[1]!==f.detail.Id)throw Object.assign(new Error('missing'),{stderr:'No such object'})
+    if(args[0]==='create')renamed=false
+    return f.run(runtime,args,options)
+  },{})
+  const state=await next.ensure(f.spec,()=>{})
+  expect(state.workspace).toContain('/.yaoyao/')
+  await expect((await import('node:fs/promises')).readFile(join(state.workspace,'keep.txt'),'utf8')).resolves.toBe('keep workspace')
+  expect(f.calls.filter(args=>args[0]==='rm')).toHaveLength(0)
 })

@@ -118,7 +118,7 @@ export class RunnerHub {
       if(computer&&this.composeDesktops.desktops.length){
         if(!this.online.get(record.id)?.features.includes('compose-desktops-v1'))throw new HttpError(409,'当前部署需要 Compose 桌面执行节点','compose_runner_required')
         const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',computer.environmentId)
-        if(!this.composeDesktops.desktops.some(d=>d.id===computer.environmentId)||claim?.owner!==owner||claim.runnerId!==record.id)throw new HttpError(409,'请先为 Agent 选择已有 Compose 共享桌面','compose_desktop_required')
+        if(!this.composeDesktops.desktops.some(d=>d.id===computer.environmentId)||claim?.owner!==owner||claim.runnerId!==record.id)throw new HttpError(409,'请先为机器人选择已有 Compose 共享桌面','compose_desktop_required')
       }
       if(computer&&!this.online.get(record.id)?.features.includes('computer-worker-v1'))throw new HttpError(409,'执行节点未提供隔离 Worker 能力，请检查配置或更新 Runner','computer_unavailable')
       if(computer&&computer.environmentId!==computer.agentId&&!this.online.get(record.id)?.features.includes('shared-computer-v1'))throw new HttpError(409,'执行节点不支持共享电脑，请更新 Runner','shared_computer_unavailable')

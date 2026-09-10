@@ -113,6 +113,7 @@ export class DesktopServiceManager {
     const generation = ++this.generation
     this.publish({ phase: 'starting', message: '正在启动本地服务…' })
     try {
+      await this.options.prepareHome?.(message => this.publish({ phase: 'starting', message }))
       await mkdir(this.options.home, { recursive: true, mode: 0o700 })
       this.root = await realpath(this.options.home)
       this.updateNotice = undefined

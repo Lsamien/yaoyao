@@ -107,7 +107,7 @@ const sessions = [
   // intentionally absent from the Web user's registry and must stay history-only.
   { id: 'session-history-only', profile: 'yaoyao', source: 'web', title: 'Hermes 外部历史', preview: '只读历史记录', message_count: 1, tool_call_count: 0, started_at: now() - 1800, last_active_at: now() - 900, model: 'gpt-5.6', provider: 'openai' },
   { id: 'session-second', profile: 'yaoyao', source: 'web', title: '第二个会话', preview: '用于验证列表和切换', message_count: 2, tool_call_count: 0, started_at: now() - 7200, last_active_at: now() - 600, model: 'gpt-5.5', provider: 'openai' },
-  { id: 'session-demo', profile: 'yaoyao', source: 'web', title: '夭夭 Web 验收会话', preview: '文件库与群聊已经就绪', message_count: 4, tool_call_count: 1, started_at: now() - 3600, last_active_at: now(), pinned: true, model: 'gpt-5.6', provider: 'openai' },
+  { id: 'session-demo', profile: 'yaoyao', source: 'web', title: '夭夭 AI 验收会话', preview: '文件库与群聊已经就绪', message_count: 4, tool_call_count: 1, started_at: now() - 3600, last_active_at: now(), pinned: true, model: 'gpt-5.6', provider: 'openai' },
   { id: 'session-yaoer', profile: 'yaoer', source: 'web', title: '瑶儿专属会话', message_count: 1, tool_call_count: 0, started_at: now() - 3500, last_active_at: now() - 20, model: 'gpt-5.6', provider: 'openai' },
   { id: 'session-media', profile: 'yaoer', source: 'web', title: '瑶儿生成图片验收', message_count: 1, tool_call_count: 0, started_at: now() - 3400, last_active_at: now() - 30, model: 'gpt-5.6', provider: 'openai' },
   { id: 'session-user-media', profile: 'yaoer', source: 'web', title: '用户多图验收', message_count: 1, tool_call_count: 0, started_at: now() - 3300, last_active_at: now() - 40, model: 'gpt-5.6', provider: 'openai' },
@@ -453,7 +453,7 @@ const server = createServer(async (request, response) => {
     const items = selectedTopicId ? groupMessages.filter(message => message.topicId === selectedTopicId) : groupMessages
     return json(response, 200, { items })
   }
-  if (url.pathname === '/api/plugins/yaoyao/files') return json(response, 200, { items: [{ id: 1, path: '/tmp/demo-report.pdf', name: 'demo-report.pdf', extension: 'pdf', mimeType: 'application/pdf', size: 204800, modifiedAt: now(), exists: true, origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 Web 验收会话', messageId: 'message-assistant', authorKind: 'assistant', authorName: '夭夭', observedAt: now() }] }], nextCursor: null, total: 1 })
+  if (url.pathname === '/api/plugins/yaoyao/files') return json(response, 200, { items: [{ id: 1, path: '/tmp/demo-report.pdf', name: 'demo-report.pdf', extension: 'pdf', mimeType: 'application/pdf', size: 204800, modifiedAt: now(), exists: true, origins: [{ profile: 'yaoyao', sessionId: 'session-demo', sessionTitle: '夭夭 AI 验收会话', messageId: 'message-assistant', authorKind: 'assistant', authorName: '夭夭', observedAt: now() }] }], nextCursor: null, total: 1 })
   if (url.pathname === '/api/plugins/yaoyao/1/download') {
     response.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': previewPdf.length })
     return response.end(previewPdf)

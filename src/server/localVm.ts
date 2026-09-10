@@ -30,6 +30,7 @@ export class LocalVmService {
     readonly hub:RunnerHub,readonly shared:SharedComputers,readonly config:ServerConfig) {
     store.prepareAgent=(owner,agent)=>{
       const record=this.record()
+      if(!this.fixed&&agent.computer==='auto'&&record){const state=this.hub.summary(record);if(state.online&&state.features.includes('local-vm-v1')&&state.features.includes('image-ready-v1'))agent.execution='computer'}
       if(this.fixed){const parent=agent.createdByAgentId?store.get<WorkspaceAgent>(owner,'agent',agent.createdByAgentId):undefined,desktop=this.config.composeDesktops?.find(d=>d.id===parent?.computerEnvironmentId);if(record&&desktop&&agent.execution==='computer'){if(agent.nodeId!=='local')throw new HttpError(409,'Compose 桌面成员须使用当前 Web 的 Hermes 来源','compose_source_required');this.shared.bindCompose(owner,agent,desktop,record.id,false)}return}
       if(record&&this.mode(owner)==='shared')this.shared.attachLocalVm(owner,agent,record.id)
     }
@@ -170,7 +171,7 @@ export class LocalVmService {
     router.put('/api/app/agents/:id/local-vm',ctx=>{
       const owner=this.auth.require(ctx).id,body=parse(z.object({enabled:z.boolean(),desktopId:z.string().uuid().optional()}).strict(),(ctx.request as any).body)
       const agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);this.nodes.requireSource(owner,agent)
-      if(agent.remoteAgentId||agent.temporaryGoalId)throw new HttpError(409,'请在该 Agent 所属的电脑上设置虚拟机','local_vm_remote')
+      if(agent.remoteAgentId||agent.temporaryGoalId)throw new HttpError(409,'请在该机器人所属的电脑上设置虚拟机','local_vm_remote')
       this.shared.assertLocalVmIdle(owner,[agent.id])
       if(this.fixed&&body.enabled){
         if(agent.nodeId!=='local')throw new HttpError(409,'Compose 桌面成员须使用当前 Web 的 Hermes 来源','compose_source_required')
@@ -181,7 +182,7 @@ export class LocalVmService {
       }
       ctx.body=this.store.atomic(()=>{
         if(!body.enabled)this.shared.detachLocalVm(owner,agent)
-        this.store.updateAgent(owner,agent.id,{execution:body.enabled?'computer':'profile'})
+        this.store.updateAgent(owner,agent.id,{execution:body.enabled?'computer':'profile',computer:body.enabled?'vm':'off'})
         if(body.enabled&&!this.fixed&&this.mode(owner)==='shared'){const record=this.record();if(record)this.shared.setLocalVmMode(owner,'shared',record.id)}
         return {agent:this.store.agentSummary(this.store.require<WorkspaceAgent>(owner,'agent',agent.id))}
       })
@@ -191,7 +192,7 @@ export class LocalVmService {
       const owner=this.auth.require(ctx).id,action=parse(z.enum(['create','start','stop','recreate','remove']),ctx.params.action)
       const agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id)
       if(agent.temporaryGoalId)throw new HttpError(409,'临时助手的虚拟机由当前任务管理','helper_task_bound')
-      if(agent.execution!=='computer'||agent.archived||agent.remoteAgentId)throw new HttpError(409,'此 Agent 未使用本地虚拟机','local_vm_disabled')
+      if(agent.execution!=='computer'||agent.archived||agent.remoteAgentId)throw new HttpError(409,'此机器人未使用本地虚拟机','local_vm_disabled')
       this.shared.assertLocalVmIdle(owner,agent.computerEnvironmentId?this.store.list<WorkspaceAgent>(owner,'agent').filter(a=>a.computerEnvironmentId===agent.computerEnvironmentId).map(a=>a.id):[agent.id])
       ctx.body=await this.hub.computer(owner,agent,'lifecycle',{action},()=>this.nodes.requireSource(owner,agent))
     })

@@ -1,5 +1,6 @@
 import { isIP } from 'node:net'
 import { normalizeReleaseSource } from '../../bin/lib/release-source.mjs'
+import { resolveDataHome } from '../../bin/lib/data-home.mjs'
 import { homedir } from 'node:os'
 import { basename, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -155,7 +156,7 @@ export function loadServerConfig(
   const host = env.HERMES_YAOYAO_HOST?.trim() || '127.0.0.1'
   const port = parsePort(env.HERMES_YAOYAO_PORT)
   const upstream = parseUpstream(env.HERMES_YAOYAO_UPSTREAM)
-  const home = resolve(env.HERMES_YAOYAO_HOME?.trim() || `${homedir()}/.hermes-yaoyao`)
+  const home = resolveDataHome(env.YAOYAO_HOME || env.HERMES_YAOYAO_HOME, { preserveActiveUpdate: true })
   const mediaRoot = resolve(env.HERMES_YAOYAO_MEDIA_ROOT?.trim() || `${homedir()}/Agents`)
   const attachmentsRoot = resolve(`${homedir()}/.hermes/attachments`)
   const imagesRoot = resolve(`${homedir()}/.hermes/images`)

@@ -14,6 +14,7 @@ docker.env
 *.key
 hermes-yaoyao-*.tar
 .hermes-yaoyao/
+.yaoyao/
 .codegraph/
 .desktop-build/
 desktop-release/

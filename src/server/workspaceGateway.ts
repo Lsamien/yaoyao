@@ -45,7 +45,7 @@ export class WorkspaceNodes {
   sourceAllowed: (owner: string, nodeId: string, profile: string) => boolean = () => true
   requireSource(owner: string, agent: { id?:string;nodeId: string; profile: string;computerEnvironmentId?:string }): void {
     requireSharedComputer(this.store,owner,agent)
-    if (!this.sourceAllowed(owner, agent.nodeId, agent.profile)) throw new HttpError(403, '基础 Agent 未分配给当前账号', 'agent_source_forbidden')
+    if (!this.sourceAllowed(owner, agent.nodeId, agent.profile)) throw new HttpError(403, '基础机器人未分配给当前账号', 'agent_source_forbidden')
   }
   private readonly key: Buffer
   private targets = new Map<string, GatewayTarget>()
@@ -109,7 +109,7 @@ export class WorkspaceNodes {
   }
   targetForAgent(owner: string, agent: { id?:string;nodeId: string; remoteAgentId?: string;execution?:string;helperRunnerId?:string;computerEnvironmentId?:string }): GatewayTarget {
     if(agent.execution==='computer'){
-      if(!agent.id||agent.remoteAgentId)throw new HttpError(409,'隔离电脑需要当前服务器管理的 Agent','computer_agent_required')
+      if(!agent.id||agent.remoteAgentId)throw new HttpError(409,'隔离电脑需要当前服务器管理的机器人','computer_agent_required')
       const target=this.runnerTarget?.(owner,agent.nodeId,{environmentId:agent.computerEnvironmentId??agent.id,agentId:agent.id,ownerKey:createHash('sha256').update(owner).digest('hex')})
       if(agent.computerEnvironmentId&&this.store.require<import('./sharedComputers.js').SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId).runnerId!==target?.runner?.id)throw new HttpError(409,'共享电脑的原执行节点已变化，请先恢复原节点','shared_runner_changed')
       if(agent.helperRunnerId&&target?.runner?.id!==agent.helperRunnerId)throw new HttpError(409,'临时助手的原执行节点已变化，请创建新助手','helper_runner_changed')
@@ -118,7 +118,7 @@ export class WorkspaceNodes {
     }
     const base = this.target(owner, agent.nodeId)
     if (!agent.remoteAgentId) return base
-    if (!base.pairedToken) throw new HttpError(409, '引用远端 Agent 需要扫码子节点', 'paired_node_required')
+    if (!base.pairedToken) throw new HttpError(409, '引用远端机器人需要扫码子节点', 'paired_node_required')
     const key = `${owner}:${agent.nodeId}:agent:${agent.remoteAgentId}`
     let target = this.targets.get(key)
     if (!target) {
@@ -126,7 +126,7 @@ export class WorkspaceNodes {
       const client = new UpstreamClient(url, base.client.fetchImpl)
       target = {url,client,pairedToken:token,session:{
         request:(path, options={})=>client.request(path,new CookieJar(),{...options,headers:{...options.headers,Authorization:`Bearer ${token}`}}),
-        webSocketCredential:async()=>{throw new Error('Remote Agent uses HTTP/SSE')},
+        webSocketCredential:async()=>{throw new Error('Remote 机器人 uses HTTP/SSE')},
       }}
       this.targets.set(key,target)
     }
@@ -141,10 +141,10 @@ export class WorkspaceNodes {
       const target=this.target(owner,nodeId)
       if (!target.pairedToken) throw new HttpError(409,'请先扫码添加远程子节点','paired_node_required')
       const response=await target.session.request('/api/workspace-agents')
-      if (response.status!==200) throw new HttpError(409,'远端需升级并重新扫码授权，才能添加 Bot 模式 Agent','remote_agents_unavailable')
+      if (response.status!==200) throw new HttpError(409,'远端需升级并重新扫码授权，才能添加 Bot 模式机器人','remote_agents_unavailable')
       const payload=JSON.parse(response.body.toString())
       const agents:Array<WorkspaceAgent>=Array.isArray(payload.agents) ? payload.agents.filter((a:WorkspaceAgent)=>!a.archived).map((a:WorkspaceAgent)=>{
-        if(typeof a.id!=='string'||!/^[0-9a-f-]{36}$/.test(a.id)) throw new HttpError(502,'远端 Agent 标识无效','invalid_remote_agent')
+        if(typeof a.id!=='string'||!/^[0-9a-f-]{36}$/.test(a.id)) throw new HttpError(502,'远端机器人标识无效','invalid_remote_agent')
         const fields=parse(agentInput,{name:a.name,avatar:a.avatar,instructions:a.instructions,nodeId:a.nodeId,profile:a.profile})
         return {...a,...fields}
       }) : []
@@ -165,7 +165,7 @@ export class WorkspaceNodes {
   }
   async importRemoteAgent(owner: string, nodeId: string, remoteAgentId: string): Promise<WorkspaceAgent> {
     const remote = (await this.remoteAgents(owner,nodeId,true)).find(a=>a.id===remoteAgentId)
-    if (!remote) throw new HttpError(404,'远端 Agent 不存在或已归档','remote_agent_not_found')
+    if (!remote) throw new HttpError(404,'远端机器人不存在或已归档','remote_agent_not_found')
     const existing = this.store.list<WorkspaceAgent>(owner,'agent').find(a=>a.nodeId===nodeId && a.remoteAgentId===remoteAgentId)
     if (existing) {
       const current=existing.archived ? this.store.updateAgent(owner,existing.id,{archived:false}) : existing
@@ -186,7 +186,7 @@ export class WorkspaceNodes {
   private async readRemoteAgent(owner: string, agent: WorkspaceAgent): Promise<WorkspaceAgent> {
     if (!agent.remoteAgentId) return agent
     const remote = (await this.remoteAgents(owner,agent.nodeId)).find(a=>a.id===agent.remoteAgentId)
-    if (!remote) throw new HttpError(404,'引用的远端 Agent 不存在或已归档','remote_agent_unavailable')
+    if (!remote) throw new HttpError(404,'引用的远端机器人不存在或已归档','remote_agent_unavailable')
     agent=this.store.require<WorkspaceAgent>(owner,'agent',agent.id)
     const latest = {...agent,name:this.uniqueRemoteName(owner,remote.name,agent.nodeId,agent.id),avatar:remote.avatar,instructions:remote.instructions,profile:remote.profile}
     if (latest.name!==agent.name || latest.avatar!==agent.avatar || latest.instructions!==agent.instructions || latest.profile!==agent.profile) {
@@ -224,7 +224,7 @@ export class WorkspaceNodes {
       || (replaced && claim.deviceId !== replaced.deviceId)
       || typeof claim.token !== 'string' || !claim.token || !/^[0-9a-f-]{36}$/.test(claim.deviceId ?? '')
       || !Array.isArray(claim.scopes) || !['agents.read', 'sessions.execute', 'history.read'].every(scope => claim.scopes.includes(scope)))
-      throw new HttpError(409, '子节点授权或身份不匹配，请重新扫码并授权 Agent 与会话访问', 'invalid_node_claim')
+      throw new HttpError(409, '子节点授权或身份不匹配，请重新扫码并授权机器人与会话访问', 'invalid_node_claim')
     const expected = new URL(`node/${claim.deviceId}`, code.url)
     if (claim.serverUrl !== expected.href) throw new HttpError(409, '子节点配对地址与二维码不一致', 'node_identity_mismatch')
     const id = replaced?.id ?? randomUUID()
@@ -363,7 +363,14 @@ export class WorkspaceGateway {
     })
     await handshake
   }
-  rpc(method: string, params: Record<string, unknown>): Promise<any> {
+  onTrace:(entry:{direction:'request'|'response'|'error';method:string;requestId:string;durationMs?:number;data:unknown})=>void=()=>{}
+  async rpc(method:string,params:Record<string,unknown>):Promise<any>{
+    const requestId=randomUUID(),started=Date.now()
+    this.onTrace({direction:'request',method,requestId,data:params})
+    try{const result=await this.rpcRaw(method,params);this.onTrace({direction:'response',method,requestId,durationMs:Date.now()-started,data:result});return result}
+    catch(error){this.onTrace({direction:'error',method,requestId,durationMs:Date.now()-started,data:{error:error instanceof Error?error.message:'请求失败'}});throw error}
+  }
+  private rpcRaw(method: string, params: Record<string, unknown>): Promise<any> {
     if(this.runner)return this.runner.rpc(method,params)
     if (this.paired) return this.paired.rpc(method, params)
     if (this.socket?.readyState !== WebSocket.OPEN)

@@ -34,7 +34,7 @@ void auth.refreshServerIdentity()
     <h3>服务器名称</h3>
     <form v-if="editable" @submit.prevent="save">
       <label>统一显示名称<input v-model="name" name="server-display-name" maxlength="100" placeholder="例如：家里的 Mac" :disabled="busy" /></label>
-      <p>该服务器上的 Agent 共用此名称，Web、iOS 和安卓同步。留空恢复服务器主机名。</p>
+      <p>该服务器上的机器人共用此名称，Web、iOS 和安卓同步。留空恢复服务器主机名。</p>
       <p v-if="error" role="alert">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
       <button type="submit" :disabled="busy || !dirty">{{ busy ? '保存中…' : '保存服务器名称' }}</button>
       <button v-if="error" type="button" :disabled="busy" @click="reload">重新载入</button>

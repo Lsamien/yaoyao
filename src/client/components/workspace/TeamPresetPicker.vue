@@ -6,14 +6,14 @@ const shortage = (preset: TeamPreset) => Math.max(0, preset.roles.length - props
 </script>
 <template>
   <section class="preset-picker" aria-label="团队预设">
-    <div class="preset-picker__heading"><span>团队预设</span><small>选择后分配已创建的 Agent</small></div>
+    <div class="preset-picker__heading"><span>团队预设</span><small>选择后分配已创建的机器人</small></div>
     <div class="preset-grid">
-      <button type="button" :class="{ selected: selected === 'custom' }" @click="emit('select')"><strong>自定义团队</strong><small>手动选择 Agent 和协作配置</small><em>自由配置</em></button>
+      <button type="button" :class="{ selected: selected === 'custom' }" @click="emit('select')"><strong>自定义团队</strong><small>手动选择机器人和协作配置</small><em>自由配置</em></button>
       <button v-for="preset in TEAM_PRESETS" :key="preset.id" type="button" :class="{ selected: selected === preset.id }" :disabled="shortage(preset) > 0" :aria-label="preset.name" @click="emit('select', preset)">
         <strong>{{ preset.name }}</strong><small>{{ preset.summary }}</small><em>{{ shortage(preset) ? `还缺 ${shortage(preset)} 人` : `${preset.roles.length} 人` }}</em>
       </button>
     </div>
-    <small v-if="available < 5" class="preset-help">成员不足时，请先创建所需的 Agent。</small>
+    <small v-if="available < 5" class="preset-help">成员不足时，请先创建所需的机器人。</small>
   </section>
 </template>
 <style scoped>

@@ -212,7 +212,7 @@ function resetAvatar() {
 
 function submit() {
   const normalized = title.value.trim().replace(/\s+/g, ' ')
-  if (!normalized) { localError.value = '请输入 Agent 名称'; return }
+  if (!normalized) { localError.value = '请输入机器人名称'; return }
   emit('save', {
     title: normalized,
     avatarMode: avatarMode.value,

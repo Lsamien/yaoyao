@@ -119,7 +119,7 @@ const desktopSidebarContext = ref<HTMLElement | null>(null)
 const mobileSidebarContext = ref<HTMLElement | null>(null)
 
 function profileTitle(profile?: Profile): string {
-  return profile?.agentName || profile?.displayName || profile?.name || '未选择 Agent'
+  return profile?.agentName || profile?.displayName || profile?.name || '未选择机器人'
 }
 
 const navItems: NavItem[] = [
@@ -391,13 +391,13 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       :inert="mobileDrawerOpen"
     >
       <div v-if="applicationWorkspace" class="bot-list-header">
-        <button class="bot-logo-trigger sidebar-brand" type="button" aria-label="返回 Bot 列表" title="夭夭 Web" @click="navigate('/conversations')"><BrandMark :size="32" :label="false" compact bare /></button>
+        <button class="bot-logo-trigger sidebar-brand" type="button" aria-label="返回 Bot 列表" title="夭夭 AI" @click="navigate('/conversations')"><BrandMark :size="32" :label="false" compact bare /></button>
         <span class="bot-list-header__spacer" />
         <button class="bot-list-toolbar-button sidebar-search-trigger" type="button" aria-label="搜索" :aria-expanded="sidebarSearchOpen" @click="openSidebarSearch(desktopSidebarContext)"><AppIcon name="search" :size="21" /></button>
         <button class="bot-list-toolbar-button sidebar-create-trigger" type="button" aria-label="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="23" /></button>
       </div>
       <div v-else class="sidebar-brand-row">
-        <button class="rail__brand sidebar-brand" type="button" aria-label="返回聊天" title="夭夭 Web" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
+        <button class="rail__brand sidebar-brand" type="button" aria-label="返回聊天" title="夭夭 AI" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
           <BrandMark :size="sidebarCollapsed ? 26 : 32" :label="false" compact bare />
         </button>
       </div>
@@ -469,12 +469,12 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 
       <div class="sidebar-footer">
         <div class="sidebar-account-switcher">
-          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换 Agent：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? undefined : 'listbox'" :aria-expanded="applicationWorkspace ? undefined : profileMenuOpen" @click="applicationWorkspace ? openSettings('account-security', $event) : toggleProfileMenu($event)">
+          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? undefined : 'listbox'" :aria-expanded="applicationWorkspace ? undefined : profileMenuOpen" @click="applicationWorkspace ? openSettings('account-security', $event) : toggleProfileMenu($event)">
             <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
             <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
             <span class="account-copy">
               <strong>{{ applicationWorkspace ? userName : profileTitle(activeProfile) }}</strong>
-              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择 Agent') }}</span>
+              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择机器人') }}</span>
             </span>
             <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
@@ -482,8 +482,8 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
             <AppIcon name="settings" :size="17" />
           </button>
           <Transition name="menu-fade">
-            <div v-if="profileMenuOpen" class="profile-menu" role="listbox" aria-label="切换 Agent" @keydown="handleProfileMenuKeydown">
-              <strong class="profile-menu__heading">切换 Agent</strong>
+            <div v-if="profileMenuOpen" class="profile-menu" role="listbox" aria-label="切换机器人" @keydown="handleProfileMenuKeydown">
+              <strong class="profile-menu__heading">切换机器人</strong>
               <button
                 v-for="profile in profiles"
                 :key="profile.name"
@@ -576,12 +576,12 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 
       <div class="sidebar-footer mobile-drawer__footer">
         <div class="sidebar-account-switcher">
-          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换 Agent：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? undefined : 'listbox'" :aria-expanded="applicationWorkspace ? undefined : profileMenuOpen" @click="applicationWorkspace ? openSettings('account-security', $event) : toggleProfileMenu($event)">
+          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? undefined : 'listbox'" :aria-expanded="applicationWorkspace ? undefined : profileMenuOpen" @click="applicationWorkspace ? openSettings('account-security', $event) : toggleProfileMenu($event)">
             <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
             <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
             <span class="account-copy">
               <strong>{{ applicationWorkspace ? userName : profileTitle(activeProfile) }}</strong>
-              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择 Agent') }}</span>
+              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择机器人') }}</span>
             </span>
             <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
@@ -589,8 +589,8 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
             <AppIcon name="settings" :size="17" />
           </button>
           <Transition name="menu-fade">
-            <div v-if="profileMenuOpen" class="profile-menu" role="listbox" aria-label="切换 Agent" @keydown="handleProfileMenuKeydown">
-              <strong class="profile-menu__heading">切换 Agent</strong>
+            <div v-if="profileMenuOpen" class="profile-menu" role="listbox" aria-label="切换机器人" @keydown="handleProfileMenuKeydown">
+              <strong class="profile-menu__heading">切换机器人</strong>
               <button
                 v-for="profile in profiles"
                 :key="profile.name"
@@ -660,7 +660,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>
-          <button v-if="isAdmin" type="button" role="menuitem" @click="chooseCreate('remote-agent')"><AppIcon name="users" :size="17" />添加远程 Agent</button>
+          <button v-if="isAdmin" type="button" role="menuitem" @click="chooseCreate('remote-agent')"><AppIcon name="users" :size="17" />添加远程机器人</button>
           <button type="button" role="menuitem" @click="chooseCreate('group')"><AppIcon name="groups" :size="17" />新建群聊</button>
         </div>
       </div>

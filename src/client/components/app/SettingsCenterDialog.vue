@@ -148,7 +148,7 @@ const activeScope = computed(() => {
 })
 
 function profileTitle(profile?: Profile): string {
-  return profile?.agentName || profile?.displayName || profile?.name || '未选择 Agent'
+  return profile?.agentName || profile?.displayName || profile?.name || '未选择机器人'
 }
 
 function setDirty(page: SettingsPage, dirty: boolean) {
@@ -283,10 +283,10 @@ function requestModeSwitch() {
                 <div v-if="showAgentSelector" class="settings-agent-selector">
                   <button ref="settingsAgentTrigger" type="button" aria-haspopup="listbox" :aria-expanded="profileMenuOpen" @click="toggleAgentMenu">
                     <AgentAvatar :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="34" />
-                    <span><strong>{{ profileTitle(activeProfile) }}</strong><small>{{ activeProfile?.name || '未选择 Agent' }}</small></span>
+                    <span><strong>{{ profileTitle(activeProfile) }}</strong><small>{{ activeProfile?.name || '未选择机器人' }}</small></span>
                     <AppIcon name="chevron-down" :size="14" />
                   </button>
-                  <div v-if="profileMenuOpen" class="settings-agent-menu" role="listbox" aria-label="切换正在设置的 Agent" @keydown="handleAgentMenuKeydown">
+                  <div v-if="profileMenuOpen" class="settings-agent-menu" role="listbox" aria-label="切换正在设置的机器人" @keydown="handleAgentMenuKeydown">
                     <button v-for="profile in profiles" :key="profile.name" type="button" role="option" :aria-selected="profile.name === activeProfile?.name" @click="selectProfile(profile.name)">
                       <AgentAvatar :name="profileTitle(profile)" :avatar="profile.agentAvatar || ''" :size="24" />
                       <span><strong>{{ profileTitle(profile) }}</strong><small>{{ profile.name }}</small></span>
@@ -302,7 +302,7 @@ function requestModeSwitch() {
                 <nav>
                   <section v-if="isAdmin"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
                   <section>
-                    <h3>当前 Agent</h3>
+                    <h3>当前机器人</h3>
                     <button v-for="item in agentItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span></button>
                   </section>
                   <section>
@@ -336,7 +336,7 @@ function requestModeSwitch() {
                   @dirty-change="setDirty('agent-identity', $event)"
                   @save="emit('save-identity', $event)"
                 />
-                <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择 Agent。</p>
+                <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择机器人。</p>
                 <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
                 <AccountSecurityPanel
                   v-else-if="activePage === 'account-security'"

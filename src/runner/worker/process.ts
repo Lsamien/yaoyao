@@ -11,9 +11,9 @@ const configurationErrors:Record<string,string>={
   computer_profile_missing:'未找到基础 Profile 配置，请检查执行节点上的 Hermes Profile',
   computer_profile_config_invalid:'基础 Profile 配置无法读取，请检查 config.yaml',
   computer_cwd_invalid:'基础 Profile 的 terminal.cwd 无效，请使用工作区内的相对路径或有效绝对路径',
-  computer_model_missing:'基础 Profile 尚未配置模型，请先选择模型后再运行 Agent',
+  computer_model_missing:'基础 Profile 尚未配置模型，请先选择模型后再运行机器人',
   computer_model_unavailable:'基础 Profile 的模型配置无法使用，请检查 Provider 与认证信息',
-  computer_model_unsupported:'基础 Profile 的模型接口暂不支持隔离电脑 Agent',
+  computer_model_unsupported:'基础 Profile 的模型接口暂不支持隔离电脑机器人',
 }
 export class HermesWorkerProcess {
   readonly nonce=randomUUID()

@@ -1,3 +1,8 @@
+import {DesktopEnvironments} from './desktopEnvironments.js'
+import type {GrokAuth} from './grokAuth.js'
+import {GrokCloud} from './grokCloud.js'
+import {WorkspaceInspector} from './workspaceInspector.js'
+import {WorkspaceRoutines} from './workspaceRoutines.js'
 import { nativeMessageFileText } from '../shared/messageFiles.js'
 import { hermesBotRelay } from './hermesBotRelay.js'
 import { remoteAgentExports } from './workspaceRemoteAgents.js'
@@ -58,6 +63,7 @@ import { RunnerHub } from './runnerHub.js'
 export interface ApplicationOptions {
   config?: ServerConfig
   fetchImpl?: typeof fetch
+  grokFetch?:typeof fetch
   csrfSecret?: Buffer
   pairings?: NodePairingStore
   uploads?: UploadStore
@@ -96,6 +102,9 @@ export interface ApplicationRuntime {
   pushEventCoordinator: PushCoordinatorEventAdapter
   chatPushJobs: ChatPushJobManager
   chatCache?: ChatCacheCoordinator
+  desktopEnvironments:DesktopEnvironments
+  grokAuth:GrokAuth
+  workspaceRoutines:WorkspaceRoutines
   localVm: LocalVmService
   close(): void
 }
@@ -221,6 +230,15 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0)
+  const grokCloud=new GrokCloud(workspace,auth,workspaceNodes,sharedComputers,options.grokFetch)
+  const desktopEnvironments=new DesktopEnvironments(workspace,auth,workspaceNodes)
+  workspaceRuntime.desktopEnvironments=desktopEnvironments
+  grokCloud.preferDesktop=(owner,agent)=>!!desktopEnvironments.selected(owner,agent)
+  grokCloud.beforeSelection=(owner,id)=>desktopEnvironments.assertIdle(owner,id)
+  workspaceRuntime.cloud=grokCloud
+  const workspaceInspector=new WorkspaceInspector(workspace,auth)
+  workspaceRuntime.inspector=workspaceInspector
+  const workspaceRoutines=new WorkspaceRoutines(workspace,auth,workspaceNodes,workspaceRuntime)
   workspaceRuntime.retireHelper=(owner,helper)=>runners.retireHelper(owner,helper)
   workspaceRuntime.onTeamCreated = (owner, team) => {
     try { push.setGroupSubscription(owner, team.id, true, team.lastSeq) } catch { /* Optional notifications do not undo a team. */ }
@@ -393,6 +411,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     } else await next()
   })
 
+  for(const router of [desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router()]){app.use(router.routes());app.use(router.allowedMethods())}
   const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
   const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
@@ -458,6 +477,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
     localVm,
     workspace,
     workspaceRuntime,
+    workspaceRoutines,
+    desktopEnvironments,
+    grokAuth:grokCloud.authorization,
     realtime,
     app,
     config,
@@ -480,6 +502,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
     close: () => {
       runners.close()
       workspaceAssets.close()
+      desktopEnvironments.close()
+      grokCloud.authorization.close()
+      workspaceRoutines.close()
       workspaceRuntime.close()
       workspaceNodes.close()
       upstream.close()
@@ -515,6 +540,8 @@ export function createNodeServer(runtime: ApplicationRuntime): NodeServerRuntime
   }
   server.once('listening',()=>{const address=server.address();if(address&&typeof address!=='string')void runtime.localVm.start(`${config.tlsCert?'https':'http'}://127.0.0.1:${address.port}`).catch(error=>console.error('本地虚拟机服务启动失败',error.message))})
   runtime.workspaceRuntime.start()
+  runtime.workspaceRoutines.start()
+  runtime.grokAuth.start()
   synchronizePushObservers()
   const removePushConfigurationListener = runtime.push.onEnabledChange(synchronizePushObservers)
   const removeWebSockets = runtime.realtime.rejectLegacyUpgrades(server)

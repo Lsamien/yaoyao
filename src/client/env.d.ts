@@ -8,3 +8,11 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+interface Window {
+  yaoyaoDesktop?: {
+    openComputer(id: string): Promise<boolean>
+    computerClosed(): Promise<void>
+    onComputerClose(callback: () => void): () => void
+  }
+}

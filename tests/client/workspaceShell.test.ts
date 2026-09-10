@@ -7,7 +7,7 @@ import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
 
 const profiles: Profile[] = [
   { name: 'default', agentName: '丫头', isDefault: true },
-  { name: 'ops:blue/team', agentName: '运维 Agent', isDefault: false },
+  { name: 'ops:blue/team', agentName: '运维机器人', isDefault: false },
 ]
 
 const SettingsCenterDialogStub = defineComponent({
@@ -89,10 +89,10 @@ describe('Workspace shell account controls', () => {
     expect(agentTrigger.attributes('aria-expanded')).toBe('true')
     const menu = desktop.get('.profile-menu')
     expect(menu.attributes('role')).toBe('listbox')
-    expect(menu.text()).toContain('切换 Agent')
+    expect(menu.text()).toContain('切换机器人')
     expect(menu.text()).toContain('丫头')
-    expect(menu.text()).toContain('运维 Agent')
-    expect(menu.text()).not.toContain('Agent 设置')
+    expect(menu.text()).toContain('运维机器人')
+    expect(menu.text()).not.toContain('机器人设置')
     expect(menu.findAll('button')).toHaveLength(profiles.length)
     expect(menu.findAll('[role="option"]').map(option => option.attributes('aria-selected'))).toEqual(['true', 'false'])
     expect(menu.text()).not.toContain('账号安全')
@@ -103,7 +103,7 @@ describe('Workspace shell account controls', () => {
     expect(document.activeElement).toBe(menu.find('[role="option"][aria-selected="true"]').element)
     await menu.trigger('keydown', { key: 'ArrowDown' })
     const targetProfile = menu.findAll<HTMLButtonElement>('button')
-      .find(button => button.text().includes('运维 Agent'))!
+      .find(button => button.text().includes('运维机器人'))!
     expect(document.activeElement).toBe(targetProfile.element)
     await targetProfile.trigger('click')
     expect(wrapper.emitted('selectProfile')).toEqual([['ops:blue/team']])
@@ -164,7 +164,7 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   await wrapper.get('[data-testid="close-settings"]').trigger('click')
   await rail.get('.sidebar-create-trigger').trigger('click')
   const items = document.querySelectorAll<HTMLButtonElement>('.workspace-create-menu [role="menuitem"]')
-  expect([...items].map(item => item.textContent?.trim())).toEqual(['新建 Bot', '添加远程 Agent', '新建群聊'])
+  expect([...items].map(item => item.textContent?.trim())).toEqual(['新建 Bot', '添加远程机器人', '新建群聊'])
   items[0]?.click()
   await wrapper.vm.$nextTick()
   expect(wrapper.emitted('createAgent')).toHaveLength(1)

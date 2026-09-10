@@ -79,14 +79,14 @@ onBeforeUnmount(() => window.clearTimeout(searchTimer))
       />
     </template>
     <section class="library-workspace">
-      <header class="library-header"><div><h2>产物</h2><p>从普通会话的 Agent 与工具消息中提取</p></div><button class="quiet-button" type="button" :disabled="artifacts.isLoading" @click="artifacts.refresh"><AppIcon name="refresh" :size="14" />刷新索引</button></header>
+      <header class="library-header"><div><h2>产物</h2><p>从普通会话的机器人与工具消息中提取</p></div><button class="quiet-button" type="button" :disabled="artifacts.isLoading" @click="artifacts.refresh"><AppIcon name="refresh" :size="14" />刷新索引</button></header>
       <LibraryGrid
         kind="artifacts"
         :items="items"
         :selected-id="selected?.id"
         :loading="artifacts.isLoading"
         empty-title="还没有产物"
-        empty-description="Agent 生成的图片、文件和链接会自动整理到这里。"
+        empty-description="机器人生成的图片、文件和链接会自动整理到这里。"
         @select="selected = $event"
         @add-to-composer="addToComposer"
         @source="openSource"

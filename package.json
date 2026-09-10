@@ -1,16 +1,17 @@
 {
-  "name": "hermes-yaoyao",
-  "version": "0.4.3",
+  "name": "yaoyao",
+  "version": "0.4.4",
   "private": true,
-  "license": "BSL-1.1",
-  "description": "夭夭 Web：直连 Hermes 9119 的聊天、团队、文件库与产物工作台",
+  "license": "Apache-2.0",
+  "description": "夭夭 AI：聊天、多 Agent 团队、文件库与电脑工作空间",
   "type": "module",
   "main": "desktop/main.mjs",
   "engines": {
     "node": ">=24.0.0"
   },
   "bin": {
-    "hermes-yaoyao": "./bin/hermes-yaoyao.mjs"
+    "hermes-yaoyao": "./bin/hermes-yaoyao.mjs",
+    "yaoyao": "./bin/hermes-yaoyao.mjs"
   },
   "scripts": {
     "dev": "cross-env NODE_ENV=development tsx watch src/server/index.ts",
@@ -89,5 +90,10 @@
     "supertest": "^7.1.4",
     "tsx": "^4.21.0",
     "vitest": "^3.2.4"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lsamien/yaoyao.git"
+  },
+  "homepage": "https://github.com/Lsamien/yaoyao"
 }

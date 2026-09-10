@@ -34,7 +34,7 @@ onMounted(load)
 </script>
 <template>
   <section class="nodes-panel">
-    <p>远程节点连接 15300 夭夭 Web，仅作为当前服务器的子节点。连接后可用它的基础智能体创建自己的 Agent 并加入群聊。</p>
+    <p>远程节点连接 15300 夭夭 AI，仅作为当前服务器的子节点。连接后可用它的基础智能体创建自己的机器人并加入群聊。</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <article v-for="node in nodes" :key="node.id">
       <div><strong>{{ node.name }}</strong><small>{{ node.url }} · 子节点</small></div>

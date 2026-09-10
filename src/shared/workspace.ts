@@ -6,6 +6,8 @@ export interface WorkspaceAgent {
   instructions: string
   /** Explicit account-owner grant; absent on older records means disabled. */
   execution?: 'profile' | 'computer'
+  computer?: 'auto' | 'cloud' | 'vm' | 'local' | 'browser' | 'off'
+  browserProfile?: 'persistent' | 'temporary'
   computerEnvironmentId?:string
   computerEnvironmentName?:string
   canManageTeam?: boolean

@@ -17,7 +17,7 @@ withDefaults(defineProps<{
     <span class="brand-mark__plate" :style="{ width: `${size}px`, height: `${size}px` }">
       <img src="/brand/AppIcon-1024.png" alt="" aria-hidden="true" />
     </span>
-    <span v-if="label" class="brand-mark__name">夭夭 Web</span>
+    <span v-if="label" class="brand-mark__name">夭夭 AI</span>
   </span>
 </template>
 

@@ -66,7 +66,7 @@ export class UpstreamProfileIdentityService {
         if (finished) return
         finished = true
         cleanup()
-        reject(new HttpError(502, `无法读取 Agent 身份：${error.message}`, 'profile_identity_failed'))
+        reject(new HttpError(502, `无法读取机器人身份：${error.message}`, 'profile_identity_failed'))
       }
       const send = (id: string, method: string, params: JsonObject) => {
         socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }))

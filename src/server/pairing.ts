@@ -329,7 +329,7 @@ export class NodePairingStore {
   workspaceOwner(deviceID: string, token: string, scope: NodeScope): string {
     this.authorize(deviceID, token, scope)
     const owner = this.#state.devices.find(device => device.id === deviceID)?.workspaceOwner
-    if (!owner) throw new HttpError(403, '请升级远端并重新扫码授权，以读取远端 Bot 模式 Agent', 'workspace_agent_pairing_required')
+    if (!owner) throw new HttpError(403, '请升级远端并重新扫码授权，以读取远端 Bot 模式机器人', 'workspace_agent_pairing_required')
     return owner
   }
 

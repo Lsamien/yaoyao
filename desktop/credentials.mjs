@@ -1,8 +1,20 @@
 import {createHash} from 'node:crypto'
 import {execFile} from 'node:child_process'
+import {readFileSync} from 'node:fs'
+import {join} from 'node:path'
+import {homedir} from 'node:os'
 const prefix=Buffer.from('YAOYAO-RUNNER-KEYCHAIN-1\n')
 export class DesktopCredentials {
-  constructor({home,helper,legacyDecrypt}){this.account=createHash('sha256').update(home).digest('hex');this.helper=helper;this.legacyDecrypt=legacyDecrypt}
+  constructor({home,helper,legacyDecrypt}){this.home=home;this.helper=helper;this.legacyDecrypt=legacyDecrypt}
+  get account(){
+    let identity=this.home
+    try {
+      const migration=JSON.parse(readFileSync(join(this.home,'.data-home-migration.json'),'utf8'))
+      const old=join(homedir(),'.hermes-yaoyao')
+      if(this.home===join(homedir(),'.yaoyao')&&migration.source===old&&migration.target===this.home)identity=old
+    }catch{/* Fresh directories retain their own Keychain identity. */}
+    return createHash('sha256').update(identity).digest('hex')
+  }
   async invoke(operation,input){
     if(input.length>1048576)throw new Error('执行节点配置超过加密大小上限')
     return new Promise((resolve,reject)=>{

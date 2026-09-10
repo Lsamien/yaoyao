@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: "${HERMES_YAOYAO_IMAGE:-hermes-yaoyao:local}"
+    image: "${HERMES_YAOYAO_IMAGE:-yaoyao:local}"
     restart: unless-stopped
     init: true
     read_only: true
@@ -29,14 +29,14 @@ services:
       HERMES_YAOYAO_SUPERVISE_DASHBOARD: "0"
       HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
       HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
-      HERMES_YAOYAO_RELEASE_SOURCE: "${HERMES_YAOYAO_RELEASE_SOURCE:-https://github.com/Lsamien/hermes-yaoyao.git}"
-      HERMES_YAOYAO_HOME: /var/lib/hermes-yaoyao
+      HERMES_YAOYAO_RELEASE_SOURCE: "${HERMES_YAOYAO_RELEASE_SOURCE:-https://github.com/Lsamien/yaoyao.git}"
+      HERMES_YAOYAO_HOME: /home/node/.yaoyao
       HERMES_YAOYAO_APNS_KEY_FILE: "${HERMES_YAOYAO_APNS_KEY_FILE:-}"
       HERMES_YAOYAO_APNS_KEY_ID: "${HERMES_YAOYAO_APNS_KEY_ID:-}"
       HERMES_YAOYAO_APNS_TEAM_ID: "${HERMES_YAOYAO_APNS_TEAM_ID:-}"
       HERMES_YAOYAO_APNS_TOPIC: "${HERMES_YAOYAO_APNS_TOPIC:-}"
     volumes:
-      - yaoyao-data:/var/lib/hermes-yaoyao
+      - yaoyao-data:/home/node/.yaoyao
     tmpfs:
       - /tmp:mode=1777
 

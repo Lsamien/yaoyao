@@ -40,7 +40,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
             <article v-for="room in rooms" :key="room.id" :class="{ current: room.id === currentRoomId, expanded: expandedRoomId === room.id }">
               <button class="topic-team-picker__choose" type="button" @click="emit('select', room.id)">
                 <TeamAvatar :name="room.name" :avatar="room.avatar || ''" :members="room.avatarMembers?.map(member => ({ name: member.displayName })) || []" :fallback-key="room.id" :size="34" />
-                <span class="topic-team-picker__copy"><strong>{{ room.name }}</strong><small>{{ room.agentCount }} 个 Agent</small></span>
+                <span class="topic-team-picker__copy"><strong>{{ room.name }}</strong><small>{{ room.agentCount }} 个机器人</small></span>
                 <em v-if="room.id === currentRoomId">当前</em>
                 <AppIcon class="topic-team-picker__next" name="chevron-left" :size="15" />
               </button>
@@ -50,7 +50,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
               <section v-if="expandedRoomId === room.id" class="topic-team-picker__details" :aria-label="`${room.name}团队详情`">
                 <p><strong>团队说明</strong><span>{{ room.instructions || '未填写团队说明' }}</span></p>
                 <dl>
-                  <div><dt>成员</dt><dd>{{ room.avatarMembers?.map(member => member.displayName).join('、') || `${room.agentCount} 个 Agent` }}</dd></div>
+                  <div><dt>成员</dt><dd>{{ room.avatarMembers?.map(member => member.displayName).join('、') || `${room.agentCount} 个机器人` }}</dd></div>
                   <div><dt>协作方式</dt><dd>{{ room.orchestrationMode === 'host' ? '管理员协调' : '自由讨论' }}</dd></div>
                   <div><dt>最多回复</dt><dd>{{ room.maxReplyRounds }} 轮</dd></div>
                 </dl>

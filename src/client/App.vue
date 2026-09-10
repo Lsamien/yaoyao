@@ -24,7 +24,7 @@ const agentIdentityFixture = import.meta.env.DEV
   && new URLSearchParams(window.location.search).get('fixture') === 'agent-identity'
 
 const pageTitle = computed(() => {
-  const name = route.path.startsWith('/history')
+  const name = route.name === 'computer' ? '电脑接管' : route.path.startsWith('/history')
     ? '历史记录'
     : route.path.startsWith('/conversations')
     ? '聊天'
@@ -33,7 +33,7 @@ const pageTitle = computed(() => {
     : route.path.startsWith('/files')
       ? '文件库'
       : chat.activeSession?.title || '对话'
-  return `${name} · 夭夭`
+  return `${name} · 夭夭 AI`
 })
 
 watch(() => theme.resolvedTheme, value => {

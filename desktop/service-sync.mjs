@@ -5,6 +5,7 @@ import { join } from 'node:path'
  * The renderer never receives its configuration or a process-control bridge. */
 export const synchronizeLocalService = options => serviceCommand({...options,action:'sync'})
 export const stopLocalService = options => serviceCommand({...options,action:'stop'})
+export const migrateLocalData = options => serviceCommand({...options,action:'migrate'})
 function serviceCommand({ home, port, root, fixture, environment, onProgress = () => {}, action }) {
   return new Promise((done, reject) => {
     const runtimeRoot = join(root, 'web-service')

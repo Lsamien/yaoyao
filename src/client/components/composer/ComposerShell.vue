@@ -417,7 +417,7 @@ defineExpose({
 
     <div v-if="mode === 'group'" class="composer-activity-slot">
       <Transition name="composer-activity">
-        <div v-if="activityText" class="composer-activity" role="status" aria-label="Agent 输入状态" aria-live="polite" aria-atomic="true">
+        <div v-if="activityText" class="composer-activity" role="status" aria-label="机器人输入状态" aria-live="polite" aria-atomic="true">
           <span class="composer-typing-dots" aria-hidden="true"><i /><i /><i /></span>
           <strong>{{ activityText }}</strong>
         </div>
@@ -533,7 +533,7 @@ defineExpose({
 
       <Transition name="composer-menu">
         <div v-if="menuKind && menuOptions.length" class="composer-menu" role="listbox">
-          <div class="composer-menu__label">{{ menuKind === 'mention' ? '提及 Agent' : '命令' }}</div>
+          <div class="composer-menu__label">{{ menuKind === 'mention' ? '提及机器人' : '命令' }}</div>
           <button
             v-for="(option, index) in menuOptions"
             :key="option.id"

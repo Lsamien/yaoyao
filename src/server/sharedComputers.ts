@@ -12,7 +12,7 @@ export interface SharedComputer {managedCompose?:boolean;managedLocalVm?:boolean
 export function requireSharedComputer(store:WorkspaceStore,owner:string,agent:{id?:string;nodeId:string;profile:string;computerEnvironmentId?:string}){
   if(!agent.computerEnvironmentId)return
   const shared=store.require<SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId)
-  if(shared.archived||!agent.id||!shared.memberIds.includes(agent.id)||shared.nodeId!==agent.nodeId||(!shared.managedCompose&&shared.profile!==agent.profile))throw new HttpError(403,'当前成员没有这台共享电脑的授权','shared_computer_forbidden')
+  if(shared.archived||!agent.id||!shared.memberIds.includes(agent.id)||shared.nodeId!==agent.nodeId||(!shared.managedCompose&&!shared.managedLocalVm&&shared.profile!=='*'&&shared.profile!==agent.profile))throw new HttpError(403,'当前成员没有这台共享电脑的授权','shared_computer_forbidden')
 }
 export class SharedComputers {
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly hub:RunnerHub){}
@@ -43,8 +43,8 @@ export class SharedComputers {
   attachLocalVm(owner:string,agent:WorkspaceAgent,runnerId:string){
     if(agent.nodeId!=='local'||agent.execution!=='computer'||agent.temporaryGoalId||agent.remoteAgentId||agent.computerEnvironmentId)return
     this.nodes.requireSource(owner,agent)
-    const group=this.store.list<SharedComputer>(owner,'shared-computer').find(g=>!g.archived&&g.managedLocalVm&&g.runnerId===runnerId&&g.profile===agent.profile)
-      ??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:agent.profile,runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
+    const group=this.store.list<SharedComputer>(owner,'shared-computer').find(g=>!g.archived&&g.managedLocalVm&&g.runnerId===runnerId)
+      ??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
     if(!group.memberIds.includes(agent.id))group.memberIds.push(agent.id)
     this.store.put(owner,'shared-computer',group.id,group)
     agent.computerEnvironmentId=group.id;agent.computerEnvironmentName=group.name
@@ -67,11 +67,13 @@ export class SharedComputers {
       for(const agent of agents){
         if(agent.computerEnvironmentId&&groups.some(g=>g.id===agent.computerEnvironmentId)){delete agent.computerEnvironmentId;delete agent.computerEnvironmentName}
       }
-      if(mode==='shared')for(const profile of new Set(agents.filter(a=>a.execution==='computer'&&!a.computerEnvironmentId).map(a=>a.profile))){
-        const members=agents.filter(a=>a.execution==='computer'&&!a.computerEnvironmentId&&a.profile===profile)
-        const group=groups.find(g=>g.profile===profile&&g.runnerId===runnerId)??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile,runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
-        group.archived=false;group.managedLocalVm=true;group.memberIds=members.map(a=>a.id);this.store.put(owner,'shared-computer',group.id,group)
-        for(const agent of members){agent.computerEnvironmentId=group.id;agent.computerEnvironmentName=group.name}
+      if(mode==='shared'){
+        const members=agents.filter(a=>a.execution==='computer'&&!a.computerEnvironmentId)
+        if(members.length){
+          const group=groups.find(g=>g.managedLocalVm)??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
+          group.profile='*';group.archived=false;group.managedLocalVm=true;group.memberIds=members.map(a=>a.id);this.store.put(owner,'shared-computer',group.id,group)
+          for(const agent of members){agent.computerEnvironmentId=group.id;agent.computerEnvironmentName=group.name}
+        }
       }
       for(const agent of agents){
         const before=previous.get(agent.id)!
@@ -88,11 +90,11 @@ export class SharedComputers {
       const agents=body.memberIds.map(id=>this.store.require<WorkspaceAgent>(owner,'agent',id)),first=agents[0]!
       for(const agent of agents){
         this.nodes.requireSource(owner,agent)
-        if(agent.archived||agent.temporaryGoalId||agent.remoteAgentId||agent.execution!=='computer'||agent.computerEnvironmentId||agent.nodeId!==first.nodeId||agent.profile!==first.profile)throw new HttpError(400,'请选择同一来源和 Profile 的持久隔离成员，且成员尚未加入其他共享电脑','shared_computer_members')
+        if(agent.archived||agent.temporaryGoalId||agent.remoteAgentId||agent.execution!=='computer'||agent.computerEnvironmentId||agent.nodeId!==first.nodeId)throw new HttpError(400,'请选择同一来源的持久隔离成员，且成员尚未加入其他共享电脑','shared_computer_members')
       }
       this.idle(owner,body.memberIds)
       const runnerId=this.hub.sharedComputerRunner(owner,first).id
-      const shared:SharedComputer={id:randomUUID(),name:body.name,memberIds:body.memberIds,nodeId:first.nodeId,profile:first.profile,runnerId,archived:false,createdAt:Date.now()}
+      const shared:SharedComputer={id:randomUUID(),name:body.name,memberIds:body.memberIds,nodeId:first.nodeId,profile:'*',runnerId,archived:false,createdAt:Date.now()}
       this.store.put(owner,'shared-computer',shared.id,shared)
       for(const agent of agents){agent.computerEnvironmentId=shared.id;agent.computerEnvironmentName=shared.name;agent.revision++;agent.updatedAt=Date.now();this.store.put(owner,'agent',agent.id,agent);this.store.event(owner,'agent.changed',agent)}
       return shared

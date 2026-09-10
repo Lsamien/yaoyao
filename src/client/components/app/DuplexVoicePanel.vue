@@ -94,7 +94,7 @@ onMounted(() => { void load() })
 
 <template>
   <section class="voice-panel" aria-label="双流语音">
-    <div class="voice-heading"><div><h3>yaoyao 双流语音</h3><p>这是整个 yaoyao 安装共享的全局设置，不随当前 Agent 切换。</p></div><span>全局</span></div>
+    <div class="voice-heading"><div><h3>yaoyao 双流语音</h3><p>这是整个 yaoyao 安装共享的全局设置，不随当前机器人切换。</p></div><span>全局</span></div>
     <p v-if="error" class="voice-error" role="alert">{{ error }}</p><p v-else-if="notice" class="voice-notice" role="status">{{ notice }}</p>
     <p v-if="loading" class="voice-empty">正在读取语音设置…</p>
     <form v-else :aria-busy="busy" @submit.prevent="save">

@@ -160,7 +160,7 @@ function archivedRoomSidebarItems(): SidebarItemBase[] {
   return archivedRoomList.value.map(room => ({
   id: room.id,
   title: room.name || '未命名团队',
-  subtitle: room.lastMessage?.content || `${room.agentCount} 个 Agent`,
+  subtitle: room.lastMessage?.content || `${room.agentCount} 个机器人`,
   meta: sidebarDate(room.updatedAt),
   avatar: room.avatar || '',
   avatarFallbackKey: room.id,
@@ -283,7 +283,7 @@ const managerBusy = computed(() => groups.isLoading || Object.values(agentUpdate
 const reference = computed<ComposerReference | null>(() => quoted.value ? { id: quoted.value.id, author: quoted.value.author, content: quoted.value.content } : null)
 const mentionNames = computed(() => ['所有人', ...displayAgents.value.map(agent => agent.displayName || agent.profile)])
 const mentionOptions = computed<ComposerOption[]>(() => [
-  { id: 'all', label: '所有人', detail: '通知团队内全部 Agent' },
+  { id: 'all', label: '所有人', detail: '通知团队内全部机器人' },
   ...displayAgents.value.map(agent => ({
     id: agent.id,
     label: agent.displayName || agent.profile,
@@ -295,7 +295,7 @@ const roomSubtitle = computed(() => {
   if (!groups.selectedRoom) return '选择或新建一个团队'
   const host = hostAgent.value ? `管理员 ${hostAgent.value.displayName || hostAgent.value.profile} · ` : ''
   const mode = groups.selectedRoom.orchestrationMode === 'host' ? '管理员协调 · ' : ''
-  return `${groups.selectedRoom.name} · ${mode}${host}${groups.agents.length} 个 Agent · 最多 ${groups.selectedRoom.maxReplyRounds} 轮回复`
+  return `${groups.selectedRoom.name} · ${mode}${host}${groups.agents.length} 个机器人 · 最多 ${groups.selectedRoom.maxReplyRounds} 轮回复`
 })
 const activeAgentIds = computed(() => {
   if (!groups.topicProtocol) {
@@ -319,7 +319,7 @@ const typingActivity = computed(() => {
   const names = typingAgentNames.value
   if (!names.length) return ''
   if (names.length <= 3) return `${names.join('、')}正在输入…`
-  return `${names.slice(0, 2).join('、')}等 ${names.length} 个 Agent 正在输入…`
+  return `${names.slice(0, 2).join('、')}等 ${names.length} 个机器人正在输入…`
 })
 
 function groupRoute(roomId = groups.selectedRoomId, topicId = groups.selectedTopicId): string {
@@ -609,7 +609,7 @@ async function updateAgent(id: string, patch: AgentSettingsPatch) {
   agentUpdateError.value = { ...agentUpdateError.value, [id]: '' }
   try { await groups.updateAgent(groups.selectedRoom.id, id, patch) }
   catch (cause) {
-    const message = cause instanceof Error ? cause.message : 'Agent 设置保存失败'
+    const message = cause instanceof Error ? cause.message : '机器人设置保存失败'
     agentUpdateError.value = { ...agentUpdateError.value, [id]: message }
     managerError.value = message
   }
@@ -621,7 +621,7 @@ async function removeAgent(id: string) {
   managerError.value = ''
   agentUpdateBusy.value = { ...agentUpdateBusy.value, [id]: true }
   try { await groups.removeAgent(groups.selectedRoom.id, id) }
-  catch (cause) { managerError.value = cause instanceof Error ? cause.message : '移除 Agent 失败' }
+  catch (cause) { managerError.value = cause instanceof Error ? cause.message : '移除机器人失败' }
   finally { agentUpdateBusy.value = { ...agentUpdateBusy.value, [id]: false } }
 }
 
@@ -836,8 +836,8 @@ watch(() => auth.activeProfile?.name, profile => { if (profile) restoreShowThink
         :interaction="activeInteraction"
         :mention-names="mentionNames"
         :agent-avatars="agentAvatars"
-        :empty-title="groups.topicProtocol ? '开始一个新话题' : '让多个 Agent 一起工作'"
-        :empty-description="groups.topicProtocol ? '第一条消息会创建独立话题，各话题分别保留 Agent 上下文。' : '使用 @ 提及指定 Agent，或直接发送消息触发已启用自动回复的成员。'"
+        :empty-title="groups.topicProtocol ? '开始一个新话题' : '让多个机器人一起工作'"
+        :empty-description="groups.topicProtocol ? '第一条消息会创建独立话题，各话题分别保留机器人上下文。' : '使用 @ 提及指定机器人，或直接发送消息触发已启用自动回复的成员。'"
         @load-older="groups.loadOlder"
         @quote="quoted = $event"
         @preview="openAttachment"
@@ -867,7 +867,7 @@ watch(() => auth.activeProfile?.name, profile => { if (profile) restoreShowThink
         :reference="reference"
         :mention-options="mentionOptions"
         :attachments-enabled="uploadsEnabled"
-        placeholder="发消息给团队，输入 @ 提及 Agent"
+        placeholder="发消息给团队，输入 @ 提及机器人"
         @send="send"
         @stop="stopActiveTopic"
         @tool-trace-toggle="toggleShowThinking"

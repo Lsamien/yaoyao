@@ -2,18 +2,27 @@
 import {ref,computed,watch,onBeforeUnmount} from 'vue'
 import {apiRequest} from '@/api/client'
 import AppIcon from '@/components/common/AppIcon.vue'
+import type {DesktopEnvironmentState,BotBrowserState} from '@shared/desktopEnvironment'
+import GrokAuthPanel from './GrokAuthPanel.vue'
 import type {WorkspaceAgent} from '@shared/workspace'
 import type {ComputerFrame} from '@shared/computerControl'
 import type {LocalVmInstance,LocalVmAction} from '@shared/localVm'
-const props=defineProps<{agents:WorkspaceAgent[];isAdmin:boolean;active?:boolean}>()
+const props=defineProps<{agents:WorkspaceAgent[];isAdmin:boolean;active?:boolean;embedded?:boolean}>()
 const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent];workspace:[agent:WorkspaceAgent]}>()
 const selected=ref(''),state=ref<LocalVmInstance&{enabled:boolean;controlMode?:string}>(),frame=ref<ComputerFrame>(),error=ref(''),busy=ref(false),loading=ref(true)
 const agent=computed(()=>props.agents.find(a=>a.id===selected.value))
-const computerTabs=ref<HTMLElement>()
-const computerChoice=computed(()=>state.value?.fixedCapacity?(state.value.desktopId??'off'):state.value?.enabled?'vm':'off')
+const native=ref<DesktopEnvironmentState>()
+const nativeSelected=computed(()=>native.value?.selected)
+const computerTabs=ref<HTMLElement>(),cloud=ref<{configured:boolean;running:boolean;connected:boolean;mode?:string}>(),connectionSettings=ref(false)
+const cloudSelected=computed(()=>agent.value?.computer==='cloud'||(agent.value?.computer==='auto'&&!nativeSelected.value&&agent.value.execution!=='computer'&&cloud.value?.configured))
+const computerChoice=computed(()=>state.value?.fixedCapacity?(state.value.desktopId??'off'):agent.value?.computer??(state.value?.enabled?'vm':'off'))
 const computerChoices=computed(()=>[
- {value:'off',label:'不使用电脑',disabled:false},
- ...(state.value?.fixedCapacity?(state.value.desktops??[]).map(desktop=>({value:desktop.id,label:desktop.name+(desktop.ready?'':' · 未就绪'),disabled:desktop.available===false})):[{value:'vm',label:'本地虚拟机',disabled:false}]),
+ {value:'auto',label:'自动',description:'按可用环境自动选择',icon:'bolt' as const,disabled:false},
+ {value:'cloud',label:'云端 · Grok Bot',description:'共享云端电脑，持续保存工作',icon:'globe' as const,disabled:false},
+ ...(state.value?.fixedCapacity?(state.value.desktops??[]).map(desktop=>({value:desktop.id,label:desktop.name,description:desktop.ready?'已有共享桌面':'桌面尚未就绪',icon:'monitor' as const,disabled:desktop.available===false})):[{value:'vm',label:'本地虚拟机',description:'在隔离的本地桌面中工作',icon:'monitor' as const,disabled:false}]),
+ {value:'local',label:'本机',description:native.value?.host?.name??'请在电脑上打开夭夭桌面端',icon:'monitor' as const,disabled:!native.value?.local.supported},
+ {value:'browser',label:'仅浏览器',description:native.value?.browser.available?'独立浏览器，保存登录资料':'请在电脑上打开夭夭桌面端',icon:'globe' as const,disabled:!native.value?.browser.available},
+ {value:'off',label:'不使用电脑',description:'使用基础机器人的其他工具',icon:'stop' as const,disabled:false},
 ])
 const computerChoiceDisabled=computed(()=>loading.value||!state.value||busy.value||state.value.inUse||!!agent.value?.remoteAgentId||!!agent.value?.temporaryGoalId)
 function selectComputer(value:string){
@@ -34,62 +43,99 @@ async function refresh(){
  if(closed||props.active===false||!selected.value||document.hidden||busy.value)return
  const version=revision
  try{
+  native.value=await apiRequest<DesktopEnvironmentState>(`/api/app/agents/${selected.value}/desktop-environment`);if(version!==revision||closed)return
+  if(nativeSelected.value){
+   const n=native.value;let ready=n.local.ready
+   if(nativeSelected.value==='browser'){const b=await apiRequest<BotBrowserState>(`/api/app/agents/${selected.value}/browser`);ready=b.open}
+   state.value={enabled:true,container:ready?'running':'stopped',ready,image:true,mode:'shared',maxInstances:1,inUse:false}
+   if(ready){const f=await apiRequest<ComputerFrame>(`/api/app/agents/${selected.value}/computer/frame`);if(version===revision&&!closed)frame.value=f}else frame.value=undefined
+   error.value='';return
+  }
+  const cloudState=await apiRequest<typeof cloud.value>(`/api/app/agents/${selected.value}/cloud-computer`);if(version!==revision||closed)return;cloud.value=cloudState
+  if(cloudSelected.value){
+   state.value={enabled:true,container:cloudState?.running?'running':'stopped',ready:!!cloudState?.connected&&!!cloudState?.running,image:!!cloudState?.configured,mode:'shared',maxInstances:1,inUse:cloudState?.mode==='agent'||cloudState?.mode==='human',controlMode:cloudState?.mode}
+   if(state.value.ready){const image=await apiRequest<ComputerFrame>(`/api/app/agents/${selected.value}/computer/frame`);if(version===revision&&!closed)frame.value=image}else frame.value=undefined
+   error.value='';return
+  }
   const result=await apiRequest<typeof state.value>(base());if(version!==revision||closed)return;state.value=result
   if(result?.container==='running'&&result.ready){const image=await apiRequest<ComputerFrame>(`/api/app/agents/${selected.value}/computer/frame`);if(version===revision&&!closed)frame.value=image}
   else frame.value=undefined
+  error.value=''
  }catch(e){if(version===revision)error.value=e instanceof Error?e.message:'无法读取电脑画面'}finally{if(version===revision)loading.value=false}
 }
 async function run(work:()=>Promise<unknown>){if(busy.value)return;busy.value=true;error.value='';try{await work();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'电脑操作未完成'}finally{busy.value=false;await refresh()}}
 function choose(value:string){
- if(state.value?.fixedCapacity&&value!=='off'&&value!==state.value.desktopId&&!confirm('连接这台共享桌面？同一桌面的成员会共用文件和浏览器登录。'))return
- void run(()=>apiRequest(base(),{method:'PUT',body:state.value?.fixedCapacity?{enabled:value!=='off',...(value!=='off'?{desktopId:value}:{})}:{enabled:value==='vm'}}))
+ if(state.value?.fixedCapacity&&!['off','auto','cloud','local','browser'].includes(value)){
+   void run(()=>apiRequest(base(),{method:'PUT',body:{enabled:true,desktopId:value}}));return
+ }
+ void run(()=>apiRequest(`/api/app/agents/${selected.value}/computer-selection`,{method:'PUT',body:{computer:value}}))
 }
+async function openDesktop(){if(!agent.value)return;if(cloudSelected.value){await run(()=>apiRequest(`/api/app/agents/${selected.value}/cloud-computer/open`,{method:'POST',body:{}}));if(error.value)return}emit('desktop',agent.value)}
 function action(value:LocalVmAction){
  if(value==='recreate'&&!confirm('重建这台虚拟机？当前桌面程序将关闭，工作文件和浏览器资料会保留。'))return
  void run(()=>apiRequest(base()+'/'+value,{method:'POST',body:{}}))
 }
-async function cycle(){await refresh();if(!closed)timer=setTimeout(cycle,3000)}
+async function cycle(){const version=revision;await refresh();if(!closed&&version===revision)timer=setTimeout(cycle,3000)}
 watch(()=>props.agents.map(a=>a.id).join(','),()=>{if(!props.agents.some(a=>a.id===selected.value))selected.value=props.agents[0]?.id??''},{immediate:true})
-watch(selected,()=>{revision++;state.value=undefined;frame.value=undefined;error.value='';loading.value=true;clearTimeout(timer);void cycle()},{immediate:true})
+watch(selected,()=>{revision++;state.value=undefined;native.value=undefined;cloud.value=undefined;frame.value=undefined;error.value='';loading.value=true;clearTimeout(timer);void cycle()},{immediate:true})
 watch(()=>props.active,value=>{if(value)void refresh()})
 onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
 </script>
 <template>
- <aside class="local-vm-chat-panel" aria-label="Agent 电脑面板">
+ <aside class="local-vm-chat-panel" :class="{embedded}" aria-label="机器人电脑面板">
   <header><strong>电脑</strong><button aria-label="关闭电脑面板" @click="emit('close')"><AppIcon name="close"/></button></header>
   <div class="panel-body">
-   <label v-if="agents.length>1" class="agent-select">Agent<select v-model="selected" :disabled="busy"><option v-for="item in agents" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
-   <p v-if="!agent">当前聊天没有可用的 Agent。</p>
+   <label v-if="agents.length>1" class="agent-select">机器人<select v-model="selected" :disabled="busy"><option v-for="item in agents" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
+   <p v-if="!agent">当前聊天没有可用的机器人。</p>
    <template v-else>
-    <div class="screen-caption"><span>{{agent.name}}的电脑</span><small v-if="state?.enabled">本地虚拟机</small></div>
-    <button class="preview" :disabled="!frame||busy" :aria-label="`打开${agent.name}的桌面`" @click="emit('desktop',agent)">
+    <div class="screen-caption"><span>{{agent.name}}的电脑</span><small v-if="state?.enabled">{{nativeSelected?(native?.host?.name??'桌面端离线'):cloudSelected?'Grok Bot 云端':'本地虚拟机'}}</small></div>
+    <button class="preview" :disabled="!frame||busy" :aria-label="`打开${agent.name}的桌面`" @click="openDesktop">
      <img v-if="frame" :src="`data:image/png;base64,${frame.data}`" :alt="`${agent.name}的电脑画面`">
-     <span v-else class="empty"><AppIcon name="monitor" :size="26"/><span>{{loading?'正在检查电脑…':!state?.enabled?'未使用电脑':!state.image?'本地虚拟机尚未准备':state.container==='missing'?'尚未创建虚拟机':state.container==='stopped'?'虚拟机已停止':'正在连接桌面…'}}</span></span>
+     <span v-else class="empty"><AppIcon name="monitor" :size="26"/><span>{{loading?'正在检查电脑…':nativeSelected?(nativeSelected==='browser'?'点击打开机器人的独立浏览器':native?.local.ready?'正在读取本机画面…':'请完成本机控制授权'):!state?.enabled?(computerChoice==='auto'?'暂无可用电脑':'未使用电脑'):!state.image?(cloudSelected?'尚未连接 Grok Bot 账号':'本地虚拟机尚未准备'):state.container==='missing'?'尚未创建虚拟机':state.container==='stopped'?'虚拟机已停止':cloudSelected?'打开云端电脑后可查看桌面':'正在连接桌面…'}}</span></span>
      <span v-if="frame" class="open-badge"><AppIcon name="external" :size="12"/>打开桌面</span>
     </button>
     <p v-if="error||state?.problem" class="problem" role="alert">{{error||state?.problem}}</p>
     <div class="computer-select">
-     <span>此 Agent 使用的电脑</span>
-     <div ref="computerTabs" class="computer-tabs" role="tablist" aria-label="此 Agent 使用的电脑" @keydown="moveComputerTab">
-      <button v-for="option in computerChoices" :id="`computer-tab-${selected}-${option.value}`" :key="option.value" type="button" role="tab" :aria-selected="computerChoice===option.value" :aria-controls="`computer-options-${selected}`" :tabindex="computerChoice===option.value?0:-1" :disabled="computerChoiceDisabled||option.disabled" @click="selectComputer(option.value)">{{option.label}}</button>
+     <span>此机器人使用的电脑</span>
+     <div ref="computerTabs" class="computer-tabs" role="tablist" aria-label="此机器人使用的电脑" @keydown="moveComputerTab">
+      <button v-for="option in computerChoices" :id="`computer-tab-${selected}-${option.value}`" :key="option.value" type="button" role="tab" :aria-selected="computerChoice===option.value" :aria-controls="`computer-options-${selected}`" :tabindex="computerChoice===option.value?0:-1" :aria-label="option.label" :title="option.description" :disabled="computerChoiceDisabled||option.disabled" @click="selectComputer(option.value)"><span><AppIcon :name="computerChoice===option.value?'check':option.icon" :size="15"/>{{option.label}}</span><small>{{option.description}}</small></button>
      </div>
     </div>
     <div :id="`computer-options-${selected}`" class="computer-options" role="tabpanel" :aria-labelledby="`computer-tab-${selected}-${computerChoice}`">
-    <template v-if="state?.enabled">
-     <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此 Agent 的独立虚拟机'}}</p>
+    <p v-if="computerChoice==='auto'" class="hint">按已有可用环境自动选择。查看此面板不会创建或唤醒云端电脑。</p>
+    <template v-if="nativeSelected">
+     <p>{{nativeSelected==='local'?'机器人将查看并操作已连接电脑的真实桌面。':'浏览器在已连接的桌面端运行，机器人和你使用同一组标签页。'}}连接电脑：{{native?.host?.name??'未连接'}}。</p>
+     <template v-if="nativeSelected==='local'">
+      <div class="permission-list"><span>{{native?.local.authorized?'✓':'○'}} 本机控制授权</span><span>{{native?.local.screen?'✓':'○'}} 屏幕录制</span><span>{{native?.local.accessibility?'✓':'○'}} 辅助功能</span></div>
+      <button v-if="!native?.local.ready" class="primary" :disabled="busy||!native?.online||!isAdmin" @click="run(()=>apiRequest(`/api/app/agents/${selected}/desktop-environment/authorize`,{method:'POST',body:{},timeoutMs:125000}))">在桌面端授权</button>
+      <p v-if="!native?.local.ready" class="hint">在连接的 Mac 上确认授权，并按系统提示开启权限；系统可能要求重新打开 App。</p>
+     </template>
+     <label v-else>浏览器资料<select :value="native?.browser.profile" :disabled="busy" @change="run(()=>apiRequest(`/api/app/agents/${selected}/browser-profile`,{method:'PUT',body:{profile:($event.target as HTMLSelectElement).value}}))"><option value="persistent">此机器人的浏览器 · 保存登录</option><option value="temporary">临时浏览器 · 退出桌面端后清除</option></select></label>
+     <button class="primary" :disabled="busy||!native?.online||(nativeSelected==='local'&&!native?.local.ready)" @click="openDesktop">{{nativeSelected==='browser'?'打开浏览器':'接管本机'}}</button>
+    </template>
+    <template v-else-if="cloudSelected">
+     <p>多个机器人共用同一台 Grok Bot 云端虚拟机、工作文件和浏览器登录。基础机器人和聊天记录保持独立。</p>
+     <button v-if="cloud?.configured" class="primary" :disabled="busy" @click="openDesktop">{{state?.controlMode==='human'?'打开控制中的桌面':'接管云端电脑'}}</button>
+     <button @click="connectionSettings=!connectionSettings">{{cloud?.configured?'云端连接设置':'连接 Grok Bot'}}</button>
+     <p v-if="!isAdmin&&!cloud?.configured" class="hint">请由管理员为当前账号配置 Grok Bot 连接。</p>
+    </template>
+    <template v-else-if="state?.enabled">
+     <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此机器人的独立虚拟机'}}</p>
      <button v-if="!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">设置本地虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='missing'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('create')">创建 {{agent.name}} 的虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='stopped'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动虚拟机</button>
      <template v-else-if="state.container==='running'">
-      <button class="primary" :disabled="!state.ready||busy" @click="emit('desktop',agent)">打开桌面</button>
+      <button class="primary" :disabled="!state.ready||busy" @click="openDesktop">打开桌面</button>
       <button v-if="state.mode==='per-bot'" :disabled="busy" @click="emit('workspace',agent)"><AppIcon name="panel"/>打开双桌面</button>
-      <p class="control-state">{{state.controlMode==='human'?'你或其他操作者正在控制电脑':state.inUse?'Agent 正在操作':'仅查看 · 虚拟机空闲'}}</p>
+      <p class="control-state">{{state.controlMode==='human'?'你或其他操作者正在控制电脑':state.inUse?'机器人正在操作':'仅查看 · 虚拟机空闲'}}</p>
      </template>
      <div v-if="!state.fixedCapacity&&state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button></div>
      <p class="hint">{{state.fixedCapacity?'桌面由 Compose 创建，数量固定。这里只连接已有共享桌面；工作目录为 /home/cua/workspace。':'重建会保留工作目录和浏览器资料。虚拟机空闲 5 分钟后自动停止。'}}</p>
      <button v-if="isAdmin" class="settings-link" @click="emit('settings')"><AppIcon name="settings" :size="14"/>本地虚拟机设置</button>
     </template>
     </div>
+    <button v-if="!cloudSelected" class="settings-link" @click="connectionSettings=!connectionSettings"><AppIcon name="globe" :size="14"/>Grok Bot 云端连接</button>
+    <GrokAuthPanel v-if="connectionSettings" :is-admin="isAdmin" @changed="emit('changed');refresh()"/>
    </template>
   </div>
  </aside>
@@ -105,3 +151,9 @@ onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
 .computer-options{display:flex;flex-direction:column;gap:14px}
 .computer-options:empty{display:none}
 </style>
+
+<style scoped>.cloud-settings{display:grid;gap:10px;padding:14px;border:1px solid var(--line);border-radius:10px}.cloud-settings input{min-height:44px;font:inherit;color:var(--text-primary);background:var(--surface-raised);border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}.computer-tabs{display:grid;grid-template-columns:1fr 1fr;overflow:visible}.computer-tabs button{text-align:left;justify-content:flex-start;white-space:normal;min-height:48px}</style>
+
+<style scoped>.computer-tabs{gap:8px;border:0;padding:0;background:transparent}.computer-tabs button{display:flex;flex-direction:column;align-items:flex-start;gap:7px;padding:12px;border:1px solid var(--line);background:var(--surface-soft);min-height:82px}.computer-tabs button span{display:flex;align-items:center;gap:6px;font-weight:500}.computer-tabs button small{font-size:11px;line-height:1.5;color:var(--text-muted)}.computer-tabs button[aria-selected=true]{border-color:var(--accent);background:var(--surface-raised);box-shadow:none}.computer-tabs button:disabled{opacity:.55}</style>
+
+<style scoped>.permission-list{display:grid;gap:8px;font-size:13px;color:var(--text-secondary)}</style>

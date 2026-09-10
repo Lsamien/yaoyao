@@ -40,8 +40,8 @@ test('native update window works without a Web service, verifies a real DMG and 
     assert.equal(denied, true)
     const opened = app.waitForEvent('window')
     await app.evaluate(({ net, shell, Menu }, fixture) => {
-      const tag = `v${fixture.version}`, api = 'https://api.github.com/repos/Lsamien/hermes-yaoyao'
-      const prefix = `https://github.com/Lsamien/hermes-yaoyao/releases/download/${tag}/`
+      const tag = `v${fixture.version}`, api = 'https://api.github.com/repos/Lsamien/yaoyao'
+      const prefix = `https://github.com/Lsamien/yaoyao/releases/download/${tag}/`
       const commit = 'a'.repeat(40)
       net.fetch = async url => {
         const path = String(url)
@@ -50,7 +50,7 @@ test('native update window works without a Web service, verifies a real DMG and 
           { name: 'SHA256SUMS.txt', size: fixture.sums.length, state: 'uploaded', browser_download_url: prefix + 'SHA256SUMS.txt' },
         ] })
         if (path === `${api}/git/ref/tags/${tag}`) return Response.json({ object: { type: 'commit', sha: commit } })
-        if (path === `https://raw.githubusercontent.com/Lsamien/hermes-yaoyao/${commit}/release.json`) return Response.json({ schemaVersion: 1, releaseVersion: fixture.version, webVersion: fixture.version, gitTag: tag })
+        if (path === `https://raw.githubusercontent.com/Lsamien/yaoyao/${commit}/release.json`) return Response.json({ schemaVersion: 1, releaseVersion: fixture.version, webVersion: fixture.version, gitTag: tag })
         if (path === prefix + 'SHA256SUMS.txt') return new Response(fixture.sums)
         if (path === prefix + fixture.name) return new Response(Buffer.from(fixture.data, 'base64'))
         throw new Error('Unexpected update request')

@@ -234,7 +234,7 @@ export class RealtimeBroker {
           if (!c.principal.valid()) throw new HttpError(401, 'Authentication expired', 'authentication_required')
           route.workingDirectory = await applyWorkingDirectory(async (method, params) => {
             const response = await this.rpc(u, method, params)
-            if (response.error) throw new HttpError(502, response.error.message || '无法切换到 Agent 工作目录', 'working_directory_rejected')
+            if (response.error) throw new HttpError(502, response.error.message || '无法切换到机器人工作目录', 'working_directory_rejected')
             return response.result
           }, route.runtime, cwd, route.workingDirectory, route.cwd)
           if (route.workingDirectory) route.cwd = route.workingDirectory.resolved

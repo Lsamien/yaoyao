@@ -134,7 +134,7 @@ describe('server security boundary', () => {
     expect(value.host).toBe('127.0.0.1')
     expect(value.insecureLan).toBe(false)
     expect(value).not.toHaveProperty('yaoyaoPluginSource')
-    expect(value.releaseSource).toBe('https://github.com/Lsamien/hermes-yaoyao.git')
+    expect(value.releaseSource).toBe('https://github.com/Lsamien/yaoyao.git')
     expect(value.allowRemoteUpdate).toBe(false)
   })
 

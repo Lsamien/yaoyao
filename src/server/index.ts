@@ -9,8 +9,17 @@ import { isLocalAuthorizationTarget } from './loopbackAuthorization.js'
 import { acquireServiceInstance } from './serviceInstance.js'
 import { readReleaseManifest } from './releases.js'
 import { readBuildIdentity } from './buildIdentity.js'
+import { migrateDataHome } from '../../bin/lib/data-migration.mjs'
+import { legacyDataHome, resolveDataHome } from '../../bin/lib/data-home.mjs'
+import { spawn } from 'node:child_process'
 
+migrateDataHome(resolveDataHome(process.env.YAOYAO_HOME || process.env.HERMES_YAOYAO_HOME, { preserveActiveUpdate: true }))
 const config = loadServerConfig()
+if (config.home === legacyDataHome() && process.platform === 'darwin') {
+  const child = spawn(process.execPath, [resolve(process.cwd(), 'bin/migrate-data-home.mjs'), String(config.port)], { detached: true, stdio: 'ignore' })
+  child.on('error', error => console.error('数据迁移助手启动失败：', error.message))
+  child.unref()
+}
 const instance = acquireServiceInstance(config.home, readReleaseManifest(resolve(process.cwd(), 'release.json')).webVersion, process.env.HERMES_YAOYAO_DESKTOP === '1', readBuildIdentity(process.cwd()))
 process.once('exit', () => instance.release())
 const runtime = createApplication({
@@ -26,7 +35,7 @@ let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).
 // The capability is loopback-only and never shared with the Web renderer.
 runtime.app.middleware.unshift(instance.middleware(shutdown, () => runtime.realtime.broker.idleForUpdate
-  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate))
+  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate, ctx=>runtime.desktopEnvironments.bridge(ctx)))
 
 if (runtime.config.production) {
   const dist = resolve(process.env.HERMES_YAOYAO_STATIC_DIR || resolve(process.cwd(), 'dist'))
@@ -73,15 +82,15 @@ if (runtime.config.production) {
 
 nodeRuntime.server.once('error', (error: NodeJS.ErrnoException) => {
   if (error.code === 'EADDRINUSE') {
-    console.error(`夭夭 Web could not start: ${runtime.config.host}:${runtime.config.port} is already in use`)
+    console.error(`夭夭 AI could not start: ${runtime.config.host}:${runtime.config.port} is already in use`)
   } else {
-    console.error(`夭夭 Web could not start: ${error.message}`)
+    console.error(`夭夭 AI could not start: ${error.message}`)
   }
   void shutdown().finally(() => { process.exitCode = 1 })
 })
 nodeRuntime.server.listen(runtime.config.port, runtime.config.host, () => {
   const protocol = runtime.config.tlsCert ? 'https' : 'http'
-  console.log(`夭夭 Web listening on ${protocol}://${runtime.config.host}:${runtime.config.port}`)
+  console.log(`夭夭 AI listening on ${protocol}://${runtime.config.host}:${runtime.config.port}`)
   instance.publish(`${protocol}://${runtime.config.host}:${runtime.config.port}`)
   if (runtime.config.insecureLan) {
     console.warn('Warning: trusted-LAN HTTP mode is enabled; credentials are not encrypted in transit.')

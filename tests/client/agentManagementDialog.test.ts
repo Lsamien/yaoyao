@@ -30,7 +30,7 @@ describe('Agent management dialog', () => {
   it('keeps non-admin users on identity management only', async () => {
     const wrapper = mount(AgentIdentityDialog, { attachTo: document.body, props: { open: true, profile, isAdmin: false } })
     await nextTick()
-    expect(document.querySelector('[aria-label="Agent 管理"]')?.textContent).toContain('自定义角色')
+    expect(document.querySelector('[aria-label="机器人管理"]')?.textContent).toContain('自定义角色')
     expect(document.querySelector('.management-tabs')).toBeNull()
     expect(document.body.textContent).not.toContain('模型服务')
     expect(document.body.textContent).toContain('custom:tingly / omni')

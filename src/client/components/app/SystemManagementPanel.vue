@@ -414,8 +414,8 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
           <small>{{ user.role === 'admin' ? '管理员' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
         </span>
         <template v-if="user.role !== 'admin'">
-          <label class="user-assignment">基础 Agent
-            <select v-model="userAssignments[user.id]" multiple :disabled="busy" :aria-label="`分配给 ${user.username} 的基础 Agent`">
+          <label class="user-assignment">基础机器人
+            <select v-model="userAssignments[user.id]" multiple :disabled="busy" :aria-label="`分配给 ${user.username} 的基础机器人`">
               <option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option>
             </select>
           </label>
@@ -428,7 +428,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
       <form class="user-create-form" aria-label="创建用户" @submit.prevent="add">
         <label><span>新用户名</span><input v-model="username" name="managed-username" autocomplete="off" :disabled="busy" /></label>
         <label><span>临时密码</span><input v-model="password" name="managed-temporary-password" type="password" autocomplete="new-password" :disabled="busy" /><small>至少 8 位</small></label>
-        <label class="create-assignment"><span>分配基础 Agent</span><select v-model="assignedProfiles" multiple :disabled="busy" aria-label="新子账号的基础 Agent"><option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option></select><small>子账号仅可使用 Bot 模式，基于分配的 Agent 创建自己的 Agent；未分配时不可创建。保存权限后需重新登录。</small></label>
+        <label class="create-assignment"><span>分配基础机器人</span><select v-model="assignedProfiles" multiple :disabled="busy" aria-label="新子账号的基础机器人"><option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option></select><small>子账号仅可使用 Bot 模式，基于分配的机器人创建自己的机器人；未分配时不可创建。保存权限后需重新登录。</small></label>
         <button class="solid-button" :disabled="busy || !username.trim() || password.length < 8">创建用户</button>
       </form>
     </div>

@@ -86,7 +86,7 @@ export class WorkspaceTaskCoordinator {
     const goal = this.store.require<AgentGoal>(owner, 'goal', goalId)
     const team = this.store.require<Conversation>(owner, 'conversation', goal.conversationId)
     if (!this.authorized(owner, goal) || goal.coordinatorId !== actorId || team.administratorId !== actorId)
-      throw new HttpError(403, '当前 Agent 无权管理这个任务', 'goal_forbidden')
+      throw new HttpError(403, '当前机器人无权管理这个任务', 'goal_forbidden')
     return goal
   }
   private authorized(owner: string, goal: AgentGoal): boolean {

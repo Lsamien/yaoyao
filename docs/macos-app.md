@@ -1,6 +1,6 @@
 # macOS App 与本地服务
 
-App、Web 服务、Vue 界面和 Runner 同仓维护。正式 App 在每个构建首次启动时，将较旧的本机 Web 同步为配套构建；已有更新的 Web 保留。Web 由独立 LaunchAgent 运行，App 连接它。源码开发模式仍使用包内子进程。默认数据目录为 `~/.hermes-yaoyao`，默认 Web 端口为 15300。Hermes 是独立基础运行时，由本地服务检测并按既有托管逻辑启动；隔离电脑另需本机 Docker 或 Podman。
+App、Web 服务、Vue 界面和 Runner 同仓维护。正式 App 在每个构建首次启动时，将较旧的本机 Web 同步为配套构建；已有更新的 Web 保留。Web 由独立 LaunchAgent 运行，App 连接它。源码开发模式仍使用包内子进程。默认数据目录为 `~/.yaoyao`，默认 Web 端口为 15300。Hermes 是独立基础运行时，由本地服务检测并按既有托管逻辑启动；隔离电脑另需本机 Docker 或 Podman。
 
 ## 生命周期与权限
 
@@ -31,7 +31,7 @@ App 新增“检查 App 更新…”窗口，直接从官方 GitHub 检查稳定
 - 原有旧版服务缺少协作暂停接口时，需要确认无未完成任务及本机服务进程的客户端连接。忙碌时 App 先连接已验证的原 Web，在菜单提示同步待完成并提供重试，不强行中断聊天。不能验证身份、TLS 或数据归属的服务不接管，启动页显示错误及恢复操作。
 - 回退单独通过 Web 的回滚入口处理。只在数据库结构兼容时切回程序并保留现有数据；结构已变化或缺少兼容性记录时拒绝直接降级，不能用旧备份覆盖升级后的新消息。
 
-正式后台服务的程序位于 `~/.local/share/hermes-yaoyao/releases`，`current` 指向启用的构建；数据仍在 `~/.hermes-yaoyao`。App 签名资源不被 Web 更新器改写。开发模式的包内服务仍随开发 App 管理，不提供服务内更新。
+正式后台服务的程序位于 `~/.local/share/hermes-yaoyao/releases`，`current` 指向启用的构建；数据仍在 `~/.yaoyao`。App 签名资源不被 Web 更新器改写。开发模式的包内服务仍随开发 App 管理，不提供服务内更新。
 
 ## 构建与验收
 
@@ -40,7 +40,7 @@ npm run desktop:build
 npm run desktop:test
 npm run desktop:pack
 codesign --verify --deep --strict desktop-release/mac-arm64/夭夭.app
-hdiutil verify desktop-release/Yaoyao-0.4.3-arm64.dmg
+hdiutil verify desktop-release/Yaoyao-0.4.4-arm64.dmg
 ```
 
 开发 App 的 6 项测试通过：真实内置服务启动、账号与 Runner 连接、关闭窗口保持运行、服务崩溃恢复、外部客户端不误停服务、退出清理、加密配置再次启动、偏好保存及手动重新打开、版本不符拒绝、钥匙串失败保护。另有更新器 14 项定向测试通过，包含 App 禁用源码更新及回退。
@@ -58,4 +58,4 @@ Electron 初始化时设置其钥匙串项目名称（[v43.4.0 源码](https://g
 
 最终实际签名 App 的完整 Runner 导入、加密保存、服务崩溃恢复、窗口关闭保持连接、退出清理和再次打开自动连接均已通过；另有独立的核心服务生命周期测试通过。新加密助手在实际签名 App 中验证所属路径和签名团队。安装包经挂载检查，开发专用助手没有进入分发包。
 
-v0.4.3 同时发布 Web 与 macOS Apple Silicon DMG，见 [发布说明](releases/v0.4.3.md)。正式 App 首次启动按上文同步规则升级较旧的本机 Web；已有更新版本保留。独立预览应指定独立 `HERMES_YAOYAO_HOME` 和 `HERMES_YAOYAO_DESKTOP_PORT`。
+v0.4.4 同时发布 Web 与 macOS Apple Silicon DMG，见 [发布说明](releases/v0.4.4.md)。正式 App 首次启动按上文同步规则升级较旧的本机 Web；已有更新版本保留。独立预览应指定独立 `HERMES_YAOYAO_HOME` 和 `HERMES_YAOYAO_DESKTOP_PORT`。

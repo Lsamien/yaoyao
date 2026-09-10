@@ -1,6 +1,6 @@
 # GitHub 版本升级
 
-官方发布源为 `https://github.com/Lsamien/hermes-yaoyao.git`。检查使用公开稳定 Release，不需要 GitHub 账号、访问令牌或安装 GitHub CLI；尚未发布的标签和预发布版本不会被选为更新。
+官方发布源为 `https://github.com/Lsamien/yaoyao.git`。检查使用公开稳定 Release，不需要 GitHub 账号、访问令牌或安装 GitHub CLI；尚未发布的标签和预发布版本不会被选为更新。
 
 ## Web
 
@@ -22,8 +22,12 @@ macOS 独立 Web 继续使用现有升级事务：构建新版本、等待任务
 
 ## 旧安装迁移
 
-加载新版本后，空发布源以及官方旧仓库 `git.samien.cn/samien/hermes-yaoyao`、`192.168.153.8:3000/samien/hermes-yaoyao` 的无凭据 HTTP(S) 地址会映射到 GitHub；兼容 `.git` 后缀、尾部斜杠和既有 `git@git.samien.cn:samien/hermes-yaoyao.git` 地址。其他用户自定义仓库保持原样。
+加载新版本后，空发布源、`github.com/Lsamien/hermes-yaoyao`（包括 HTTPS 与 SSH）以及官方旧仓库 `git.samien.cn/samien/hermes-yaoyao`、`192.168.153.8:3000/samien/hermes-yaoyao` 的无凭据 HTTP(S) 地址会映射到 GitHub；兼容 `.git` 后缀、尾部斜杠和既有 `git@git.samien.cn:samien/hermes-yaoyao.git` 地址。其他用户自定义仓库保持原样。
 
 运行时先使用归一化后的源；下次生成或更新本应用管理的 LaunchAgent 配置时持久化，保留地址、TLS、上游等其他环境变量。不会直接改写用户维护的环境文件。
 
 旧程序不会凭空获得迁移能力：首次需手动安装包含此功能的新 App，或更新源码并重启。既有发布标签和安装包不会被改写。
+
+从 v0.4.4 起默认应用数据为 `~/.yaoyao`，兼容读取旧配置并迁移 `~/.hermes-yaoyao`。迁移按服务所有权和 SQLite 锁检查，旧升级事务完成后才改名；上传与缓存索引、通知配置及更新记录中的内部路径一起更新。新旧目录都已有数据时不覆盖。`YAOYAO_HOME` 可覆盖默认值，既有 `HERMES_YAOYAO_HOME` 继续有效。
+
+现有 LaunchAgent 标识和 `~/.local/share/hermes-yaoyao` 程序目录用于延续服务与回滚历史，不是 Web 应用数据目录。客户端历史缓存与身份命名空间也保留兼容。

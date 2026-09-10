@@ -8,6 +8,8 @@ import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { normalizeReleaseSource } from './lib/release-source.mjs'
+import { resolveDataHome } from './lib/data-home.mjs'
+import { migrateDataHome } from './lib/data-migration.mjs'
 
 const label = 'com.samien.hermes-yaoyao'
 const sourceProjectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -16,7 +18,7 @@ const uid = process.getuid?.() ?? 501
 const domain = `gui/${uid}`
 const launchAgents = join(homedir(), 'Library', 'LaunchAgents')
 const plistPath = join(launchAgents, `${label}.plist`)
-const dataHome = process.env.HERMES_YAOYAO_HOME || join(homedir(), '.hermes-yaoyao')
+const dataHome = resolveDataHome(process.env.YAOYAO_HOME || process.env.HERMES_YAOYAO_HOME)
 const logDir = join(homedir(), 'Library', 'Logs')
 const serverEntry = join(serviceRoot, 'dist-server', 'server', 'index.js')
 
@@ -70,11 +72,12 @@ export function launchAgentPlist(options = {}) {
   const envEntries = {
     PATH: `${dirname(node)}:${join(homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
     NODE_ENV: 'production',
-    HERMES_YAOYAO_HOME: dataHome,
     HERMES_YAOYAO_PORT: '15300',
     HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:9119',
     HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1',
     ...environment(options.environment),
+    HERMES_YAOYAO_HOME: resolveDataHome(options.environment?.YAOYAO_HOME || options.environment?.HERMES_YAOYAO_HOME || dataHome),
+    YAOYAO_HOME: resolveDataHome(options.environment?.YAOYAO_HOME || options.environment?.HERMES_YAOYAO_HOME || dataHome),
     HERMES_YAOYAO_HOST: '0.0.0.0',
     HERMES_YAOYAO_ALLOW_INSECURE_LAN: '1',
   }
@@ -153,9 +156,10 @@ async function install() {
     throw new Error('未找到生产构建，请先运行 npm run build')
   }
   await mkdir(launchAgents, { recursive: true })
-  await mkdir(dataHome, { recursive: true, mode: 0o700 })
   await mkdir(logDir, { recursive: true })
   if (loaded()) run('launchctl', ['bootout', `${domain}/${label}`])
+  migrateDataHome(dataHome)
+  await mkdir(dataHome, { recursive: true, mode: 0o700 })
   await writeFile(plistPath, launchAgentPlist(), { mode: 0o600 })
   await chmod(plistPath, 0o600)
   run('plutil', ['-lint', plistPath], { inherit: true })
@@ -222,7 +226,7 @@ async function main() {
     if (command === 'uninstall') return uninstall()
   }
   if (group === 'uploads' && command === 'prune') return pruneUploads(args)
-  process.stdout.write(`夭夭 Web\n\n用法：\n  hermes-yaoyao service install|start|stop|status|uninstall\n  hermes-yaoyao uploads prune --older-than 30 --yes\n`)
+  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao service install|start|stop|status|uninstall\n  yaoyao uploads prune --older-than 30 --yes\n`)
 }
 
 export function isMainModule(entry = process.argv[1]) {

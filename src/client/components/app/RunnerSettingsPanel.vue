@@ -86,7 +86,7 @@ onMounted(()=>{void action(refresh)})
         <label>Hermes 源码目录<input v-model.trim="hermesSource" placeholder="留空使用默认安装"></label>
         <label>Hermes 配置目录<input v-model.trim="hermesHome" placeholder="留空使用默认安装"></label>
         <small>留空时在执行电脑上查找 ~/.hermes/hermes-agent/venv/bin/python。自定义安装请填写绝对路径；镜像可在节点连接后于本页准备。</small>
-        <small>这是外部执行节点的高级配置。本机虚拟机可直接在应用设置中准备，并从 Agent 聊天的电脑面板启用。</small>
+        <small>这是外部执行节点的高级配置。本机虚拟机可直接在应用设置中准备，并从机器人聊天的电脑面板启用。</small>
       </fieldset>
       <button class="solid-button" :disabled="busy || !name.trim() || !profiles.trim()">注册节点</button>
     </form>
@@ -95,7 +95,7 @@ onMounted(()=>{void action(refresh)})
       <p>配置包含本节点的连接凭据，仅本次可下载。将文件放在 Hermes 所在电脑，设置为仅自己可读：</p>
       <code v-if="bundleAvailable">mkdir -p yaoyao-runner<br>tar -xzf yaoyao-runner.tar.gz -C yaoyao-runner<br>chmod 600 runner.json<br>node yaoyao-runner/runner.mjs --config /完整路径/runner.json</code>
       <code v-else>chmod 600 runner.json<br>npm run runner -- --config /完整路径/runner.json</code>
-      <small>{{bundleAvailable?'在运行 Hermes 和 Docker/Podman 的电脑上执行，节点连接后返回本地虚拟机设置准备桌面。':'在 hermes-yaoyao 项目中先运行 npm run build。'}}配置丢失后可停用节点并重新注册。</small>
+      <small>{{bundleAvailable?'在运行 Hermes 和 Docker/Podman 的电脑上执行，节点连接后返回本地虚拟机设置准备桌面。':'在 yaoyao 项目中先运行 npm run build。'}}配置丢失后可停用节点并重新注册。</small>
     </div>
     <p v-if="error" class="runner-error" role="alert">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>

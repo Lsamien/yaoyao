@@ -5,7 +5,7 @@ import { mentionedAgents } from './workspaceMentions.js'
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceMessage as Message, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 
 export const NO_REPLY = '[[YAOYAO_NO_REPLY_V1]]'
-export const HOST_FALLBACK = '我还不能确定你希望我处理什么，请补充具体目标、范围，或明确需要我协调的 Agent。'
+export const HOST_FALLBACK = '我还不能确定你希望我处理什么，请补充具体目标、范围，或明确需要我协调的机器人。'
 const terminal = (status: string) => ['complete', 'failed', 'interrupted'].includes(status)
 export interface Work {
   resourceWait?:boolean

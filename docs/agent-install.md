@@ -1,4 +1,4 @@
-# 部署夭夭 Web
+# 部署夭夭 AI
 
 ## 前提
 
@@ -26,7 +26,7 @@ docker compose --env-file docker.env config --quiet
 docker compose --env-file docker.env up -d --build
 ```
 
-Compose 将 Web 的 15300 端口发布到宿主机，使用 `yaoyao-data` 命名卷保存 `/var/lib/hermes-yaoyao`。宿主机连接、访问配置、备份及升级见 [Docker 部署说明](docker-install.md)。
+Compose 将 Web 的 15300 端口发布到宿主机，使用 `yaoyao-data` 命名卷保存 `/home/node/.yaoyao`。宿主机连接、访问配置、备份及升级见 [Docker 部署说明](docker-install.md)。
 
 ## 验收
 

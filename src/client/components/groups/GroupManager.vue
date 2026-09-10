@@ -270,11 +270,11 @@ function statusLabel(status: GroupAgent['status']): string {
         <input ref="avatarInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" @change="chooseAvatar" />
       </div>
       <p v-if="avatarError" class="avatar-error" role="alert">{{ avatarError }}</p>
-      <label v-if="roomInstructionsEnabled"><span>说明<small>所有 Agent 都会在回复前查阅，可填写协作规则和形式准则。</small></span><textarea v-model="form.instructions" maxlength="4000" rows="5" aria-label="团队说明" placeholder="例如：先核对事实；结论使用中文；发布前等待确认。" @change="saveRoom" /></label>
+      <label v-if="roomInstructionsEnabled"><span>说明<small>所有机器人都会在回复前查阅，可填写协作规则和形式准则。</small></span><textarea v-model="form.instructions" maxlength="4000" rows="5" aria-label="团队说明" placeholder="例如：先核对事实；结论使用中文；发布前等待确认。" @change="saveRoom" /></label>
       <label class="rounds"><span>最多回复轮数<small>-1 表示无限</small></span><input v-model.number="form.replyRounds" type="number" min="-1" max="100" aria-label="最多回复轮数" @change="saveRoom" /></label>
       <label v-if="hostFlowEnabled" class="flow-mode">
         <span>协作模式<small>管理员可按依赖逐步调度，也可一次 @ 多人并列执行。</small></span>
-        <select v-model="form.orchestrationMode" aria-label="协作模式" :disabled="busy || hasActiveAgents" :title="hasActiveAgents ? '请等待当前回复完成或先中断 Agent' : ''" @change="saveRoom">
+        <select v-model="form.orchestrationMode" aria-label="协作模式" :disabled="busy || hasActiveAgents" :title="hasActiveAgents ? '请等待当前回复完成或先中断机器人' : ''" @change="saveRoom">
           <option value="free">自由讨论</option>
           <option value="host">管理员协调</option>
         </select>
@@ -301,8 +301,8 @@ function statusLabel(status: GroupAgent['status']): string {
       </div>
 
       <div v-if="agents.length < 8 && availableProfiles?.length" class="add-agent">
-        <select aria-label="选择要添加的 Agent" @change="($event.target as HTMLSelectElement).value && emit('addAgent', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
-          <option value="">添加 Agent…</option>
+        <select aria-label="选择要添加的机器人" @change="($event.target as HTMLSelectElement).value && emit('addAgent', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
+          <option value="">添加机器人…</option>
           <option v-for="profile in availableProfiles" :key="profile.id" :value="profile.id">{{ profile.displayName }} · {{ profile.nodeLabel }}</option>
         </select>
       </div>
@@ -316,18 +316,18 @@ function statusLabel(status: GroupAgent['status']): string {
 
   <Teleport to="body">
     <div v-if="selectedAgent && agentDrafts[selectedAgent.id]" class="agent-settings-backdrop" @click.self="closeAgentSettings">
-      <section class="agent-settings-dialog" role="dialog" aria-modal="true" :aria-label="`${selectedAgent.displayName} Agent 设置`" @keydown.esc="closeAgentSettings">
+      <section class="agent-settings-dialog" role="dialog" aria-modal="true" :aria-label="`${selectedAgent.displayName}机器人设置`" @keydown.esc="closeAgentSettings">
         <header>
           <span>
-            <small>Agent 设置</small>
+            <small>机器人设置</small>
             <strong class="settings-agent-name">{{ selectedAgent.displayName }}<em v-if="hostEnabled && selectedAgent.isHost" class="host-badge">管理员</em></strong>
           </span>
-          <button class="agent-settings-close" type="button" aria-label="关闭 Agent 设置" title="关闭 Agent 设置" @click="closeAgentSettings"><AppIcon name="close" :size="17" /></button>
+          <button class="agent-settings-close" type="button" aria-label="关闭机器人设置" title="关闭机器人设置" @click="closeAgentSettings"><AppIcon name="close" :size="17" /></button>
         </header>
         <fieldset class="agent-editor">
-          <legend class="sr-only">{{ selectedAgent.displayName }} Agent 设置</legend>
+          <legend class="sr-only">{{ selectedAgent.displayName }} 机器人设置</legend>
           <div class="editor-grid">
-            <label v-if="isRemoteAgent(selectedAgent)"><span>群内名称<small>仅影响此群，会同步到其他设备；不修改远端 Agent 名称。</small></span><input v-model="agentDrafts[selectedAgent.id].displayName" maxlength="100" aria-label="群内名称" @input="markDirty(selectedAgent.id)" /></label>
+            <label v-if="isRemoteAgent(selectedAgent)"><span>群内名称<small>仅影响此群，会同步到其他设备；不修改远端机器人名称。</small></span><input v-model="agentDrafts[selectedAgent.id].displayName" maxlength="100" aria-label="群内名称" @input="markDirty(selectedAgent.id)" /></label>
             <label><span>职责说明</span><textarea v-model="agentDrafts[selectedAgent.id].description" rows="3" maxlength="500" aria-label="职责说明" @input="markDirty(selectedAgent.id)" /></label>
             <label>
               <span>模型</span>
@@ -358,11 +358,11 @@ function statusLabel(status: GroupAgent['status']): string {
             <label><input v-model="agentDrafts[selectedAgent.id].enabled" type="checkbox" aria-label="启用" @change="markDirty(selectedAgent.id)" />启用</label>
             <label><input v-model="agentDrafts[selectedAgent.id].replyWithoutMention" type="checkbox" :aria-label="hostEnabled ? '无需 @ 也回复' : '自动回复'" @change="markDirty(selectedAgent.id)" />{{ hostEnabled ? '无需 @ 也回复' : '自动回复' }}</label>
           </div>
-          <p v-if="hostEnabled" class="host-explanation">{{ form.orchestrationMode === 'host' ? '管理员协调下此开关暂不触发自动并发；切回自由讨论后继续按原设置生效。' : (selectedAgent.isHost ? '管理员始终处理用户无 @ 消息；此开关仅决定是否自动参与 Agent 发出的无 @ 消息。' : '开启后，该成员会自动参与未明确 @ 的消息；用户无 @ 消息仍由管理员兜底。') }}</p>
+          <p v-if="hostEnabled" class="host-explanation">{{ form.orchestrationMode === 'host' ? '管理员协调下此开关暂不触发自动并发；切回自由讨论后继续按原设置生效。' : (selectedAgent.isHost ? '管理员始终处理用户无 @ 消息；此开关仅决定是否自动参与机器人发出的无 @ 消息。' : '开启后，该成员会自动参与未明确 @ 的消息；用户无 @ 消息仍由管理员兜底。') }}</p>
           <p v-if="agentUpdateError?.[selectedAgent.id]" class="agent-save-error" role="alert">{{ agentUpdateError[selectedAgent.id] }}</p>
           <div class="editor-actions">
             <button class="quiet-button" type="button" :disabled="busy || !hasAgentChanges(selectedAgent)" @click="resetAgent(selectedAgent)">取消更改</button>
-            <button class="save-agent" type="button" :disabled="busy || !hasAgentChanges(selectedAgent)" @click="saveAgent(selectedAgent)">保存 Agent 设置</button>
+            <button class="save-agent" type="button" :disabled="busy || !hasAgentChanges(selectedAgent)" @click="saveAgent(selectedAgent)">保存机器人设置</button>
           </div>
         </fieldset>
       </section>

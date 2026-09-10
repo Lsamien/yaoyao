@@ -27,16 +27,18 @@ FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     HERMES_YAOYAO_HOST=0.0.0.0 \
     HERMES_YAOYAO_PORT=15300 \
-    HERMES_YAOYAO_HOME=/var/lib/hermes-yaoyao \
+    HERMES_YAOYAO_HOME=/home/node/.yaoyao \
     HERMES_YAOYAO_CHAT_CACHE_MODE=prefer-local \
     HERMES_YAOYAO_SUPERVISE_DASHBOARD=0 \
     HERMES_YAOYAO_LOCAL_VM_HOST=runner
 
 WORKDIR /app
 
-RUN install -d -o node -g node -m 0700 /var/lib/hermes-yaoyao
+RUN install -d -o node -g node -m 0700 /home/node/.yaoyao
 
 COPY --chown=node:node package.json package-lock.json release.json ./
+COPY --chown=node:node LICENSE NOTICE THIRD_PARTY_NOTICES.md ./
+COPY --chown=node:node licenses ./licenses
 COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/dist-server ./dist-server

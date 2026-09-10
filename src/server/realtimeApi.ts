@@ -175,7 +175,7 @@ export class RealtimeAPI {
       this.checkMutation(ctx, Boolean(device))
       if (ctx.method === 'POST' && path === '/channels') {
         const body = await this.body(ctx)
-        if (ctx.state.workspaceAgentExport && body.channel !== 'chat') throw new HttpError(403,'Agent 仅支持聊天通道','invalid_channel')
+        if (ctx.state.workspaceAgentExport && body.channel !== 'chat') throw new HttpError(403,'机器人仅支持聊天通道','invalid_channel')
         if (body.channel !== 'chat' && body.channel !== 'groups') throw new HttpError(400, 'Invalid channel', 'invalid_channel')
         const c = await this.broker.create(principal, body.channel, body.channel === 'groups'
           ? { epoch: canonicalEpoch(body.epoch), cursor: groupCursor(body.cursor) } : undefined)

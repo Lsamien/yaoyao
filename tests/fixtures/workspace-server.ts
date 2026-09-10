@@ -1,3 +1,5 @@
+import {nativeEnvironmentFixture} from './native-environment.js'
+import {FixtureGrokAuthProvider} from './grok-auth-provider.js'
 /** Isolated, deterministic Hermes fixture. Optional team-tool readiness is only for editor UI tests. */
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
@@ -334,8 +336,11 @@ if (!existsSync(usersPath)) {
   )
 }
 const auth = new LocalAuthStore(home, false)
-const runtime = createApplication({ config, auth }),
+const grokAuth=process.env.WORKSPACE_FIXTURE_GROK_AUTH==='1'?new FixtureGrokAuthProvider():undefined
+const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch }),
   node = createNodeServer(runtime)
+const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?nativeEnvironmentFixture(runtime,home,port):undefined
+runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/browser-page')return next();ctx.type='html';ctx.body='<!doctype html><meta charset="utf-8"><title>浏览器操作验收</title><body style="font:22px sans-serif;padding:48px;background:#edf4ff"><h1>机器人的独立浏览器</h1><p>这是隔离的真实浏览器验收页面。</p><input aria-label="输入内容"><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">确认</button><output></output></body>'})
 runtime.app.use((ctx,next) => {
   if (ctx.path !== '/__test/task-plan' || ctx.method !== 'POST') return next()
   const owner=auth.require(ctx).id
@@ -353,6 +358,17 @@ runtime.app.use((ctx,next) => {
   runtime.workspace.event(owner,'assignment.changed',assignment,team.id)
   runtime.workspace.saveMessage(owner,{id:randomUUID(),conversationId:source.id,seq:0,role:'system',content:`任务已有结果。[打开任务](/conversations/${team.id}?taskId=${first.id})`,reasoning:'',status:'complete',attachments:[],tools:[],createdAt:Date.now()})
   ctx.body={conversationId:team.id,firstTaskId:first.id,secondTaskId:second.id,sourceConversationId:source.id}
+})
+runtime.app.use((ctx,next)=>{
+ if(!grokAuth||!ctx.path.startsWith('/__test/grok-auth/')||ctx.method!=='POST')return next()
+ const owner=auth.requireAdmin(ctx).id
+ if(ctx.path==='/__test/grok-auth/complete'){
+  const attempt=runtime.grokAuth.snapshot(owner).attempt
+  if(!attempt?.loginUrl){ctx.status=409;ctx.body={error:'No pending fixture authorization'};return}
+  grokAuth.accept(new URL(attempt.loginUrl).searchParams.get('uuid')!);ctx.body={ok:true};return
+ }
+ if(ctx.path==='/__test/grok-auth/reject'){grokAuth.rejectCloud=true;ctx.body={ok:true};return}
+ return next()
 })
 const computerFixtures=new Map<string,{mode:string;generation:number;controlId?:string;actions:unknown[]}>()
 const originalComputer=runtime.runners.computer.bind(runtime.runners),originalRunner=runtime.runners.computerRunner.bind(runtime.runners),originalSharedRunner=runtime.runners.sharedComputerRunner.bind(runtime.runners)
@@ -407,6 +423,7 @@ await new Promise<void>((resolve) => node.server.listen(port, '127.0.0.1', resol
 process.stdout.write(`Workspace fixture http://127.0.0.1:${port}; home=${home}\n`)
 for (const signal of ['SIGTERM', 'SIGINT'])
   process.once(signal, () => {
+    closeNative?.()
     void node.close().then(() => {
       for (const socket of wss.clients) socket.terminate()
       wss.close()

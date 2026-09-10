@@ -105,7 +105,7 @@ export class ComputerRuntime {
       return
     }
     const resolved=await this.resolveWorkspace(profile);authorize()
-    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.config.imageId,cwd:resolved.cwd,network:this.config.network??'none'},action,authorize)
+    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.config.imageId,cwd:meta.environmentId!==meta.agentId?(this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.config.network??'none'},action,authorize)
   }
 }
 export class ComputerGateway {
@@ -136,7 +136,7 @@ export class ComputerGateway {
       const profile=String(params.profile),resolved=await this.runtime.resolve(profile,this.controller.signal)
       await this.authorized();this.guard()
       const session:WorkerSession=method==='session.resume'?this.runtime.session(String(params.session_id),this.meta,profile):{id:randomUUID(),agentId:this.meta.agentId,ownerKey:this.meta.ownerKey,environmentId:this.meta.environmentId,profile,cwd:resolved.cwd,configuredCwd:resolved.configuredCwd,history:[]}
-      session.cwd=resolved.cwd;session.configuredCwd=resolved.configuredCwd
+      session.cwd=this.meta.environmentId!==this.meta.agentId?(this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd;session.configuredCwd=resolved.configuredCwd
       await this.runtime.pool.configure(this.spec(session),()=>this.guard())
       await this.authorized()
       const controller=new AbortController(),lease=await this.runtime.pool.acquire(this.spec(session),this.workId,()=>{this.guard();if(controller.signal.aborted)throw new Error('cancelled')},controller.signal)
@@ -282,7 +282,7 @@ export class ComputerGateway {
   get specification(){return this.live?this.spec(this.live.session):undefined}
   async takeControl(controlId:string,authorize:()=>void):Promise<ComputerLease>{
     const live=this.live
-    if(!live||!this.active)throw new HttpError(409,'Agent 已不在执行，请重新打开电脑','computer_not_active')
+    if(!live||!this.active)throw new HttpError(409,'机器人已不在执行，请重新打开电脑','computer_not_active')
     if(live.pauseJob)return live.pauseJob
     live.paused=true;this.event('computer.paused',{stage:'pausing'})
     live.pauseJob=(async()=>{
@@ -304,7 +304,7 @@ export class ComputerGateway {
   }
   async giveBack(notes:string):Promise<void>{
     const live=this.live
-    if(!live?.paused)throw new HttpError(409,'Agent 没有处于接管状态','computer_not_paused')
+    if(!live?.paused)throw new HttpError(409,'机器人没有处于接管状态','computer_not_paused')
     await live.pauseJob;await this.authorized()
     live.lease=await this.runtime.pool.transfer(live.lease,this.workId,()=>this.guard())
     live.paused=false;live.pauseJob=undefined;live.journal.clear()

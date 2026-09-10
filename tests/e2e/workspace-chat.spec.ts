@@ -174,7 +174,7 @@ test('created roles and editable teams share a durable chat list without plugin 
   const plus = rail.getByRole('button', { name: '新建', exact: true })
   await expect(rail.locator('.sidebar-collapse')).toHaveCount(0)
   await plus.click()
-  await expect(page.getByRole('menu', { name: '新建聊天' }).getByRole('menuitem')).toHaveText(['新建 Bot', '添加远程 Agent', '新建群聊'])
+  await expect(page.getByRole('menu', { name: '新建聊天' }).getByRole('menuitem')).toHaveText(['新建 Bot', '添加远程机器人', '新建群聊'])
   await page.keyboard.press('Escape')
   await rail.getByRole('button', { name: '搜索', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '搜索聊天' })).toBeVisible()
@@ -375,8 +375,8 @@ test('created roles and editable teams share a durable chat list without plugin 
   await page.screenshot({ path: testInfo.outputPath('restored-team-presets.png'), fullPage: true })
   await dialog.getByRole('button', { name: '产品设计团队', exact: true }).click()
   await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('产品设计团队')
-  await dialog.getByRole('combobox', { name: '产品负责人对应的 Agent', exact: true }).selectOption({ label: '产品经理' })
-  await dialog.getByRole('combobox', { name: '交互设计对应的 Agent', exact: true }).selectOption({ label: '开发工程师' })
+  await dialog.getByRole('combobox', { name: '产品负责人对应的机器人', exact: true }).selectOption({ label: '产品经理' })
+  await dialog.getByRole('combobox', { name: '交互设计对应的机器人', exact: true }).selectOption({ label: '开发工程师' })
   const [submitted] = await Promise.all([
     page.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/api/app/conversations')),
     dialog.getByRole('button', { name: '保存', exact: true }).click(),
@@ -443,7 +443,7 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   const username = `child-${Date.now()}`
   await settings.locator('input[name=managed-username]').fill(username)
   await settings.locator('input[name=managed-temporary-password]').fill('temporary-pass')
-  await settings.getByRole('listbox', { name: '新子账号的基础 Agent' }).selectOption('default')
+  await settings.getByRole('listbox', { name: '新子账号的基础机器人' }).selectOption('default')
   await settings.getByRole('button', { name: '创建用户', exact: true }).click()
   await expect(settings.getByRole('listbox', { name: `分配给 ${username} 的基础 Agent`, exact: true })).toHaveValues(['default'])
   await page.screenshot({ path: testInfo.outputPath('admin-agent-allocation.png'), fullPage: true })
@@ -465,9 +465,9 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   await child.keyboard.press('Escape')
   await openCreate(child, '新建 Bot')
   const dialog = child.getByRole('dialog')
-  await expect(dialog.getByLabel('基础 Agent').locator('option')).toHaveCount(1)
-  await expect(dialog.getByLabel('基础 Agent').locator('option')).toContainText('通用助手')
-  await dialog.getByLabel('基础 Agent').scrollIntoViewIfNeeded()
+  await expect(dialog.getByLabel('基础机器人').locator('option')).toHaveCount(1)
+  await expect(dialog.getByLabel('基础机器人').locator('option')).toContainText('通用助手')
+  await dialog.getByLabel('基础机器人').scrollIntoViewIfNeeded()
   await child.screenshot({ path: testInfo.outputPath('subaccount-assigned-source.png'), fullPage: true })
   await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('子账号助手')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()

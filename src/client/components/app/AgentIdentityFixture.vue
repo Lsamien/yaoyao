@@ -23,7 +23,7 @@ const teamMembers = shapes.map(item => ({ name: item.name, avatar: item.avatar }
   <main class="identity-fixture">
     <header>
       <span>跨端角色系统</span>
-      <h1>自定义 Agent 角色</h1>
+      <h1>自定义机器人角色</h1>
       <p>采用 OpenMausBot 的纯色轮廓、五官与状态动画。</p>
     </header>
     <section class="shape-row" aria-label="三种头像形状">

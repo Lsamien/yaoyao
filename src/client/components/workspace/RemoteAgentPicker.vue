@@ -25,12 +25,12 @@ async function add(agent:WorkspaceAgent){
 </script>
 <template>
   <dialog ref="dialog" class="remote-agent-picker" @cancel.prevent="!adding && emit('close')">
-    <header><h2>添加远程 Agent</h2><button type="button" :disabled="adding" @click="emit('close')">关闭</button></header>
-    <p>直接引用远端 Bot 模式的 Agent，配置由远端管理，可用于聊天和群聊。</p>
+    <header><h2>添加远程机器人</h2><button type="button" :disabled="adding" @click="emit('close')">关闭</button></header>
+    <p>直接引用远端 Bot 模式的机器人，配置由远端管理，可用于聊天和群聊。</p>
     <label>远程子节点<select v-model="nodeId" :disabled="busy"><option v-for="node in nodes" :key="node.id" :value="node.id">{{node.name}}</option></select></label>
     <p v-if="error" role="alert">{{error}}</p>
     <p v-if="!nodes.length">请先在远程节点中扫码添加子节点。</p>
-    <p v-else-if="!busy && !agents.length && !error">这个节点暂无可添加的 Agent。</p>
+    <p v-else-if="!busy && !agents.length && !error">这个节点暂无可添加的机器人。</p>
     <button v-for="agent in agents" :key="agent.id" class="agent-option" :disabled="busy" @click="add(agent)">{{agent.name}}<span>添加</span></button>
     <p v-if="busy">加载中…</p>
   </dialog>

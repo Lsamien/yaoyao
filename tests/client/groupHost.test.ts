@@ -55,8 +55,8 @@ describe('group host controls', () => {
     await wrapper.get('button[aria-label^="信息收集团队"]').trigger('click')
     expect(wrapper.get<HTMLInputElement>('input[placeholder="例如：产品评审"]').element.value).toBe('信息收集团队')
     expect(wrapper.findAll('.role-mapping select')).toHaveLength(4)
-    await wrapper.get<HTMLSelectElement>('select[aria-label="信息检索对应的 Agent"]').setValue('local|yaoyao')
-    await wrapper.get<HTMLSelectElement>('select[aria-label="信息检索对应的 Agent"]').setValue('local|reviewer')
+    await wrapper.get<HTMLSelectElement>('select[aria-label="信息检索对应的机器人"]').setValue('local|yaoyao')
+    await wrapper.get<HTMLSelectElement>('select[aria-label="信息检索对应的机器人"]').setValue('local|reviewer')
     await wrapper.get('.solid-button').trigger('click')
 
     const payload = wrapper.emitted('create')?.[0]?.[0] as { members: Array<{ profile: string; displayName: string; description: string }>; hostProfile: string; autoReply: boolean; orchestrationMode: string; instructions: string }
@@ -130,7 +130,7 @@ describe('group host controls', () => {
   })
 
   it('adds an Agent from a paired node to an existing group', async () => {
-    const local = agent('agent-local', 'default', '本机 Agent', true, true)
+    const local = agent('agent-local', 'default', '本机机器人', true, true)
     const remote = {
       id: '11111111-1111-4111-8111-111111111111|reviewer',
       profile: 'reviewer',
@@ -146,7 +146,7 @@ describe('group host controls', () => {
       },
     })
 
-    await wrapper.get<HTMLSelectElement>('select[aria-label="选择要添加的 Agent"]').setValue(remote.id)
+    await wrapper.get<HTMLSelectElement>('select[aria-label="选择要添加的机器人"]').setValue(remote.id)
     expect(wrapper.emitted('addAgent')?.at(-1)).toEqual([remote.id])
     wrapper.unmount()
   })
@@ -261,7 +261,7 @@ describe('group host controls', () => {
     await wrapper.setProps({ agents: [{ ...first, isHost: false }, { ...second, isHost: true }] })
     await wrapper.get('button[aria-label="设置瑶儿"]').trigger('click')
     await nextTick()
-    const dialog = document.querySelector('[role="dialog"][aria-label="瑶儿 Agent 设置"]')
+    const dialog = document.querySelector('[role="dialog"][aria-label="瑶儿机器人设置"]')
     expect(dialog?.textContent).toContain('管理员始终处理用户无 @ 消息')
     expect(dialog?.querySelector('input[aria-label="无需 @ 也回复"]')).not.toBeNull()
     wrapper.unmount()

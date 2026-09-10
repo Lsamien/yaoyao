@@ -18,12 +18,12 @@ defineExpose({close})
 </script>
 <template>
  <main class="local-vm-workspace" aria-label="双桌面工作区">
-  <header><div><strong>本地虚拟机 · 双桌面</strong><p>同时查看两个 Agent 的桌面，每次只控制其中一台。</p></div><button :disabled="busy" @click="close">交还并关闭</button></header>
+  <header><div><strong>本地虚拟机 · 双桌面</strong><p>同时查看两个机器人的桌面，每次只控制其中一台。</p></div><button :disabled="busy" @click="close">交还并关闭</button></header>
   <p v-if="error" role="alert">{{error}}</p>
   <div class="panes"><section v-for="(_,index) in slots" :key="index" class="pane" :class="{controlled:controlled===index}">
-   <label>桌面 {{index+1}}<select :value="slots[index]" :disabled="busy" :aria-label="`选择桌面 ${index+1}`" @change="select(index,($event.target as HTMLSelectElement).value)"><option value="">选择 Agent</option><option v-for="agent in choices" :key="agent.id" :value="agent.id" :disabled="slots[1-index]===agent.id">{{agent.name}}</option></select></label>
+   <label>桌面 {{index+1}}<select :value="slots[index]" :disabled="busy" :aria-label="`选择桌面 ${index+1}`" @change="select(index,($event.target as HTMLSelectElement).value)"><option value="">选择机器人</option><option v-for="agent in choices" :key="agent.id" :value="agent.id" :disabled="slots[1-index]===agent.id">{{agent.name}}</option></select></label>
    <ComputerPanel v-if="slots[index]&&choices.some(a=>a.id===slots[index])" :key="slots[index]" :ref="el=>panels[index]=el as InstanceType<typeof ComputerPanel>|null" embedded :agents="choices.filter(a=>a.id===slots[index])" @control-request="take(index)"/>
-   <p v-else class="empty">选择另一位 Agent。打开工作区不会创建或启动虚拟机。</p>
+   <p v-else class="empty">选择另一位机器人。打开工作区不会创建或启动虚拟机。</p>
   </section></div>
  </main>
 </template>

@@ -25,6 +25,7 @@ extraResources:
       - build-info.json
       - github-release.mjs
       - keychain-helper
+      - computer-helper
       - ui/**/*
       - web-service/**/*
 asar: true

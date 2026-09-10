@@ -81,7 +81,7 @@ describe('Kanban components', () => {
     expect(wrapper.text()).toContain('编辑仅限管理员')
     expect(wrapper.text()).toContain('请补充验收')
     expect(wrapper.text()).toContain('正在执行')
-    expect(wrapper.text()).toContain('Agent 开始处理')
+    expect(wrapper.text()).toContain('机器人开始处理')
     expect(wrapper.findAll('input:disabled, textarea:disabled, select:disabled').length).toBeGreaterThan(0)
     expect(wrapper.find('.kanban-comment-form').exists()).toBe(false)
     expect(wrapper.find('.kanban-task-form__actions').exists()).toBe(false)

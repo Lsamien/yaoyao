@@ -165,13 +165,13 @@ function metadataText(value: unknown): string {
           <article v-for="item in detail.comments" :key="item.id"><header><strong>{{ item.author }}</strong><time>{{ formatKanbanTime(item.created_at) }}</time></header><p>{{ item.body }}</p></article>
         </div>
         <p v-else class="kanban-empty-copy">还没有评论。</p>
-        <form v-if="canEdit" class="kanban-comment-form" @submit.prevent="sendComment"><textarea v-model="comment" rows="3" placeholder="补充上下文或给 Agent 留言" /><button type="submit" :disabled="busy || !comment.trim()">添加评论</button></form>
+        <form v-if="canEdit" class="kanban-comment-form" @submit.prevent="sendComment"><textarea v-model="comment" rows="3" placeholder="补充上下文或给机器人留言" /><button type="submit" :disabled="busy || !comment.trim()">添加评论</button></form>
       </section>
 
       <section class="kanban-detail-section">
         <h3>运行记录 <span>{{ detail.runs.length }}</span></h3>
         <div v-if="detail.runs.length" class="kanban-runs">
-          <article v-for="run in detail.runs" :key="run.id"><header><strong>{{ run.profile || '未指定 Agent' }}</strong><span>{{ run.outcome || run.status }}</span></header><p v-if="run.summary">{{ run.summary }}</p><p v-if="run.error" class="run-error">{{ run.error }}</p><pre v-if="metadataText(run.metadata)">{{ metadataText(run.metadata) }}</pre><time>{{ formatKanbanTime(run.started_at) }}<template v-if="run.ended_at"> → {{ formatKanbanTime(run.ended_at) }}</template></time></article>
+          <article v-for="run in detail.runs" :key="run.id"><header><strong>{{ run.profile || '未指定机器人' }}</strong><span>{{ run.outcome || run.status }}</span></header><p v-if="run.summary">{{ run.summary }}</p><p v-if="run.error" class="run-error">{{ run.error }}</p><pre v-if="metadataText(run.metadata)">{{ metadataText(run.metadata) }}</pre><time>{{ formatKanbanTime(run.started_at) }}<template v-if="run.ended_at"> → {{ formatKanbanTime(run.ended_at) }}</template></time></article>
         </div>
         <p v-else class="kanban-empty-copy">尚未产生运行记录。</p>
       </section>

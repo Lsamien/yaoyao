@@ -36,12 +36,16 @@ it('requires an explicit human grant, one compatible source and idle permanent m
     expect(store.require<any>('owner','shared-computer',shared.id).archived).toBe(true)
   }finally{nodes.close();store.close();rmSync(home,{recursive:true,force:true})}
 })
-it('does not grant temporary helpers or mixed profiles a shared desktop',()=>{
+it('shares one desktop across authorized profiles and rejects temporary helpers',()=>{
   const home=mkdtempSync(join(tmpdir(),'yaoyao-shared-')),store=new WorkspaceStore(home),nodes=new WorkspaceNodes(store,loadServerConfig({HERMES_YAOYAO_HOME:home}),{} as any),service=new SharedComputers(store,{} as any,nodes,{sharedComputerRunner:()=>({id:'runner'})} as any)
   try{
     const first=store.createAgent('owner',{name:'第一位',execution:'computer',profile:'default'}),second=store.createAgent('owner',{name:'第二位',execution:'computer',profile:'different'})
     const command={requestId:randomUUID(),name:'共享',memberIds:[first.id,second.id],trusted:true}
-    expect(()=>service.create('owner',command)).toThrow('同一来源')
+    const group=service.create('owner',command)
+    expect(store.require<WorkspaceAgent>('owner','agent',second.id).computerEnvironmentId).toBe(group.id)
+    nodes.requireSource('owner',store.require<WorkspaceAgent>('owner','agent',second.id))
+    service.remove('owner',group.id)
+    command.requestId=randomUUID()
     store.put('owner','agent',second.id,{...second,profile:'default',temporaryGoalId:randomUUID()})
     expect(()=>service.create('owner',command)).toThrow('持久隔离成员')
   }finally{nodes.close();store.close();rmSync(home,{recursive:true,force:true})}

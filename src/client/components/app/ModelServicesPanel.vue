@@ -266,7 +266,7 @@ async function activate(service: CustomModelService) {
     await activateModelService(props.profile, service.id)
     await load(true)
     notifyModelCatalogChanged(props.profile)
-    notice.value = `“${service.name}”已设为当前 Agent 的默认模型服务`
+    notice.value = `“${service.name}”已设为当前机器人的默认模型服务`
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '设为默认失败'
   } finally {
@@ -299,7 +299,7 @@ onMounted(() => { void load() })
 
 <template>
   <section class="management-panel" aria-label="模型服务">
-    <div class="panel-context"><strong>9119 Provider 与模型</strong><span>全部来自当前 Agent：<b>{{ profile }}</b></span></div>
+    <div class="panel-context"><strong>9119 Provider 与模型</strong><span>全部来自当前机器人：<b>{{ profile }}</b></span></div>
     <form class="default-model-card" @submit.prevent="saveDefaultModel">
       <label><strong>默认全局模型</strong><small>仅用于之后新建的会话，已有会话保持原模型。</small></label>
       <select v-model="defaultModelKey" aria-label="默认全局模型" :disabled="busy || loading">
@@ -331,7 +331,7 @@ onMounted(() => { void load() })
       <p v-else class="editor-hint">该 Provider 的密钥不由 9119 环境变量管理，因此这里只编辑 URL 和模型。</p>
       <button v-if="draft.canEditApiKey && draft.hasApiKey && !draft.clearApiKey" class="text-button danger" type="button" :disabled="busy" @click="draft.apiKey = ''; draft.apiKeyTouched = false; draft.clearApiKey = true">清除已保存密钥</button><button v-else-if="draft.canEditApiKey && draft.clearApiKey" class="text-button" type="button" :disabled="busy" @click="draft.clearApiKey = false">取消清除密钥</button>
       <label>模型列表（每行一个）<textarea v-model="draft.modelsText" rows="5" :disabled="busy" placeholder="连接测试后自动填充，也可手动输入" /></label>
-      <label class="check-row"><input v-model="draft.discoverModels" type="checkbox" :disabled="busy" />允许 9119 自动发现模型</label><label v-if="draft.source === 'managed'" class="check-row"><input v-model="draft.makeDefault" type="checkbox" :disabled="busy" />保存后设为当前 Agent 默认服务</label>
+      <label class="check-row"><input v-model="draft.discoverModels" type="checkbox" :disabled="busy" />允许 9119 自动发现模型</label><label v-if="draft.source === 'managed'" class="check-row"><input v-model="draft.makeDefault" type="checkbox" :disabled="busy" />保存后设为当前机器人默认服务</label>
       <small class="editor-hint">{{ draft.source === 'legacy' ? '保存后模型列表按当前内容更新；当前默认 Provider 会同步新的 URL 与默认模型。' : '9119 会保留服务中已有的模型条目；删除整项服务会一并移除它们。' }}</small>
       <footer><button class="quiet-button" type="button" :disabled="busy" @click="probe">测试连接</button><button class="primary-button" type="submit" :disabled="busy">{{ busy ? '处理中…' : '保存模型服务' }}</button></footer>
     </form>

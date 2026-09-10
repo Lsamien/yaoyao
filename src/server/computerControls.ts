@@ -13,7 +13,7 @@ export class ComputerControlService {
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly hub:RunnerHub){}
   private agent(owner:string,id:string){
     const agent=this.store.require<WorkspaceAgent>(owner,'agent',id)
-    if(agent.archived||agent.execution!=='computer'||agent.remoteAgentId)throw new HttpError(409,'该 Agent 没有可用的隔离电脑','computer_unavailable')
+    if(agent.archived||agent.execution!=='computer'||agent.remoteAgentId)throw new HttpError(409,'该机器人没有可用的隔离电脑','computer_unavailable')
     this.nodes.requireSource(owner,agent);return agent
   }
   allowed(id:string,runnerId:string):boolean{
@@ -33,7 +33,7 @@ export class ComputerControlService {
     router.get('/api/app/computers',ctx=>{
       const actor=this.auth.require(ctx),agents=this.store.list<WorkspaceAgent>(actor.id,'agent').filter(agent=>!agent.archived)
       ctx.body={canManageLocalVm:actor.role==='admin',computers:agents.map(agent=>{
-        let available=false,reason='在 Agent 设置中将执行环境设为隔离电脑'
+        let available=false,reason='在机器人设置中将执行环境设为隔离电脑'
         if(agent.execution==='computer')try{this.nodes.requireSource(actor.id,agent);const record=this.hub.computerRunner(actor.id,agent),features=this.hub.summary(record).features;if(features.includes('local-vm-v1')&&!features.includes('image-ready-v1'))throw new Error('请先在应用设置的本地虚拟机页面完成准备');available=true;reason='可以打开电脑面板'}catch(error){reason=error instanceof Error?error.message:'电脑不可用'}
         return {agent,available,reason}
       })}

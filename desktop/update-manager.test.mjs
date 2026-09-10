@@ -7,18 +7,18 @@ import { createHash } from 'node:crypto'
 import { DesktopUpdateManager, githubDownload } from './update-manager.mjs'
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
-const prefix = 'https://github.com/Lsamien/hermes-yaoyao/releases/download/v0.4.2/'
+const prefix = 'https://github.com/Lsamien/yaoyao/releases/download/v0.4.2/'
 const name = 'Yaoyao-0.4.2-arm64.dmg', data = Buffer.from('fixture-image')
 async function fixture(overrides = {}) {
   const home = await mkdtemp(join(tmpdir(), 'yaoyao-update-unit-'))
   const sums = Buffer.from(`${hash(data)}  ${name}\n`)
-  const release = { manifest: { webVersion: '0.4.2' }, commit: 'a'.repeat(40), notes: 'Notes', releasePageUrl: 'https://github.com/Lsamien/hermes-yaoyao/releases/tag/v0.4.2', assets: [
+  const release = { manifest: { webVersion: '0.4.2' }, commit: 'a'.repeat(40), notes: 'Notes', releasePageUrl: 'https://github.com/Lsamien/yaoyao/releases/tag/v0.4.2', assets: [
     { name, size: data.length, digest: `sha256:${hash(data)}`, url: prefix + name },
     { name: 'SHA256SUMS.txt', size: sums.length, digest: `sha256:${hash(sums)}`, url: prefix + 'SHA256SUMS.txt' },
   ] }
   const calls = [], verified = []
   const manager = new DesktopUpdateManager({ version: '0.4.1', arch: 'arm64', platform: 'darwin', cacheRoot: home,
-    source: 'https://github.com/Lsamien/hermes-yaoyao.git', inspect: async () => release,
+    source: 'https://github.com/Lsamien/yaoyao.git', inspect: async () => release,
     compare: (a, b) => Number(a.split('.').at(-1)) - Number(b.split('.').at(-1)),
     fetchImpl: async url => { calls.push(url); return new Response(url.endsWith('.dmg') ? data : sums) },
     verifyImage: async path => { verified.push(path) }, ...overrides })

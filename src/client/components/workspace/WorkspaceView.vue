@@ -37,7 +37,7 @@ async function saveIdentity(input: ProfileIdentityInput) {
     identityError.value = ''
     identityResetVersion.value += 1
   } catch (cause) {
-    identityError.value = cause instanceof Error ? cause.message : '保存 Agent 身份失败'
+    identityError.value = cause instanceof Error ? cause.message : '保存机器人身份失败'
   } finally {
     identityBusy.value = false
   }

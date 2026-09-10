@@ -4,7 +4,7 @@ import Router from '@koa/router'
 import type Koa from 'koa'
 import { createReadStream, statSync } from 'node:fs'
 import { z } from 'zod'
-import { WorkspaceStore, agentInput, parse } from './workspaceStore.js'
+import { WorkspaceStore, agentInput, agentPatch, parse } from './workspaceStore.js'
 import { WorkspaceRuntime } from './workspaceRuntime.js'
 import { WorkspaceNodes, type WorkspaceNode } from './workspaceGateway.js'
 import {
@@ -100,7 +100,7 @@ export function workspaceRouter(
     nodes.requireSource(user, input)
     const sources = await nodes.sources(user)
     if (!sources.sources.some((s) => s.nodeId === input.nodeId && s.profile === input.profile))
-      throw new HttpError(409, '基础 Agent 当前不可用', 'source_unavailable')
+      throw new HttpError(409, '基础机器人当前不可用', 'source_unavailable')
     nodes.requireSource(user, input)
     if (input.canManageTeam || input.execution==='computer') await runtime.teamTools.requireAvailable(user, input)
     if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
@@ -108,17 +108,25 @@ export function workspaceRouter(
     ctx.status = 201
   })
   router.patch('/api/app/agents/:id', async (ctx) => {
-    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id), input = body(ctx)
+    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id), input = parse(agentPatch,body(ctx))
     const authorization = auth.pushAuthorizationVersion(user)
-    nodes.requireSource(user, agent)
-    if ((input.canManageTeam === true && agent.canManageTeam !== true) || input.execution==='computer') await runtime.teamTools.requireAvailable(user, {...agent,...(input.execution?{execution:input.execution}:{})})
+    const updated={...agent,...input}
+    const sourceChanged=updated.nodeId!==agent.nodeId||updated.profile!==agent.profile
+    nodes.requireSource(user,updated)
+    if(sourceChanged){
+      const sources=await nodes.sources(user)
+      if(!sources.sources.some(s=>s.nodeId===updated.nodeId&&s.profile===updated.profile))throw new HttpError(409,'基础机器人当前不可用','source_unavailable')
+    }
+    if ((input.canManageTeam === true && agent.canManageTeam !== true) || input.execution==='computer' || (sourceChanged&&(updated.canManageTeam||updated.execution==='computer'))) await runtime.teamTools.requireAvailable(user, updated)
+    if(sourceChanged&&runtime.cloud?.selected(user,updated))await runtime.cloud.requireAvailable(user,updated,nodes.target(user,updated.nodeId))
     if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
-    nodes.requireSource(user, agent)
+    nodes.requireSource(user, updated)
     ctx.body = { agent: store.agentSummary(store.atomic(() => {
       if (input.archived === true && !agent.temporaryGoalId) {
         const direct = store.list<WorkspaceConversation>(user, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === agent.id)
         if (direct) store.changeConversationLifecycle(user, direct.id, 'archive')
       }
+      nodes.requireSource(user,{...store.require<WorkspaceAgent>(user,'agent',ctx.params.id),...input})
       return store.updateAgent(user, ctx.params.id, input)
     })) }
   })

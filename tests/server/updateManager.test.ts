@@ -107,8 +107,8 @@ describe('SystemUpdateManager', () => {
         sourceSeen = source; return { manifest: current, commit: 'd'.repeat(40) }
       },
     })
-    expect(await manager.check()).toMatchObject({ updateAvailable: false, releaseSource: 'https://github.com/Lsamien/hermes-yaoyao.git' })
-    expect(sourceSeen).toBe('https://github.com/Lsamien/hermes-yaoyao.git')
+    expect(await manager.check()).toMatchObject({ updateAvailable: false, releaseSource: 'https://github.com/Lsamien/yaoyao.git' })
+    expect(sourceSeen).toBe('https://github.com/Lsamien/yaoyao.git')
     await expect(manager.startUpdate(current.releaseVersion)).rejects.toThrow('最新版本')
   })
   it('reports the current Web release and discovers a newer fixed release', async () => {

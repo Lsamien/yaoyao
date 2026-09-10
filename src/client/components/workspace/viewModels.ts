@@ -192,7 +192,7 @@ export function chatInteraction(approval?: ApprovalRequest, clarification?: Clar
     id: approval.id,
     kind: 'approval',
     title: approval.toolName ? `允许 ${approval.toolName}` : '允许这项操作',
-    prompt: approval.message || 'Agent 请求执行一项需要确认的操作。',
+    prompt: approval.message || '机器人请求执行一项需要确认的操作。',
     options: approval.choices,
     detail: JSON.stringify(approval.payload, null, 2),
   }
@@ -214,7 +214,7 @@ export function roomSidebarItem(
   return {
     id: room.id,
     title: room.name || '未命名团队',
-    subtitle: room.lastMessage?.content || `${room.agentCount} 个 Agent`,
+    subtitle: room.lastMessage?.content || `${room.agentCount} 个机器人`,
     meta: formatRelative(room.updatedAt),
     section: historySection(room.updatedAt),
     unread: room.unreadCount,
@@ -286,7 +286,7 @@ export function groupInteraction(interaction?: GroupInteraction): UiInteraction 
     id: interaction.id,
     kind: interaction.kind === 'clarification' ? 'clarification' : 'approval',
     title: string(payload.title || payload.tool_name),
-    prompt: string(payload.question || payload.message || payload.prompt, interaction.kind === 'clarification' ? 'Agent 需要补充信息' : 'Agent 请求执行操作'),
+    prompt: string(payload.question || payload.message || payload.prompt, interaction.kind === 'clarification' ? '机器人需要补充信息' : '机器人请求执行操作'),
     options: choices,
     detail: JSON.stringify(payload, null, 2),
   }
