@@ -41,6 +41,8 @@ const childStubs = {
   Teleport: true,
   AgentAvatar: true,
   AppIcon: true,
+  BotPluginsPanel: simpleStub('BotPluginsPanel', 'bot-plugins'),
+  BotAutomationPanel: simpleStub('BotAutomationPanel', 'bot-automations'),
   AgentIdentityPanel: simpleStub('AgentIdentityPanel', 'agent-identity'),
   ModelServicesPanel: ModelServicesPanelStub,
   AccountSecurityPanel: simpleStub('AccountSecurityPanel', 'account-security'),
@@ -81,6 +83,20 @@ afterEach(() => {
 })
 
 describe('Settings center dialog', () => {
+  it('keeps plugin, connected-app and automation settings scoped to Bot mode', async () => {
+    const normal = mountSettings({ initialPage: 'bot-plugins' })
+    expect(normal.find('[data-testid="bot-plugins"]').exists()).toBe(false)
+    expect(normal.findAll('.settings-sidebar nav button').some(b => b.text() === '插件')).toBe(false)
+    normal.unmount()
+    const bot = mountSettings({ botMode: true, initialPage: 'bot-plugins' })
+    await vi.waitFor(() => expect(bot.find('[data-testid="bot-plugins"]').exists()).toBe(true))
+    await navigationButton(bot, '自动化').trigger('click')
+    await vi.waitFor(() => expect(bot.find('[data-testid="bot-automations"]').exists()).toBe(true))
+    await navigationButton(bot, '关于').trigger('click')
+    expect(bot.get('.bot-about').text()).toContain('夭夭 AI')
+    expect(bot.get('.bot-about a').attributes('href')).toBe('https://yaoyao.samien.cn')
+    bot.unmount()
+  })
   it('groups administrator pages and routes Agent, voice, and system content to the right scope', async () => {
     const wrapper = mountSettings()
 

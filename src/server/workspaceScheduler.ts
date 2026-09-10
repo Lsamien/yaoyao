@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './workspaceStore.js'
 import { HttpError } from './errors.js'
-import { mentionedAgents } from './workspaceMentions.js'
+import { botRelayIntent, relayFingerprint, relayMessageValue, REPEATED_RELAY_NOTICE } from './workspaceRelay.js'
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceMessage as Message, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 
 export const NO_REPLY = '[[YAOYAO_NO_REPLY_V1]]'
@@ -30,6 +30,12 @@ export interface Work {
   planned?: boolean
   silent?: boolean
   hadInteraction?: boolean
+  /** Durable assistant-to-assistant routing decisions, scoped to this run. */
+  relay?: {
+    fingerprints: Record<string, string>
+    suppressed: Record<string, 'acknowledgement' | 'repeated'>
+    notice?: boolean
+  }
   error?: string
   contextThroughSeq?: number
   turnConfiguration?: { mode: 'host' | 'free'; administratorId: string; members: Array<Pick<Agent, 'id' | 'name'>> }
@@ -171,17 +177,82 @@ export abstract class WorkspaceScheduler {
         }
       } else if (work.status === 'complete' && !work.silent && message) {
         const nextDepth = work.depth + 1
-        const mentions = mentionedAgents(message.content, config.members).filter(id => id !== work.agentId && c.memberIds.includes(id))
-        const targets = mentions.length ? mentions : config.mode === 'free' ? c.autoReplyIds.filter(id => id !== work.agentId && c.memberIds.includes(id)) : []
-        if (c.maxReplyRounds === -1 || nextDepth < c.maxReplyRounds) {
-          for (const target of targets) this.enqueue(owner, root, target, nextDepth, work.id, message.seq, mentions.includes(target) ? 'mentioned' : 'automatic', false)
+        const intent = botRelayIntent(message.content, config.members)
+        const eligible = (id: string) => id !== work.agentId && this.store.taskMemberIds(owner, c, work.conversationTaskId).includes(id)
+        const mentions = intent.targetIds.filter(eligible)
+        // A filtered mention is still an explicit address. Never turn a closing
+        // receipt back into a broadcast through the automatic participant list.
+        const automatic = config.mode === 'free' ? c.autoReplyIds.filter(eligible) : []
+        const targets = intent.mentionedIds.length ? mentions : intent.acknowledgementOnly ? [] : automatic
+        work.relay = { fingerprints: {}, suppressed: {} }
+        for (const target of intent.mentionedIds.filter(eligible)) {
+          if (!mentions.includes(target)) work.relay.suppressed[target] = 'acknowledgement'
+        }
+        if (intent.acknowledgementOnly && !intent.mentionedIds.length)
+          for (const target of automatic) work.relay.suppressed[target] = 'acknowledgement'
+        if (targets.length && (c.maxReplyRounds === -1 || nextDepth < c.maxReplyRounds)) {
+          const works = this.works(owner, root.id).filter(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId)
+          const evidence = this.relayEvidence(owner, work, works)
+          const previous = works.filter(t => t.id !== work.id && t.agentId === work.agentId && t.status === 'complete' && t.planned)
+          const legacyEvidence = new Map<string, unknown>()
+          for (const target of targets) {
+            const fingerprint = evidence === undefined ? undefined : relayFingerprint({ target, evidence })
+            if (fingerprint) work.relay.fingerprints[target] = fingerprint
+            const repeated = fingerprint && previous.some(t => {
+              if (t.relay) return t.relay.fingerprints[target] === fingerprint
+              // Pre-upgrade turns have no receipt. Only a persisted child is
+              // evidence that this particular edge was actually dispatched.
+              if (!works.some(child => child.batchId === t.id && child.agentId === target && !child.reviewOf)) return false
+              if (!legacyEvidence.has(t.id)) legacyEvidence.set(t.id, this.relayEvidence(owner, t, works))
+              const old = legacyEvidence.get(t.id)
+              return old !== undefined && relayFingerprint({ target, evidence: old }) === fingerprint
+            })
+            if (repeated) { work.relay.suppressed[target] = 'repeated'; continue }
+            this.enqueue(owner, root, target, nextDepth, work.id, message.seq, mentions.includes(target) ? 'mentioned' : 'automatic', false)
+          }
+          if (Object.values(work.relay.suppressed).includes('repeated') && !works.some(t => t.relay?.notice)) {
+            work.relay.notice = true
+            this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, conversationTaskId: root.conversationTaskId, seq: 0, role: 'system', content: REPEATED_RELAY_NOTICE, reasoning: '', status: 'complete', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
+          }
         } else if (targets.length && !this.store.get(owner, 'limit-notice', root.id)) {
           this.store.put(owner, 'limit-notice', root.id, { id: root.id })
           this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, conversationTaskId: root.conversationTaskId, seq: 0, role: 'system', content: '已达到自动协作轮数上限，本轮不再自动分派。', reasoning: '', status: 'complete', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
         }
+        this.store.put(owner, 'turn', work.id, work)
       }
       this.updateRoot(owner, root.id)
     })
+  }
+  private relayEvidence(owner: string, work: Work, works: Work[]): unknown | undefined {
+    const read = (id?: string) => {
+      const message = id ? this.store.get<Message>(owner, 'message', id) : undefined
+      return message?.conversationId === work.conversationId && message.conversationTaskId === work.conversationTaskId && message.runId === work.runId ? message : undefined
+    }
+    const reply = read(work.currentMessageId)
+    if (!reply) return undefined
+    const inputs = work.reviewOf ? works.filter(t => t.batchId === work.reviewOf && !t.reviewOf).sort((a, b) => a.agentId.localeCompare(b.agentId))
+      : works.filter(t => t.id === work.batchId)
+    let input: unknown
+    if (inputs.length) {
+      input = inputs.map(t => {
+        const message = read(t.currentMessageId)
+        return { agentId: t.agentId, status: t.status, error: t.error, message: message ? relayMessageValue(message) : null }
+      })
+    } else {
+      // Initial turns and the legacy admission path have no parent Work.
+      const row = this.store.db.prepare("SELECT data FROM workspace_entities WHERE owner=? AND kind='message' AND json_extract(data,'$.conversationId')=? AND json_extract(data,'$.seq')=?").get(owner, work.conversationId, work.triggerSeq)
+      const trigger = row ? read((JSON.parse(String(row.data)) as Message).id) : undefined
+      if (!trigger) return undefined
+      input = relayMessageValue(trigger)
+    }
+    const relevant = new Set([work.id, ...inputs.map(t => t.id)])
+    const interactions = this.store.list<WorkspaceInteraction & { answer?: string; responseState?: string }>(owner, 'interaction')
+      .filter(i => i.runId === work.runId && i.conversationId === work.conversationId && i.conversationTaskId === work.conversationTaskId && i.answer !== undefined && i.responseState === 'sent'
+        && relevant.has(this.store.get<{ taskId: string }>(owner, 'interaction-binding', i.id)?.taskId ?? ''))
+      // A fresh human answer is permission to advance, even if the person
+      // chooses the same answer again. This is not a provider event ID.
+      .map(i => ({ id: i.id, kind: i.kind, question: i.message, answer: i.answer })).sort((a, b) => a.id.localeCompare(b.id))
+    return { version: 1, agentId: work.agentId, mode: work.turnConfiguration?.mode, input, reply: relayMessageValue(reply), interactions }
   }
   private pump(): void {
     if (this.pumping || this.closing) return

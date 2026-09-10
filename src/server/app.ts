@@ -3,6 +3,7 @@ import type {GrokAuth} from './grokAuth.js'
 import {GrokCloud} from './grokCloud.js'
 import {WorkspaceInspector} from './workspaceInspector.js'
 import {WorkspaceRoutines} from './workspaceRoutines.js'
+import { WorkspacePlugins } from './botPlugins/workspacePlugins.js'
 import { nativeMessageFileText } from '../shared/messageFiles.js'
 import { hermesBotRelay } from './hermesBotRelay.js'
 import { remoteAgentExports } from './workspaceRemoteAgents.js'
@@ -69,6 +70,7 @@ export interface ApplicationOptions {
   uploads?: UploadStore
   updates?: SystemUpdateManager
   auth?: LocalAuthStore
+  pluginFetch?: typeof fetch
   upstreamSession?: UpstreamServiceSession
   accountPairings?: AccountLoginPairingStore
   profileIdentities?: UpstreamProfileIdentityService
@@ -105,6 +107,7 @@ export interface ApplicationRuntime {
   desktopEnvironments:DesktopEnvironments
   grokAuth:GrokAuth
   workspaceRoutines:WorkspaceRoutines
+  workspacePlugins:WorkspacePlugins
   localVm: LocalVmService
   close(): void
 }
@@ -239,6 +242,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const workspaceInspector=new WorkspaceInspector(workspace,auth)
   workspaceRuntime.inspector=workspaceInspector
   const workspaceRoutines=new WorkspaceRoutines(workspace,auth,workspaceNodes,workspaceRuntime)
+  const workspacePlugins=new WorkspacePlugins(workspace,workspaceNodes,auth,workspaceRuntime,config.home,options.pluginFetch)
+  workspaceRuntime.plugins=workspacePlugins
   workspaceRuntime.retireHelper=(owner,helper)=>runners.retireHelper(owner,helper)
   workspaceRuntime.onTeamCreated = (owner, team) => {
     try { push.setGroupSubscription(owner, team.id, true, team.lastSeq) } catch { /* Optional notifications do not undo a team. */ }
@@ -347,7 +352,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       const path = ctx.path
       const publicPath = ['/api/status', '/api/auth/providers', '/api/auth/me', '/api/profiles', '/api/app/bootstrap', '/api/app/login', '/api/app/logout'].includes(path)
       const accountPath = ['/api/account/credentials', '/api/app/account/credentials', '/api/app/account/avatar'].includes(path)
-      const workspacePath = /^\/api\/app\/(?:capabilities|agents|conversations|runs|interactions|events|uploads|files|message-files|computers)(?:\/|$)/.test(path)
+      const workspacePath = /^\/api\/app\/(?:capabilities|agents|conversations|runs|interactions|events|uploads|files|message-files|computers|bot-tools)(?:\/|$)/.test(path)
         && path !== '/api/app/agents/remote'
       const pushPath = /^\/api\/(?:app\/)?push\/v1\//.test(path)
       const identityRead = path === '/api/app/server-identity' && ['GET', 'HEAD'].includes(ctx.method)
@@ -415,7 +420,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     } else await next()
   })
 
-  for(const router of [desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router()]){app.use(router.routes());app.use(router.allowedMethods())}
+  for(const router of [desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
   const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
   const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
@@ -483,6 +488,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     workspace,
     workspaceRuntime,
     workspaceRoutines,
+    workspacePlugins,
     desktopEnvironments,
     grokAuth:grokCloud.authorization,
     realtime,
@@ -510,6 +516,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       desktopEnvironments.close()
       grokCloud.authorization.close()
       workspaceRoutines.close()
+      workspacePlugins.close()
       workspaceRuntime.close()
       workspaceNodes.close()
       upstream.close()

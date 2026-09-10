@@ -160,6 +160,10 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   expect(rail.find('.sidebar-collapse').exists()).toBe(false)
   expect(rail.find('.sidebar-context__heading').exists()).toBe(false)
   await rail.get('.sidebar-account-switcher__main').trigger('click')
+  const accountItems = [...document.querySelectorAll<HTMLElement>('.workspace-settings-menu [role="menuitem"]')]
+  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['设置', '关于', '帮助', '进入聊天模式'])
+  expect(document.querySelector<HTMLAnchorElement>('.workspace-settings-menu a')?.href).toBe('https://yaoyao.samien.cn/')
+  accountItems[0]!.click(); await wrapper.vm.$nextTick()
   expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('account-security')
   await wrapper.get('[data-testid="close-settings"]').trigger('click')
   await rail.get('.sidebar-create-trigger').trigger('click')
@@ -175,5 +179,25 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   await rail.get('.sidebar-search-trigger').trigger('click')
   document.dispatchEvent(new CustomEvent('hermes-yaoyao:sidebar-search-close'))
   await wrapper.vm.$nextTick()
+  wrapper.unmount()
+})
+
+it('shows Bot tools only in Bot mode and restores keyboard focus after closing', async () => {
+  const normal = await mountShell('/chat')
+  expect(normal.find('.sidebar-tools-trigger').exists()).toBe(false)
+  normal.unmount()
+  const wrapper = await mountShell('/conversations')
+  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-tools-trigger')
+  await trigger.trigger('click')
+  const menu = document.querySelector<HTMLElement>('.workspace-tools-menu')!
+  const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+  expect(items.map(b => b.textContent?.trim())).toEqual(['插件', '自动化', '已连接应用'])
+  expect(document.activeElement).toBe(items[0])
+  menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  expect(document.activeElement).toBe(items[1])
+  items[1]!.click(); await wrapper.vm.$nextTick()
+  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('bot-routines')
+  await wrapper.get('[data-testid="close-settings"]').trigger('click'); await wrapper.vm.$nextTick()
+  expect(document.activeElement).toBe(trigger.element)
   wrapper.unmount()
 })

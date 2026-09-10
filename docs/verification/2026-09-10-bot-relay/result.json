@@ -1,0 +1,33 @@
+{
+  "source": "dist-server",
+  "network": "loopback fixture only",
+  "results": [
+    {
+      "mode": "host",
+      "closingReceipt": true,
+      "calls": 3,
+      "status": "complete",
+      "pending": 0,
+      "notices": 0,
+      "stableAfterMs": 250
+    },
+    {
+      "mode": "host",
+      "closingReceipt": false,
+      "calls": 5,
+      "status": "complete",
+      "pending": 0,
+      "notices": 1,
+      "stableAfterMs": 250
+    },
+    {
+      "mode": "free",
+      "closingReceipt": false,
+      "calls": 4,
+      "status": "complete",
+      "pending": 0,
+      "notices": 1,
+      "stableAfterMs": 250
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import {nativeEnvironmentFixture} from './native-environment.js'
 import {FixtureGrokAuthProvider} from './grok-auth-provider.js'
+import { FixtureBotPlugins } from './bot-plugins.js'
 /** Isolated, deterministic Hermes fixture. Optional team-tool readiness is only for editor UI tests. */
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
@@ -30,6 +31,7 @@ const sessions = new Map<
 const latestRuntimeBySession = new Map<string, string>()
 const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 const heldReplies: Array<() => void> = []
+const pluginsFixture = process.env.WORKSPACE_FIXTURE_PLUGINS === '1' ? new FixtureBotPlugins() : undefined
 const profileState = new Map([
   ['default', { name: 'default', display_name: '通用助手', is_default: true, gateway_running: true, ui_meta: {} as Record<string, unknown>, ui_meta_revisions: {} as Record<string, number> }],
   ['server', { name: 'server', display_name: '开发助手', is_default: false, gateway_running: true, ui_meta: {} as Record<string, unknown>, ui_meta_revisions: {} as Record<string, number> }],
@@ -58,6 +60,7 @@ const upstream = createServer((req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${upstreamPort}`)
   res.setHeader('content-type', 'application/json')
   const send = (v: unknown) => res.end(JSON.stringify(v))
+  if (pluginsFixture?.handle(req, res, url.pathname)) return
   if (url.pathname === '/api/config') {
     send({ terminal: { cwd: `/tmp/hermes-fixture/${url.searchParams.get('profile') || 'default'}` } })
     return
@@ -261,7 +264,7 @@ wss.on('connection', (socket) => {
       const crossClientRun = String(f.params.text).includes('[cross-client-live]')
       const markdownPrefix = '# 流式标题\n\n**即时格式化**\n\n- 第一项\n- 第二项\n\n```ts\nconst answer = 42' + (String(f.params.text).includes('[long]') ? `\n\x60\x60\x60\n\n${'这是持续生成的长回复段落。\n\n'.repeat(80)}流式末尾标记\n\n\x60\x60\x60ts\nconst tail = 1` : '')
       const markdownFinal = `${markdownPrefix}\n\x60\x60\x60\n\n| 名称 | 数量 |\n| --- | --- |\n| 项目 | 2 |\n\n最终完整标记`
-      const text = markdownStream ? markdownFinal : `我是${name}。已按角色规则处理这条消息。\n\n- 会话独立保存\n- 可以继续交流\n\n[报告](/tmp/workspace-report.txt)${delegates ? `\n请${requested}处理任务。` : ''}`
+      let text = markdownStream ? markdownFinal : `我是${name}。已按角色规则处理这条消息。\n\n- 会话独立保存\n- 可以继续交流\n\n[报告](/tmp/workspace-report.txt)${delegates ? `\n请${requested}处理任务。` : ''}`
       event('message.start', {}, f.params.session_id)
       if (String(f.params.text).includes('[message-files]')) {
         event('reasoning.delta', { text: '![过程图](/tmp/process.png)' }, f.params.session_id)
@@ -281,7 +284,14 @@ wss.on('connection', (socket) => {
         })
         event('message.complete', { text, status: 'complete' }, f.params.session_id)
       }
-      if (crossClientRun || markdownStream || f.params.text.includes('[hold-workspace]')) heldReplies.push(complete)
+      if (pluginsFixture && f.params.text.includes('[plugin-roundtrip]')) {
+        void pluginsFixture.exercise(f.params.session_id).then(({ tool, result }) => {
+          event('tool.start', { tool_id: 'plugin-fixture', name: tool.name }, f.params.session_id)
+          event('tool.complete', { tool_id: 'plugin-fixture', name: tool.name, result }, f.params.session_id)
+          text = String(result.content?.[0]?.text ?? '插件未返回文字'); complete()
+        }).catch(error => { stored!.running = false; event('run.failed', { error: String(error) }, f.params.session_id) })
+      }
+      else if (crossClientRun || markdownStream || f.params.text.includes('[hold-workspace]')) heldReplies.push(complete)
       else setTimeout(complete, 250)
       return
     }
@@ -337,7 +347,7 @@ if (!existsSync(usersPath)) {
 }
 const auth = new LocalAuthStore(home, false)
 const grokAuth=process.env.WORKSPACE_FIXTURE_GROK_AUTH==='1'?new FixtureGrokAuthProvider():undefined
-const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch }),
+const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch, pluginFetch: pluginsFixture?.fetch }),
   node = createNodeServer(runtime)
 const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?nativeEnvironmentFixture(runtime,home,port):undefined
 runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/browser-page')return next();ctx.type='html';ctx.body='<!doctype html><meta charset="utf-8"><title>浏览器操作验收</title><body style="font:22px sans-serif;padding:48px;background:#edf4ff"><h1>机器人的独立浏览器</h1><p>这是隔离的真实浏览器验收页面。</p><input aria-label="输入内容"><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">确认</button><output></output></body>'})

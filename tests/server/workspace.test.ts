@@ -10,6 +10,8 @@ import {HttpError} from '../../src/server/errors'
 import {WorkspaceAssets} from '../../src/server/workspaceAssets'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { WorkspaceRuntime, mentionedAgents } from '../../src/server/workspaceRuntime'
+import type { Work } from '../../src/server/workspaceScheduler'
+import { REPEATED_RELAY_NOTICE } from '../../src/server/workspaceRelay'
 import { WorkspaceNodes } from '../../src/server/workspaceGateway'
 import { UploadStore } from '../../src/server/uploads'
 import type {
@@ -399,6 +401,9 @@ describe('Web-owned workspace', () => {
       },
     })), 5) }
     const firstRun=runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '任务甲' })
+    // Different tasks admitted in the same millisecond need not win a lane in
+    // insertion order. Establish the active task before testing its isolation.
+    await vi.waitFor(() => expect(pending).toHaveLength(1))
     const secondRun=runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '任务乙' })
     await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction').filter(interaction => !interaction.resolved)).toHaveLength(1))
     const first=store.list<WorkspaceInteraction>(owner,'interaction').find(i=>i.conversationTaskId===firstTask.id)!
@@ -899,6 +904,155 @@ function completeReply(socket: WebSocket, p: Record<string, any>, text: string, 
   socket.send(JSON.stringify({ method: 'event', params: { type: 'message.complete', session_id: p.session_id, payload: { text, status, ...(status === 'failed' ? { error: text } : {}) } } }))
 }
 const speaker = (p: Record<string, any>) => /^你是 (.*?)。/.exec(p.text)?.[1]
+
+describe('automatic relay termination', () => {
+  const receipt = '收到 @审核 终审维持通过。\n\n交付状态（不变）：入草稿箱 Media ID `draft-123`，发布目录 `/work/final/`。\n等民哥群发指令。'
+  const review = '@竹儿 维持通过，等民哥群发指令。无新事实、无新派工，本轮不重复核验。'
+  const promptCount = () => requests.filter(r => r.method === 'prompt.submit').length
+  async function idle(runId: string, conversationId: string) {
+    await finished(runId)
+    const count = promptCount()
+    await new Promise(resolve => setTimeout(resolve, 80))
+    expect(promptCount()).toBe(count)
+    expect(store.list<Work>(owner, 'turn').filter(w => w.runId === runId && (!w.planned || !['complete', 'failed', 'interrupted'].includes(w.status)))).toEqual([])
+    const summary = store.conversationSummary(owner, store.require(owner, 'conversation', conversationId))
+    expect(summary.activeRunId).toBeUndefined()
+    expect(summary.queuedMessageCount ?? 0).toBe(0)
+  }
+  it('finishes the observed host receipt cycle in exactly three calls and accepts a new user message', async () => {
+    const a = agent('竹儿'), b = agent('审核')
+    const g = store.createGroup(owner, { name: '收尾验收', memberIds: [a.id, b.id], administratorId: a.id, maxReplyRounds: -1 })
+    let admin = 0
+    reply = (socket, p) => completeReply(socket, p, speaker(p) === a.name ? admin++ === 0 ? '@审核 请审核文案' : receipt : review)
+    const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '请完成文案' })
+    await idle(root.id, g.id)
+    expect(promptCount()).toBe(3)
+    expect(store.messages(owner, g.id).map(m => m.content)).toEqual(['请完成文案', '@审核 请审核文案', review, receipt])
+    expect(store.list<Work>(owner, 'turn').find(w => w.reviewOf)?.relay?.suppressed[b.id]).toBe('acknowledgement')
+    const next = runtime.send(owner, g.id, { requestId: randomUUID(), content: '好的。' })
+    await idle(next.id, g.id)
+    expect(promptCount()).toBe(4)
+  })
+  it.each(['感谢 @审核，等待用户指令。', '收到，等待用户指令。'])('does not turn a free-mode receipt into an automatic broadcast: %s', content => {
+    const a = agent('竹儿'), b = agent('审核')
+    const g = store.createGroup(owner, { name: '自动收尾', memberIds: [a.id, b.id], administratorId: a.id, mode: 'free', autoReplyIds: [b.id], maxReplyRounds: -1 })
+    reply = (socket, p) => completeReply(socket, p, content)
+    return (async () => {
+      const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '@竹儿 请处理' })
+      await idle(root.id, g.id)
+      expect(promptCount()).toBe(1)
+      const next = runtime.send(owner, g.id, { requestId: randomUUID(), content: '感谢 @审核' })
+      await idle(next.id, g.id)
+      expect(speaker(requests.filter(r => r.method === 'prompt.submit').at(-1)!.params)).toBe(b.name)
+    })()
+  })
+  it.each([
+    ['host', 2, 5], ['host', 3, 7], ['free', 2, 4], ['free', 3, 5],
+  ] as const)('bounds unchanged %s cooperation with %i members at %i calls', async (mode, size, expected) => {
+    const members = [agent('甲'), agent('乙'), ...(size === 3 ? [agent('丙')] : [])]
+    const g = store.createGroup(owner, { name: '重复往返', memberIds: members.map(a => a.id), administratorId: members[0]!.id, mode, maxReplyRounds: -1 })
+    let count = 0
+    reply = (socket, p) => {
+      const index = members.findIndex(a => a.name === speaker(p)), whitespace = count++ % 2 ? '  ' : ' '
+      const text = mode === 'host' ? index === 0 ? members.slice(1).map(a => `@${a.name}${whitespace}再检查一次`).join('，') : '检查结果相同'
+        : `@${members[(index + 1) % members.length]!.name}${whitespace}再检查一次`
+      completeReply(socket, p, count > 20 ? '完成' : text)
+      completeReply(socket, p, count > 20 ? '完成' : text) // Duplicate completion must not double-plan.
+    }
+    const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '@甲 开始' })
+    await idle(root.id, g.id)
+    expect(count).toBe(expected)
+    expect(store.messages(owner, g.id).filter(m => m.content === REPEATED_RELAY_NOTICE)).toHaveLength(1)
+    expect(store.list<Work>(owner, 'turn').some(w => Object.values(w.relay?.suppressed ?? {}).includes('repeated'))).toBe(true)
+  })
+  it.each(['result', 'tool', 'attachment', 'interaction'] as const)('allows repeated instructions with new %s evidence beyond thirteen calls', async kind => {
+    const a = agent('负责人'), b = agent('审核')
+    const g = store.createGroup(owner, { name: '持续推进', memberIds: [a.id, b.id], administratorId: a.id, maxReplyRounds: -1 })
+    let admin = 0, worker = 0
+    reply = (socket, p) => {
+      if (speaker(p) === a.name) completeReply(socket, p, admin++ < 7 ? '感谢 @审核，请重新检查第二段' : '完成')
+      else { worker++; completeReply(socket, p, kind === 'result' ? `第 ${worker} 版结果` : '本次检查结果') }
+    }
+    runtime.onMessage = async (_owner, message) => {
+      if (message.agentId !== b.id) return
+      if (kind === 'tool') message.tools = [{ id: randomUUID(), name: 'verify', status: 'tool.complete', result: { revision: worker } }]
+      if (kind === 'attachment') message.attachments = [{ id: randomUUID(), name: 'revision.txt', mimeType: 'text/plain', size: 10, createdAt: Date.now() }]
+      if (kind === 'interaction') {
+        const id = randomUUID()
+        store.put(owner, 'interaction', id, { id, runId: message.runId, conversationId: g.id, conversationTaskId: message.conversationTaskId, agentId: b.id, kind: 'clarification', message: '继续重试？', answer: '继续', responseState: 'sent', resolved: true })
+        store.put(owner, 'interaction-binding', id, { taskId: message.taskId })
+      }
+      store.saveMessage(owner, message)
+    }
+    const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '反复改进' })
+    await idle(root.id, g.id)
+    expect(promptCount()).toBe(15)
+    expect(store.messages(owner, g.id).some(m => m.content === REPEATED_RELAY_NOTICE)).toBe(false)
+  })
+  it('ends only the repeating free-mode branch while an independent member finishes', async () => {
+    const a = agent('甲'), b = agent('乙'), c = agent('独立成员')
+    const g = store.createGroup(owner, { name: '分支隔离', memberIds: [a.id, b.id, c.id], administratorId: a.id, mode: 'free', maxReplyRounds: -1 })
+    let pending: { socket: WebSocket; p: Record<string, any> } | undefined, loops = 0
+    reply = (socket, p) => {
+      if (speaker(p) === c.name) { pending = { socket, p }; return }
+      completeReply(socket, p, ++loops > 15 ? '完成' : speaker(p) === a.name ? '@乙 再检查' : '@甲 再检查')
+    }
+    const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '@甲 @独立成员 请分别处理' })
+    await vi.waitFor(() => expect(store.messages(owner, g.id).some(m => m.content === REPEATED_RELAY_NOTICE)).toBe(true))
+    expect(store.require<WorkspaceRun>(owner, 'run', root.id).status).toBe('running')
+    expect(store.list<Work>(owner, 'turn').filter(w => w.cancelRequested)).toEqual([])
+    expect(loops).toBe(4)
+    completeReply(pending!.socket, pending!.p, '完成')
+    await idle(root.id, g.id)
+    expect(store.messages(owner, g.id).find(m => m.agentId === c.id)).toMatchObject({ content: '完成', status: 'complete' })
+  })
+  it('checks each target independently when a new automatic member joins the same repeated reply', async () => {
+    const a = agent('甲'), b = agent('乙'), c = agent('丙')
+    const g = store.createGroup(owner, { name: '目标隔离', memberIds: [a.id, b.id, c.id], administratorId: a.id, mode: 'free', autoReplyIds: [a.id], maxReplyRounds: -1 })
+    let calls = 0, admin = 0
+    reply = (socket, p) => { calls++; completeReply(socket, p, calls > 15 ? '完成' : speaker(p) === a.name ? '@乙 再检查' : speaker(p) === b.name ? '继续检查' : '完成') }
+    runtime.onMessage = async (_owner, message) => {
+      if (message.agentId === b.id && ++admin === 2) store.updateConversation(owner, g.id, { autoReplyIds: [a.id, c.id] })
+    }
+    const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '@甲 开始' })
+    await idle(root.id, g.id)
+    expect(calls).toBe(5)
+    const blocked = store.list<Work>(owner, 'turn').find(w => w.relay?.suppressed[a.id] === 'repeated')!
+    expect(blocked.relay?.suppressed[c.id]).toBeUndefined()
+    expect(store.list<Work>(owner, 'turn').find(w => w.batchId === blocked.id && w.agentId === c.id)?.status).toBe('complete')
+  })
+  it('starts fresh for identical new requests in the same task and a different task', async () => {
+    const a = agent('甲'), b = agent('乙')
+    const g = store.createGroup(owner, { name: '任务隔离', memberIds: [a.id, b.id], administratorId: a.id, mode: 'free', maxReplyRounds: -1 })
+    let calls = 0
+    reply = (socket, p) => { calls++; completeReply(socket, p, calls > 20 ? '完成' : speaker(p) === a.name ? '@乙 再检查' : '@甲 再检查') }
+    const originalTask = defaultTask(g.id), secondTask = store.createTask(owner, g.id, { title: '另一个任务' })
+    for (const [index, task] of [originalTask, originalTask, secondTask].entries()) {
+      const root = runtime.send(owner, g.id, { requestId: randomUUID(), taskId: task.id, content: '@甲 开始' })
+      await idle(root.id, g.id)
+      expect(calls).toBe((index + 1) * 4)
+      expect(store.messages(owner, g.id, Number.MAX_SAFE_INTEGER, 100, false, task.id).filter(m => m.runId === root.id && m.content === REPEATED_RELAY_NOTICE)).toHaveLength(1)
+    }
+  })
+  it.each([false, true])('recovers repeat suppression across restart before planning (legacy=%s)', async legacy => {
+    const a = agent('负责人'), b = agent('成员')
+    const g = store.createGroup(owner, { name: '循环恢复', memberIds: [a.id, b.id], administratorId: a.id, maxReplyRounds: -1 })
+    let calls = 0
+    reply = (socket, p) => { calls++; completeReply(socket, p, calls > 15 ? '完成' : speaker(p) === a.name ? '@成员 再检查' : '结果相同') }
+    runtime.onMessage = async () => { if (calls === 5) runtime.close() }
+    const root = runtime.send(owner, g.id, { requestId: randomUUID(), content: '开始' })
+    await vi.waitFor(() => expect(store.list<Work>(owner, 'turn').filter(w => w.status === 'complete')).toHaveLength(5))
+    if (legacy) for (const work of store.list<Work>(owner, 'turn')) { delete work.relay; store.put(owner, 'turn', work.id, work) }
+    runtime = new WorkspaceRuntime(store, nodes, uploads); runtime.start()
+    await idle(root.id, g.id)
+    expect(calls).toBe(5)
+    expect(store.messages(owner, g.id).filter(m => m.content === REPEATED_RELAY_NOTICE)).toHaveLength(1)
+    runtime.close(); runtime = new WorkspaceRuntime(store, nodes, uploads); runtime.start()
+    await idle(root.id, g.id)
+    expect(calls).toBe(5)
+    expect(store.messages(owner, g.id).filter(m => m.content === REPEATED_RELAY_NOTICE)).toHaveLength(1)
+  })
+})
 
 it('starts with the administrator, executes a batch concurrently, and reviews failures once without spending a round', async () => {
   const a = agent('管理员'), b = agent('成员乙'), c = agent('成员丙')

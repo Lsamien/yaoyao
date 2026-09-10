@@ -19,6 +19,7 @@ type NavItem = {
 }
 
 type SettingsPage =
+  | 'bot-plugins' | 'bot-apps' | 'bot-routines' | 'bot-about'
   | 'agent-identity'
   | 'agent-models'
   | 'account-security'
@@ -115,6 +116,9 @@ const settingsMenuOpen = ref(false)
 const settingsMenu = ref<HTMLElement | null>(null)
 let settingsTrigger: HTMLButtonElement | null = null
 const settingsMenuPosition = ref({ left: '8px', top: '8px' })
+const toolsMenuOpen = ref(false), toolsMenu = ref<HTMLElement | null>(null)
+const toolsPosition = ref({ left: '8px', top: '8px' })
+let toolsTrigger: HTMLButtonElement | null = null
 const desktopSidebarContext = ref<HTMLElement | null>(null)
 const mobileSidebarContext = ref<HTMLElement | null>(null)
 
@@ -172,6 +176,7 @@ function closeMenus(event: MouseEvent) {
   if (!target.closest('.sidebar-account-switcher')) profileMenuOpen.value = false
   if (!target.closest('.workspace-create-menu, .sidebar-create-trigger')) createMenuOpen.value = false
   if (!target.closest('.workspace-settings-menu, .sidebar-settings-trigger')) settingsMenuOpen.value = false
+  if (!target.closest('.workspace-tools-menu, .sidebar-tools-trigger')) toolsMenuOpen.value = false
 }
 function closeCreateMenu() {
   createMenuOpen.value = false
@@ -197,8 +202,8 @@ function chooseCreate(kind: 'agent' | 'group' | 'remote-agent') {
 function actionMenuKeydown(event: KeyboardEvent) {
   if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-  const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]')]
+  const index = buttons.indexOf(document.activeElement as HTMLElement)
   buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length]?.focus()
 }
 
@@ -210,19 +215,36 @@ async function openSettingsMenu(event: MouseEvent) {
   if (settingsMenuOpen.value) { closeSettingsMenu(); return }
   settingsTrigger = event.currentTarget as HTMLButtonElement
   const rect = settingsTrigger.getBoundingClientRect()
-  settingsMenuPosition.value = { left: `${Math.max(8, Math.min(rect.right - 180, window.innerWidth - 188))}px`, top: `${Math.max(8, rect.top - 92)}px` }
+  const height = applicationWorkspace.value ? (props.isAdmin ? 4 : 3) * (window.innerWidth < 768 ? 44 : 36) + 18 : 92
+  settingsMenuPosition.value = { left: `${Math.max(8, Math.min(rect.right - 180, window.innerWidth - 188))}px`, top: `${Math.max(8, rect.top - height)}px` }
   profileMenuOpen.value = false
   createMenuOpen.value = false
+  toolsMenuOpen.value = false
   settingsMenuOpen.value = true
   await nextTick()
   settingsMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
 }
-function chooseSettingsAction(action: 'settings' | 'bots') {
+function chooseSettingsAction(action: 'settings' | 'bots' | 'about') {
   settingsMenuOpen.value = false
   if (action === 'bots') { switchInterfaceMode(); return }
   settingsReturnFocus.value = settingsTrigger?.closest('.mobile-drawer')
     ? mobileNavigationTrigger.value : settingsTrigger ?? undefined
-  openSettings(applicationWorkspace.value ? 'account-security' : 'agent-identity')
+  openSettings(action === 'about' && applicationWorkspace.value ? 'bot-about' : applicationWorkspace.value ? 'account-security' : 'agent-identity')
+}
+function closeToolsMenu() { toolsMenuOpen.value = false; void nextTick(() => toolsTrigger?.isConnected && toolsTrigger.focus()) }
+async function openToolsMenu(event: MouseEvent) {
+  if (!applicationWorkspace.value) return
+  if (toolsMenuOpen.value) { closeToolsMenu(); return }
+  toolsTrigger = event.currentTarget as HTMLButtonElement
+  const rect = toolsTrigger.getBoundingClientRect()
+  toolsPosition.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 208))}px`, top: `${Math.max(8, rect.top - (window.innerWidth < 768 ? 150 : 126))}px` }
+  settingsMenuOpen.value = false; createMenuOpen.value = false; toolsMenuOpen.value = true
+  await nextTick(); toolsMenu.value?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+}
+function chooseTool(page: 'bot-plugins' | 'bot-apps' | 'bot-routines') {
+  toolsMenuOpen.value = false
+  settingsReturnFocus.value = toolsTrigger?.closest('.mobile-drawer') ? mobileNavigationTrigger.value : toolsTrigger ?? undefined
+  openSettings(page)
 }
 function switchInterfaceMode() {
   if (!props.isAdmin) return
@@ -281,6 +303,8 @@ function openSettings(page: SettingsPage = 'agent-identity', event?: MouseEvent)
       : trigger
   }
   profileMenuOpen.value = false
+  toolsMenuOpen.value = false
+  settingsMenuOpen.value = false
   mobileDrawerOpen.value = false
   settingsPage.value = page
   settingsOpen.value = true
@@ -347,7 +371,7 @@ function handleSidebarFocusout(event: FocusEvent) {
 
 function handleSidebarSearchClosed() { sidebarSearchOpen.value = false }
 
-watch(() => route.fullPath, () => { mobileDrawerOpen.value = false; createMenuOpen.value = false; settingsMenuOpen.value = false })
+watch(() => route.fullPath, () => { mobileDrawerOpen.value = false; createMenuOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false })
 watch(() => activeNav.value.key, () => {
   sidebarSearchOpen.value = false
   profileMenuOpen.value = false
@@ -468,8 +492,9 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       </section>
 
       <div class="sidebar-footer">
+        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><AppIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
-          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? undefined : 'listbox'" :aria-expanded="applicationWorkspace ? undefined : profileMenuOpen" @click="applicationWorkspace ? openSettings('account-security', $event) : toggleProfileMenu($event)">
+          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? 'menu' : 'listbox'" :aria-expanded="applicationWorkspace ? settingsMenuOpen : profileMenuOpen" @click="applicationWorkspace ? openSettingsMenu($event) : toggleProfileMenu($event)">
             <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
             <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
             <span class="account-copy">
@@ -575,8 +600,9 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       </section>
 
       <div class="sidebar-footer mobile-drawer__footer">
+        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><AppIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
-          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? undefined : 'listbox'" :aria-expanded="applicationWorkspace ? undefined : profileMenuOpen" @click="applicationWorkspace ? openSettings('account-security', $event) : toggleProfileMenu($event)">
+          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? 'menu' : 'listbox'" :aria-expanded="applicationWorkspace ? settingsMenuOpen : profileMenuOpen" @click="applicationWorkspace ? openSettingsMenu($event) : toggleProfileMenu($event)">
             <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
             <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
             <span class="account-copy">
@@ -652,11 +678,14 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
     />
     <Teleport to="body">
       <div v-if="settingsMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeSettingsMenu" @keydown.esc.prevent.stop="closeSettingsMenu">
-        <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :style="settingsMenuPosition" role="menu" aria-label="设置与模式" @keydown="actionMenuKeydown">
-          <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />进入设置</button>
+        <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :class="{ 'workspace-settings-menu--bot': applicationWorkspace }" :style="settingsMenuPosition" role="menu" :aria-label="applicationWorkspace ? '账号菜单' : '设置与模式'" @keydown="actionMenuKeydown">
+          <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />{{ applicationWorkspace ? '设置' : '进入设置' }}</button>
+          <button v-if="applicationWorkspace" type="button" role="menuitem" @click="chooseSettingsAction('about')"><AppIcon name="info" :size="17" />关于</button>
+          <a v-if="applicationWorkspace" role="menuitem" href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer" @click="closeSettingsMenu"><AppIcon name="external" :size="17" />帮助</a>
           <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
       </div>
+      <div v-if="toolsMenuOpen && applicationWorkspace" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('bot-plugins')"><AppIcon name="tools" :size="17" />插件</button><button type="button" role="menuitem" @click="chooseTool('bot-routines')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('bot-apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>
@@ -669,6 +698,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 </template>
 
 <style scoped>
+.sidebar-tools-trigger{display:flex;width:100%;min-height:44px;align-items:center;gap:10px;padding:8px 12px;margin:0 0 8px;border:0;border-radius:9px;background:transparent;color:var(--text-primary);font:500 13px var(--font-ui);cursor:pointer}.sidebar-tools-trigger span{flex:1;text-align:left}.sidebar-tools-trigger:hover,.sidebar-tools-trigger[aria-expanded=true]{background:var(--surface-hover)}.sidebar-tools-trigger:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.workspace-settings-menu a{display:flex;align-items:center;gap:8px;min-height:36px;padding:8px 10px;box-sizing:border-box;border-radius:7px;color:var(--text-primary);text-decoration:none;font-size:13px}.workspace-settings-menu a:hover{background:var(--surface-hover)}.workspace-settings-menu a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .workspace-shell {
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr) auto;
@@ -895,6 +925,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 .workspace-create-menu{position:absolute;width:180px;padding:5px;border:1px solid var(--line);border-radius:11px;background:var(--surface-raised);box-shadow:var(--shadow-float)}
 .workspace-create-menu button{display:flex;width:100%;min-height:36px;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:var(--text-primary);font:13px var(--font-ui);text-align:left;cursor:pointer}
 .workspace-create-menu button:hover,.workspace-create-menu button:focus-visible{outline:0;background:var(--surface-hover)}
+@media(max-width:767px){.workspace-tools-menu button,.workspace-settings-menu--bot button,.workspace-settings-menu--bot a{min-height:44px}}
 
 .bot-list-header{display:flex;align-items:center;gap:10px;padding:20px 20px 12px;min-height:74px}
 .bot-list-header__spacer{flex:1}

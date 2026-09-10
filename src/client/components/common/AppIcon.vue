@@ -1,5 +1,7 @@
 <script setup lang="ts">
 type IconName =
+  | 'info'
+  | 'clock'
   | 'chat'
   | 'history'
   | 'groups'
@@ -104,6 +106,8 @@ withDefaults(defineProps<{ name: IconName; size?: number }>(), { size: 18 })
     <template v-else-if="name === 'arrow-up'"><path d="M12 19V5m-7 7 7-7 7 7" stroke-width="2.2" /></template>
     <template v-else-if="name === 'stop'"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" stroke="none" /></template>
     <template v-else-if="name === 'tools'"><path d="M14.7 6.3a4 4 0 0 0-5-5L12 3.6 8.4 7.2 6.1 4.9a4 4 0 0 0 5 5l-7.4 7.4a2.1 2.1 0 0 0 3 3l7.4-7.4a4 4 0 0 0 5-5l-2.3 2.3-3.6-3.6z" /></template>
+    <template v-else-if="name === 'info'"><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></template>
+    <template v-else-if="name === 'clock'"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></template>
     <template v-else-if="name === 'users'"><circle cx="9" cy="8" r="3" /><path d="M3 21v-2a6 6 0 0 1 12 0v2M16 3a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 5v2" /></template>
     <template v-else-if="name === 'chevron-down'"><path d="m6 9 6 6 6-6" /></template>
     <template v-else-if="name === 'chevron-left'"><path d="m15 18-6-6 6-6" /></template>

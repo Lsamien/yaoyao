@@ -18,6 +18,7 @@ import type {
 } from '../shared/workspace.js'
 
 import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK } from './workspaceScheduler.js'
+import type { WorkspacePlugins, OpenBotPlugins } from './botPlugins/workspacePlugins.js'
 import { mentionedAgents } from './workspaceMentions.js'
 import { WorkspaceTeamTools, TEAM_TOOL_RULES } from './workspaceTeamTools.js'
 import { createWorkspaceToolLease, type WorkspaceToolLease } from './workspaceToolLease.js'
@@ -62,6 +63,7 @@ export const sendInput = z
   .strict()
   .refine((b) => b.content.trim() || b.fileIds.length, '请输入消息或添加附件')
 export class WorkspaceRuntime extends WorkspaceScheduler {
+  plugins?: WorkspacePlugins
   get idleForUpdate(): boolean {
     return this.live.size === 0 && this.executing.size === 0 && !this.store.db.prepare("SELECT 1 FROM workspace_entities WHERE kind IN ('run','turn') AND COALESCE(json_extract(data,'$.status'),'unknown') NOT IN ('complete','failed','interrupted') LIMIT 1").get()
   }
@@ -245,6 +247,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     let flushTimer: ReturnType<typeof setTimeout> | undefined
     const toolController = new AbortController()
     let toolLease: WorkspaceToolLease | undefined
+    let pluginLease: OpenBotPlugins | undefined
     let resolveTurn!: (m: Message) => void, rejectTurn!: (e: Error) => void
     const completion = new Promise<Message>((resolve, reject) => {
       resolveTurn = resolve
@@ -257,6 +260,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       settled = true
       toolController.abort()
       void toolLease?.dispose()
+      void pluginLease?.dispose()
       clearTimeout(flushTimer)
       flushTimer = undefined
       this.live.delete(key)
@@ -544,8 +548,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         this.nodes.requireSource(owner, agent)
         const team=agent.canManageTeam===true&&!this.store.require<Run>(owner,'run',run.runId).assignmentId
         const cloud=!!this.cloud?.selected(owner,agent)
+        const plugins=!!this.plugins?.selected(owner,agent)
         const desktop=this.desktopEnvironments?.selected(owner,agent),desktopEpoch=this.desktopEnvironments?.epoch??''
-        if(team||cloud||desktop){
+        if(team||cloud||desktop||plugins){
           if(team){
             const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)
             await this.teamTools.requireAvailable(owner,agent)
@@ -556,12 +561,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             if(settled||this.closing||toolController.signal.aborted)throw new Error('运行已停止')
             this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,this.store.require<Agent>(owner,'agent',agent.id))
             if(team)this.teamTools.assertTurn(owner,run.id)
+            if(plugins){const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id);if(current.cancelRequested||this.store.require<Run>(owner,'run',run.runId).stopRequested||latest.archived||!['running','waiting'].includes(current.status))throw new HttpError(403,'本轮插件授权已结束','plugin_grant_revoked')}
           }
+          if(plugins)pluginLease=await this.plugins!.open(owner,agent,target,toolController.signal,assertActive)
           toolLease=await createWorkspaceToolLease({
             target,profile:agent.profile,workId:run.id,signal:toolController.signal,
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
-            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.filter(t=>desktop==='browser'||t.id!=='desktop_browser'):[])],
-            call:async(toolId,args)=>{assertActive();return toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,desktop!,desktopEpoch):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):this.teamTools.call(owner,run.id,toolId,args)},
+            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.filter(t=>desktop==='browser'||t.id!=='desktop_browser'):[]),...(pluginLease?.catalog()??[])],
+            call:async(toolId,args)=>{assertActive();return toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,desktop!,desktopEpoch):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):this.teamTools.call(owner,run.id,toolId,args)},
             onFailure:error=>{if(!settled)void gateway.rpc('session.interrupt',{session_id:runtimeId}).catch(()=>{}).finally(()=>finish(error))},
           })
           await toolLease.bind();if(settled)return await completion
@@ -600,13 +607,15 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           c.kind === 'group'
             ? `你正在群聊「${c.name}」发言。群成员：${members.map((a) => `@${a.name} (id=${a.id})`).join('、')}。\n群规则：${c.instructions}\n${c.mode === 'host' ? (agent.id === c.administratorId ? '你是管理员。必要时用精确 @成员名称 委派工作；收到结果后复核并给用户结论。任务完成时不要继续 @。' : '执行当前委派任务。公开给出结果，由管理员复核；不要安排其他成员。') : '按自己的职责回复，只在需要协作时 @成员。不要重复已完成的工作。'}`
             : '',
-          run.requiredReply ? '你必须公开处理本次消息，直接回答、委派或澄清；禁止静默。管理员可按依赖一次 @一人，也可同时 @多人并行执行，整批结束后系统统一交回复核。' : run.replyMode === 'automatic' ? `你按自动参与配置收到消息。若与职责无关，禁止调用工具、禁止 @，完整答复只能是 ${NO_REPLY}。有关时正常回答。` : '',
+          c.kind === 'group' ? '只有安排具体的新工作时才用 @成员派工，并写明需要执行的动作。收到、感谢、审核通过、等待用户指令等确认不需要再次 @。任务收尾直接向用户报告结果；不要重复确认或把同一结果反复交回其他成员。' : '',
+          run.requiredReply ? '你必须公开处理本次消息，直接回答、委派或澄清；禁止静默。管理员可按依赖一次 @一人，也可同时 @多人并行执行，整批结束后系统统一交回复核。' : run.replyMode === 'automatic' ? `你按自动参与配置收到消息。若与职责无关或仅是已完成工作的重复确认，禁止调用工具、禁止 @，完整答复只能是 ${NO_REPLY}。有新工作或新结果时正常回答。` : '',
           `本轮用户指定成员：${this.store.require<Run>(owner, 'run', run.runId).mentionIds.map(id => members.find(a => a.id === id)).filter(Boolean).map(a => '@' + a!.name).join('、') || '未指定'}`,
           '角色规则不赋予额外工具权限；仍遵守基础 Hermes 的工具和安全约束。',
           this.store.require<Run>(owner, 'run', run.runId).internalInstruction || '',
           goal ? `当前团队目标 ID：${goal.id}。目标：${goal.objective.slice(0,8000)}\n验收要求：${goal.acceptanceCriteria.join('；')}\n${assignmentId ? `你在执行子任务 ${assignmentId}，请完成分派并提交结果，不要扩大团队或再次委派。` : '优先使用 workspace_assign_task 进行有依赖和验收要求的结构化分派；成员结果需要通过 workspace_review_assignment 复核。最终使用 workspace_finish_team_task 记录完成、受阻或等待用户。不要将一次模型回复结束当作目标完成。'}` : '',
           agent.temporaryGoalId ? `你是当前任务的临时助手，任务 ID：${agent.temporaryGoalId}。仅处理分派工作，使用 computer_export 回传产物。任务结束后会退役；不要创建团队或改变自身权限。` : '',
           team ? TEAM_TOOL_RULES : '',
+          plugins ? '本轮已挂载用户为当前 Bot 授权的插件工具，工具名以 plugin_ 开头，说明中包含实际服务和操作。仅按用户当前任务使用；连接或重新授权应用请让用户打开 Bot 模式的工具 → 已连接应用。不要索取 API Key 或在回复中展示凭据。' : '',
           desktop ? DESKTOP_ENVIRONMENT_RULES : '',
           cloud ? GROK_COMPUTER_RULES : '',
           `[yaoyao-run:${run.runId}:${resultMessage.id}]`,

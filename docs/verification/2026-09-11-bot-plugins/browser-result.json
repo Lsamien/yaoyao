@@ -1,0 +1,28 @@
+{
+  "environment": "isolated browser fixture only",
+  "browserWidths": [
+    1280,
+    375
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "pluginRoundTrips": 3,
+  "toolCalls": 3,
+  "runStatuses": [
+    "complete",
+    "complete",
+    "complete"
+  ],
+  "pendingTurns": 0,
+  "routineRuns": 1,
+  "verifiedPaths": [
+    "Tools > Plugins > MCP > add, test, enable, call",
+    "Tools > Connected Apps > authorize Bot > call",
+    "Tools > Automation > create > run now > completed log",
+    "Account > About / Settings / Help",
+    "Ordinary chat has no Bot tools entry"
+  ],
+  "realThirdPartyOAuthTested": false
+}
