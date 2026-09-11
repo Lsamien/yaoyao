@@ -200,9 +200,16 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/auth/logout' && request.method === 'POST') return json(response, 200, { ok: true }, { 'Set-Cookie': 'fake_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax' })
   if (!authenticated(request)) return json(response, 401, { detail: 'Unauthorized' })
   if (url.pathname === '/api/config') return json(response, 200, { terminal: { cwd: '/tmp/hermes-fixture' } })
+  if (url.pathname === '/api/fs/default-cwd') return json(response, 200, { cwd: '/tmp/hermes-fixture' })
+  if (url.pathname === '/api/files') {
+    const path = url.searchParams.get('path') || '/tmp/hermes-fixture'
+    return json(response, 200, { path, entries: [...profileMediaPaths, ...userProfileMediaPaths, '/tmp/hello.png']
+      .filter(file => file.slice(0, file.lastIndexOf('/')) === path)
+      .map(file => ({ name: file.split('/').at(-1), path: file, is_directory: false })) })
+  }
   if (url.pathname === '/api/files/download' && request.method === 'GET') {
     const path = url.searchParams.get('path')
-    if (![...profileMediaPaths, ...userProfileMediaPaths].includes(path)) return json(response, 404, { detail: 'File not found' })
+    if (![...profileMediaPaths, ...userProfileMediaPaths, '/tmp/hello.png'].includes(path)) return json(response, 404, { detail: 'File not found' })
     response.writeHead(200, {
       'Content-Type': 'image/png',
       'Content-Length': profileMediaPng.length,
@@ -490,6 +497,15 @@ server.on('upgrade', (request, socket, head) => {
             jsonrpc: '2.0', method: 'event',
             params: { type, session_id: requestFrame.params.session_id, profile: 'yaoyao', ...(payload ? { payload } : {}) },
           }))
+          if (requestFrame.params.text === '验证工具和文件权限') {
+            const tool_id = `file-test-${Date.now()}`
+            emit('message.start', {})
+            emit('tool.generating', { name: 'terminal' })
+            emit('tool.start', { tool_id, name: 'terminal', args: { command: '创建测试图片' } })
+            emit('tool.complete', { tool_id, name: 'terminal', result: { output: '', exit_code: 0 } })
+            emit('message.complete', { text: '已完成。\n\nMEDIA: /tmp/hello.png', status: 'complete' })
+            return
+          }
           if (requestFrame.params.text === '验证流式分段') {
             emit('message.start')
             emit('message.delta', { text: '我先检查配置。' })

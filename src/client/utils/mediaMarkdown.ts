@@ -72,7 +72,8 @@ function asMarkdown(path: string): string {
   const fileName = path.split('/').filter(Boolean).at(-1) || '文件'
   const extension = fileName.split('.').at(-1)?.toLocaleLowerCase() || ''
   const label = escapeLabel(fileName)
-  return IMAGE_EXTENSIONS.has(extension) ? `![${label}](${path})` : `[${label}](${path})`
+  const destination = path.split('/').map(part => encodeURIComponent(part).replace(/\(/g, '%28').replace(/\)/g, '%29')).join('/')
+  return IMAGE_EXTENSIONS.has(extension) ? `![${label}](${destination})` : `[${label}](${destination})`
 }
 
 function transformLine(line: string, streaming: boolean, terminated: boolean): string {

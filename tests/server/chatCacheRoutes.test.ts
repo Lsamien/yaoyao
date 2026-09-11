@@ -6,6 +6,7 @@ import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApplication, type ApplicationRuntime } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
+import { saveFileAccess } from '../../src/server/fileAccess.js'
 
 const homes: string[] = []
 const runtimes: ApplicationRuntime[] = []
@@ -342,6 +343,7 @@ describe('source=web chat cache routes', () => {
 
   it('serves warm and restarted chat reads locally while history stays upstream-only', async () => {
     const home = mkdtempSync(join(tmpdir(), 'yaoyao-chat-cache-routes-')); homes.push(home)
+    saveFileAccess(home, { mode: 'all', folders: [] })
     const counts = { list: 0, detail: 0, messages: 0, history: 0, media: 0 }
     const mediaPath = '/Users/test/.hermes/profiles/default/images/result.png'
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {

@@ -1,7 +1,7 @@
 export type UiToolCall = {
   id: string
   name: string
-  status: 'running' | 'success' | 'error' | 'pending'
+  status: 'running' | 'success' | 'error' | 'pending' | 'interrupted'
   input?: unknown
   output?: unknown
   durationMs?: number

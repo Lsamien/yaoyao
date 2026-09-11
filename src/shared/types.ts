@@ -122,7 +122,7 @@ export interface ChatAttachment {
 export interface ToolCall {
   id: string
   name: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'interrupted'
   arguments?: JsonValue
   result?: JsonValue
   preview?: string

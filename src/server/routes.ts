@@ -1,4 +1,5 @@
 import { readServerIdentity, updateServerIdentity } from './serverIdentity.js'
+import { authorizeFileRead, fileAccessWorkingDirectory, readFileAccess, saveFileAccess } from './fileAccess.js'
 import type { ServerIdentity } from '../shared/serverIdentity.js'
 import type Koa from 'koa'
 import type { WorkspaceStore } from './workspaceStore.js'
@@ -1064,7 +1065,7 @@ function sendLocalMedia(ctx: Koa.Context, path: string, contentType?: string, di
   ctx.body = createReadStream(path, { start, end: boundedEnd })
 }
 
-function prepareFilePreview(ctx: Koa.Context, name: string): void {
+function prepareFilePreview(ctx: Koa.Context, name: string, preserveDisposition = false): void {
   const type = ctx.response.get('content-type').split(';', 1)[0]?.trim().toLowerCase()
   const activeContent = type === 'text/html'
     || type === 'application/xhtml+xml'
@@ -1073,7 +1074,7 @@ function prepareFilePreview(ctx: Koa.Context, name: string): void {
   if (activeContent) {
     ctx.type = 'application/octet-stream'
     ctx.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
-  } else {
+  } else if (!preserveDisposition) {
     ctx.remove('Content-Disposition')
   }
 }
@@ -1098,11 +1099,12 @@ function hermesMediaPath(ctx: Koa.Context, rootDirectory = 'cache'): string {
 
 async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencies, rootDirectory = 'cache'): Promise<void> {
   const user = dependencies.auth.require(ctx)
-  const path = hermesMediaPath(ctx, rootDirectory)
+  const path = await authorizeFileRead(dependencies.config, dependencies.upstreamSession, hermesMediaPath(ctx, rootDirectory), ctx.params.profile || String(ctx.query.profile || ctx.get('x-hermes-profile') || 'default'))
   const cached = dependencies.chatCache?.store.attachment(user.id, path)
   if (cached) {
     ctx.set('X-Yaoyao-Data-Source', 'local')
     sendLocalMedia(ctx, cached.localPath, cached.mimeType, basename(path))
+    prepareFilePreview(ctx, basename(path), true)
     return
   }
   // Generated media belongs to Hermes, which may run on a different machine
@@ -1142,6 +1144,38 @@ function pairedLocalMediaPath(config: ServerConfig, rawPath: string): string {
 
 export function createApiRouter(dependencies: RouteDependencies): Router {
   const router = new Router()
+  const fileReadRequest = (ctx: Koa.Context, path: string) => ['GET', 'HEAD'].includes(ctx.method)
+    && /^\/api\/(?:files(?:\/[^/]+)?|fs\/[^/]+|media|hermes\/download)$/.test(path)
+  const authorizeFileQuery = async (ctx: Koa.Context, route: string, host: Pick<UpstreamServiceSession, 'request'> = dependencies.upstreamSession) => {
+    const profile = String(ctx.query.profile || ctx.get('x-hermes-profile') || 'default')
+    const directoryRequest = ['/api/files', '/api/fs/list', '/api/fs/git-root'].includes(route)
+    const rawPath = ctx.query.path || (directoryRequest ? await fileAccessWorkingDirectory(host, profile) : undefined)
+    if (typeof rawPath === 'string') {
+      const path = await authorizeFileRead(dependencies.config, host, rawPath, profile, directoryRequest)
+      const search = new URLSearchParams(ctx.querystring)
+      search.set('path', path)
+      search.set('profile', profile)
+      ctx.querystring = search.toString()
+    }
+  }
+  router.use(async (ctx, next) => {
+    if (fileReadRequest(ctx, ctx.path)) {
+      dependencies.auth.require(ctx)
+      await authorizeFileQuery(ctx, ctx.path)
+    }
+    await next()
+  })
+  router.get('/api/app/settings/file-access', async ctx => {
+    dependencies.auth.require(ctx)
+    const settings = readFileAccess(dependencies.config.home)
+    const profile = String(ctx.query.profile || ctx.get('x-hermes-profile') || 'default')
+    try { json(ctx, 200, { ...settings, profile, workingDirectory: await fileAccessWorkingDirectory(dependencies.upstreamSession, profile) }) }
+    catch (error) { json(ctx, 200, { ...settings, profile, workingDirectory: null, cwdError: error instanceof Error ? error.message : '无法读取工作目录' }) }
+  })
+  router.put('/api/app/settings/file-access', ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx, 200, saveFileAccess(dependencies.config.home, body(ctx)))
+  })
 
   registerKanbanRoutes(router, dependencies, '/api/app/kanban')
   registerKanbanRoutes(router, dependencies, '/api/kanban/v1')
@@ -1542,6 +1576,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       throw new HttpError(414, 'Paired node query is too long', 'node_query_too_long')
     }
     const jar = new CookieJar(cookieHeader)
+    if (fileReadRequest(ctx, path)) await authorizeFileQuery(ctx, path, {
+      request: (path, options) => dependencies.upstream.request(path, jar, options),
+    })
     const response = await dependencies.upstream.withReadScope(`device:${ctx.params.deviceID}`, ctx.get('x-yaoyao-cache') === 'bypass', () => dependencies.upstream.request(path, jar, {
       method: ctx.method,
       search: new URLSearchParams(ctx.querystring),
@@ -1574,7 +1611,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async (jar) => {
       await requireGatewayAuthentication(ctx, dependencies, jar)
       const filePath = Array.isArray(ctx.params.filePath) ? ctx.params.filePath.join('/') : ctx.params.filePath
-      sendLocalMedia(ctx, localMediaPath(dependencies.config.mediaRoot, filePath))
+      const path = await authorizeFileRead(dependencies.config, dependencies.upstreamSession, localMediaPath(dependencies.config.mediaRoot, filePath))
+      sendLocalMedia(ctx, path)
+      prepareFilePreview(ctx, basename(path), true)
     })
   })
   router.get('/Users/:owner/.hermes/attachments/*filePath', async (ctx) => {
@@ -1587,7 +1626,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async (jar) => {
       await requireGatewayAuthentication(ctx, dependencies, jar)
       const filePath = Array.isArray(ctx.params.filePath) ? ctx.params.filePath.join('/') : ctx.params.filePath
-      sendLocalMedia(ctx, localMediaPath(dependencies.config.attachmentsRoot, filePath))
+      const path = await authorizeFileRead(dependencies.config, dependencies.upstreamSession, localMediaPath(dependencies.config.attachmentsRoot, filePath))
+      sendLocalMedia(ctx, path)
+      prepareFilePreview(ctx, basename(path), true)
     })
   })
   router.get('/Users/:owner/.hermes/images/*filePath', async (ctx) => {
@@ -1600,7 +1641,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async (jar) => {
       await requireGatewayAuthentication(ctx, dependencies, jar)
       const filePath = Array.isArray(ctx.params.filePath) ? ctx.params.filePath.join('/') : ctx.params.filePath
-      sendLocalMedia(ctx, localMediaPath(dependencies.config.imagesRoot, filePath))
+      const path = await authorizeFileRead(dependencies.config, dependencies.upstreamSession, localMediaPath(dependencies.config.imagesRoot, filePath))
+      sendLocalMedia(ctx, path)
+      prepareFilePreview(ctx, basename(path), true)
     })
   })
   router.get('/attachments/*filePath', async (ctx) => {
@@ -1610,7 +1653,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async (jar) => {
       await requireGatewayAuthentication(ctx, dependencies, jar)
       const filePath = Array.isArray(ctx.params.filePath) ? ctx.params.filePath.join('/') : ctx.params.filePath
-      sendLocalMedia(ctx, localMediaPath(dependencies.config.attachmentsRoot, filePath))
+      const path = await authorizeFileRead(dependencies.config, dependencies.upstreamSession, localMediaPath(dependencies.config.attachmentsRoot, filePath), String(ctx.query.profile || ctx.get('x-hermes-profile') || 'default'))
+      sendLocalMedia(ctx, path)
+      prepareFilePreview(ctx, basename(path), true)
     })
   })
   router.get('/readyz', async (ctx) => {
@@ -2213,6 +2258,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     if (cached) {
       ctx.set('X-Yaoyao-Data-Source', 'local')
       sendLocalMedia(ctx, cached.localPath, cached.mimeType, basename(path))
+      prepareFilePreview(ctx, basename(path), true)
       return
     }
     const response = await dependencies.upstreamSession.request('/api/files/download', {
@@ -2227,6 +2273,9 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       void dependencies.chatCache?.cacheAttachment(user.id, path)
     }
     sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
+    ctx.set('Cache-Control', 'private, no-store')
+    ctx.set('X-Content-Type-Options', 'nosniff')
+    if (response.status >= 200 && response.status < 300 && ctx.query.preview === '1') prepareFilePreview(ctx, basename(path))
   })
 
   router.all('/api/*gatewayPath', async (ctx) => {

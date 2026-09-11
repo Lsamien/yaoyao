@@ -63,6 +63,7 @@ export function hermesBotRelay(nodes: WorkspaceNodes, auth: LocalAuthStore, csrf
       response = await target.client.fetchImpl(new URL(`${target.url.href.replace(/\/$/, '')}${match[2] ? '/api/hermes-bot' : ''}${path}${ctx.search}`), {
         method: ctx.method, redirect: 'error', signal: controller.signal,
         headers: { Authorization: `Bearer ${target.pairedToken}`, 'Content-Type': 'application/json',
+          'X-Hermes-Profile': ctx.get('x-hermes-profile'),
           'Last-Event-ID': ctx.get('last-event-id'), 'Idempotency-Key': ctx.get('idempotency-key') },
         ...(body ? { body: new Uint8Array(body) } : {}),
       })

@@ -10,6 +10,7 @@ import WorkspaceNodesPanel from '@/components/workspace/WorkspaceNodesPanel.vue'
 import WorkspaceVoiceProviders from '@/components/workspace/WorkspaceVoiceProviders.vue'
 import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
 import SystemOverviewPanel from '@/components/app/SystemOverviewPanel.vue'
+import FileAccessPanel from '@/components/app/FileAccessPanel.vue'
 import LocalVmSettingsPanel from '@/components/app/LocalVmSettingsPanel.vue'
 import SystemUpdatePanel from '@/components/app/SystemUpdatePanel.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
@@ -24,6 +25,7 @@ type SettingsPage =
   | 'account-mobile'
   | 'appearance'
   | 'system-overview'
+  | 'system-file-access'
   | 'system-users'
   | 'system-connection'
   | 'system-push'
@@ -108,6 +110,7 @@ const accountItems = computed<NavigationItem[]>(() => [
 const systemItems: NavigationItem[] = [
   { key: 'system-local-vm', label: '本地虚拟机', icon: 'monitor' },
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
+  { key: 'system-file-access', label: '文件访问', icon: 'panel' },
   { key: 'system-users', label: '用户与权限', icon: 'users' },
   { key: 'system-connection', label: 'Hermes 连接', icon: 'link' },
   { key: 'system-push', label: '消息推送', icon: 'bell' },
@@ -131,6 +134,7 @@ const activeTitle = computed(() => ({
   appearance: '外观',
   'system-local-vm': '本地虚拟机',
   'system-overview': '系统概览',
+  'system-file-access': '文件访问',
   'system-users': '用户与权限',
   'system-connection': 'Hermes 连接',
   'system-push': '消息推送',
@@ -360,6 +364,7 @@ function requestModeSwitch() {
                   </div>
                 </section>
                 <SystemOverviewPanel v-else-if="activePage === 'system-overview' && isAdmin" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @navigate="selectPage" />
+                <FileAccessPanel v-else-if="activePage === 'system-file-access' && isAdmin" :profile="activeProfile?.name" @dirty-change="setDirty('system-file-access', $event)" />
                 <LocalVmSettingsPanel v-else-if="activePage === 'system-local-vm' && isAdmin" />
                 <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :profiles="profiles" :active="true" @dirty-change="setDirty('system-users', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />

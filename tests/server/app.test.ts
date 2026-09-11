@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createApplication as createUnauthenticatedApplication, type ApplicationRuntime } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
 import { createAuthenticatedApplication as createApplication } from './authenticatedApplication.js'
+import { saveFileAccess } from '../../src/server/fileAccess.js'
 
 interface RecordedRequest {
   path: string
@@ -25,6 +26,7 @@ afterEach(() => {
 
 function makeConfig(upstream = 'http://127.0.0.1:9119'): ServerConfig {
   const home = mkdtempSync(join(tmpdir(), 'hermes-yaoyao-server-'))
+  saveFileAccess(home, { mode: 'all', folders: [] })
   const mediaRoot = join(home, 'media')
   const attachmentsRoot = join(home, 'attachments')
   const imagesRoot = join(home, 'images')

@@ -257,7 +257,7 @@ export class RealtimeBroker {
         .finally(() => this.onActivity(activity))
       if (nativeOwner && route && ['prompt.submit','session.steer'].includes(method)) {
         this.onNativeEvent(nativeOwner,route.profile,route.stored,{type:response.error?'command.rejected':'command.confirmed',
-          delivery_id:`command-result:${deliveryID}`,payload:{delivery_id:deliveryID,error:response.error?.message}})
+          delivery_id:`command-result:${deliveryID}`,payload:{delivery_id:deliveryID,error:response.error?.message,status:response.result?.status}})
         const peer={jsonrpc:'2.0',method:'event',params:{type:'run.peer_user_message',session_id:route.runtime,profile:route.profile,
           payload:{message_id:`user:${deliveryID}`,queue_id:deliveryID.replace(/^(web|ios):prompt:/,''),client_message_id:deliveryID.replace(/^(web|ios):prompt:/,''),text:p.text??'',status:response.error?'failed':'accepted',timestamp:submittedAt}}}
         for(const channel of this.channels.values())if(channel.routes.has(this.routeKey(route.profile,route.stored))&&channel.principal.valid()&&this.nativeOwner(channel.principal)===nativeOwner)this.emit(channel,'frame',peer)

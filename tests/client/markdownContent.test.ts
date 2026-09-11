@@ -57,18 +57,22 @@ describe('Markdown file cards', () => {
     expect(card.attributes('target')).toBeUndefined()
     expect(card.attributes('aria-label')).toBe('预览文件 报告.md')
     await card.trigger('click')
-    expect(wrapper.emitted('fileLink')).toEqual([['报告.md', encodeURI(path.replace(/^sandbox:/, ''))]])
+    const href = card.attributes('href')!
+    if (!path.startsWith('/api/')) expect(new URL(href, 'http://localhost').searchParams.get('path')).toBe(path.replace(/^sandbox:/, ''))
+    else expect(href).toBe(path)
+    expect(wrapper.emitted('fileLink')).toEqual([['报告.md', href]])
     wrapper.unmount()
   })
 
-  it('preserves ordinary links and keeps unknown protocols sanitized', () => {
+  it('preserves external links, routes server files through permissions and sanitizes unknown protocols', () => {
     const wrapper = mount(MarkdownContent, { props: { fileCards: true, content: [
       '[外部](https://example.com/Users/samien/.hermes/workspace/report.md)',
       '[普通](https://example.com/report.md)',
       '[配置](/Users/samien/.hermes/config.yaml)',
       '[未知](sandbox:/etc/passwd)',
     ].join('\n\n') } })
-    expect(wrapper.find('.file-link-card').exists()).toBe(false)
+    expect(wrapper.findAll('.file-link-card')).toHaveLength(1)
+    expect(new URL(wrapper.get('.file-link-card').attributes('href')!, 'http://localhost').searchParams.get('path')).toBe('/Users/samien/.hermes/config.yaml')
     expect(wrapper.find('a[href^="sandbox:"]').exists()).toBe(false)
     expect(wrapper.findAll('a[href]')).toHaveLength(3)
     wrapper.unmount()

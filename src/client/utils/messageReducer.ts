@@ -2,6 +2,7 @@ import type {
   ApprovalRequest, ChatMessage, ChatRouteState, ChatUsage, ClarificationRequest, JsonValue, RpcEventFrame, ToolCall,
 } from '@shared/types'
 import { createId } from './id'
+import { toolStatus } from '@shared/chatTools'
 import { bool, number, record, string } from './normalize'
 
 type MergePosition = 'append' | 'prepend' | 'snapshot'
@@ -36,6 +37,10 @@ function sameMessage(left: ChatMessage, right: ChatMessage): boolean {
 }
 
 function mergeOne(previous: ChatMessage, incoming: ChatMessage): ChatMessage {
+  const persistedUser = (message: ChatMessage) => message.role === 'user' && message.stage === 'settled'
+    && message.serverMessageId === message.id && message.id !== message.clientMessageId && !message.id.startsWith('user:')
+  // A late receipt or a cached optimistic row must not demote persisted history.
+  if (persistedUser(previous) && !persistedUser(incoming)) [previous, incoming] = [incoming, previous]
   const replacesContent = Boolean(incoming.content) || Boolean(incoming.attachments?.length)
   return {
     ...previous,
@@ -55,9 +60,16 @@ export function mergeChatMessages(existing: ChatMessage[], incoming: ChatMessage
   const base = position === 'prepend' || position === 'snapshot' ? [...incoming, ...existing] : [...existing, ...incoming]
   const result: ChatMessage[] = []
   for (const message of base) {
-    const index = result.findIndex(candidate => sameMessage(candidate, message))
-    if (index < 0) result.push(message)
-    else result[index] = mergeOne(result[index], message)
+    let merged = message
+    let index: number
+    let insertionIndex = result.length
+    // An enriched history row can bridge both an old server row and its local
+    // echo already in the cache. Consume every identity match, not just the first.
+    while ((index = result.findIndex(candidate => sameMessage(candidate, merged))) >= 0) {
+      insertionIndex = Math.min(insertionIndex, index)
+      merged = mergeOne(result.splice(index, 1)[0]!, merged)
+    }
+    result.splice(insertionIndex, 0, merged)
   }
   return orderChatMessages(result)
 }
@@ -93,9 +105,10 @@ function lastStreamingAssistant(messages: ChatMessage[], afterLatestUser = false
     .find(message => message.role === 'assistant' && message.isStreaming)
 }
 
-function settleSupersededStreams(messages: ChatMessage[], current?: ChatMessage): ChatMessage[] {
-  return messages.map(message => message.role === 'assistant' && message.isStreaming && message !== current
-    ? { ...message, stage: message.stage === 'streaming' ? 'settled' : message.stage, isStreaming: false }
+export function settleChatMessages(messages: ChatMessage[], current?: ChatMessage): ChatMessage[] {
+  return messages.map(message => message.role === 'assistant' && message !== current
+    ? { ...message, stage: message.stage === 'streaming' ? 'settled' : message.stage, isStreaming: false,
+      toolCalls: message.toolCalls?.map(tool => ['running', 'pending'].includes(tool.status) ? { ...tool, status: 'interrupted' } : tool) }
     : message)
 }
 
@@ -226,7 +239,7 @@ function updateStreamingMessage(
     toolCalls: existing?.toolCalls,
     raw: payload as JsonValue,
   }
-  const messages = mode === 'start' ? settleSupersededStreams(state.messages, current) : state.messages
+  const messages = mode === 'start' ? settleChatMessages(state.messages, current) : state.messages
   return mergeChatMessages(messages, [message])
 }
 
@@ -277,6 +290,7 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
       const terminalStatus = string(payload.status).trim().toLowerCase()
       const failed = terminalStatus === 'error' || terminalStatus === 'failed' || Boolean(payload.error)
       next.messages = updateStreamingMessage(state, payload, failed ? 'failed' : 'complete')
+      next.messages = settleChatMessages(next.messages)
       next.isStreaming = false
       next.isQueued = false
       next.liveStatus = undefined
@@ -287,6 +301,7 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
     case 'error':
     case 'run.failed':
       next.messages = updateStreamingMessage(state, payload, 'failed')
+      next.messages = settleChatMessages(next.messages)
       next.isStreaming = false
       next.isQueued = false
       next.error = string(payload.error ?? payload.message, '运行失败')
@@ -307,22 +322,33 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
     case 'tool.progress':
     case 'tool.started':
     case 'tool.generating': {
+      const id = string(payload.tool_call_id ?? payload.toolCallId ?? payload.tool_id ?? payload.id)
+      if (!id) {
+        next.liveStatus = `正在准备 ${string(payload.name ?? payload.tool_name, '工具')}`
+        break
+      }
       const current = lastStreamingAssistant(next.messages)
       if (!current) break
       const tool = toolFromEvent(payload, 'running')
       const tools = [...(current.toolCalls ?? [])]
       const index = tools.findIndex(item => item.id === tool.id)
-      if (index >= 0) tools[index] = { ...tools[index], ...tool }
+      if (index >= 0) tools[index] = { ...tools[index], ...tool,
+        result: tool.result ?? tools[index].result,
+        status: ['completed', 'failed'].includes(tools[index].status) ? tools[index].status : tool.status }
       else tools.push(tool)
       next.messages = mergeChatMessages(next.messages, [{ ...current, toolCalls: tools }])
+      next.liveStatus = undefined
       break
     }
     case 'tool.complete':
     case 'tool.completed':
     case 'tool.failed': {
-      const current = lastStreamingAssistant(next.messages) ?? [...next.messages].reverse().find(message => message.role === 'assistant')
+      const id = string(payload.tool_call_id ?? payload.toolCallId ?? payload.tool_id ?? payload.id)
+      if (!id) break
+      const current = [...next.messages].reverse().find(message => message.role === 'assistant' && message.toolCalls?.some(tool => tool.id === id))
+        ?? lastStreamingAssistant(next.messages)
       if (!current) break
-      const tool = toolFromEvent(payload, event.type === 'tool.failed' || payload.error ? 'failed' : 'completed')
+      const tool = toolFromEvent(payload, toolStatus(event.type, payload.result ?? payload.output, payload.error))
       const tools = [...(current.toolCalls ?? [])]
       const index = tools.findIndex(item => item.id === tool.id)
       if (index >= 0) tools[index] = { ...tools[index], ...tool }

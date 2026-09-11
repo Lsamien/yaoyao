@@ -7,6 +7,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { normalizeAssistantMediaMarkdown } from '@/utils/mediaMarkdown'
 import { repairMarkdownForRender } from '@/utils/markdownRepair'
+import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
 
 const props = withDefaults(defineProps<{
   content: string
@@ -17,6 +18,7 @@ const props = withDefaults(defineProps<{
   fileCards?: boolean
   processContent?: boolean
   outlinePrefix?: string
+  fileProfile?: string
 }>(), { streaming: false, legacyMedia: false, plain: false, fileCards: false, processContent: false, outlinePrefix: '' })
 
 const emit = defineEmits<{ fileLink: [name: string, url: string]; rendered: [] }>()
@@ -88,10 +90,15 @@ const md = new MarkdownIt({
 
 // Dashboard 规范：保留原文引号，不做智能引号替换。
 md.disable('smartquotes')
+const defaultValidateLink = md.validateLink
+md.validateLink = value => Boolean(serverFileUrl(value)) || defaultValidateLink(value)
 
 const defaultImage = md.renderer.rules.image!
 md.renderer.rules.image = (tokens, index, options, env, self) => {
   if (props.processContent) return escapeHtml(tokens[index].content || tokens[index].attrGet('src') || '图片')
+  const source = tokens[index].attrGet('src') || ''
+  const file = serverFileUrl(source, props.fileProfile)
+  if (file) tokens[index].attrSet('src', file)
   return defaultImage(tokens, index, options, env, self)
 }
 
@@ -101,9 +108,8 @@ md.renderer.rules.link_open = (tokens, index, options, env, self) => {
   // Some assistants wrap real Hermes workspace paths in a sandbox: URI.
   // Resolve only this known file route before sanitizing the Markdown.
   const href = token.attrGet('href') || ''
-  if (!props.processContent && props.fileCards && /^sandbox:\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/i.test(href)) {
-    token.attrSet('href', href.slice('sandbox:'.length))
-  }
+  const file = !props.processContent && props.fileCards ? serverFileUrl(href, props.fileProfile) : undefined
+  if (file && /\.[^/]+$/.test(serverFilePath(href) ?? '')) token.attrSet('href', file)
   token.attrSet('target', '_blank')
   token.attrSet('rel', 'noopener noreferrer')
   return defaultLinkOpen(tokens, index, options, env, self)
@@ -191,7 +197,8 @@ function decorateFileLinks() {
     const isAgentFile = /^\/Users\/[^/]+\/Agents\/.+/.test(url.pathname)
     const isWorkspaceFile = /^\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/.test(url.pathname)
     const isRemoteNodeFile = /^\/api\/app\/files\/(?:[0-9a-f-]{36}|[0-9]+)\/(?:download|preview)$/i.test(url.pathname)
-    if (url.origin !== window.location.origin || (!isAgentFile && !isWorkspaceFile && !isRemoteNodeFile)) return
+    const isServerFile = url.pathname === '/api/files/download' && Boolean(url.searchParams.get('path'))
+    if (url.origin !== window.location.origin || (!isAgentFile && !isWorkspaceFile && !isRemoteNodeFile && !isServerFile)) return
     link.dataset.fileCard = 'true'
     link.classList.add('file-link-card')
     link.removeAttribute('target')
@@ -213,7 +220,7 @@ function decorateMediaPreviews() {
     try { url = new URL(image.currentSrc || image.src, window.location.href) } catch { return }
     if (url.origin !== window.location.origin) return
     image.dataset.mediaPreview = 'true'
-    const name = decodeURIComponent(url.pathname.split('/').at(-1) || '图片')
+    const name = (url.searchParams.get('path') || decodeURIComponent(url.pathname)).split('/').at(-1) || '图片'
     image.setAttribute('role', 'button')
     image.setAttribute('tabindex', '0')
     image.setAttribute('aria-label', `预览图片 ${name}`)
@@ -226,6 +233,35 @@ function decorateMediaPreviews() {
     image.addEventListener('keydown', event => {
       if ((event as KeyboardEvent).key === 'Enter' || (event as KeyboardEvent).key === ' ') preview(event)
     })
+    let failure: HTMLElement | undefined
+    const failed = async () => {
+      if (!image.isConnected || failure) return
+      failure = document.createElement('span')
+      failure.className = 'media-load-error'
+      failure.setAttribute('role', 'alert')
+      const label = document.createElement('span')
+      label.textContent = `${name}：图片加载失败。`
+      const retry = document.createElement('button')
+      retry.type = 'button'; retry.textContent = '重试'
+      retry.addEventListener('click', () => {
+        failure?.remove(); failure = undefined
+        image.hidden = false
+        const next = new URL(url); next.searchParams.set('_retry', String(Date.now())); image.src = next.toString()
+      })
+      failure.append(label, retry); image.after(failure); image.hidden = true
+      if (url.pathname !== '/api/files/download') return
+      try {
+        const response = await fetch(url, { credentials: 'same-origin' })
+        if (!response.ok) {
+          const value = await response.json().catch(() => ({}))
+          const reason = value.error?.message || (typeof value.error === 'string' ? value.error : undefined) || value.message || value.detail
+          label.textContent = `${name}：${typeof reason === 'string' ? reason : response.status === 404 ? '服务器文件不存在或已被移动。' : response.status === 403 ? '此目录未获授权，请检查设置中的文件访问权限。' : '服务器暂时无法读取此文件。'}`
+        } else { await response.body?.cancel(); label.textContent = `${name}：文件内容不是可解码的图片。` }
+      } catch { label.textContent = `${name}：连接失败，请重试。` }
+    }
+    image.addEventListener('error', () => { void failed() })
+    image.addEventListener('load', () => { image.hidden = false; failure?.remove(); failure = undefined })
+    if (image.complete && image.naturalWidth === 0) void failed()
   })
 }
 
@@ -256,6 +292,8 @@ onUpdated(() => { decorateCopyButtons(); decorateFileLinks(); decorateMediaPrevi
 </template>
 
 <style scoped>
+.markdown :deep(img[hidden]){display:none!important}
+.markdown :deep(.media-load-error){display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft);font-size:12px}.markdown :deep(.media-load-error span){flex:1;overflow-wrap:anywhere}.markdown :deep(.media-load-error button){min-width:48px;min-height:44px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text-primary);cursor:pointer}.markdown :deep(.media-load-error button:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .plain-text { min-width: 0; color: inherit; font-size: 13px; line-height: 1.68; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-block { display: flow-root; }
 .markdown { min-width: 0; color: inherit; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }

@@ -4,7 +4,7 @@ import type { UiToolCall } from './types'
 
 const props = withDefaults(defineProps<{ tool: UiToolCall; expanded?: boolean }>(), { expanded: false })
 const open = ref(props.expanded || props.tool.status === 'error')
-const statusLabel = computed(() => ({ running: '运行中', success: '完成', error: '失败', pending: '等待' })[props.tool.status])
+const statusLabel = computed(() => ({ running: '运行中', success: '完成', error: '失败', pending: '等待', interrupted: '已结束，结果未确认' })[props.tool.status])
 function detail(value: unknown): string {
   if (value === undefined || value === null || value === '') return ''
   if (typeof value === 'string') return value
@@ -19,7 +19,7 @@ watch(() => props.expanded, value => { if (value) open.value = true })
   <div class="tool-trace" :class="`tool-trace--${tool.status}`">
     <button type="button" @click="open = !open">
       <strong>{{ tool.name }}</strong>
-      <small v-if="tool.status === 'error'">{{ statusLabel }}</small>
+      <small v-if="tool.status === 'error' || tool.status === 'interrupted'">{{ statusLabel }}</small>
       <span class="tool-trace__caret" :class="{ open }">›</span>
     </button>
     <div v-if="open && (inputDetail || outputDetail)" class="tool-trace__details">

@@ -12,7 +12,8 @@ import { ApiError } from '@/api/client'
 import { encodeAttachment } from '@/utils/attachments'
 import { ScopedCache } from '@/utils/cache'
 import { createId, routeKey } from '@/utils/id'
-import { applyChatEvent, mergeChatMessages } from '@/utils/messageReducer'
+import { applyChatEvent, mergeChatMessages, settleChatMessages } from '@/utils/messageReducer'
+import { reconcileChatHistory } from '@/utils/chatHistory'
 import { bool, normalizeChatMessage, number, record, string, values } from '@/utils/normalize'
 import { appendSessionPage, pinnedSessionsFirst } from '@/utils/sessionOrder'
 import { modelForSession, modelSelectionFromSessionInfo } from '@/utils/sessionModel'
@@ -503,7 +504,7 @@ export const useChatStore = defineStore('chat', () => {
         throw new Error('正在回复，请结束后再刷新历史')
       }
       const retained = forceRefresh ? state.messages.filter(message => message.role === 'user' && message.stage !== 'settled') : state.messages
-      state.messages = mergeChatMessages(retained, page.messages, 'snapshot')
+      state.messages = reconcileChatHistory(retained, page.messages, state.isStreaming)
       state.messageTotal = page.total
       state.loadedMessageCount = page.returned
       state.hasMoreBefore = page.hasMore
@@ -656,9 +657,7 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (!migrated.isStreaming) {
       migrated.liveStatus = undefined
-      migrated.messages = migrated.messages.map(message => message.isStreaming
-        ? { ...message, isStreaming: false, stage: message.stage === 'streaming' ? 'settled' : message.stage }
-        : message)
+      migrated.messages = settleChatMessages(migrated.messages)
     }
     migrated.pendingApproval = undefined
     migrated.pendingClarification = undefined
@@ -726,7 +725,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function updateDelivery(state: ChatRouteState, clientMessageId: string, patch: Partial<ChatMessage>): void {
     state.messages = state.messages.map(message => message.clientMessageId === clientMessageId || message.id === clientMessageId
-      ? { ...message, ...patch }
+      ? { ...message, ...patch, stage: message.stage === 'settled' && patch.stage === 'accepted' ? 'settled' : patch.stage ?? message.stage }
       : message)
   }
 
@@ -839,9 +838,7 @@ export const useChatStore = defineStore('chat', () => {
     await socket.request('session.interrupt', { session_id: current.runtimeSessionId! }, 15_000)
     current.isStreaming = false
     current.isQueued = false
-    current.messages = current.messages.map(message => message.role === 'assistant' && message.isStreaming
-      ? { ...message, stage: message.stage === 'streaming' ? 'settled' : message.stage, isStreaming: false }
-      : message)
+    current.messages = settleChatMessages(current.messages)
     clearInflightMarker(current.route.profile, current.route.sessionId)
   }
 

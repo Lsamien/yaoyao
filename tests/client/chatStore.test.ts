@@ -45,6 +45,32 @@ describe('chat message reducer', () => {
     expect(merged[0].stage).toBe('settled')
   })
 
+  it.each(['append', 'snapshot', 'prepend'] as const)('repairs both cached echoes when history restores identity (%s)', position => {
+    const local = { ...message('local', '查看服务器情况', 'client-1'), stage: 'accepted' as const }
+    const oldHistory = { ...message('1155', '查看服务器情况'), serverMessageId: '1155', timestamp: 2 }
+    const history = { ...oldHistory, clientMessageId: 'client-1' }
+    const merged = mergeChatMessages([local, oldHistory], [history], position)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]).toMatchObject({ id: '1155', clientMessageId: 'client-1', stage: 'settled', timestamp: 2 })
+  })
+
+  it('keeps persisted identity and delivery state when a peer receipt arrives after history', () => {
+    const current = state()
+    current.messages = [{ ...message('1155', '查看服务器情况', 'client-1'), serverMessageId: '1155' }]
+    const updated = applyChatEvent(current, event('run.peer_user_message', {
+      message_id: 'user:web:prompt:client-1', client_message_id: 'client-1', text: '查看服务器情况', status: 'accepted',
+    }))
+    expect(updated.messages).toHaveLength(1)
+    expect(updated.messages[0]).toMatchObject({ id: '1155', serverMessageId: '1155', stage: 'settled' })
+  })
+
+  it('retains two separate identical submissions while reconciling both echoes', () => {
+    const local = ['first', 'second'].map(id => ({ ...message(id, '查看服务器情况', id), stage: 'accepted' as const }))
+    const history = local.map((row, index) => ({ ...row, id: String(index + 1), serverMessageId: String(index + 1), stage: 'settled' as const }))
+    expect(mergeChatMessages(local, history, 'snapshot').map(row => [row.id, row.clientMessageId, row.stage]))
+      .toEqual([['1', 'first', 'settled'], ['2', 'second', 'settled']])
+  })
+
   it('keeps history and a realtime assistant reply in chronological order', () => {
     const optimistic = { ...message('local-user', '新问题', 'client-1'), timestamp: 30, stage: 'pending' as const }
     const older = { ...message('history-user', '旧问题'), timestamp: 10, sequence: 10 }

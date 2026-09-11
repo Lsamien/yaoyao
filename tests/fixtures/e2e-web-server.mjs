@@ -43,6 +43,12 @@ const ownedSessions = [
   ...Array.from({ length: 101 }, (_, index) => [`session-page-${index + 1}`, 'yaoyao']),
 ]
 const { ChatCacheStore } = await import('../../dist-server/server/chatCache.js')
+// General media fixtures intentionally span several server directories.
+// Permission-specific QA leaves the production cwd-only default intact.
+if (process.env.YAOYAO_FILE_ACCESS_TEST_MODE !== 'cwd') {
+  const { saveFileAccess } = await import('../../dist-server/server/fileAccess.js')
+  saveFileAccess(testHome, { mode: 'all', folders: [] })
+}
 const registry = new ChatCacheStore(testHome, testUserID)
 for (const [sessionID, profile] of ownedSessions) {
   registry.recordCommand(testUserID, profile, sessionID, 'session.create', {

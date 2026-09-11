@@ -111,6 +111,26 @@ describe('cross-client chat subscriptions', () => {
     expect(api.getMessages).toHaveBeenCalledTimes(1)
   })
 
+  it('reconciles synchronized history before a delayed submit receipt without duplicating or demoting the user row', async () => {
+    chat.sessions = [session('identity-session')]
+    realtime.request.mockResolvedValue({ session_id: 'runtime-1', stored_session_id: 'identity-session', running: false })
+    await chat.selectSession('identity-session', 'alpha')
+    let accept: (value: unknown) => void = () => {}
+    realtime.request.mockImplementation((method: string) => method === 'prompt.submit'
+      ? new Promise(resolve => { accept = resolve }) : Promise.resolve({}))
+    const sending = chat.send('查看服务器情况')
+    await vi.waitFor(() => expect(realtime.request.mock.calls.some(([method]) => method === 'prompt.submit')).toBe(true))
+    const local = chat.messages.find(message => message.role === 'user')!
+    const persisted = { ...local, id: '1155', serverMessageId: '1155', stage: 'settled' as const }
+    api.getMessages.mockResolvedValue({ messages: [persisted], total: 1, returned: 1, hasMore: false })
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: 'identity-session' })
+    await vi.waitFor(() => expect(chat.messages[0]?.id).toBe('1155'))
+    accept({ status: 'streaming' })
+    await sending
+    expect(chat.messages.filter(message => message.role === 'user')).toHaveLength(1)
+    expect(chat.messages[0]).toMatchObject({ id: '1155', clientMessageId: local.clientMessageId, stage: 'settled' })
+  })
+
   it('settles a run and clears an interaction completed while the viewer was offline', async () => {
     await chat.selectSession('stored-1', 'alpha')
     emit('message.start')

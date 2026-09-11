@@ -1,5 +1,6 @@
 import type { UiMessage } from '@/components/messages/types'
 import { normalizeAssistantMediaMarkdown } from '@/utils/mediaMarkdown'
+import { serverFileUrl } from '@shared/serverFiles'
 import type { LibraryKind, UiLibraryItem } from './types'
 
 const imageExtensions = new Set(['apng', 'avif', 'bmp', 'gif', 'heic', 'heif', 'ico', 'jfif', 'jpeg', 'jpg', 'jxl', 'png', 'svg', 'tif', 'tiff', 'webp'])
@@ -17,14 +18,23 @@ export function previewItemFromUrl(name: string, url: string, id = `local:${url}
 
 export function mediaUrlIdentity(url: string): string {
   try {
-    return new URL(url, window.location.origin).href
+    const parsed = new URL(url, window.location.origin)
+    if (parsed.origin === window.location.origin && parsed.pathname === '/api/files/download') {
+      parsed.searchParams.delete('_retry')
+      parsed.searchParams.sort()
+    }
+    return parsed.href
   } catch {
     return url
   }
 }
 
 function nameFromUrl(url: string): string {
-  try { return decodeURIComponent(new URL(url, window.location.origin).pathname.split('/').at(-1) || '媒体') } catch { return '媒体' }
+  try {
+    const parsed = new URL(url, window.location.origin)
+    const path = parsed.pathname === '/api/files/download' ? parsed.searchParams.get('path') || parsed.pathname : decodeURIComponent(parsed.pathname)
+    return path.split('/').at(-1) || '媒体'
+  } catch { return '媒体' }
 }
 
 /** The ordered image/video sequence visible in one normal or group conversation. */
@@ -46,8 +56,10 @@ export function mediaItemsFromMessages(messages: UiMessage[]): UiLibraryItem[] {
     const content = message.role === 'assistant' ? normalizeAssistantMediaMarkdown(message.content) : message.content
     const markdownMedia = /!\[[^\]]*\]\(([^)\s]+)\)|\[[^\]]+\]\(([^)\s]+)\)/g
     for (let match = markdownMedia.exec(content); match; match = markdownMedia.exec(content)) {
-      const url = match[1] || match[2]
-      if (!url) continue
+      const source = match[1] || match[2]
+      if (!source) continue
+      // Match MarkdownContent's renderer, including the selected server Profile.
+      const url = serverFileUrl(source, message.profile) || source
       const item = previewItemFromUrl(nameFromUrl(url), url, `${message.id}:${url}`)
       append(item)
     }

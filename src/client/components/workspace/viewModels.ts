@@ -1,4 +1,6 @@
 import { visibleMessageText, messageReasoningText } from '@shared/messageFiles'
+import { toolResultFailed } from '@shared/chatTools'
+import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
 import type {
   ApprovalRequest,
   ChatMessage,
@@ -116,7 +118,7 @@ export function chatMessageToUi(message: ChatMessage, agentNameFor?: (profile?: 
     id: attachment.id,
     name: attachment.name,
     kind: attachment.kind === 'image' ? 'image' : 'file',
-    url: attachment.url,
+    url: serverFileUrl(attachment.url || attachment.path || '', message.profile) || attachment.url || attachment.path,
     size: attachment.size,
   }))
   return {
@@ -129,7 +131,8 @@ export function chatMessageToUi(message: ChatMessage, agentNameFor?: (profile?: 
     status: message.isStreaming ? 'streaming' : message.stage,
     error: message.error,
     attachments,
-    tools: message.toolCalls?.map(toolToUi),
+    tools: message.toolCalls?.filter(tool => tool.id).map(tool => toolToUi(!message.isStreaming && ['pending', 'running'].includes(tool.status)
+      ? { ...tool, status: 'interrupted' } : tool)),
     profile: message.profile,
   }
 }
@@ -150,7 +153,7 @@ export function chatMessagesToUi(messages: ChatMessage[], agentNameFor?: (profil
       const patch: UiToolCall = {
         id,
         name: message.toolName || tools[index]?.name || '工具',
-        status: message.error ? 'error' : 'success',
+        status: toolResultFailed(toolResult(message), message.error) ? 'error' : 'success',
         input: tools[index]?.input,
         output: message.error || toolResult(message),
       }
@@ -181,7 +184,17 @@ export function chatMessagesToUi(messages: ChatMessage[], agentNameFor?: (profil
     result.push(ui)
     if (message.role === 'assistant') {
       lastAssistant = ui
-      for (const tool of ui.tools ?? []) toolOwners.set(tool.id, ui)
+      ui.tools = ui.tools?.map(tool => {
+        const previous = toolOwners.get(tool.id)
+        const known = previous?.tools?.find(candidate => candidate.id === tool.id)
+        if (previous && known && !/^tool-\d+$/.test(tool.id)) {
+          previous.tools = previous.tools?.filter(candidate => candidate.id !== tool.id)
+          tool = { ...known, ...tool, input: tool.input ?? known.input, output: tool.output ?? known.output,
+            status: ['success', 'error'].includes(known.status) && !['success', 'error'].includes(tool.status) ? known.status : tool.status }
+        }
+        toolOwners.set(tool.id, ui)
+        return tool
+      })
     }
   }
   return result
@@ -271,10 +284,11 @@ export function groupMessageToUi(message: GroupMessage, agents: GroupAgent[] = [
 export function rewriteRemoteNodeFiles(content: string, nodeId: string, streaming = false): string {
   if (!/^[0-9a-f-]{36}$/i.test(nodeId)) return content
   return normalizeAssistantMediaMarkdown(content, streaming).replace(
-    /(!?\[[^\]]*\]\()<?(?:file:\/\/)?(\/(?:Users|private|var|tmp)\/[^)>\n]+)>?(\))/g,
-    (_match, prefix: string, path: string, suffix: string) => (
-      `${prefix}/api/app/groups/nodes/${encodeURIComponent(nodeId)}/files?path=${encodeURIComponent(path)}${suffix}`
-    ),
+    /(!?\[[^\]]*\]\()<?(?:file:\/\/|sandbox:)?(\/[^)>\n]+)>?(\))/g,
+    (match, prefix: string, raw: string, suffix: string) => {
+      const path = serverFilePath(raw)
+      return path && serverFileUrl(raw) ? `${prefix}/api/app/groups/nodes/${encodeURIComponent(nodeId)}/files?path=${encodeURIComponent(path)}${suffix}` : match
+    },
   )
 }
 

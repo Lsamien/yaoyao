@@ -27,4 +27,22 @@ describe('conversation media sequence', () => {
       mediaUrlIdentity('/Users/samien/Agents/%E7%91%B6%E5%84%BF/%E5%8D%95%E8%A7%86%E8%A7%92%E5%9B%BE%E7%89%87.png'),
     )
   })
+
+  it('uses the same Profile-scoped URL and filename as rendered server images', () => {
+    const items = mediaItemsFromMessages([
+      { id: 'one', role: 'assistant', profile: 'yaoer', content: 'MEDIA:/Users/test/工作/图片.png\n![第二张](/Users/test/工作/第二张.png)' },
+    ])
+    expect(items.map(item => item.name)).toEqual(['图片.png', '第二张.png'])
+    const url = new URL(items[0]!.previewUrl!, window.location.origin)
+    expect(url.pathname).toBe('/api/files/download')
+    expect(url.searchParams.get('path')).toBe('/Users/test/工作/图片.png')
+    expect(url.searchParams.get('profile')).toBe('yaoer')
+    expect(items.every(item => item.kind === 'image')).toBe(true)
+  })
+
+  it('matches retried media without merging different Profile authorizations', () => {
+    const original='/api/files/download?path=%2Fwork%2Fa.png&preview=1&profile=one'
+    expect(mediaUrlIdentity(original)).toBe(mediaUrlIdentity(original+'&_retry=123'))
+    expect(mediaUrlIdentity(original)).not.toBe(mediaUrlIdentity(original.replace('profile=one','profile=two')))
+  })
 })

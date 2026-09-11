@@ -328,6 +328,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 
             <div class="message__content">
               <MarkdownContent
+                :file-profile="message.profile"
                 :content="displayContentForMessage(message.role, message.content)"
                 :streaming="message.status === 'streaming'"
                 :legacy-media="message.role === 'assistant'"

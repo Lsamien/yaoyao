@@ -1,3 +1,4 @@
+import { toolStatus } from '@shared/chatTools'
 import type {
   ChatAttachment,
   ChatMessage,
@@ -150,7 +151,7 @@ function normalizeToolCall(value: unknown, index: number): ToolCall {
   return {
     id: string(pick(source, 'id', 'tool_call_id', 'toolCallId', 'tool_id'), `tool-${index}`),
     name: string(pick(source, 'name', 'tool_name', 'toolName') ?? functionCall.name, '工具'),
-    status: error ? 'failed' : result !== undefined ? 'completed' : 'running',
+    status: toolStatus(source.completion_unknown ? 'interrupted' : source.status, result, source.error),
     arguments: (pick(source, 'arguments', 'args', 'context') ?? functionCall.arguments) as JsonValue | undefined,
     result,
     preview: string(pick(source, 'preview', 'summary', 'args_text')) || undefined,
@@ -323,7 +324,8 @@ export function normalizeChatMessage(value: unknown, sessionId: string, fallback
     reasoning: string(pick(source, 'reasoning', 'thinking', 'reasoning_content', 'reasoningContent')) || undefined,
     timestamp: number(pick(source, 'timestamp', 'created_at', 'createdAt', 'updated_at', 'updatedAt'), Date.now() / 1000),
     sequence: number(pick(source, 'seq', 'sequence')) || undefined,
-    stage: status === 'error' || source.error ? 'failed' : 'settled',
+    stage: ['error', 'failed'].includes(status) || source.error ? 'failed' : status === 'streaming' ? 'streaming' : 'settled',
+    isStreaming: status === 'streaming',
     error: string(source.error) || undefined,
     attachments: attachments.length ? attachments : undefined,
     toolCalls: values(typeof pick(source, 'tool_calls', 'toolCalls', 'tools') === 'string'

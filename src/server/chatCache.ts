@@ -192,7 +192,12 @@ export class ChatCacheStore {
       CREATE TABLE IF NOT EXISTS chat_recovery_jobs(owner TEXT NOT NULL,profile TEXT NOT NULL,session_id TEXT NOT NULL,force INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner,profile,session_id));
       CREATE TABLE IF NOT EXISTS chat_event_receipts(
       owner TEXT NOT NULL, profile TEXT NOT NULL, session_id TEXT NOT NULL, event_id TEXT NOT NULL,
-      PRIMARY KEY(owner,profile,session_id,event_id));`)
+      PRIMARY KEY(owner,profile,session_id,event_id));
+      CREATE TABLE IF NOT EXISTS chat_message_identities(
+        owner TEXT NOT NULL, profile TEXT NOT NULL, session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL, client_message_id TEXT NOT NULL,
+        PRIMARY KEY(owner,profile,session_id,message_id),
+        UNIQUE(owner,profile,session_id,client_message_id));`)
     const localColumns=this.db.prepare('PRAGMA table_info(chat_local_state)').all() as {name:string}[]
     for(const [name,type] of [['title','TEXT'],['archived','INTEGER'],['read_initialized','INTEGER NOT NULL DEFAULT 0'],['final_read_count','INTEGER']]){
       if(!localColumns.some(c=>c.name===name))this.db.exec(`ALTER TABLE chat_local_state ADD COLUMN ${name} ${type}`)
@@ -552,13 +557,15 @@ export class ChatCacheStore {
         for(const window of windows){
           const pagination=window.pagination??{},messages=window.messages as Record<string,any>[]
           if(!Array.isArray(messages)||!Number.isSafeInteger(pagination.total))continue
+          const identified = this.userMessageIdentities(owner, profile, sessionID, messages, false)
           const end=pagination.total-Number(pagination.offset??0),start=end-messages.length
           const ids=new Set(messages.map((m,index)=>messageID(m,String(start+index))))
           const existing=this.db.prepare('SELECT message_id,data FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND position>=? AND position<?').all(owner,profile,sessionID,start,end) as {message_id:string;data:string}[]
           for(const row of existing){
             if(ids.has(row.message_id))continue
             const value=JSON.parse(row.data)
-            if(value.role==='user'&&value.status==='pending'&&!messages.some(m=>m.role==='user'&&m.content===value.content))
+            if(value.role==='user'&&value.status==='pending'&&!identified.some(m=>m.role==='user'
+              && value.client_message_id && m.client_message_id===value.client_message_id))
               throw new Error('Unconfirmed submission must be reconciled before history replacement')
             this.db.prepare('DELETE FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?').run(owner,profile,sessionID,row.message_id)
           }
@@ -566,6 +573,14 @@ export class ChatCacheStore {
       }
       this.db.prepare("DELETE FROM chat_snapshots WHERE owner=? AND profile=? AND session_id=? AND kind='messages'").run(owner, profile, sessionID)
       for (const page of pages) this.putSnapshot(owner, page.key, page.kind, profile, sessionID, page.response, false, page.startedAt)
+      // Resolve legacy identities only after all pages are stored. Resolving
+      // pages individually could consume a send before seeing an ambiguous row.
+      const coverage = this.db.prepare('SELECT complete FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
+        .get(owner, profile, sessionID) as {complete: number} | undefined
+      if (coverage?.complete) this.userMessageIdentities(owner, profile, sessionID, pages.flatMap(page => {
+        const messages = page.kind === 'messages' ? parseResponse(page.response)?.messages : undefined
+        return Array.isArray(messages) ? messages.flatMap(value => object(value) ? [object(value)!] : []) : []
+      }))
       const latest=this.db.prepare("SELECT message_id FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND json_extract(data,'$.role')='assistant' ORDER BY position DESC LIMIT 1").get(owner,profile,sessionID) as {message_id:string}|undefined
       if(latest)this.db.prepare('UPDATE chat_local_state SET assistant_id=? WHERE owner=? AND profile=? AND session_id=?').run(latest.message_id,owner,profile,sessionID)
       this.db.exec('RELEASE history_sync')
@@ -574,6 +589,82 @@ export class ChatCacheStore {
       this.db.exec('ROLLBACK TO history_sync; RELEASE history_sync')
       throw error
     }
+  }
+
+  private userMessageIdentities(owner: string, profile: string, sessionID: string,
+    messages: Record<string, unknown>[], recoverLegacy = true): Record<string, unknown>[] {
+    const scope = [owner, profile, sessionID]
+    const bindings = this.db.prepare(`SELECT message_id,client_message_id FROM chat_message_identities
+      WHERE owner=? AND profile=? AND session_id=?`).all(...scope) as {message_id: string; client_message_id: string}[]
+    const byServer = new Map(bindings.map(row => [row.message_id, row.client_message_id]))
+    const byClient = new Map(bindings.map(row => [row.client_message_id, row.message_id]))
+    const serverID = (message: Record<string, unknown>) => {
+      const id = String(message.id ?? message.message_id ?? '').trim()
+      return message.role === 'user' && id && !id.startsWith('user:') ? id : ''
+    }
+    const bind = (id: string, client: string) => {
+      if (!id || !client || byServer.has(id) || byClient.has(client)) return
+      this.db.prepare('INSERT INTO chat_message_identities VALUES(?,?,?,?,?)').run(...scope, id, client)
+      byServer.set(id, client)
+      byClient.set(client, id)
+    }
+    for (const message of messages) {
+      bind(serverID(message), String(message.client_message_id ?? message.clientMessageId ?? ''))
+    }
+    if (recoverLegacy && messages.some(message => serverID(message) && !byServer.has(serverID(message)))) {
+      // Older gateways omit client IDs. Recover only a mutually unique match
+      // inside a confirmed, non-queued submission's time window. Never dedupe
+      // by text or position alone, and include other pages when testing uniqueness.
+      const events = this.db.prepare(`SELECT event_type,payload,received_at FROM chat_events
+        WHERE owner=? AND profile=? AND session_id=?
+        AND event_type IN ('command:prompt.submit','command:session.steer','command.confirmed','command.rejected','message.start')
+        ORDER BY received_at,event_seq`)
+        .all(...scope) as {event_type: string; payload: string; received_at: number}[]
+      const confirmed = new Map<string, number>(), rejected = new Set<string>()
+      for (const event of events) {
+        const payload = JSON.parse(event.payload)
+        if (event.event_type === 'command.confirmed' && payload.status !== 'queued') confirmed.set(payload.delivery_id, event.received_at)
+        if (event.event_type === 'command.rejected') rejected.add(payload.delivery_id)
+      }
+      const stored = this.db.prepare(`SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=?
+        AND json_extract(data,'$.role')='user'`).all(...scope) as {data: string}[]
+      const candidates = new Map<string, Record<string, unknown>>()
+      for (const message of [...stored.map(row => JSON.parse(row.data)), ...messages]) {
+        const id = serverID(message)
+        if (id && !byServer.has(id)) candidates.set(id, message)
+      }
+      const matches = new Map<string, string[]>(), claims = new Map<string, number>()
+      const submissions = events.filter(event => event.event_type === 'command:prompt.submit' || event.event_type === 'command:session.steer')
+      for (const [index, event] of submissions.entries()) {
+        if (event.event_type !== 'command:prompt.submit') continue
+        const payload = JSON.parse(event.payload), delivery = String(payload._delivery_id ?? '')
+        const client = delivery.replace(/^(web|ios):prompt:/, '')
+        const acceptedAt = confirmed.get(delivery)
+        if (!client || byClient.has(client) || payload.queued || rejected.has(delivery) || acceptedAt === undefined) continue
+        const start = event.received_at / 1000
+        const nextStart = submissions[index + 1]?.received_at ?? Infinity
+        const runStart = events.find(candidate => candidate.event_type === 'message.start'
+          && candidate.received_at >= event.received_at && candidate.received_at < nextStart)
+        // The receipt can precede the gateway's DB insert by a few milliseconds.
+        // A deferred agent build may start later; the next submission always
+        // closes this window, including when users rapidly repeat the same text.
+        const end = Math.min((runStart?.received_at ?? acceptedAt) + 1000, event.received_at + 120_000) / 1000
+        const ids = [...candidates].flatMap(([id, message]) => {
+          const time = firstTimestamp(message, ['timestamp', 'created_at', 'createdAt'])
+          return time !== undefined && time >= start && time <= end && time < nextStart / 1000
+            && message.content === (payload.text ?? payload.input ?? '') ? [id] : []
+        })
+        matches.set(client, ids)
+        for (const id of ids) claims.set(id, (claims.get(id) ?? 0) + 1)
+      }
+      for (const [client, ids] of matches) {
+        if (ids.length === 1 && claims.get(ids[0]!) === 1) bind(ids[0]!, client)
+      }
+    }
+    return messages.map(message => {
+      const client = byServer.get(serverID(message))
+      return client ? { ...message, client_message_id: client } : message
+    })
   }
 
   messagePage(owner: string, profile: string, sessionID: string, offset: number, limit: number): MessagePage | undefined {
@@ -588,8 +679,8 @@ export class ChatCacheStore {
     const start = Math.max(0, end - limit)
     const rows = this.db.prepare(`SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=?
       AND position>=? AND position<? ORDER BY position`).all(owner, profile, sessionID, start, end) as Array<{ data: string }>
-    const messages = rows.map(row => JSON.parse(row.data))
-    if (messages.length !== end - start) return undefined // Fetch only an actually missing page.
+    if (rows.length !== end - start) return undefined // Fetch only an actually missing page.
+    const messages = this.userMessageIdentities(owner, profile, sessionID, rows.map(row => JSON.parse(row.data)), bool(session.complete))
     const body = Buffer.from(JSON.stringify({
       session_id: sessionID,
       session: JSON.parse(this.localDetail(owner,profile,sessionID)!.response.body.toString()),
@@ -675,7 +766,7 @@ export class ChatCacheStore {
     if(!old||this.ownsSession(owner,profile,id))return
     this.db.exec('SAVEPOINT migrate_live_route')
     try{
-      for(const table of ['chat_sessions','chat_messages','chat_events','chat_snapshots','chat_attachments','chat_local_state','chat_event_receipts','chat_recovery_jobs'])
+      for(const table of ['chat_sessions','chat_messages','chat_events','chat_snapshots','chat_attachments','chat_local_state','chat_event_receipts','chat_recovery_jobs','chat_message_identities'])
         this.db.prepare(`UPDATE ${table} SET session_id=? WHERE owner=? AND profile=? AND session_id=?`).run(id,owner,profile,old.session_id)
       this.db.prepare('INSERT OR REPLACE INTO chat_session_aliases VALUES(?,?,?,?)').run(owner,profile,old.session_id,id)
       this.db.prepare('UPDATE chat_session_aliases SET session_id=? WHERE owner=? AND profile=? AND session_id=?').run(id,owner,profile,old.session_id)
@@ -773,7 +864,7 @@ export class ChatCacheStore {
       .all(owner, profile, sessionID) as Array<{ local_path: string }>
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      for (const table of ['chat_messages', 'chat_events', 'chat_attachments', 'chat_local_state', 'chat_event_receipts', 'chat_recovery_jobs', 'chat_session_aliases', 'chat_sessions']) {
+      for (const table of ['chat_messages', 'chat_events', 'chat_attachments', 'chat_local_state', 'chat_event_receipts', 'chat_recovery_jobs', 'chat_session_aliases', 'chat_message_identities', 'chat_sessions']) {
         this.db.prepare(`DELETE FROM ${table} WHERE owner=? AND profile=? AND session_id=?`).run(owner, profile, sessionID)
       }
       this.db.prepare("DELETE FROM chat_snapshots WHERE owner=? AND ((profile=? AND session_id=?) OR kind='list')")
@@ -1121,7 +1212,7 @@ export class ChatCacheStore {
     const total = Math.max(offset + messages.length,
       Number(pagination.total ?? payload.total ?? storedSummary.message_count ?? storedSummary.messageCount ?? 0) || 0)
     const start = Math.max(0, total - offset - messages.length)
-    messages.forEach((message, index) => {
+    this.userMessageIdentities(owner, profile, sessionID, messages, false).forEach((message, index) => {
       const data = JSON.stringify(message)
       this.db.prepare(`INSERT INTO chat_messages(owner,profile,session_id,message_id,position,data,content_hash)
         VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id,message_id) DO UPDATE SET position=excluded.position,

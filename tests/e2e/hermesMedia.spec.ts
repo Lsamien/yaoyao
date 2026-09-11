@@ -33,10 +33,10 @@ test('loads Hermes profile cache images through the Web server and switches thei
   // No image interception: this exercises the real Web route, upstream account
   // authentication, attachment-to-inline response handling, and browser decode.
   const responses = mediaPaths.map(path => page.waitForResponse(response => (
-    decodeURIComponent(new URL(response.url()).pathname) === path
+    new URL(response.url()).pathname === '/api/files/download' && new URL(response.url()).searchParams.get('path') === path
   )))
   await page.goto('/chat/session-media?profile=yaoer')
-  await expect(page).toHaveTitle('瑶儿生成图片验收 · 夭夭')
+  await expect(page).toHaveTitle('瑶儿生成图片验收 · 夭夭 AI')
 
   for (const [index, name] of mediaNames.entries()) {
     const image = page.getByRole('button', { name: `预览图片 ${name}`, exact: true })
@@ -47,6 +47,7 @@ test('loads Hermes profile cache images through the Web server and switches thei
     expect(response.headers()['content-type']).toContain('image/png')
     expect(response.headers()['content-disposition'] ?? '').not.toMatch(/^attachment(?:;|$)/)
     expect(new URL(response.url()).origin).toBe(new URL(baseURL!).origin)
+    expect(new URL(response.url()).searchParams.get('profile')).toBe('yaoer')
   }
 
   await page.getByRole('button', { name: `预览图片 ${mediaNames[0]}`, exact: true }).click()
@@ -59,7 +60,7 @@ test('loads Hermes profile cache images through the Web server and switches thei
   await expect(preview).toHaveAccessibleName(`预览 ${mediaNames[1]}`)
   const secondPreview = preview.getByRole('img', { name: mediaNames[1], exact: true })
   await expectDecodedImage(secondPreview)
-  expect(decodeURIComponent(new URL(await secondPreview.getAttribute('src') || '', baseURL).pathname)).toBe(mediaPaths[1])
+  expect(new URL(await secondPreview.getAttribute('src') || '', baseURL).searchParams.get('path')).toBe(mediaPaths[1])
   await expect(preview.locator('.image-preview-counter')).toHaveText('2 / 2')
 
   await page.keyboard.press('ArrowLeft')
@@ -86,7 +87,9 @@ test('restores nine user Profile uploads as images and opens the whole batch in 
     await expectDecodedImage(image)
     const url = new URL(await image.getAttribute('src') || '', baseURL)
     expect(url.origin).toBe(new URL(baseURL!).origin)
-    expect(url.pathname).toContain('/.hermes/profiles/yaoer/images/')
+    expect(url.pathname).toBe('/api/files/download')
+    expect(url.searchParams.get('path')).toContain('/.hermes/profiles/yaoer/images/')
+    expect(url.searchParams.get('profile')).toBe('yaoer')
   }
   await page.screenshot({ path: testInfo.outputPath('user-profile-images.png') })
   await images.first().click()
@@ -97,4 +100,28 @@ test('restores nine user Profile uploads as images and opens the whole batch in 
   await expect(preview.locator('.image-preview-counter')).toHaveText('2 / 9')
   await expectDecodedImage(preview.getByRole('img', { name: '照片-2.png', exact: true }))
   await page.screenshot({ path: testInfo.outputPath('user-profile-image-preview.png') })
+})
+
+test('server permissions reject a previously readable image and retry succeeds after authorization', async ({page,baseURL}) => {
+  const origin=new URL(baseURL!).origin
+  await signIn(page.request,origin)
+  const capabilities=await(await page.request.get('/api/realtime/capabilities')).json()
+  const headers={Origin:origin,'X-CSRF-Token':capabilities.csrfToken}
+  const policy=async(mode:'folders'|'all')=>{
+    const response=await page.request.put('/api/app/settings/file-access',{headers,data:{mode,folders:[]}})
+    expect(response.ok(),await response.text()).toBe(true)
+  }
+  await policy('folders')
+  try {
+    await page.goto('/chat/session-media?profile=yaoer')
+    const failure=page.getByRole('alert').filter({hasText:mediaNames[0]})
+    await expect(failure).toContainText('文件访问')
+    await expect(failure.getByRole('button',{name:'重试',exact:true})).toBeVisible()
+    const denied=await page.request.get('/api/files/download',{params:{path:mediaPaths[0]!,profile:'yaoer',preview:'1'}})
+    expect(denied.status()).toBe(403)
+    await policy('all')
+    await failure.getByRole('button',{name:'重试',exact:true}).click()
+    await expectDecodedImage(page.getByRole('button',{name:`预览图片 ${mediaNames[0]}`,exact:true}))
+    await expect(failure).toHaveCount(0)
+  } finally {await policy('all')}
 })
