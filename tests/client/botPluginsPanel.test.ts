@@ -21,11 +21,11 @@ beforeEach(() => {
   })
 })
 afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks() })
-const render = (connectedOnly = false) => mount(BotPluginsPanel, { attachTo: document.body, props: { connectedOnly }, global: { stubs: { AppIcon: true } } })
+const render = () => mount(BotPluginsPanel, { attachTo: document.body, global: { stubs: { AppIcon: true } } })
 function button(wrapper: ReturnType<typeof render>, text: string) { return wrapper.findAll('button').find(b => b.text() === text)! }
 
 it('retains connected accounts on failed refresh instead of presenting them as disconnected', async () => {
-  const wrapper = render(true); await flushPromises()
+  const wrapper = render(); await flushPromises()
   expect(wrapper.text()).toContain('工作账号')
   failInventory = true
   await wrapper.get('[aria-label="刷新应用连接"]').trigger('click'); await flushPromises()

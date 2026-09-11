@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { defineComponent } from 'vue'
@@ -26,6 +26,7 @@ async function mountShell(start = '/chat') {
     routes: [
       { path: '/chat', component: { template: '<div></div>' } },
       { path: '/history', component: { template: '<div></div>' } },
+      { path: '/conversations/automations', component: { template: '<div></div>' } },
       { path: '/conversations', component: { template: '<div></div>' } },
       { path: '/groups', component: { template: '<div></div>' } },
       { path: '/kanban', component: { template: '<div></div>' } },
@@ -48,6 +49,8 @@ async function mountShell(start = '/chat') {
       plugins: [router],
       stubs: {
         SettingsCenterDialog: SettingsCenterDialogStub,
+        BotPluginsDialog: defineComponent({emits:['close'],template:'<div data-testid="plugins-dialog"><button @click="$emit(\'close\')">关闭已连接应用</button></div>'}),
+        AboutDialog: defineComponent({emits:['close'],template:'<div data-testid="about-dialog"><button @click="$emit(\'close\')">关闭关于</button></div>'}),
         AgentAvatar: true,
         AppIcon: true,
         BrandMark: true,
@@ -114,7 +117,7 @@ describe('Workspace shell account controls', () => {
     expect(settingsTrigger.attributes('aria-label')).toBe('设置与模式')
     await settingsTrigger.trigger('click')
     const actions = document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')
-    expect([...actions].map(button => button.textContent?.trim())).toEqual(['进入设置', '进入 Bot 模式'])
+    expect([...actions].map(button => button.textContent?.trim())).toEqual(['设置', '关于', '帮助', '进入 Bot 模式'])
     actions[0]!.click()
     await wrapper.vm.$nextTick()
     const settings = wrapper.get('[data-testid="settings-center"]')
@@ -139,7 +142,7 @@ describe('Workspace shell account controls', () => {
 
     expect(desktop.findAll('.sidebar-feature-nav button').map(button => button.text())).not.toContain('聊天')
     await settingsTrigger.trigger('click')
-    document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')[1]!.click()
+    document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')[3]!.click()
     await vi.waitFor(() => expect(wrapper.classes()).toContain('workspace-shell--conversations'))
     expect(document.querySelector('.workspace-settings-menu')).toBeNull()
     wrapper.unmount()
@@ -191,13 +194,39 @@ it('shows Bot tools only in Bot mode and restores keyboard focus after closing',
   await trigger.trigger('click')
   const menu = document.querySelector<HTMLElement>('.workspace-tools-menu')!
   const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-  expect(items.map(b => b.textContent?.trim())).toEqual(['插件', '自动化', '已连接应用'])
+  expect(items.map(b => b.textContent?.trim())).toEqual(['自动化', '已连接应用'])
   expect(document.activeElement).toBe(items[0])
   menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
   expect(document.activeElement).toBe(items[1])
   items[1]!.click(); await wrapper.vm.$nextTick()
-  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('bot-routines')
-  await wrapper.get('[data-testid="close-settings"]').trigger('click'); await wrapper.vm.$nextTick()
+  await flushPromises()
+  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="plugins-dialog"]').exists()).toBe(true)
+  await wrapper.get('[data-testid="plugins-dialog"] button').trigger('click'); await wrapper.vm.$nextTick()
   expect(document.activeElement).toBe(trigger.element)
+  wrapper.unmount()
+})
+
+
+it.each(['/chat', '/history', '/conversations', '/kanban', '/files'])('opens an independent About dialog from the menu in %s', async path => {
+  const wrapper = await mountShell(path)
+  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-settings-trigger')
+  await trigger.trigger('click')
+  const item = [...document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu button')].find(b => b.textContent?.trim() === '关于')!
+  item.click(); await flushPromises()
+  expect(wrapper.find('[data-testid="about-dialog"]').exists()).toBe(true)
+  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
+  await wrapper.get('[data-testid="about-dialog"] button').trigger('click'); await flushPromises()
+  expect(document.activeElement).toBe(trigger.element)
+  wrapper.unmount()
+})
+
+it('navigates to the independent automation route without opening settings', async () => {
+  const wrapper = await mountShell('/conversations')
+  await wrapper.get('.desktop-sidebar .sidebar-tools-trigger').trigger('click')
+  const item = [...document.querySelectorAll<HTMLButtonElement>('.workspace-tools-menu button')].find(b => b.textContent?.trim() === '自动化')!
+  item.click(); await flushPromises()
+  expect(wrapper.vm.$router.currentRoute.value.path).toBe('/conversations/automations')
+  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
   wrapper.unmount()
 })

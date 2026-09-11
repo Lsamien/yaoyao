@@ -1,4 +1,5 @@
 import { projectChatEvent } from './chatEventProjection.js'
+import { isFinalChatResult } from './chatUnread.js'
 import { HttpError } from './errors.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, createReadStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -193,7 +194,7 @@ export class ChatCacheStore {
       owner TEXT NOT NULL, profile TEXT NOT NULL, session_id TEXT NOT NULL, event_id TEXT NOT NULL,
       PRIMARY KEY(owner,profile,session_id,event_id));`)
     const localColumns=this.db.prepare('PRAGMA table_info(chat_local_state)').all() as {name:string}[]
-    for(const [name,type] of [['title','TEXT'],['archived','INTEGER'],['read_initialized','INTEGER NOT NULL DEFAULT 0']]){
+    for(const [name,type] of [['title','TEXT'],['archived','INTEGER'],['read_initialized','INTEGER NOT NULL DEFAULT 0'],['final_read_count','INTEGER']]){
       if(!localColumns.some(c=>c.name===name))this.db.exec(`ALTER TABLE chat_local_state ADD COLUMN ${name} ${type}`)
     }
     const sessionColumns = this.db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>
@@ -345,8 +346,10 @@ export class ChatCacheStore {
       FROM chat_sessions s LEFT JOIN chat_local_state l USING(owner,profile,session_id) WHERE ${where}
       ORDER BY pin DESC, COALESCE(json_extract(s.data,'$.last_active'),0) DESC, s.session_id
       LIMIT ? OFFSET ?`).all(...args, limit, offset) as Array<Record<string,any>>
+    const unread = new Map(this.unread(owner, profile).sessions.map(row => [JSON.stringify([row.profile, row.session_id]), row.final_unread_count]))
     return {status:200,headers:new Headers({'content-type':'application/json'}),body:Buffer.from(JSON.stringify({
       sessions:rows.map(r=>({...JSON.parse(r.data),...(r.local_title!=null?{title:r.local_title}:{}),id:r.session_id,profile:r.profile,owned:true,pinned:!!r.pin,
+        final_unread_count:unread.get(JSON.stringify([r.profile,r.session_id]))??0,
         sync_state:r.sync_state,history_complete:!!r.complete})), total,offset,limit,
       sync_state:this.needsListMetadata(owner,profile)?'syncing':'current'
     }))}
@@ -367,9 +370,17 @@ export class ChatCacheStore {
 
   unread(owner: string, profile: string) {
     const sessions = (this.db.prepare(`SELECT s.profile,s.session_id,COALESCE(s.message_total,0) message_count,
+      CASE WHEN COALESCE(l.read_initialized,0)=1 THEN COALESCE(l.final_read_count,l.read_count) ELSE COALESCE(s.message_total,0) END final_read_count,
       CASE WHEN COALESCE(l.read_initialized,0)=1 THEN l.read_count ELSE COALESCE(s.message_total,0) END read_message_count FROM chat_sessions s LEFT JOIN chat_local_state l USING(owner,profile,session_id)
       WHERE s.owner=? AND s.owned_at IS NOT NULL AND (?='' OR s.profile=?)`).all(owner,profile,profile) as any[])
-      .map(r=>({...r,updated_at:Date.now(),unread_count:Math.max(0,r.message_count-r.read_message_count)}))
+      .map(({final_read_count,...r})=>{
+        const messages = this.db.prepare(`SELECT data FROM chat_messages
+          WHERE owner=? AND profile=? AND session_id=? AND position>=?
+          AND json_extract(data,'$.role')='assistant'`)
+          .all(owner,r.profile,r.session_id,final_read_count) as {data:string}[]
+        return {...r,updated_at:Date.now(),unread_count:Math.max(0,r.message_count-r.read_message_count),
+          final_unread_count:messages.filter(row=>isFinalChatResult(JSON.parse(row.data))).length}
+      })
     return {profile,supported:true,total_unread:sessions.reduce((n,r)=>n+r.unread_count,0),sessions}
   }
 
@@ -379,8 +390,17 @@ export class ChatCacheStore {
     const total = Number((this.db.prepare('SELECT message_total FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
       .get(owner,profile,id) as any).message_total ?? 0)
     const read = Math.max(0,Math.min(total, count ?? total))
-    this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,read_count,read_initialized) VALUES(?,?,?,?,1)
-      ON CONFLICT(owner,profile,session_id) DO UPDATE SET read_count=MAX(read_count,excluded.read_count),read_initialized=1`).run(owner,profile,id,read)
+    // Reading a streaming placeholder must not consume its future final answer.
+    // Keep the original cursor untouched for existing consumers.
+    const pending = this.db.prepare(`SELECT MIN(position) position FROM chat_messages
+      WHERE owner=? AND profile=? AND session_id=? AND position<?
+      AND message_id=(SELECT assistant_id FROM chat_local_state WHERE owner=? AND profile=? AND session_id=?)
+      AND json_extract(data,'$.role')='assistant' AND json_extract(data,'$.status')='streaming'`)
+      .get(owner,profile,id,read,owner,profile,id) as {position:number|null}
+    const finalRead = pending.position ?? read
+    this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,read_count,final_read_count,read_initialized) VALUES(?,?,?,?,?,1)
+      ON CONFLICT(owner,profile,session_id) DO UPDATE SET read_count=MAX(read_count,excluded.read_count),
+      final_read_count=MAX(COALESCE(final_read_count,read_count),excluded.final_read_count),read_initialized=1`).run(owner,profile,id,read,finalRead)
     return this.unread(owner,profile).sessions.find(r=>r.session_id===id)!
   }
 

@@ -76,6 +76,13 @@ export class WorkspaceRoutines {
   start(){if(this.timer)return;this.tick();this.timer=setInterval(()=>this.tick(),10000);this.timer.unref()}
   close(){this.closed=true;clearInterval(this.timer)}
   router(){const router=new Router()
+    router.get('/api/app/bot-tools/automations',ctx=>{
+      const owner=this.auth.require(ctx).id
+      const agents=this.store.list<WorkspaceAgent>(owner,'agent').filter(a=>{try{this.agent(owner,a.id);return true}catch(error){if(error instanceof HttpError&&[403,404,409].includes(error.status))return false;throw error}})
+      const allowed=new Set(agents.map(a=>a.id))
+      const runs=this.store.list<WorkspaceRoutineRun>(owner,'routine-run').filter(r=>allowed.has(r.agentId)).sort((a,b)=>b.startedAt-a.startedAt).slice(0,300).map(r=>{const run=r.runId?this.store.get<WorkspaceRun>(owner,'run',r.runId):undefined;return run?{...r,status:run.status,error:run.error}:r})
+      ctx.body={agents:agents.map(({id,name,avatar})=>({id,name,avatar})),routines:this.store.list<WorkspaceRoutine>(owner,'routine').filter(r=>allowed.has(r.agentId)),runs}
+    })
     router.get('/api/app/agents/:id/routines',ctx=>{const owner=this.auth.require(ctx).id;this.store.require(owner,'agent',ctx.params.id);ctx.body={routines:this.store.list<WorkspaceRoutine>(owner,'routine').filter(r=>r.agentId===ctx.params.id),runs:this.runs(owner,ctx.params.id)}})
     router.post('/api/app/agents/:id/routines',ctx=>{ctx.body={routine:this.save(this.auth.require(ctx).id,ctx.params.id,(ctx.request as any).body)};ctx.status=201})
     router.put('/api/app/agents/:id/routines/:routineId',ctx=>{const owner=this.auth.require(ctx).id;this.store.require(owner,'routine',ctx.params.routineId);ctx.body={routine:this.save(owner,ctx.params.id,(ctx.request as any).body,ctx.params.routineId)}})

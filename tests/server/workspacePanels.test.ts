@@ -37,6 +37,26 @@ it('calculates daily and weekly schedules in the requested timezone, including D
  expect(nextRoutineAt({kind:'daily',timezone:'America/New_York',time:'09:00'},Date.parse('2026-03-07T15:00:00Z'))).toBe(Date.parse('2026-03-08T13:00:00Z'))
 })
 
+it('returns an account-scoped automation overview with only currently permitted Bots and current run states',async()=>{
+ const own=store.createAgent('owner',{name:'自己的 Bot',profile:'default'}),blocked=store.createAgent('owner',{name:'未授权 Bot',profile:'blocked'}),foreign=store.createAgent('other',{name:'其他账号 Bot',profile:'default'})
+ const service=new WorkspaceRoutines(store,auth,nodes,{} as any)
+ const body={name:'日常核对',prompt:'核对内容',enabled:true,schedule:{kind:'interval',timezone:'UTC',everyMinutes:60}}
+ const routine=service.save('owner',own.id,body)
+ service.save('owner',blocked.id,body);service.save('other',foreign.id,body)
+ const id=randomUUID();store.put('owner','run',id,{id,status:'complete'})
+ store.put('owner','routine-run','receipt',{id:'receipt',agentId:own.id,routineId:routine.id,runId:id,status:'queued',startedAt:1,scheduledAt:0})
+ nodes.sourceAllowed=(_owner,_node,profile)=>profile!=='blocked'
+ const app=new Koa();app.use(service.router().routes())
+ const result=await request(app.callback()).get('/api/app/bot-tools/automations')
+ expect(result.status).toBe(200)
+ expect(result.body.agents.map((a:any)=>a.id)).toEqual([own.id])
+ expect(result.body.routines.map((r:any)=>r.id)).toEqual([routine.id])
+ expect(result.body.runs).toMatchObject([{id:'receipt',status:'complete'}])
+ const other=await request(app.callback()).get('/api/app/bot-tools/automations').set('x-user','other')
+ expect(other.body.agents.map((a:any)=>a.id)).toEqual([foreign.id])
+ expect(other.body.runs).toEqual([])
+})
+
 it('keeps the original next occurrence when only a routine title or prompt changes',()=>{
  vi.useFakeTimers();vi.setSystemTime(new Date('2026-09-10T00:00:00Z'))
  const agent=store.createAgent('owner',{name:'排期验收',profile:'default'}),service=new WorkspaceRoutines(store,auth,nodes,{} as any)

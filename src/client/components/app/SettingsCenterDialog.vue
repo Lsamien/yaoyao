@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
 import AccountSecurityPanel from '@/components/app/AccountSecurityPanel.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
@@ -16,13 +16,8 @@ import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import AccountInitialAvatar from '@/components/common/AccountInitialAvatar.vue'
 import type { ProfileIdentityInput } from '@/api/profiles'
 import AppIcon from '@/components/common/AppIcon.vue'
-import BrandMark from '@/components/common/BrandMark.vue'
-import { version } from '../../../../package.json'
-const BotPluginsPanel = defineAsyncComponent(() => import('@/components/workspace/BotPluginsPanel.vue'))
-const BotAutomationPanel = defineAsyncComponent(() => import('@/components/workspace/BotAutomationPanel.vue'))
 
 type SettingsPage =
-  | 'bot-plugins' | 'bot-apps' | 'bot-routines' | 'bot-about'
   | 'agent-identity'
   | 'agent-models'
   | 'account-security'
@@ -37,7 +32,7 @@ type SettingsPage =
   | 'system-local-vm'
   | 'system-update'
 
-type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'monitor' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh' | 'tools' | 'info' | 'clock'
+type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'monitor' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh'
 type ThemePreference = 'light' | 'dark' | 'system'
 
 interface NavigationItem {
@@ -110,12 +105,6 @@ const accountItems = computed<NavigationItem[]>(() => [
   ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
 ])
-const botItems = computed<NavigationItem[]>(() => props.botMode ? [
-  { key: 'bot-plugins', label: '插件', icon: 'tools' },
-  { key: 'bot-apps', label: '已连接应用', icon: 'link' },
-  { key: 'bot-routines', label: '自动化', icon: 'clock' },
-  { key: 'bot-about', label: '关于', icon: 'info' },
-] : [])
 const systemItems: NavigationItem[] = [
   { key: 'system-local-vm', label: '本地虚拟机', icon: 'monitor' },
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
@@ -130,13 +119,11 @@ const systemItems: NavigationItem[] = [
 const allAllowedPages = computed(() => new Set<SettingsPage>([
   ...agentItems.value.map(item => item.key),
   ...accountItems.value.map(item => item.key),
-  ...botItems.value.map(item => item.key),
   ...(props.isAdmin ? systemItems.map(item => item.key) : []),
 ]))
 const activeDirty = computed(() => Boolean(dirtyPages[activePage.value]))
 const showFixedFooter = computed(() => activePage.value === 'agent-identity' || activePage.value === 'account-security')
 const activeTitle = computed(() => ({
-  'bot-plugins': '插件', 'bot-apps': '已连接应用', 'bot-routines': '自动化', 'bot-about': '关于夭夭 AI',
   'agent-identity': '身份与头像',
   'agent-models': '模型与 Provider',
   'account-security': '登录与安全',
@@ -154,7 +141,6 @@ const activeTitle = computed(() => ({
 const accountName = computed(() => props.pairingUserName || props.userName || '当前账号')
 const showAgentSelector = computed(() => activePage.value.startsWith('agent-'))
 const activeScope = computed(() => {
-  if (activePage.value.startsWith('bot-')) return 'Bot 模式 · 当前账号'
   if (activePage.value.startsWith('agent-')) return `正在设置：${profileTitle(props.activeProfile)} / ${props.activeProfile?.name || '未选择'}`
   if (activePage.value.startsWith('account-')) return `当前账号：${accountName.value}${props.isAdmin ? ' · 管理员' : ''}`
   if (activePage.value === 'appearance') return '仅影响当前浏览器'
@@ -264,7 +250,7 @@ watch(() => [props.open, props.initialPage] as const, ([open, initialPage]) => {
     : props.activeProfile ? 'agent-identity' : 'account-security'
   for (const key of Object.keys(dirtyPages) as SettingsPage[]) dirtyPages[key] = false
   profileMenuOpen.value = false
-  mobileDetailOpen.value = initialPage.startsWith('bot-')
+  mobileDetailOpen.value = false
   void nextTick(() => dialog.value?.focus())
 }, { immediate: true })
 function requestModeSwitch() {
@@ -315,7 +301,6 @@ function requestModeSwitch() {
 
                 <nav>
                   <section v-if="isAdmin"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
-                  <section v-if="botItems.length"><h3>Bot 模式</h3><button v-for="item in botItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span></button></section>
                   <section>
                     <h3>当前机器人</h3>
                     <button v-for="item in agentItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span></button>
@@ -339,11 +324,8 @@ function requestModeSwitch() {
                 <button class="settings-center__close" type="button" aria-label="关闭设置中心" :disabled="updateLocked" @click="requestClose"><AppIcon name="close" :size="18" /></button>
               </header>
               <div class="settings-content__scroll">
-                <BotPluginsPanel v-if="botMode && (activePage === 'bot-plugins' || activePage === 'bot-apps')" :key="activePage" :connected-only="activePage === 'bot-apps'" @dirty-change="setDirty(activePage, $event)" />
-                <BotAutomationPanel v-else-if="botMode && activePage === 'bot-routines'" />
-                <section v-else-if="botMode && activePage === 'bot-about'" class="bot-about" aria-label="关于夭夭 AI"><BrandMark :size="48" /><h4>夭夭 AI</h4><p>版本 {{ version }}</p><p>与 AI 聊天，让 Bot 协作完成任务。</p><a href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer">帮助中心 <AppIcon name="external" :size="15" /></a></section>
                 <AgentIdentityPanel
-                  v-else-if="activePage === 'agent-identity' && activeProfile"
+                  v-if="activePage === 'agent-identity' && activeProfile"
                   :key="activeProfile.name"
                   :profile="activeProfile"
                   :busy="identityBusy"
@@ -412,7 +394,6 @@ function requestModeSwitch() {
 </template>
 
 <style scoped>
-.bot-about{display:grid;justify-items:center;gap:14px;padding:36px 12px;text-align:center}.bot-about h4{font-size:22px;margin:0}.bot-about p{margin:0;color:var(--text-secondary);line-height:1.6}.bot-about a{display:flex;gap:6px;align-items:center;color:var(--accent);padding:10px}.bot-about a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .settings-center-layer { position: fixed; z-index: 300; inset: 0; display: grid; place-items: center; padding: 64px; background: color-mix(in srgb, #000 24%, transparent); backdrop-filter: blur(4px); }
 .settings-center { display: block; width: min(820px, calc(100vw - 128px)); height: min(600px, calc(100dvh - 128px)); overflow: hidden; border: 1px solid var(--line); border-radius: 16px; outline: 0; background: var(--surface-raised); box-shadow: 0 20px 60px rgba(0,0,0,.18); color: var(--text-primary); }
 .settings-center__close,.mobile-back { display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); cursor: pointer; }

@@ -29,5 +29,6 @@ export function projectChatEvent(type: string, payload: ChatRecord, previous: Ch
   } else if (type === 'error' || type === 'run.failed') {
     message.status = 'failed'; message.error = String(payload.error ?? payload.message ?? '运行失败')
   } else if (type !== 'message.interim') message.status = 'streaming'
+  message.final_result = (type === 'message.complete' || type === 'run.completed') && message.status === 'complete'
   return message
 }

@@ -150,6 +150,11 @@ describe('source=web chat cache routes', () => {
       source: 'ios',
       owned: true,
       title: 'Hermes 仍标记为 iOS',
+      final_unread_count: 1,
+    })])
+    const unread = await agent.get('/api/app/sessions/unread?profile=default').set('Host', host).expect(200)
+    expect(unread.body.sessions).toEqual([expect.objectContaining({
+      session_id: 'owned-session', final_unread_count: 1,
     })])
 
     const history = await agent

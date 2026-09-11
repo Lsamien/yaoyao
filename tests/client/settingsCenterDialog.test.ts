@@ -41,8 +41,6 @@ const childStubs = {
   Teleport: true,
   AgentAvatar: true,
   AppIcon: true,
-  BotPluginsPanel: simpleStub('BotPluginsPanel', 'bot-plugins'),
-  BotAutomationPanel: simpleStub('BotAutomationPanel', 'bot-automations'),
   AgentIdentityPanel: simpleStub('AgentIdentityPanel', 'agent-identity'),
   ModelServicesPanel: ModelServicesPanelStub,
   AccountSecurityPanel: simpleStub('AccountSecurityPanel', 'account-security'),
@@ -83,19 +81,13 @@ afterEach(() => {
 })
 
 describe('Settings center dialog', () => {
-  it('keeps plugin, connected-app and automation settings scoped to Bot mode', async () => {
-    const normal = mountSettings({ initialPage: 'bot-plugins' })
-    expect(normal.find('[data-testid="bot-plugins"]').exists()).toBe(false)
-    expect(normal.findAll('.settings-sidebar nav button').some(b => b.text() === '插件')).toBe(false)
-    normal.unmount()
-    const bot = mountSettings({ botMode: true, initialPage: 'bot-plugins' })
-    await vi.waitFor(() => expect(bot.find('[data-testid="bot-plugins"]').exists()).toBe(true))
-    await navigationButton(bot, '自动化').trigger('click')
-    await vi.waitFor(() => expect(bot.find('[data-testid="bot-automations"]').exists()).toBe(true))
-    await navigationButton(bot, '关于').trigger('click')
-    expect(bot.get('.bot-about').text()).toContain('夭夭 AI')
-    expect(bot.get('.bot-about a').attributes('href')).toBe('https://yaoyao.samien.cn')
-    bot.unmount()
+  it.each([false, true])('keeps independent tools and About outside settings (Bot mode=%s)', botMode => {
+    const wrapper = mountSettings({ botMode, initialPage: 'bot-plugins' })
+    const labels = wrapper.findAll('.settings-sidebar nav button').map(button => button.text())
+    for (const label of ['插件', '已连接应用', '自动化', '关于']) expect(labels).not.toContain(label)
+    expect(wrapper.find('[data-testid="bot-plugins"]').exists()).toBe(false)
+    expect(wrapper.find('.bot-about').exists()).toBe(false)
+    wrapper.unmount()
   })
   it('groups administrator pages and routes Agent, voice, and system content to the right scope', async () => {
     const wrapper = mountSettings()

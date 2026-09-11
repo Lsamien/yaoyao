@@ -4,7 +4,8 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import {apiRequest} from '@/api/client'
 import {createUuid} from '@/utils/id'
 import type {WorkspaceRoutine,WorkspaceRoutineRun,WorkspaceSchedule} from '@shared/workspacePanels'
-const props=defineProps<{agentId:string}>()
+const props=defineProps<{agentId:string;editorOnly?:boolean}>()
+const emit=defineEmits<{changed:[];executed:[id:string]}>()
 const routines=ref<WorkspaceRoutine[]>([]),runs=ref<WorkspaceRoutineRun[]>([]),editing=ref<string|null>(null),showEditor=ref(false),error=ref(''),busy=ref(false)
 const form=reactive({name:'',prompt:'',enabled:true,kind:'daily' as WorkspaceSchedule['kind'],time:'09:00',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,everyMinutes:60,at:'',weekdays:[1,2,3,4,5]})
 const status:Record<string,string>={queued:'排队中',running:'执行中',waiting:'等待处理',complete:'已完成',failed:'失败',interrupted:'已停止',uncertain:'状态待确认',skipped:'已跳过'}
@@ -18,20 +19,21 @@ const scheduleLabel=(r:WorkspaceRoutine)=>r.schedule.kind==='interval'?`每 ${r.
 const scheduleState=(r:WorkspaceRoutine)=>r.enabled?'已启用':r.schedule.kind==='once'&&r.lastAt?'已结束':'已暂停'
 function openLogs(id=''){logFilter.value=id;view.value='logs';query.value='';statusFilter.value='all'}
 watch(showEditor,async(value)=>{await nextTick();if(value)dialog.value?.showModal();else dialog.value?.close()})
-async function runNow(r:WorkspaceRoutine){await action(async()=>{await apiRequest(base()+'/'+r.id+'/run',{method:'POST',body:{requestId:createUuid()}});showEditor.value=false;openLogs(r.id)})}
+async function runNow(r:WorkspaceRoutine){await action(async()=>{await apiRequest(base()+'/'+r.id+'/run',{method:'POST',body:{requestId:createUuid()}});showEditor.value=false;openLogs(r.id);emit('executed',r.id)})}
 let timer:ReturnType<typeof setTimeout>|undefined,closed=false,generation=0
 const base=()=>`/api/app/agents/${props.agentId}/routines`
 async function load(){const version=generation;try{const value=await apiRequest<{routines:WorkspaceRoutine[];runs:WorkspaceRoutineRun[]}>(base());if(version===generation&&!closed){routines.value=value.routines;runs.value=value.runs;error.value=''}}catch(e){if(version===generation&&!closed)error.value=e instanceof Error?e.message:'无法读取定时任务'}}
 async function cycle(){const version=generation;if(!document.hidden&&!busy.value)await load();if(!closed&&version===generation)timer=setTimeout(cycle,5000)}
 function edit(r?:WorkspaceRoutine){editing.value=r?.id??null;Object.assign(form,{name:r?.name??'',prompt:r?.prompt??'',enabled:r?.enabled??true,kind:r?.schedule.kind??'daily',time:r?.schedule.time??'09:00',timezone:r?.schedule.timezone??Intl.DateTimeFormat().resolvedOptions().timeZone,everyMinutes:r?.schedule.everyMinutes??60,at:r?.schedule.at?new Date(r.schedule.at-new Date(r.schedule.at).getTimezoneOffset()*60000).toISOString().slice(0,16):'',weekdays:r?.schedule.weekdays??[1,2,3,4,5]});showEditor.value=true}
-async function action(work:()=>Promise<unknown>){if(busy.value)return;busy.value=true;error.value='';try{await work();await load()}catch(e){error.value=e instanceof Error?e.message:'定时任务操作失败'}finally{busy.value=false}}
+async function action(work:()=>Promise<unknown>){if(busy.value)return;busy.value=true;error.value='';try{await work();await load();emit('changed')}catch(e){error.value=e instanceof Error?e.message:'定时任务操作失败'}finally{busy.value=false}}
 function payload(r:WorkspaceRoutine){return {name:r.name,prompt:r.prompt,enabled:!r.enabled,schedule:r.schedule}}
 async function save(){const original=selectedRoutine.value?.schedule.at,originalDisplay=original?new Date(original-new Date(original).getTimezoneOffset()*60000).toISOString().slice(0,16):undefined;const schedule:WorkspaceSchedule={kind:form.kind,timezone:form.timezone,...(form.kind==='once'?{at:originalDisplay===form.at?original:new Date(form.at).getTime()}:form.kind==='interval'?{everyMinutes:form.everyMinutes}:{time:form.time,...(form.kind==='weekly'?{weekdays:form.weekdays}:{})})};await action(async()=>{await apiRequest(base()+(editing.value?'/'+editing.value:''),{method:editing.value?'PUT':'POST',body:{name:form.name,prompt:form.prompt,enabled:form.enabled,schedule} as any});showEditor.value=false})}
-watch(()=>props.agentId,()=>{generation++;routines.value=[];runs.value=[];showEditor.value=false;view.value='list';logFilter.value='';clearTimeout(timer);void cycle()},{immediate:true})
+watch(()=>props.agentId,()=>{generation++;routines.value=[];runs.value=[];showEditor.value=false;view.value='list';logFilter.value='';clearTimeout(timer);if(!props.editorOnly)void cycle()},{immediate:true})
+defineExpose({edit:(r?:WorkspaceRoutine)=>{if(props.editorOnly)routines.value=r?[r]:[];edit(r)}})
 onBeforeUnmount(()=>{closed=true;generation++;clearTimeout(timer)})
 </script>
 <template>
- <section class="routines" aria-label="机器人定时任务">
+ <section v-show="!editorOnly" class="routines" aria-label="机器人定时任务">
   <template v-if="view==='list'">
    <div class="routine-overview"><div class="overview-title"><AppIcon name="calendar" :size="16"/><h2>定时任务</h2><span>{{routines.length}}</span></div><div class="overview-actions"><button class="primary" @click="edit()"><AppIcon name="plus" :size="14"/>新建定时任务</button><button @click="openLogs()"><AppIcon name="file" :size="13"/>运行日志</button></div></div>
    <p v-if="error" class="error-box" role="alert">{{error}}</p>

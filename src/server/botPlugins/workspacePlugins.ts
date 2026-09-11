@@ -167,7 +167,7 @@ export class WorkspacePlugins {
           catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(502, '插件工具调用失败或连接已关闭', 'plugin_call_failed') }
         }, dispose,
       }
-    } catch (error) { await dispose(); if (error instanceof HttpError) throw error; throw new HttpError(502, '插件初始化失败，请在设置中测试连接', 'plugin_initialization_failed') }
+    } catch (error) { await dispose(); if (error instanceof HttpError) throw error; throw new HttpError(502, '插件初始化失败，请在已连接应用中测试连接', 'plugin_initialization_failed') }
   }
   router() {
     const router = new Router({ prefix: '/api/app/bot-tools' })

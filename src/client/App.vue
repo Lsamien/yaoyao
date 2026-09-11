@@ -24,7 +24,7 @@ const agentIdentityFixture = import.meta.env.DEV
   && new URLSearchParams(window.location.search).get('fixture') === 'agent-identity'
 
 const pageTitle = computed(() => {
-  const name = route.name === 'computer' ? '电脑接管' : route.path.startsWith('/history')
+  const name = route.name === 'computer' ? '电脑接管' : route.name === 'bot-automations' ? '自动化' : route.path.startsWith('/history')
     ? '历史记录'
     : route.path.startsWith('/conversations')
     ? '聊天'

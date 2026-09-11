@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { Profile } from '@shared/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
@@ -10,6 +10,8 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import SettingsCenterDialog from '@/components/app/SettingsCenterDialog.vue'
 import { rememberInterfacePath } from '@/utils/interfaceMode'
 import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
+const AboutDialog = defineAsyncComponent(() => import('./AboutDialog.vue'))
+const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspace/BotPluginsDialog.vue'))
 
 type NavItem = {
   key: 'chat' | 'history' | 'groups' | 'kanban' | 'files'
@@ -19,7 +21,6 @@ type NavItem = {
 }
 
 type SettingsPage =
-  | 'bot-plugins' | 'bot-apps' | 'bot-routines' | 'bot-about'
   | 'agent-identity'
   | 'agent-models'
   | 'account-security'
@@ -101,6 +102,8 @@ const router = useRouter()
 const mobileDrawerOpen = ref(false)
 const profileMenuOpen = ref(false)
 const settingsOpen = ref(false)
+const standalone = ref<'plugins' | 'about' | null>(null)
+const standaloneReturnFocus = ref<HTMLElement>()
 const settingsPage = ref<SettingsPage>('agent-identity')
 const settingsReturnFocus = ref<HTMLButtonElement>()
 const mobileNavigationTrigger = ref<HTMLButtonElement>()
@@ -215,7 +218,7 @@ async function openSettingsMenu(event: MouseEvent) {
   if (settingsMenuOpen.value) { closeSettingsMenu(); return }
   settingsTrigger = event.currentTarget as HTMLButtonElement
   const rect = settingsTrigger.getBoundingClientRect()
-  const height = applicationWorkspace.value ? (props.isAdmin ? 4 : 3) * (window.innerWidth < 768 ? 44 : 36) + 18 : 92
+  const height = (props.isAdmin ? 4 : 3) * (window.innerWidth < 768 ? 44 : 36) + 18
   settingsMenuPosition.value = { left: `${Math.max(8, Math.min(rect.right - 180, window.innerWidth - 188))}px`, top: `${Math.max(8, rect.top - height)}px` }
   profileMenuOpen.value = false
   createMenuOpen.value = false
@@ -229,22 +232,31 @@ function chooseSettingsAction(action: 'settings' | 'bots' | 'about') {
   if (action === 'bots') { switchInterfaceMode(); return }
   settingsReturnFocus.value = settingsTrigger?.closest('.mobile-drawer')
     ? mobileNavigationTrigger.value : settingsTrigger ?? undefined
-  openSettings(action === 'about' && applicationWorkspace.value ? 'bot-about' : applicationWorkspace.value ? 'account-security' : 'agent-identity')
+  if (action === 'about') {
+    standaloneReturnFocus.value = settingsReturnFocus.value
+    mobileDrawerOpen.value = false
+    standalone.value = 'about'
+    return
+  }
+  openSettings(applicationWorkspace.value ? 'account-security' : 'agent-identity')
 }
+function closeStandalone() { standalone.value = null; void nextTick(() => standaloneReturnFocus.value?.isConnected && standaloneReturnFocus.value.focus()) }
 function closeToolsMenu() { toolsMenuOpen.value = false; void nextTick(() => toolsTrigger?.isConnected && toolsTrigger.focus()) }
 async function openToolsMenu(event: MouseEvent) {
   if (!applicationWorkspace.value) return
   if (toolsMenuOpen.value) { closeToolsMenu(); return }
   toolsTrigger = event.currentTarget as HTMLButtonElement
   const rect = toolsTrigger.getBoundingClientRect()
-  toolsPosition.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 208))}px`, top: `${Math.max(8, rect.top - (window.innerWidth < 768 ? 150 : 126))}px` }
+  toolsPosition.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 208))}px`, top: `${Math.max(8, rect.top - (window.innerWidth < 768 ? 106 : 90))}px` }
   settingsMenuOpen.value = false; createMenuOpen.value = false; toolsMenuOpen.value = true
   await nextTick(); toolsMenu.value?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
 }
-function chooseTool(page: 'bot-plugins' | 'bot-apps' | 'bot-routines') {
+function chooseTool(page: 'apps' | 'automations') {
   toolsMenuOpen.value = false
-  settingsReturnFocus.value = toolsTrigger?.closest('.mobile-drawer') ? mobileNavigationTrigger.value : toolsTrigger ?? undefined
-  openSettings(page)
+  if (page === 'automations') { void navigate('/conversations/automations?from=' + encodeURIComponent(route.fullPath)); return }
+  standaloneReturnFocus.value = toolsTrigger?.closest('.mobile-drawer') ? mobileNavigationTrigger.value : toolsTrigger ?? undefined
+  mobileDrawerOpen.value = false
+  standalone.value = 'plugins'
 }
 function switchInterfaceMode() {
   if (!props.isAdmin) return
@@ -371,7 +383,7 @@ function handleSidebarFocusout(event: FocusEvent) {
 
 function handleSidebarSearchClosed() { sidebarSearchOpen.value = false }
 
-watch(() => route.fullPath, () => { mobileDrawerOpen.value = false; createMenuOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false })
+watch(() => route.fullPath, () => { mobileDrawerOpen.value = false; createMenuOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false; standalone.value = null })
 watch(() => activeNav.value.key, () => {
   sidebarSearchOpen.value = false
   profileMenuOpen.value = false
@@ -395,7 +407,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 </script>
 
 <template>
-  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="settingsOpen || (applicationWorkspace && sidebarSearchOpen)">
+  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)">
     <header class="mobile-header" :inert="mobileDrawerOpen">
       <button ref="mobileNavigationTrigger" class="icon-button" type="button" aria-label="打开导航" @click="openMobileDrawer">
         <AppIcon name="menu" :size="20" />
@@ -651,6 +663,8 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       </aside>
     </Transition>
 
+    <AboutDialog v-if="standalone === 'about'" @close="closeStandalone" />
+    <BotPluginsDialog v-if="standalone === 'plugins' && applicationWorkspace" @close="closeStandalone" />
     <SettingsCenterDialog
       :open="settingsOpen"
       :bot-mode="applicationWorkspace"
@@ -678,14 +692,14 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
     />
     <Teleport to="body">
       <div v-if="settingsMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeSettingsMenu" @keydown.esc.prevent.stop="closeSettingsMenu">
-        <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :class="{ 'workspace-settings-menu--bot': applicationWorkspace }" :style="settingsMenuPosition" role="menu" :aria-label="applicationWorkspace ? '账号菜单' : '设置与模式'" @keydown="actionMenuKeydown">
-          <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />{{ applicationWorkspace ? '设置' : '进入设置' }}</button>
-          <button v-if="applicationWorkspace" type="button" role="menuitem" @click="chooseSettingsAction('about')"><AppIcon name="info" :size="17" />关于</button>
-          <a v-if="applicationWorkspace" role="menuitem" href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer" @click="closeSettingsMenu"><AppIcon name="external" :size="17" />帮助</a>
+        <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :style="settingsMenuPosition" role="menu" aria-label="账号菜单" @keydown="actionMenuKeydown">
+          <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />设置</button>
+          <button type="button" role="menuitem" @click="chooseSettingsAction('about')"><AppIcon name="info" :size="17" />关于</button>
+          <a role="menuitem" href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer" @click="closeSettingsMenu"><AppIcon name="external" :size="17" />帮助</a>
           <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
       </div>
-      <div v-if="toolsMenuOpen && applicationWorkspace" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('bot-plugins')"><AppIcon name="tools" :size="17" />插件</button><button type="button" role="menuitem" @click="chooseTool('bot-routines')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('bot-apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
+      <div v-if="toolsMenuOpen && applicationWorkspace" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('automations')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>
@@ -925,7 +939,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 .workspace-create-menu{position:absolute;width:180px;padding:5px;border:1px solid var(--line);border-radius:11px;background:var(--surface-raised);box-shadow:var(--shadow-float)}
 .workspace-create-menu button{display:flex;width:100%;min-height:36px;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:var(--text-primary);font:13px var(--font-ui);text-align:left;cursor:pointer}
 .workspace-create-menu button:hover,.workspace-create-menu button:focus-visible{outline:0;background:var(--surface-hover)}
-@media(max-width:767px){.workspace-tools-menu button,.workspace-settings-menu--bot button,.workspace-settings-menu--bot a{min-height:44px}}
+@media(max-width:767px){.workspace-tools-menu button,.workspace-settings-menu button,.workspace-settings-menu a{min-height:44px}}
 
 .bot-list-header{display:flex;align-items:center;gap:10px;padding:20px 20px 12px;min-height:74px}
 .bot-list-header__spacer{flex:1}

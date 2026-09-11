@@ -35,7 +35,7 @@ mac:
   signIgnore:
     - /web-service/node$
   category: public.app-category.productivity
-  icon: public/icons/icon-512.png
+  icon: .desktop-build/branding/icon.icns
   target:
     - target: dir
       arch: [arm64]

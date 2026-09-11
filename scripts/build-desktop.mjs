@@ -8,6 +8,10 @@ import { sealRuntime } from '../bin/lib/runtime-release.mjs'
 const root = resolve(import.meta.dirname, '..'), out = resolve(root, '.desktop-build')
 await rm(out, { recursive: true, force: true })
 await mkdir(out, { recursive: true })
+execFileSync('xcrun', ['swift', resolve(root, 'scripts/build-desktop-icon.swift'),
+  resolve(root, 'public/brand/AppIcon-1024.png'), resolve(out, 'branding')], { stdio: 'inherit' })
+execFileSync('iconutil', ['-c', 'icns', resolve(out, 'branding/icon.iconset'),
+  '-o', resolve(out, 'branding/icon.icns')], { stdio: 'inherit' })
 await build({ entryPoints: [resolve(root, 'src/server/index.ts')], outfile: resolve(out, 'server.mjs'),
   bundle: true, platform: 'node', format: 'esm', target: 'node24', external: ['vite'],
   banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },

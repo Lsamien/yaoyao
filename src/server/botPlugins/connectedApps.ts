@@ -74,7 +74,7 @@ export class ConnectedApps {
     this.catalogCache.delete(owner); this.invalidate(owner)
     return this.status(owner)
   }
-  private require(owner: string) { const value = this.read(owner); if (!value?.key) throw new HttpError(409, '请先在插件设置中配置 Composio API Key', 'connected_apps_unconfigured'); return value }
+  private require(owner: string) { const value = this.read(owner); if (!value?.key) throw new HttpError(409, '请先在已连接应用中配置 Composio API Key', 'connected_apps_unconfigured'); return value }
   async catalog(owner: string): Promise<{ cards: BotAppCard[]; source: 'api' | 'curated' }> {
     const value = this.read(owner), cache = this.catalogCache.get(owner)
     if (cache && Date.now() - cache.at < 600_000) return { cards: cache.cards, source: 'api' }

@@ -1,0 +1,32 @@
+{
+  "toolsMenu": [
+    "自动化",
+    "已连接应用"
+  ],
+  "pluginsSurface": "independent dialog with apps and MCP",
+  "automationRoute": "/conversations/automations",
+  "aboutSurface": "independent dialog",
+  "aboutBrowserModes": [
+    "Bot",
+    "普通聊天"
+  ],
+  "aboutMenuTestedRoutes": [
+    "/chat",
+    "/history",
+    "/conversations",
+    "/kanban",
+    "/files"
+  ],
+  "viewportWidths": [
+    1280,
+    375
+  ],
+  "settingsContainsIndependentPages": false,
+  "fixtureRoutines": 4,
+  "newRoutineCreated": true,
+  "editedRoutineSaved": true,
+  "routineRunStatuses": [
+    "complete"
+  ],
+  "pendingTurns": 0
+}

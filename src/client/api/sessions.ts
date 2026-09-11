@@ -145,7 +145,7 @@ export async function getSessionUnread(profile?: string): Promise<Record<string,
       const id = typeof item.sessionId === 'string'
         ? item.sessionId
         : typeof item.session_id === 'string' ? item.session_id : ''
-      if (id) result[id] = Math.max(0, number(item.unreadCount ?? item.unread_count ?? item.count))
+      if (id) result[id] = Math.max(0, number(item.final_unread_count ?? item.unreadCount ?? item.unread_count ?? item.count))
     }
     return result
   }
@@ -156,7 +156,7 @@ export async function getSessionUnread(profile?: string): Promise<Record<string,
     else {
       const item = record(value)
       const id = typeof item.sessionId === 'string' ? item.sessionId : typeof item.session_id === 'string' ? item.session_id : sessionId
-      result[id] = Math.max(0, number(item.unreadCount ?? item.unread_count ?? item.count))
+      result[id] = Math.max(0, number(item.final_unread_count ?? item.unreadCount ?? item.unread_count ?? item.count))
     }
   }
   return result
