@@ -56,6 +56,7 @@ export class RunnerHub {
   async localVm(owner:string,id:string,payload:Record<string,unknown>){
     const record=this.store.require<RunnerRecord>('_system','runner',id),version=this.auth.pushAuthorizationVersion(owner)
     if(!record.enabled||!this.online.get(id)?.features.includes('local-vm-v1'))throw new HttpError(409,'本地虚拟机执行环境离线或版本过旧，请重新连接或更新','local_vm_unavailable')
+    if(payload.imageKey&&!this.online.get(id)?.features.includes('image-options-v1'))throw new HttpError(409,'执行节点版本不支持镜像选择，请更新 Runner','computer_image_options_unavailable')
     const valid=()=>this.auth.isAdminActive(owner)&&this.auth.pushAuthorizationVersion(owner)===version&&this.store.get<RunnerRecord>('_system','runner',id)?.enabled===true
     if(!valid())throw new HttpError(403,'本地虚拟机设置需要管理员权限','admin_required')
     const key = `${owner}:${id}`
@@ -186,6 +187,7 @@ export class RunnerHub {
   sharedComputerRunner(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent){const record=this.computerRunner(owner,agent);if(agent.computerEnvironmentId&&this.store.require<import('./sharedComputers.js').SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId).runnerId!==record.id)throw new HttpError(409,'共享电脑的原执行节点已变化','shared_runner_changed');if(!this.online.get(record.id)?.features.includes('shared-computer-v1'))throw new HttpError(409,'执行节点不支持共享电脑，请更新 Runner','shared_computer_unavailable');return record}
   async computer(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent,op:string,data:Record<string,unknown>,authorize:()=>void):Promise<any>{
     const record=agent.computerEnvironmentId?this.sharedComputerRunner(owner,agent):this.computerRunner(owner,agent),version=this.auth.pushAuthorizationVersion(owner)
+    if(op==='image'&&!this.online.get(record.id)?.features.includes('image-options-v1'))throw new HttpError(409,'执行节点版本不支持镜像选择，请更新 Runner','computer_image_options_unavailable')
     const valid=()=>{try{authorize();return this.auth.isUserActive(owner)&&this.auth.pushAuthorizationVersion(owner)===version}catch{return false}}
     const result=await this.request(record.id,'computer.control',{target:{environmentId:agent.computerEnvironmentId??agent.id,agentId:agent.id,ownerKey:hash(owner)},profile:agent.profile,op,...data},valid)
     if(!valid())throw new HttpError(403,'电脑请求授权已失效','computer_control_expired')
@@ -227,7 +229,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')

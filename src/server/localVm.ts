@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { RunnerAgent } from '../runner/agent.js'
 import { UNCONFIGURED_COMPUTER_IMAGE, type RunnerConfiguration } from '../shared/runner.js'
 import type { LocalVmMode, LocalVmStatus } from '../shared/localVm.js'
+import {LOCAL_VM_IMAGE_KEYS} from '../shared/localVm.js'
 import type { WorkspaceAgent } from '../shared/workspace.js'
 import { parse, type WorkspaceStore } from './workspaceStore.js'
 import type { LocalAuthStore } from './localAuth.js'
@@ -138,9 +139,9 @@ export class LocalVmService {
     router.get('/api/app/admin/local-vm',async ctx=>{ctx.body=await this.status(this.auth.requireAdmin(ctx).id)})
     router.post('/api/app/admin/local-vm/prepare',async ctx=>{
       this.auth.requireAdmin(ctx);this.assertManaged()
-      const actor=this.auth.requireAdmin(ctx),body=parse(z.object({requestId:z.string().uuid()}).strict(),(ctx.request as any).body)
+      const actor=this.auth.requireAdmin(ctx),body=parse(z.object({requestId:z.string().uuid(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional()}).strict(),(ctx.request as any).body)
       const record=await this.ensure(actor.id);this.grant(actor.id,body.requestId,record.id)
-      ctx.body=await this.hub.localVm(actor.id,record.id,{op:'prepare',id:body.requestId})
+      ctx.body=await this.hub.localVm(actor.id,record.id,{op:'prepare',id:body.requestId,...(body.imageKey?{imageKey:body.imageKey}:{})})
     })
     router.put('/api/app/admin/local-vm/policy',async ctx=>{
       this.auth.requireAdmin(ctx);this.assertManaged()
@@ -186,6 +187,15 @@ export class LocalVmService {
         if(body.enabled&&!this.fixed&&this.mode(owner)==='shared'){const record=this.record();if(record)this.shared.setLocalVmMode(owner,'shared',record.id)}
         return {agent:this.store.agentSummary(this.store.require<WorkspaceAgent>(owner,'agent',agent.id))}
       })
+    })
+    router.put('/api/app/agents/:id/local-vm/image',async ctx=>{
+      const owner=this.auth.require(ctx).id;this.assertManaged()
+      const body=parse(z.object({imageKey:z.enum(LOCAL_VM_IMAGE_KEYS)}).strict(),(ctx.request as any).body)
+      const agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id)
+      this.nodes.requireSource(owner,agent)
+      if(agent.execution!=='computer'||agent.archived||agent.remoteAgentId||agent.temporaryGoalId)throw new HttpError(409,'此机器人不能更改虚拟机镜像','local_vm_disabled')
+      this.shared.assertLocalVmIdle(owner,agent.computerEnvironmentId?this.store.list<WorkspaceAgent>(owner,'agent').filter(a=>a.computerEnvironmentId===agent.computerEnvironmentId).map(a=>a.id):[agent.id])
+      ctx.body=await this.hub.computer(owner,agent,'image',{imageKey:body.imageKey},()=>this.nodes.requireSource(owner,agent))
     })
     router.post('/api/app/agents/:id/local-vm/:action',async ctx=>{
       this.auth.require(ctx);this.assertManaged()

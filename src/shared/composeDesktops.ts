@@ -1,5 +1,6 @@
-export interface ComposeDesktop {id:string;name:string;socketPath:string}
-export interface ComposeDesktopState {id:string;name:string;online:boolean;ready:boolean}
+import type {LocalVmImageKey} from './localVm.js'
+export interface ComposeDesktop {id:string;name:string;socketPath:string;imageKey?:LocalVmImageKey}
+export interface ComposeDesktopState {id:string;name:string;online:boolean;ready:boolean;imageKey?:LocalVmImageKey}
 export interface DesktopRelay {
   (id:string,operation:string,body:Record<string,unknown>):Promise<any>
 }

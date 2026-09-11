@@ -9,6 +9,11 @@ import type { AgentGoal, AgentAssignment, TaskDelivery, TaskOrigin } from '../sh
 const terminalRun = (status: string) => ['complete', 'failed', 'interrupted'].includes(status)
 const terminalGoal = (status: string) => ['complete', 'blocked', 'cancelled'].includes(status)
 const criteria = z.array(z.string().trim().min(1).max(1000)).max(12).default([])
+export const goalCriteriaInput = z.object({
+  requestId: z.string().uuid(),
+  expectedRevision: z.number().int().positive(),
+  acceptanceCriteria: z.array(z.string().trim().min(1).max(1000)).min(1).max(12),
+}).strict()
 export const assignmentInput = z.object({
   requestId: z.string().uuid(), goalId: z.string().uuid(), agentId: z.string().uuid(),
   title: z.string().trim().min(1).max(100), brief: z.string().trim().min(1).max(16000),
@@ -28,6 +33,7 @@ export const assignmentCancel = z.object({requestId:z.string().uuid(),assignment
 export const finishGoalInput = z.object({
   requestId: z.string().uuid(), goalId: z.string().uuid(), status: z.enum(['complete', 'blocked', 'waiting']),
   result: z.string().trim().min(1).max(16000), artifactIds: z.array(z.string().uuid()).max(24).default([]),
+  acceptanceRevision: z.number().int().positive().optional(),
   checks: z.array(z.object({criterion:z.number().int().min(0).max(11),passed:z.boolean(),evidence:z.string().trim().min(1).max(2000)}).strict()).max(12).default([]),
 }).strict()
 export const resumeGoalInput = z.object({requestId:z.string().uuid(),goalId:z.string().uuid()}).strict()
@@ -56,11 +62,26 @@ export class WorkspaceTaskCoordinator {
     const old = this.store.get<AgentGoal>(owner, 'goal', task.id)
     if (old) throw new HttpError(409, '这个任务已有目标，请继续原任务或新建任务', 'goal_exists')
     const goal: AgentGoal = { id: task.id, conversationId: task.conversationId, coordinatorId: coordinator.id,
-      authorityRevision: coordinator.teamAuthorizationVersion ?? 0, objective, acceptanceCriteria: acceptanceCriteria.length ? acceptanceCriteria : ['对照原始请求核验交付结果'],
+      authorityRevision: coordinator.teamAuthorizationVersion ?? 0, objective, acceptanceCriteria: acceptanceCriteria.length ? acceptanceCriteria : ['对照原始请求核验交付结果'], acceptanceRevision: 1,
       authorizationVersion: this.runtime.authorizationVersion(owner), activation: 1,
       status: 'running', origin, artifactIds: [], revision: 1, automaticWakes: 0, createdAt: Date.now(), updatedAt: Date.now() }
     this.saveGoal(owner, goal)
     return goal
+  }
+  updateCriteria(owner: string, goalId: string, input: unknown, actorId?: string): AgentGoal {
+    const body = parse(goalCriteriaInput, input)
+    return this.store.command(owner, body.requestId, { operation: 'goal.criteria', goalId, actorId: actorId ?? 'user', ...body }, () => {
+      const goal = actorId ? this.requireCoordinator(owner, goalId, actorId) : this.store.require<AgentGoal>(owner, 'goal', goalId)
+      if (!this.authorized(owner, goal)) throw new HttpError(403, '目标授权已失效', 'goal_forbidden')
+      if (!['running', 'review', 'waiting'].includes(goal.status)) throw new HttpError(409, '只能调整进行中的目标，请先继续任务', 'goal_not_editable')
+      if ((goal.acceptanceRevision ?? 1) !== body.expectedRevision) throw new HttpError(409, '验收要求已更新，请重新查看后修改', 'goal_criteria_changed')
+      goal.acceptanceCriteria = body.acceptanceCriteria
+      goal.acceptanceRevision = body.expectedRevision + 1
+      goal.checks = undefined
+      goal.revision++
+      this.saveGoal(owner, goal)
+      return goal
+    })
   }
   private saveGoal(owner: string, goal: AgentGoal) {
     goal.updatedAt = Date.now()
@@ -181,6 +202,8 @@ export class WorkspaceTaskCoordinator {
     const body = parse(finishGoalInput, input), goal = this.requireCoordinator(owner, body.goalId, actorId)
     return this.store.command(owner, body.requestId, { actorId, operation: 'goal.finish', ...body }, () => {
       if (terminalGoal(goal.status)) throw new HttpError(409, '目标已结束', 'goal_terminal')
+      if (body.status === 'complete' && (body.acceptanceRevision ?? 1) !== (goal.acceptanceRevision ?? 1))
+        throw new HttpError(409, '验收要求已修改，请按最新要求重新核验', 'goal_criteria_changed')
       const assignments=this.assignments(owner,goal.id)
       if (body.status === 'complete' && (assignments.some(a => !['complete','cancelled'].includes(a.status)) || (assignments.length>0&&!assignments.some(a=>a.status==='complete'))))
         throw new HttpError(409, '还有未验收的子任务，不能宣布目标完成', 'goal_incomplete')
@@ -358,7 +381,9 @@ export class WorkspaceTaskCoordinator {
     if (activeRuns) return
     const reviewing = goal.reviewRunId && this.store.get<Run>(owner, 'run', goal.reviewRunId)
     if (reviewing && !terminalRun(reviewing.status)) return
-    const batch = assignments.map(a => `${a.id}:${a.status}:${a.attempt}`).join('|') || 'initial'
+    const assignmentBatch = assignments.map(a => `${a.id}:${a.status}:${a.attempt}`).join('|') || 'initial'
+    // A user's changed requirements need a fresh review even when assignments are unchanged.
+    const batch = assignmentBatch + ((goal.acceptanceRevision ?? 1) > 1 ? `:criteria:${goal.acceptanceRevision}` : '')
     if (goal.lastReviewedBatch === batch) {
       if (goal.status === 'review') this.deliver(owner, goal, 'review', batch)
       return

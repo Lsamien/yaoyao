@@ -6,9 +6,11 @@ import {tmpdir} from 'node:os'
 import {spawn} from 'node:child_process'
 import {z} from 'zod'
 import {ContainerComputerProvider} from './container.js'
+import type {LocalVmImageKey} from '../../shared/localVm.js'
+import {LOCAL_VM_IMAGE_KEYS} from '../../shared/localVm.js'
 
 const imageId=z.string().regex(/^sha256:[a-f0-9]{64}$/)
-export const imageManifest=z.object({protocol:z.literal(1),imageId,architecture:z.enum(['amd64','arm64']),driver:z.literal('0.20.0'),layer:z.literal('5'),createdAt:z.number().int().nonnegative(),archiveSha256:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict()
+export const imageManifest=z.object({protocol:z.literal(1),imageId,architecture:z.enum(['amd64','arm64']),driver:z.literal('0.20.0'),layer:z.literal('5'),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),createdAt:z.number().int().nonnegative(),archiveSha256:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict()
 export type ComputerImageManifest=z.infer<typeof imageManifest>
 export async function fileSHA256(path:string){const hash=createHash('sha256');for await(const bytes of createReadStream(path))hash.update(bytes);return hash.digest('hex')}
 export async function writeManifest(path:string,manifest:ComputerImageManifest){
@@ -32,11 +34,11 @@ export class ComputerImages {
     imageId.parse(id)
     const image=JSON.parse(await this.run(this.runtime,['image','inspect',id]))[0]
     if(image?.Id!==id||image.Os!=='linux'||image.Config?.Labels?.['com.openmausbot.cua-driver']!=='0.20.0'||image.Config?.Labels?.['com.openmausbot.image-layer']!=='5')throw new Error('镜像身份或电脑驱动不兼容')
-    return imageManifest.parse({protocol:1,imageId:id,architecture:image.Architecture,driver:'0.20.0',layer:'5',createdAt:Date.now()})
+    return imageManifest.parse({protocol:1,imageId:id,architecture:image.Architecture,driver:'0.20.0',layer:'5',imageKey:image.Config.Labels['cn.samien.yaoyao.image-key']??'standard',createdAt:Date.now()})
   }
-  async prepare(recipe:string):Promise<ComputerImageManifest>{
+  async prepare(recipe:string,key:LocalVmImageKey='standard'):Promise<ComputerImageManifest>{
     const tag=`localhost/yaoyao/computer:prepare-${randomUUID()}`
-    await this.run(this.runtime,['build','--pull=false','--tag',tag,resolve(recipe)])
+    await this.run(this.runtime,['build','--pull=false',...(key==='cursor'?['--platform','linux/amd64','--file',join(resolve(recipe),'Dockerfile.cursor')]:[]),'--tag',tag,resolve(recipe)])
     const id=JSON.parse(await this.run(this.runtime,['image','inspect',tag]))[0]?.Id
     const manifest=await this.inspect(id)
     await this.verify(manifest)

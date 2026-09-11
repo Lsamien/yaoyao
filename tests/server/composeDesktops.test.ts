@@ -43,6 +43,7 @@ it('locks Compose capacity and binds existing desktops without allowing cross-ac
   const bind=(id:string,desktopId:string,owner='alice')=>request(app.callback()).put(`/api/app/agents/${id}/local-vm`).set('x-owner',owner).send({enabled:true,desktopId})
   await bind(first.id,randomUUID()).expect(400)
   await bind(first.id,desktops[0]!.id).expect(200);await bind(second.id,desktops[0]!.id).expect(200)
+  await request(app.callback()).put(`/api/app/agents/${first.id}/local-vm/image`).send({imageKey:'cursor'}).expect(409,{code:'compose_desktop_managed'})
   for(const id of [first.id,second.id])expect(()=>nodes.requireSource('alice',store.require('alice','agent',id))).not.toThrow()
   await bind(other.id,desktops[0]!.id,'bob').expect(403)
   expect((await service.status('bob')).desktops?.[0]?.available).toBe(false)

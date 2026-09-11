@@ -42,6 +42,63 @@ function settle(runId:string,status:WorkspaceRun['status']='complete',text='有�
 const assignment=(id:string)=>store.require<AgentAssignment>(owner,'assignment',id)
 
 describe('durable team task coordination',()=>{
+  it('keeps chat lightweight and starts one explicit goal in the existing topic', () => {
+    const conversation = store.createGroup(owner, {name:'日常群聊',memberIds:[lead.id,worker.id],administratorId:lead.id,mode:'free',autoReplyIds:[worker.id]})
+    const task = store.tasks(owner, conversation.id)[0]!
+    const chat = runtime.send(owner, conversation.id, {requestId:randomUUID(),taskId:task.id,content:'讨论一下方案'})
+    expect(store.get(owner,'goal',task.id)).toBeUndefined()
+    expect(runtime.tasks.assignments(owner,task.id)).toEqual([])
+    settle(chat.id)
+    const input = {requestId:randomUUID(),taskId:task.id,content:'完成方案并交付报告',mode:'goal'}
+    const run = runtime.send(owner,conversation.id,input)
+    expect(runtime.send(owner,conversation.id,input).id).toBe(run.id)
+    expect(store.tasks(owner,conversation.id)).toHaveLength(1)
+    expect(store.require<AgentGoal>(owner,'goal',task.id)).toMatchObject({objective:input.content,coordinatorId:lead.id})
+    expect(run).toMatchObject({goalId:task.id,targetAgentId:lead.id})
+    expect(store.list<{runId:string;agentId:string}>(owner,'turn').filter(w=>w.runId===run.id).map(w=>w.agentId)).toEqual([lead.id])
+    expect(runtime.tasks.assignments(owner,task.id)).toEqual([])
+    const review = runtime.dispatch(owner,conversation.id,{requestId:randomUUID(),taskId:task.id,content:'复核进展'}, {agentId:lead.id,kind:'task_review'})
+    expect(store.list<{runId:string;agentId:string}>(owner,'turn').filter(w=>w.runId===review.id).map(w=>w.agentId)).toEqual([lead.id])
+    settle(review.id)
+    expect(runtime.tasks.finish(owner,lead.id,{requestId:randomUUID(),goalId:task.id,status:'complete',result:'交付完整报告',checks:[{criterion:0,passed:true,evidence:'报告已对照请求核验'}]},run.id).status).toBe('complete')
+  })
+  it('rejects delivery without a valid coordinator or during existing chat work without leaving a goal', () => {
+    const conversation = store.createGroup(owner,{name:'讨论群',memberIds:[lead.id,worker.id],administratorId:worker.id})
+    const task = store.tasks(owner,conversation.id)[0]!
+    const input = {requestId:randomUUID(),taskId:task.id,mode:'goal',content:'完成报告'}
+    expect(()=>runtime.send(owner,conversation.id,input)).toThrow('允许组建团队')
+    expect(store.get(owner,'goal',task.id)).toBeUndefined()
+    expect(store.messages(owner,conversation.id)).toEqual([])
+    store.updateConversation(owner,conversation.id,{administratorId:lead.id})
+    runtime.send(owner,conversation.id,{requestId:randomUUID(),taskId:task.id,content:'先讨论'})
+    expect(()=>runtime.send(owner,conversation.id,input)).toThrow('等待当前回复')
+    expect(store.get(owner,'goal',task.id)).toBeUndefined()
+  })
+  it('edits criteria with concurrency protection and refuses completion against superseded criteria', () => {
+    const input = {requestId:randomUUID(),expectedRevision:1,acceptanceCriteria:['报告应比较三种方案']}
+    const edited = runtime.tasks.updateCriteria(owner,goal.id,input)
+    expect(edited.acceptanceRevision).toBe(2)
+    expect(runtime.tasks.updateCriteria(owner,goal.id,input)).toEqual(edited)
+    expect(()=>runtime.tasks.updateCriteria(owner,goal.id,{...input,requestId:randomUUID(),acceptanceCriteria:['覆盖用户的新要求']})).toThrow('已更新')
+    const finish = {requestId:randomUUID(),goalId:goal.id,status:'complete',result:'完成',checks:[{criterion:0,passed:true,evidence:'原有验收依据'}]}
+    expect(()=>runtime.tasks.finish(owner,lead.id,finish)).toThrow('最新要求')
+    expect(()=>runtime.tasks.updateCriteria('other',goal.id,{...input,requestId:randomUUID()})).toThrow()
+    expect(runtime.tasks.finish(owner,lead.id,{...finish,acceptanceRevision:2,checks:[{criterion:0,passed:true,evidence:'报告包含三种方案及逐项比较'}]}).status).toBe('complete')
+    expect(()=>runtime.tasks.updateCriteria(owner,goal.id,{...input,requestId:randomUUID(),expectedRevision:2})).toThrow('进行中的目标')
+  })
+  it('wakes an idle coordinator once for newly edited criteria without creating assignments', async () => {
+    const run = runtime.dispatch(owner,team.id,{requestId:randomUUID(),taskId:goal.id,content:'直接交付报告'}, {agentId:lead.id,kind:'task_review'})
+    settle(run.id)
+    await vi.waitFor(()=>expect(store.list<TaskDelivery>(owner,'task-delivery')).toHaveLength(1))
+    const firstDelivery = store.list<TaskDelivery>(owner,'task-delivery')[0]!
+    settle(firstDelivery.runId!)
+    runtime.tasks.updateCriteria(owner,goal.id,{requestId:randomUUID(),expectedRevision:1,acceptanceCriteria:['增加三种方案的比较']})
+    await vi.waitFor(()=>expect(store.list<TaskDelivery>(owner,'task-delivery')).toHaveLength(2))
+    runtime.tasks.wake()
+    await new Promise(resolve=>setTimeout(resolve,5))
+    expect(store.list<TaskDelivery>(owner,'task-delivery')).toHaveLength(2)
+    expect(runtime.tasks.assignments(owner,goal.id)).toEqual([])
+  })
   it('runs dependencies only after review, returns a result to the original conversation once',async()=>{
     const a=assign('调研'),b=assign('撰写',second,[a.id])
     await vi.waitFor(()=>expect(assignment(a.id).status).toBe('running'))

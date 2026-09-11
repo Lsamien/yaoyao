@@ -1,0 +1,26 @@
+# Cursor Universal with the same private desktop protocol as the standard image.
+# The upstream tag is mutable; pin the inspected amd64 digest for reproducible builds.
+ARG CURSOR_BASE=public.ecr.aws/k0i0n2g5/cursorenvironments/universal:sand-box-latest@sha256:858b6df5d0aeffd5db0e20c81553e98f84b07e9c700a13fcd1febac0e8c54830
+FROM ${CURSOR_BASE}
+USER root
+RUN set -eux; \
+    test "$(uname -m)" = x86_64; \
+    curl -fsSL 'https://files.pythonhosted.org/packages/fa/d7/a43008a328a40c85e7bc706fc20235b9abedc75e28b413817655153157ff/cua_driver-0.20.0-py3-none-manylinux_2_31_x86_64.whl' -o /tmp/cua-driver.whl; \
+    echo 'f60c35696a37f37ac954935e478ae4754f220856d022036625c9400d72185961  /tmp/cua-driver.whl' | sha256sum -c -; \
+    unzip -p /tmp/cua-driver.whl cua_driver/bin/cua-driver > /tmp/cua-driver; \
+    install -D -m 0755 /tmp/cua-driver /usr/local/libexec/openmausbot/cua-driver; \
+    rm /tmp/cua-driver.whl /tmp/cua-driver; \
+    test "$(/usr/local/libexec/openmausbot/cua-driver --version)" = 'cua-driver 0.20.0'; \
+    usermod -l cua -d /home/cua box; groupmod -n cua box; \
+    install -d -o cua -g cua -m 0700 /home/cua /home/cua/workspace /run/user/1000; \
+    install -d -m 0755 /run/yaoyao-private
+COPY compose_bridge.py /usr/local/libexec/yaoyao/compose_bridge.py
+COPY cursor-desktop.py /usr/local/libexec/yaoyao/cursor-desktop.py
+COPY cursor-browser.sh /usr/local/bin/yaoyao-browser
+RUN chmod 0755 /usr/local/bin/yaoyao-browser; \
+    sed -i 's|^Exec=.*|Exec=/usr/local/bin/yaoyao-browser %U|' /usr/share/applications/google-chrome.desktop /usr/share/applications/com.google.Chrome.desktop
+ENV HOME=/home/cua USER=cua DISPLAY=:1 XDG_RUNTIME_DIR=/run/user/1000 BROWSER=/usr/local/bin/yaoyao-browser CUA_DRIVER_INSTALL_CHANNEL=python_package CUA_DRIVER_RS_TELEMETRY_ENABLED=0
+LABEL com.openmausbot.local-vm="1" com.openmausbot.cua-driver="0.20.0" com.openmausbot.image-layer="5" \
+      cn.samien.yaoyao.computer-image="1" cn.samien.yaoyao.compose-desktop="1" cn.samien.yaoyao.image-key="cursor"
+# Start only the desktop and Yaoyao bridge; the upstream cloud services are not needed.
+ENTRYPOINT ["python3", "/usr/local/libexec/yaoyao/cursor-desktop.py"]

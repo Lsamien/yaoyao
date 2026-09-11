@@ -4,6 +4,7 @@ import { NIcon } from 'naive-ui'
 import {
   AddOutline,
   ChatbubbleOutline,
+  ConstructOutline,
   FolderOutline,
   GridOutline,
   PeopleOutline,
@@ -11,7 +12,7 @@ import {
   TimeOutline,
 } from '@vicons/ionicons5'
 
-type SidebarIconName = 'add' | 'board' | 'chat' | 'history' | 'folder' | 'people' | 'search'
+type SidebarIconName = 'add' | 'board' | 'chat' | 'history' | 'folder' | 'people' | 'search' | 'tools'
 
 const props = withDefaults(defineProps<{ name: SidebarIconName; size?: number }>(), { size: 20 })
 const component = computed(() => ({
@@ -22,6 +23,7 @@ const component = computed(() => ({
   folder: FolderOutline,
   people: PeopleOutline,
   search: SearchOutline,
+  tools: ConstructOutline,
 })[props.name])
 </script>
 

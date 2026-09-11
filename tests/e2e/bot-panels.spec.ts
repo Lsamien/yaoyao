@@ -64,11 +64,11 @@ test('robot sidebar, source changes, requests, routines and group boundaries wor
  const group=(await response.json()).conversation
  await page.goto('/conversations/'+group.id)
  await expect(page.getByRole('button',{name:'电脑与定时任务',exact:true})).toHaveCount(0)
- const taskPicker=page.getByRole('combobox',{name:'当前任务',exact:true})
+ const taskPicker=page.getByRole('combobox',{name:'当前话题',exact:true})
  const optionCount=await taskPicker.locator('option').count()
  await taskPicker.selectOption('__create_task__')
  await expect(page).toHaveURL(/taskId=/)
- await expect(page.getByRole('combobox',{name:'当前任务',exact:true}).locator('option')).toHaveCount(optionCount+1)
+ await expect(page.getByRole('combobox',{name:'当前话题',exact:true}).locator('option')).toHaveCount(optionCount+1)
  await page.screenshot({path:evidence+'/desktop-group-task-picker.png'})
  for(let index=1;index<=12;index++){
   const created=await page.request.post('/api/app/agents',{headers:{'X-CSRF-Token':capabilities.csrfToken,Origin:'http://127.0.0.1:18832'},data:{name:`滚动验收 ${index}`,profile:'default'}})

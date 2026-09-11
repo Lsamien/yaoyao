@@ -65,7 +65,7 @@ export class ComputerControls {
       if(state.gateway){state.lease=await state.gateway.takeControl(id,()=>this.guard(state));state.spec=state.gateway.specification}
       else{
         const resolved=await this.runtime.resolveWorkspace(profile);await check();this.guard(state)
-        state.spec={id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.config.imageId,cwd:resolved.cwd,network:this.runtime.config.network??'none'}
+        state.spec={id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.runtime.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??'/home/cua/workspace'):resolved.cwd,network:this.runtime.config.network??'none'}
         await this.runtime.pool.configure(state.spec,()=>this.guard(state))
         state.lease=await this.runtime.pool.acquire(state.spec,`human:${id}`,()=>this.guard(state))
         if(this.runtime.config.network==='public-proxy')state.proxy=await ComputerPublicProxy.start(this.runtime.provider,state.spec,this.runtime.proxyScript,()=>this.runtime.pool.authorize(state.lease!),check,()=>{void this.stop(state)})

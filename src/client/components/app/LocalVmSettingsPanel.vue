@@ -5,9 +5,11 @@ import {createUuid} from '@/utils/id'
 import AppIcon from '@/components/common/AppIcon.vue'
 import RunnerSettingsPanel from './RunnerSettingsPanel.vue'
 import type {LocalVmStatus,LocalVmMode,LocalVmAction,LocalVmInstance} from '@shared/localVm'
+import {LOCAL_VM_IMAGES,type LocalVmImageKey} from '@shared/localVm'
 import type {WorkspaceAgent} from '@shared/workspace'
 const state=ref<LocalVmStatus>(),error=ref(''),loading=ref(false),acting=ref(false)
 const runnerSettingsOpen=ref(false)
+const prepareImage=ref<LocalVmImageKey>('standard')
 const instances=ref<Array<{agent:WorkspaceAgent;vm:LocalVmInstance}>>([])
 let closed=false,timer:ReturnType<typeof setTimeout>|undefined
 async function refresh(){
@@ -23,7 +25,7 @@ async function refresh(){
  }catch(e){if(!closed)error.value=e instanceof Error?e.message:'无法读取本地虚拟机状态'}finally{loading.value=false}
 }
 async function action(work:()=>Promise<unknown>){acting.value=true;error.value='';try{await work()}catch(e){error.value=e instanceof Error?e.message:'操作未完成'}finally{acting.value=false;await refresh()}}
-function prepare(){void action(()=>apiRequest('/api/app/admin/local-vm/prepare',{method:'POST',body:{requestId:createUuid()}}))}
+function prepare(){void action(()=>apiRequest('/api/app/admin/local-vm/prepare',{method:'POST',body:{requestId:createUuid(),imageKey:prepareImage.value}}))}
 function policy(mode:LocalVmMode,maxInstances=state.value?.maxInstances??2){
  if(mode==='shared'&&state.value?.mode!=='shared'&&!confirm('当前账号的多个机器人将共用桌面、工作文件和浏览器登录。确认使用共享虚拟机？'))return
  void action(()=>apiRequest('/api/app/admin/local-vm/policy',{method:'PUT',body:{requestId:createUuid(),mode,maxInstances}}))
@@ -43,7 +45,7 @@ onMounted(cycle);onBeforeUnmount(()=>{closed=true;clearTimeout(timer)})
    <p v-if="state?.job" role="status">{{state.job.message}}</p>
   </article>
   <article v-if="state?.executionHost==='runner'"><h3>Hermes 执行连接</h3><p>{{state.fixedCapacity?'执行连接负责 Hermes 模型与工具调用，桌面容器完全由这套 Compose 管理。':'虚拟桌面由运行 Hermes 的执行节点提供，Docker 版 Web 通过这条连接使用桌面。'}}{{state.runnerName?`当前节点：${state.runnerName}。`:''}}</p><button :aria-expanded="runnerSettingsOpen" @click="runnerSettingsOpen=!runnerSettingsOpen">{{runnerSettingsOpen?'收起执行节点设置':'打开执行节点设置'}}</button><RunnerSettingsPanel v-if="runnerSettingsOpen" computer-setup /></article>
-  <article v-if="state?.fixedCapacity"><h3>Compose 共享桌面</h3><p>已配置 {{state.maxInstances}} 台桌面，数量由 Compose 固定。请在机器人聊天的电脑面板选择已有桌面。</p><div v-for="desktop in state.desktops" :key="desktop.id" class="instance"><strong>{{desktop.name}}</strong><span>{{desktop.ready?'已就绪':desktop.online?'正在启动':'未连接'}}</span></div></article>
+  <article v-if="state?.fixedCapacity"><h3>Compose 共享桌面</h3><p>已配置 {{state.maxInstances}} 台桌面，数量由 Compose 固定。请在机器人聊天的电脑面板选择已有桌面。</p><div v-for="desktop in state.desktops" :key="desktop.id" class="instance"><strong>{{desktop.name}} · {{desktop.imageKey==='cursor'?'Cursor Universal':'标准桌面'}}</strong><span>{{desktop.ready?'已就绪':desktop.online?'正在启动':'未连接'}}</span></div></article>
   <article v-else-if="state"><h3>隔离方式</h3><p>按机器人创建独立桌面，或让可信的机器人共用一个桌面。</p>
    <div class="segmented" role="group" aria-label="虚拟机隔离方式"><button :aria-pressed="state?.mode==='shared'" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @click="policy('shared')">共享虚拟机</button><button :aria-pressed="state?.mode==='per-bot'" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @click="policy('per-bot')">每个机器人独立</button></div>
    <p class="sharing-explanation">共享指多个机器人操作同一台虚拟机，共用桌面和工作文件；与可同时运行的虚拟机数量无关。</p>
@@ -52,7 +54,7 @@ onMounted(cycle);onBeforeUnmount(()=>{closed=true;clearTimeout(timer)})
   <article v-if="state&&!state.fixedCapacity&&!state.setupRequired"><h3>准备运行环境</h3><p v-if="state?.executionHost==='runner'">以下检查和镜像准备均在执行节点所在电脑完成。</p><ol>
    <li><span class="step">{{state?.runtime?'✓':'1'}}</span><div><strong>安装 Docker 或 Podman</strong><p>{{state?.runtime?`已检测到 ${state.runtime}`:'请先安装 Docker Desktop 或 Podman。'}}</p></div></li>
    <li><span class="step">{{state?.daemonUp?'✓':'2'}}</span><div><strong>启动容器运行环境</strong><p>{{state?.daemonUp?'运行环境已启动':'打开 Docker / Podman，等待它完成启动后重新检查。'}}</p></div></li>
-   <li><span class="step">{{state?.image?'✓':'3'}}</span><div><strong>准备本地虚拟机</strong><p>下载并检查托管桌面环境。后续创建虚拟机时会自动使用。</p><button class="primary" :disabled="acting||state?.busy||!state?.daemonUp" @click="prepare">{{state?.busy?'正在准备…':state?.image?'重新检查虚拟机镜像':'准备本地虚拟机'}}</button></div></li>
+   <li><span class="step">{{state?.image?'✓':'3'}}</span><div class="image-preparation"><strong>准备虚拟机镜像</strong><p>两个镜像可分别准备。独立桌面可各自选择；同一共享桌面的所有机器人使用一个镜像。</p><label>镜像<select v-model="prepareImage" :disabled="acting||state.busy"><option v-for="image in LOCAL_VM_IMAGES" :key="image.key" :value="image.key">{{image.name}} · {{state.images?.find(i=>i.key===image.key)?.ready?'已就绪':'未准备'}}</option></select></label><p>{{LOCAL_VM_IMAGES.find(i=>i.key===prepareImage)?.description}}{{prepareImage==='cursor'?'；Apple 芯片电脑需要运行环境支持 amd64 模拟。':''}}</p><button class="primary" :disabled="acting||state?.busy||!state?.daemonUp" @click="prepare">{{state?.busy?'正在准备…':state.images?.find(i=>i.key===prepareImage)?.ready?'重新检查所选镜像':'准备所选镜像'}}</button></div></li>
    <li><span class="step">4</span><div><strong>从机器人聊天中创建桌面</strong><p>打开聊天右上角的“电脑”，选择“本地虚拟机”，然后创建该机器人的虚拟机。</p></div></li>
   </ol></article>
   <article v-if="state&&!state.fixedCapacity"><h3>{{state?.mode==='shared'?'共享虚拟机':'机器人虚拟机'}}</h3><p v-if="!instances.length">还没有机器人使用本地虚拟机。</p>
@@ -68,3 +70,4 @@ onMounted(cycle);onBeforeUnmount(()=>{closed=true;clearTimeout(timer)})
 <style scoped>
 .local-vm-settings{display:grid;gap:16px;max-width:820px}article{padding:20px;border:1px solid var(--line);border-radius:14px;display:grid;gap:12px;background:var(--surface)}h3,p{margin:0}h3{font-size:15px}p{font-size:13px;line-height:1.7;color:var(--text-secondary)}.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.status{display:inline-flex;align-items:center;gap:7px;font-size:13px}.segmented{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}.segmented button{flex:1;border:0;border-radius:0}.segmented button[aria-pressed=true]{background:var(--surface-soft);font-weight:600}.instance{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:12px;border-top:1px solid var(--line)}button,select{font:inherit;color:var(--text-primary);background:var(--surface-raised);border:1px solid var(--line);border-radius:8px;min-height:40px;padding:7px 12px}button{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary{background:var(--accent);color:var(--text-on-solid);margin-top:8px}button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}ol{list-style:none;margin:0;padding:0;display:grid;gap:20px}li{display:flex;gap:12px}.step{display:grid;place-items:center;border:1px solid var(--line);border-radius:50%;height:26px;width:26px;flex:none;font-size:12px}li strong{font-size:13px}[role=alert]{color:var(--danger)}
 </style>
+<style scoped>.image-preparation{display:grid;gap:10px;min-width:0}.image-preparation label{display:grid;gap:6px}.image-preparation select{width:100%;min-height:44px}.image-preparation button{justify-self:start}</style>

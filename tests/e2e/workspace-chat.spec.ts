@@ -305,7 +305,7 @@ test('created roles and editable teams share a durable chat list without plugin 
   await dialog.getByRole('checkbox', { name: '产品经理', exact: true }).check()
   await dialog.getByRole('checkbox', { name: '开发工程师', exact: true }).check()
   await dialog
-    .getByRole('combobox', { name: '管理员', exact: true })
+    .getByRole('combobox', { name: '负责人', exact: true })
     .selectOption({ label: '产品经理' })
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.getByRole('heading', { name: '产品开发团队', exact: true })).toBeVisible()
@@ -392,11 +392,13 @@ test('created roles and editable teams share a durable chat list without plugin 
   await second.close()
   await page.goto('/conversations')
   await openCreate(page, '新建群聊')
+  await dialog.locator('summary').filter({hasText:'从团队模板选择'}).click()
   await expect(dialog.getByRole('button', { name: '信息收集团队', exact: true })).toBeDisabled()
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await createAgent(page, '模板成员四')
   await createAgent(page, '模板成员五')
   await openCreate(page, '新建群聊')
+  await dialog.locator('summary').filter({hasText:'从团队模板选择'}).click()
   for (const name of ['信息收集团队', '产品设计团队', '软件开发团队', '文案书写团队', '项目管理团队', '数据分析团队', '会议协作团队', '运维保障团队']) {
     await expect(dialog.getByRole('button', { name, exact: true })).toBeEnabled()
   }
@@ -522,7 +524,7 @@ for (const mode of ['普通聊天', 'Bot 单聊', '群聊', '普通长回复'] a
         await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('流式验证群')
         await dialog.getByRole('checkbox', { name: `${mode}流式验证助手`, exact: true }).check()
         await dialog.getByRole('checkbox', { name: '群聊流式协作成员', exact: true }).check()
-        await dialog.getByRole('combobox', { name: '管理员', exact: true }).selectOption({ label: `${mode}流式验证助手` })
+        await dialog.getByRole('combobox', { name: '负责人', exact: true }).selectOption({ label: `${mode}流式验证助手` })
         await dialog.getByRole('button', { name: '保存', exact: true }).click()
         await expect(page.getByRole('heading', { name: '流式验证群', exact: true })).toBeVisible()
       }

@@ -265,12 +265,33 @@ describe('application workspace HTTP contract', () => {
     expect(repeated.body.run.id).toBe(resumed.body.run.id)
     await req('post',`/api/app/conversations/${team.id}/tasks/${task.id}/resume`,'second').send({requestId:randomUUID()}).expect(404)
   })
+  it('starts an explicit delivery and lets only its owner edit versioned acceptance criteria',async()=>{
+    vi.spyOn(runtime.workspaceRuntime,'wake').mockImplementation(()=>{})
+    vi.spyOn(runtime.workspaceRuntime.teamTools,'requireAvailable').mockResolvedValue()
+    const lead=runtime.workspace.createAgent('first',{name:'负责人',profile:'default',canManageTeam:true})
+    const member=runtime.workspace.createAgent('first',{name:'成员',profile:'default'})
+    const team=runtime.workspace.createGroup('first',{name:'交付群',memberIds:[lead.id,member.id],administratorId:lead.id})
+    const task=runtime.workspace.tasks('first',team.id)[0]!
+    const path=`/api/app/conversations/${team.id}`
+    const input={requestId:randomUUID(),taskId:task.id,content:'完成并交付报告',mode:'goal'}
+    const sent=await req('post',`${path}/messages`).send(input).expect(202)
+    expect(sent.body.run.goalId).toBe(task.id)
+    expect((await req('post',`${path}/messages`).send(input).expect(202)).body.run.id).toBe(sent.body.run.id)
+    expect((await req('get',`${path}/tasks/${task.id}/plan`).expect(200)).body.assignments).toEqual([])
+    const update={requestId:randomUUID(),expectedRevision:1,acceptanceCriteria:['包含三种方案的比较']}
+    const edited=await req('patch',`${path}/tasks/${task.id}/plan`).send(update).expect(200)
+    expect(edited.body.goal).toMatchObject({acceptanceRevision:2,acceptanceCriteria:update.acceptanceCriteria})
+    await req('patch',`${path}/tasks/${task.id}/plan`,'second').send({...update,requestId:randomUUID()}).expect(404)
+    expect((await req('patch',`${path}/tasks/${task.id}/plan`).send({...update,requestId:randomUUID()}).expect(409)).body.code).toBe('goal_criteria_changed')
+  })
   it('grants team management only with a ready bridge and persists explicit revocation', async () => {
     const denied = await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true}).expect(409)
     expect(denied.body.code).toBe('team_tools_unavailable')
     expect((await req('get','/api/app/agents')).body.agents).toEqual([])
     bridgeReady = true
-    const agent = (await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true}).expect(201)).body.agent
+    const created = await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true})
+    expect(created.status, JSON.stringify(created.body)).toBe(201)
+    const agent = created.body.agent
     expect(agent.canManageTeam).toBe(true)
     await req('patch',`/api/app/agents/${agent.id}`,'second').send({canManageTeam:false}).expect(404)
     bridgeReady = false

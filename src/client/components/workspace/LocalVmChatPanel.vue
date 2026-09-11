@@ -19,7 +19,7 @@ const computerChoice=computed(()=>state.value?.fixedCapacity?(state.value.deskto
 const computerChoices=computed(()=>[
  {value:'auto',label:'自动',description:'按可用环境自动选择',icon:'bolt' as const,disabled:false},
  {value:'cloud',label:'云端 · Grok Bot',description:'共享云端电脑，持续保存工作',icon:'globe' as const,disabled:false},
- ...(state.value?.fixedCapacity?(state.value.desktops??[]).map(desktop=>({value:desktop.id,label:desktop.name,description:desktop.ready?'已有共享桌面':'桌面尚未就绪',icon:'monitor' as const,disabled:desktop.available===false})):[{value:'vm',label:'本地虚拟机',description:'在隔离的本地桌面中工作',icon:'monitor' as const,disabled:false}]),
+ ...(state.value?.fixedCapacity?(state.value.desktops??[]).map(desktop=>({value:desktop.id,label:desktop.name,description:(desktop.imageKey==='cursor'?'Cursor Universal · ':'标准桌面 · ')+(desktop.ready?'已就绪':'尚未就绪'),icon:'monitor' as const,disabled:desktop.available===false})):[{value:'vm',label:'本地虚拟机',description:'在隔离的本地桌面中工作',icon:'monitor' as const,disabled:false}]),
  {value:'local',label:'本机',description:native.value?.host?.name??'请在电脑上打开夭夭桌面端',icon:'monitor' as const,disabled:!native.value?.local.supported},
  {value:'browser',label:'仅浏览器',description:native.value?.browser.available?'独立浏览器，保存登录资料':'请在电脑上打开夭夭桌面端',icon:'globe' as const,disabled:!native.value?.browser.available},
  {value:'off',label:'不使用电脑',description:'使用基础机器人的其他工具',icon:'stop' as const,disabled:false},
@@ -73,6 +73,7 @@ function choose(value:string){
 async function openDesktop(){if(!agent.value)return;if(cloudSelected.value){await run(()=>apiRequest(`/api/app/agents/${selected.value}/cloud-computer/open`,{method:'POST',body:{}}));if(error.value)return}emit('desktop',agent.value)}
 function action(value:LocalVmAction){
  if(value==='recreate'&&!confirm('重建这台虚拟机？当前桌面程序将关闭，工作文件和浏览器资料会保留。'))return
+ if(value==='remove'&&!confirm('移除这台虚拟机实例以切换镜像？工作文件和浏览器资料会保留。'))return
  void run(()=>apiRequest(base()+'/'+value,{method:'POST',body:{}}))
 }
 async function cycle(){const version=revision;await refresh();if(!closed&&version===revision)timer=setTimeout(cycle,3000)}
@@ -121,6 +122,10 @@ onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
     </template>
     <template v-else-if="state?.enabled">
      <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此机器人的独立虚拟机'}}</p>
+     <template v-if="!state.fixedCapacity&&state.images?.length&&!agent.temporaryGoalId">
+      <label>虚拟机镜像<select :value="state.imageKey??''" :disabled="busy||state.inUse||state.container!=='missing'" @change="run(()=>apiRequest(base()+'/image',{method:'PUT',body:{imageKey:($event.target as HTMLSelectElement).value}}))"><option v-if="!state.imageKey" value="" disabled>{{state.image?'当前保留的镜像':'请选择已准备的镜像'}}</option><option v-for="image in state.images" :key="image.key" :value="image.key" :disabled="!image.ready">{{image.name}}{{image.ready?'':' · 未准备'}}</option></select></label>
+      <p class="hint">{{state.mode==='shared'?'同一共享桌面只能使用一个镜像，选择会对所有共享成员生效。':'此桌面的镜像、文件和浏览器资料与其他独立桌面分开。'}}{{state.container!=='missing'?'切换镜像前请先移除实例。':''}}</p>
+     </template>
      <button v-if="!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">设置本地虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='missing'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('create')">创建 {{agent.name}} 的虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='stopped'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动虚拟机</button>
@@ -129,7 +134,7 @@ onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
       <button v-if="state.mode==='per-bot'" :disabled="busy" @click="emit('workspace',agent)"><AppIcon name="panel"/>打开双桌面</button>
       <p class="control-state">{{state.controlMode==='human'?'你或其他操作者正在控制电脑':state.inUse?'机器人正在操作':'仅查看 · 虚拟机空闲'}}</p>
      </template>
-     <div v-if="!state.fixedCapacity&&state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button></div>
+     <div v-if="!state.fixedCapacity&&state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button><button :disabled="busy||state.inUse" @click="action('remove')">移除实例</button></div>
      <p class="hint">{{state.fixedCapacity?'桌面由 Compose 创建，数量固定。这里只连接已有共享桌面；工作目录为 /home/cua/workspace。':'重建会保留工作目录和浏览器资料。虚拟机空闲 5 分钟后自动停止。'}}</p>
      <button v-if="isAdmin" class="settings-link" @click="emit('settings')"><AppIcon name="settings" :size="14"/>本地虚拟机设置</button>
     </template>

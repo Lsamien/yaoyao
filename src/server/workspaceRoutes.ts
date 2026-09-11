@@ -5,7 +5,7 @@ import type Koa from 'koa'
 import { createReadStream, statSync } from 'node:fs'
 import { z } from 'zod'
 import { WorkspaceStore, agentInput, agentPatch, parse } from './workspaceStore.js'
-import { WorkspaceRuntime } from './workspaceRuntime.js'
+import { WorkspaceRuntime, sendInput } from './workspaceRuntime.js'
 import { WorkspaceNodes, type WorkspaceNode } from './workspaceGateway.js'
 import {
   WorkspaceAssets,
@@ -188,6 +188,11 @@ export function workspaceRouter(
     ctx.body = { goal: store.get(user, 'goal', ctx.params.taskId) ?? null,
       assignments: runtime.tasks.assignments(user, ctx.params.taskId) }
   })
+  router.patch('/api/app/conversations/:id/tasks/:taskId/plan', (ctx) => {
+    const user = owner(ctx)
+    store.requireTask(user, ctx.params.id, ctx.params.taskId)
+    ctx.body = { goal: runtime.tasks.updateCriteria(user, ctx.params.taskId, body(ctx)) }
+  })
   router.post('/api/app/conversations/:id/tasks/:taskId/stop', async (ctx) => {
     const user=owner(ctx)
     store.requireTask(user,ctx.params.id,ctx.params.taskId)
@@ -281,9 +286,16 @@ export function workspaceRouter(
       ),
     }
   })
-  router.post('/api/app/conversations/:id/messages', (ctx) => {
+  router.post('/api/app/conversations/:id/messages', async (ctx) => {
     const user = owner(ctx)
-    ctx.body = { run: runtime.send(user, ctx.params.id, body(ctx)) }
+    const input = parse(sendInput, body(ctx))
+    if (input.mode === 'goal') {
+      const version = auth.pushAuthorizationVersion(user)
+      const conversation = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id)
+      await runtime.teamTools.requireAvailable(user, store.require<WorkspaceAgent>(user, 'agent', conversation.administratorId))
+      if (auth.pushAuthorizationVersion(user) !== version) throw new HttpError(401, '账号授权已变化，请重新登录', 'session_revoked')
+    }
+    ctx.body = { run: runtime.send(user, ctx.params.id, input) }
     ctx.status = 202
   })
   router.put('/api/app/conversations/:id/read', (ctx) => {

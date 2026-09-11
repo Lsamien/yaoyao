@@ -55,10 +55,17 @@ export class ComputerRuntime {
     this.pool=new ComputerPool(db,this.provider,{concurrent:this.config.maxConcurrent??2,environments:32,ttlMs:30000})
     db.exec('CREATE TABLE IF NOT EXISTS retired_computers(id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,spec TEXT)')
     db.exec('CREATE TABLE IF NOT EXISTS computer_sessions(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
+    db.exec('CREATE TABLE IF NOT EXISTS computer_image_bindings(id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,image_id TEXT NOT NULL)')
     this.controls=new ComputerControls(this)
     this.ready=this.pool.recover();void this.ready.catch(()=>{})
   }
   assertTarget(meta:ComputerTarget){if(this.db.prepare('SELECT id FROM retired_computers WHERE id=?').get(meta.environmentId))throw new HttpError(410,'临时电脑已退役','computer_retired')}
+  imageFor(meta:ComputerTarget):string {
+    const spec=this.pool.definition(meta.ownerKey,meta.environmentId)
+    const binding=this.db.prepare('SELECT owner_key,image_id FROM computer_image_bindings WHERE id=?').get(meta.environmentId) as {owner_key:string;image_id:string}|undefined
+    if(binding&&binding.owner_key!==meta.ownerKey)throw new HttpError(403,'电脑归属不匹配','computer_owner_mismatch')
+    return spec?.imageId??binding?.image_id??this.config.imageId
+  }
   async retire(meta:ComputerTarget){
     const old=this.db.prepare('SELECT owner_key,spec FROM retired_computers WHERE id=?').get(meta.environmentId) as {owner_key:string;spec?:string}|undefined
     if(old&&old.owner_key!==meta.ownerKey)throw new HttpError(403,'电脑归属不匹配','computer_owner_mismatch')
@@ -105,7 +112,7 @@ export class ComputerRuntime {
       return
     }
     const resolved=await this.resolveWorkspace(profile);authorize()
-    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.config.imageId,cwd:meta.environmentId!==meta.agentId?(this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.config.network??'none'},action,authorize)
+    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.config.network??'none'},action,authorize)
   }
 }
 export class ComputerGateway {
@@ -123,7 +130,7 @@ export class ComputerGateway {
   private async authorized(){try{await this.check();this.guard()}catch(error){await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect();throw error}}
   private guard(){if(this.closed||this.live?.controller.signal.aborted)throw new HttpError(410,'电脑任务授权已结束','computer_cancelled')}
   private event(type:string,payload:Record<string,unknown>){if(!this.closed&&this.live)this.onEvent({type,session_id:this.live.session.id,payload})}
-  private spec(session:WorkerSession):ComputerSpecification{return {id:this.meta.environmentId,ownerKey:this.meta.ownerKey,imageId:this.runtime.config.imageId,cwd:session.cwd,network:this.runtime.config.network??'none'}}
+  private spec(session:WorkerSession):ComputerSpecification{return {id:this.meta.environmentId,ownerKey:this.meta.ownerKey,imageId:this.runtime.imageFor(this.meta),cwd:session.cwd,network:this.runtime.config.network??'none'}}
   async rpc(method:string,params:Record<string,any>):Promise<any>{
     if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.live?.session.id){await this.interrupt();return {status:'interrupted'}}
     if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.recoverySession?.id){await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {status:'interrupted'}}
@@ -132,7 +139,7 @@ export class ComputerGateway {
       if(this.live)throw new HttpError(409,'电脑通道已有会话','computer_session_busy')
       await this.authorized()
       if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderId===this.workId)await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
-      if(this.runtime.config.imageId===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
+      if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
       const profile=String(params.profile),resolved=await this.runtime.resolve(profile,this.controller.signal)
       await this.authorized();this.guard()
       const session:WorkerSession=method==='session.resume'?this.runtime.session(String(params.session_id),this.meta,profile):{id:randomUUID(),agentId:this.meta.agentId,ownerKey:this.meta.ownerKey,environmentId:this.meta.environmentId,profile,cwd:resolved.cwd,configuredCwd:resolved.configuredCwd,history:[]}

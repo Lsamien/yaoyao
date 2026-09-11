@@ -62,6 +62,31 @@ async function buildTeam() {
 }
 
 describe('Agent-owned team tools', () => {
+  it('only assembles members when creating a team, without goals or assignments', async () => {
+    const before = store.list(owner,'run').length
+    const {team,task} = await buildTeam()
+    expect(store.tasks(owner,team.id)).toHaveLength(1)
+    expect(task.goal).toBeUndefined()
+    expect(store.list(owner,'goal')).toEqual([])
+    expect(store.list(owner,'assignment')).toEqual([])
+    expect(store.list(owner,'run')).toHaveLength(before)
+  })
+  it('promotes the current user conversation into a goal without creating another task or turn', async () => {
+    const {team,task} = await buildTeam()
+    const run = runtime.send(owner,team.id,{requestId:randomUUID(),taskId:task.id,content:'把这件事做完并交付报告'})
+    work = store.list<Work>(owner,'turn').find(w=>w.runId===run.id)!
+    work.status='running';work.teamManagementRevision=manager.revision;store.put(owner,'turn',work.id,work)
+    const before = store.list(owner,'run').length
+    const input = {requestId:randomUUID(),teamId:team.id,title:'报告',content:'交付报告',acceptanceCriteria:['包含结论和依据']}
+    const started = await call('start_team_task',input)
+    expect((await call('start_team_task',input)).task.id).toBe(task.id)
+    expect(store.tasks(owner,team.id)).toHaveLength(1)
+    expect(store.list(owner,'run')).toHaveLength(before)
+    expect(started.run.goalId).toBe(task.id)
+    const edited = await call('update_team_goal',{requestId:randomUUID(),goalId:task.id,expectedRevision:1,acceptanceCriteria:['包含三条结论及对应来源']})
+    expect(edited.goal.acceptanceRevision).toBe(2)
+    await expect(call('start_team_task',{...input,requestId:randomUUID()})).rejects.toMatchObject({code:'goal_exists'})
+  })
   it('records creator authority and archives only an unused member it created',async()=>{
     const child=(await call('create_agent',{requestId:randomUUID(),name:'临时项目成员',profile:'default'})).agent
     expect(child.createdByAgentId).toBe(manager.id)

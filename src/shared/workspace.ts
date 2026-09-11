@@ -122,6 +122,8 @@ export interface WorkspaceRun {
   error?: string
   stopRequested?: boolean
   assignmentId?: string
+  /** Structured delivery run; ordinary chat does not carry a goal. */
+  goalId?: string
   targetAgentId?: string
   triggerKind?: 'assignment' | 'task_review' | 'task_result'
   internalInstruction?: string

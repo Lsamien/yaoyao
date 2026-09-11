@@ -128,3 +128,73 @@ it('keeps uncertain preparation cleanup fenced and retries cleanup when runtime 
   const release=f.runtime.pool.beginMaintenance();release()
  }finally{canStop=true;await manager.close();await f.close()}
 })
+
+it('keeps two prepared images and binds one immutable image per independent or shared desktop',async()=>{
+ const f=await fixture(),standard='sha256:'+'a'.repeat(64),cursor='sha256:'+'b'.repeat(64)
+ f.runtime.config.imageId=standard
+ const manager=new LocalVmImages(f.runtime,f.db)
+ const manifest=(id:string)=>({protocol:1 as const,imageId:id,architecture:'amd64' as const,driver:'0.20.0' as const,layer:'5' as const,imageKey:id===cursor?'cursor' as const:'standard' as const,createdAt:1})
+ try{
+  vi.spyOn(manager.images,'inspect').mockImplementation(async id=>manifest(id))
+  vi.spyOn(manager.images,'run').mockResolvedValue(standard+'\n'+cursor)
+  await manager.prepare(randomUUID(),async()=>{},'cursor')
+  await vi.waitFor(async()=>expect((await manager.status()).job?.state).toBe('complete'))
+  expect((await manager.status()).images?.filter(i=>i.ready).map(i=>i.key)).toEqual(['standard','cursor'])
+  expect(f.runtime.config.imageId).toBe(standard)
+  const a={environmentId:randomUUID(),agentId:randomUUID(),ownerKey:'alice'},b={environmentId:randomUUID(),agentId:randomUUID(),ownerKey:'alice'}
+  await manager.select(a,'standard',()=>{})
+  await manager.select(b,'cursor',()=>{})
+  expect(f.runtime.imageFor(a)).toBe(standard);expect(f.runtime.imageFor(b)).toBe(cursor)
+  expect(f.runtime.imageFor({...b,agentId:randomUUID()})).toBe(cursor)
+  await expect(manager.select({...b,ownerKey:'bob'},'standard',()=>{})).rejects.toMatchObject({code:'computer_owner_mismatch'})
+  vi.spyOn(f.runtime,'resolveWorkspace').mockResolvedValue({type:'resolved',cwd:'/home/cua/workspace',configuredCwd:'.'})
+  await f.runtime.desktop(a,'default','create',()=>{})
+  await f.runtime.desktop(b,'default','create',()=>{})
+  expect(f.running.size).toBe(2)
+  expect(f.runtime.pool.definition('alice',a.environmentId)?.imageId).toBe(standard)
+  expect(f.runtime.pool.definition('alice',b.environmentId)?.imageId).toBe(cursor)
+  await expect(manager.select(b,'standard',()=>{})).rejects.toMatchObject({code:'computer_image_in_use'})
+  await f.runtime.desktop(b,'default','stop',()=>{})
+  await expect(manager.select(b,'standard',()=>{})).rejects.toMatchObject({code:'computer_image_in_use'})
+  await f.runtime.desktop(b,'default','remove',()=>{})
+  expect(f.runtime.imageFor(b)).toBe(cursor)
+  await manager.select(b,'standard',()=>{})
+  expect(f.runtime.imageFor({...b,agentId:randomUUID()})).toBe(standard)
+  expect(f.runtime.provider.deleteWorkspace).toHaveBeenCalledTimes(2) // Only preparation scratch space.
+  await manager.close()
+  const resumed=new LocalVmImages(f.runtime,f.db);await resumed.ready
+  expect(f.runtime.imageFor(b)).toBe(standard)
+  vi.spyOn(resumed.images,'inspect').mockImplementation(async id=>manifest(id))
+  expect((await resumed.options()).filter(i=>i.ready)).toHaveLength(2)
+  await resumed.close()
+ }finally{await manager.close();await f.close()}
+})
+
+it('does not select an unprepared image or mutate a choice after authorization expires',async()=>{
+ const f=await fixture(),manager=new LocalVmImages(f.runtime,f.db),meta={environmentId:randomUUID(),agentId:randomUUID(),ownerKey:'alice'}
+ try{
+  await expect(manager.select(meta,'cursor',()=>{})).rejects.toMatchObject({code:'computer_image_required'})
+  expect(f.runtime.imageFor(meta)).toBe(UNCONFIGURED_COMPUTER_IMAGE)
+  const denied=()=>{throw new Error('expired')}
+  await expect(manager.select(meta,'standard',denied)).rejects.toThrow('expired')
+  expect(f.db.prepare('SELECT * FROM computer_image_bindings').all()).toEqual([])
+ }finally{await manager.close();await f.close()}
+})
+
+it('does not fall back to the standard recipe when Cursor preparation fails',async()=>{
+ const f=await fixture(),standard='sha256:'+'a'.repeat(64)
+ f.runtime.config.imageId=standard
+ const manager=new LocalVmImages(f.runtime,f.db)
+ try{
+  vi.spyOn(manager.images,'run').mockResolvedValue(standard)
+  vi.spyOn(manager.images,'inspect').mockResolvedValue({protocol:1,imageId:standard,architecture:'arm64',driver:'0.20.0',layer:'5',createdAt:1})
+  const prepare=vi.spyOn(manager.images,'prepare').mockRejectedValue(new Error('cursor build failed'))
+  const id=randomUUID()
+  await manager.prepare(id,async()=>{},'cursor')
+  await vi.waitFor(async()=>expect((await manager.status()).job?.state).toBe('failed'))
+  expect(prepare).toHaveBeenCalledWith(expect.any(String),'cursor')
+  expect(f.runtime.config.imageId).toBe(standard)
+  expect((await manager.options()).find(i=>i.key==='cursor')?.ready).toBe(false)
+  await expect(manager.prepare(id,async()=>{},'standard')).rejects.toMatchObject({code:'idempotency_conflict'})
+ }finally{await manager.close();await f.close()}
+})

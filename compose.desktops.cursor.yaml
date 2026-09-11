@@ -1,4 +1,4 @@
-# Generated from compose.yaml and deploy/compose-desktops.json.
+# Generated from compose.yaml and deploy/compose-desktops.cursor.json.
 name: hermes-yaoyao
 
 services:
@@ -29,7 +29,7 @@ services:
       HERMES_YAOYAO_ALLOW_INSECURE_LAN: "1"
       HERMES_YAOYAO_SUPERVISE_DASHBOARD: "0"
       HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
-      HERMES_YAOYAO_COMPOSE_DESKTOPS: "[{\"id\":\"160fe7cd-e530-4ac5-a97f-26c19a362b11\",\"name\":\"共享桌面 1\",\"socketPath\":\"/run/yaoyao-desktops/desktop-1/desktop.sock\",\"imageKey\":\"standard\"},{\"id\":\"eba5caaf-744e-4f27-bcdd-1f1f35d05a42\",\"name\":\"共享桌面 2\",\"socketPath\":\"/run/yaoyao-desktops/desktop-2/desktop.sock\",\"imageKey\":\"standard\"}]"
+      HERMES_YAOYAO_COMPOSE_DESKTOPS: "[{\"id\":\"647fbb98-0c40-4d96-91e0-3290eb9020eb\",\"name\":\"Cursor 开发桌面\",\"socketPath\":\"/run/yaoyao-desktops/desktop-cursor/desktop.sock\",\"imageKey\":\"cursor\"}]"
       HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
       HERMES_YAOYAO_RELEASE_SOURCE: "${HERMES_YAOYAO_RELEASE_SOURCE:-https://github.com/Lsamien/yaoyao.git}"
       HERMES_YAOYAO_HOME: /home/node/.yaoyao
@@ -39,19 +39,19 @@ services:
       HERMES_YAOYAO_APNS_TOPIC: "${HERMES_YAOYAO_APNS_TOPIC:-}"
     volumes:
       - yaoyao-data:/home/node/.yaoyao
-      - desktop-1-ipc:/run/yaoyao-desktops/desktop-1:ro
-      - desktop-2-ipc:/run/yaoyao-desktops/desktop-2:ro
+      - desktop-cursor-ipc:/run/yaoyao-desktops/desktop-cursor:ro
     tmpfs:
       - /tmp:mode=1777
 
-  desktop-1:
-    image: "${YAOYAO_DESKTOP_IMAGE:-hermes-yaoyao-desktop:0.4.0}"
+  desktop-cursor:
+    image: "${YAOYAO_CURSOR_DESKTOP_IMAGE:-yaoyao-desktop:cursor}"
+    platform: linux/amd64
     build:
       context: ./deploy/computer
-      dockerfile: Dockerfile
-    hostname: desktop-1
+      dockerfile: Dockerfile.cursor
+    hostname: desktop-cursor
     extra_hosts:
-      - "desktop-1:127.0.0.1"
+      - "desktop-cursor:127.0.0.1"
     init: true
     restart: unless-stopped
     network_mode: none
@@ -69,44 +69,13 @@ services:
       - CHOWN
       - KILL
     environment:
-      YAOYAO_COMPOSE_DESKTOP_ID: "160fe7cd-e530-4ac5-a97f-26c19a362b11"
+      YAOYAO_COMPOSE_DESKTOP_ID: "647fbb98-0c40-4d96-91e0-3290eb9020eb"
     volumes:
-      - desktop-1-workspace:/home/cua/workspace
-      - desktop-1-ipc:/run/yaoyao-private/bridge
-  desktop-2:
-    image: "${YAOYAO_DESKTOP_IMAGE:-hermes-yaoyao-desktop:0.4.0}"
-    build:
-      context: ./deploy/computer
-      dockerfile: Dockerfile
-    hostname: desktop-2
-    extra_hosts:
-      - "desktop-2:127.0.0.1"
-    init: true
-    restart: unless-stopped
-    network_mode: none
-    shm_size: 512m
-    mem_limit: 4g
-    cpus: 2
-    pids_limit: 512
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETUID
-      - SETGID
-      - CHOWN
-      - KILL
-    environment:
-      YAOYAO_COMPOSE_DESKTOP_ID: "eba5caaf-744e-4f27-bcdd-1f1f35d05a42"
-    volumes:
-      - desktop-2-workspace:/home/cua/workspace
-      - desktop-2-ipc:/run/yaoyao-private/bridge
+      - desktop-cursor-workspace:/home/cua/workspace
+      - desktop-cursor-ipc:/run/yaoyao-private/bridge
 
 volumes:
   yaoyao-data:
 
-  desktop-1-workspace:
-  desktop-1-ipc:
-  desktop-2-workspace:
-  desktop-2-ipc:
+  desktop-cursor-workspace:
+  desktop-cursor-ipc:

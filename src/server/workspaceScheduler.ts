@@ -120,10 +120,11 @@ export abstract class WorkspaceScheduler {
   }
   protected admit(owner: string, root: Run, c: Conversation, trigger: Message): void {
     this.store.put(owner, 'run', root.id, root)
-    const ids = root.assignmentId && root.targetAgentId ? [root.targetAgentId] : c.kind === 'direct' || c.mode === 'host' ? [c.administratorId]
+    const targeted = (root.assignmentId || root.goalId) && root.targetAgentId
+    const ids = targeted ? [root.targetAgentId!] : c.kind === 'direct' || c.mode === 'host' ? [c.administratorId]
       : root.mentionIds.length ? root.mentionIds : [...new Set([c.administratorId, ...c.autoReplyIds])]
     for (const id of ids) this.enqueue(owner, root, id, 0, root.id, trigger.seq,
-      c.kind === 'direct' || root.assignmentId ? 'mentioned' : c.mode === 'host' || !root.mentionIds.length ? 'automatic' : 'mentioned', !!root.assignmentId || c.kind === 'group' && id === c.administratorId && (c.mode === 'host' || !root.mentionIds.length))
+      c.kind === 'direct' || targeted ? 'mentioned' : c.mode === 'host' || !root.mentionIds.length ? 'automatic' : 'mentioned', !!targeted || c.kind === 'group' && id === c.administratorId && (c.mode === 'host' || !root.mentionIds.length))
     this.updateRoot(owner, root.id)
   }
   start(): void { this.wake() }
@@ -166,7 +167,7 @@ export abstract class WorkspaceScheduler {
       const root = this.store.require<Run>(owner, 'run', work.runId), c = this.store.require<Conversation>(owner, 'conversation', work.conversationId)
       work.planned = true
       this.store.put(owner, 'turn', work.id, work)
-      if (root.stopRequested || c.archived || c.kind === 'direct' || root.assignmentId) { this.updateRoot(owner, root.id); return }
+      if (root.stopRequested || c.archived || c.kind === 'direct' || root.assignmentId || root.goalId) { this.updateRoot(owner, root.id); return }
       const config = work.turnConfiguration ?? { mode: c.mode, administratorId: c.administratorId, members: c.memberIds.map(id => this.store.require<Agent>(owner, 'agent', id)) }
       const message = work.currentMessageId ? this.store.get<Message>(owner, 'message', work.currentMessageId) : undefined
       if (config.mode === 'host' && work.agentId !== config.administratorId) {

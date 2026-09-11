@@ -8,6 +8,8 @@
 
 新建群聊保留原有 8 套团队预设。模板将角色分配给已创建的 Agent，`memberRoles` 以成员 ID 保存群内角色名称与职责。分工仅在对应群聊执行时加入提示词，不修改 Agent 的身份与独立规则；移除成员会同步清理分工。模板所需成员不足时，先创建足够的 Agent 再使用模板。
 
+Web/macOS 建群默认仅展示名称、成员、负责人和可选群规则，模板和高级协作设置折叠。会话任务在界面称为「话题」。建群与普通发消息不会自动创建目标、子任务或验收要求；明确交付时可开启「交付目标」，或让已获准组队的管理员按用户指令启动目标。管理员可直接完成，分工按需使用。
+
 应用数据保存在 Web 数据目录的 `workspace.sqlite3`。每一条实体、命令和事件包含服务端用户归属。隐藏上游会话只由 WorkspaceRuntime 驱动，原生历史及 RPC 不允许直接访问。基础 Hermes Profile 的记忆和工具权限没有被复制为新的隔离运行环境。
 
 ## API
@@ -16,6 +18,8 @@
 - `GET/POST /api/app/agents`、`PATCH /api/app/agents/:id`：角色；`GET /api/app/agents/sources`：基础来源。
 - `GET/POST /api/app/conversations`、`GET/PATCH /api/app/conversations/:id`：混合列表和聊天详情。创建接口仅创建群聊；创建角色自动创建单聊。
 - `GET/POST /api/app/conversations/:id/messages`：历史和发送。发送需 UUID `requestId`、`content`、`mentionIds`、`fileIds`。重复编号与内容返回同一运行，内容冲突返回 409。
+- 发送的可选 `mode` 为 `chat` 或 `goal`；缺省保持聊天。`goal` 仅用于尚无目标且没有运行中回复的群话题，需要有效管理员及团队工具能力，原子保存用户消息、目标和执行，不创建额外话题。
+- `GET/PATCH /api/app/conversations/:id/tasks/:taskId/plan`：查看目标与子任务；PATCH 用 `requestId`、`expectedRevision` 和 `acceptanceCriteria` 修改进行中目标的验收条件。`expectedRevision` 对应 `goal.acceptanceRevision`（旧记录默认为 1），冲突返回 409。完成工具在验收版本大于 1 时必须传入最新 `acceptanceRevision`，旧验收依据不能直接用于完成。
 - `PUT /api/app/conversations/:id/read`：单调递增的已读序号。
 - `POST /api/app/runs/:id/stop`、`/reconcile`：停止和核对不确定状态。
 - `POST /api/app/interactions/:id/respond`：审批或澄清。

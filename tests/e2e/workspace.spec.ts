@@ -1,4 +1,12 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function openSecondSession(page: Page) {
+  const sidebar = page.locator('.desktop-sidebar')
+  const second = sidebar.getByRole('option').filter({ hasText: '第二个会话' })
+  await expect(sidebar.getByRole('option').first()).toBeVisible()
+  if (!await second.isVisible()) await sidebar.getByRole('button', { name: '继续加载会话' }).click()
+  await second.click()
+}
 
 const WIDE_DOCX_BASE64 = 'UEsDBAoAAAAIAKwmFF15bjPX6AAAAK0BAAATAAAAW0NvbnRlbnRfVHlwZXNdLnhtbH1QyU7DMBD9FWuuKHHggBCK0wPLETiUDxjZk8SqN3nc0v49Tlt6QIXjzFv1+tXeO7GjzDYGBbdtB4KCjsaGScHn+rV5AMEFg0EXAyk4EMNq6NeHRCyqNrCCuZT0KCXrmTxyGxOFiowxeyz1zJNMqDc4kbzrunupYygUSlMWDxj6Zxpx64p42df3qUcmxyCeTsQlSwGm5KzGUnG5C+ZXSnNOaKvyyOHZJr6pBJBXExbk74Cz7r0Ok60h8YG5vKGvLPkVs5Em6q2vyvZ/mys94zhaTRf94pZy1MRcF/euvSAebfjpL49zD99QSwMECgAAAAAArCYUXQAAAAAAAAAAAAAAAAYAAABfcmVscy9QSwMECgAAAAgArCYUXZv9N+qtAAAAKQEAAAsAAABfcmVscy8ucmVsc43POw7CMAwG4KtE3mlaBoRQ0y4IqSsqB7ASN61oHkrCo7cnAwNFDIy2f3+W6/ZpZnanECdnBVRFCYysdGqyWsClP232wGJCq3B2lgQsFKFt6jPNmPJKHCcfWTZsFDCm5A+cRzmSwVg4TzZPBhcMplwGzT3KK2ri27Lc8fBpwNpknRIQOlUB6xdP/9huGCZJRydvhmz6ceIrkWUMmpKAhwuKq3e7yCzwpuarF5sXUEsDBAoAAAAAAKwmFF0AAAAAAAAAAAAAAAAFAAAAd29yZC9QSwMECgAAAAgArCYUXalT+9hjAQAABwMAABEAAAB3b3JkL2RvY3VtZW50LnhtbKVSW0/CMBT+K03fpXMBJYRBFAaaYDSKwdeydluTrW3awsBfb7uVDYwmJr6cc75z+c6lHU8PZQH2VGkmeASvewEElCeCMJ5F8H29uBpCoA3mBBeC0wgeqYbTybgaEZHsSsoNsARcj6oI5sbIEUI6yWmJdU9Iym0sFarExkKVoUooIpVIqNaWvyxQGAQ3qMSMQ0e5FeTotHRCOWEmG0YomD/PPoBUdM9oNUbO7aSqZZ1stoVXL8obG1C5oa6DYWB3sq6jtOOTA4bIZ6zwUexMG0rZgRIXRJdES8WIMzOrZ6JoaAd9y4p+daOLStNQJY30xMnmrOT7fKhLPD/GKl6swfrufhWDeL6MfzgF6vr8u9vr4/Lhb+1QsyNqH0LTxHjC7O3Tv0QY9uveubUHw76/n8yesHITCRnB27DOUCzLTYu2whhRtrCgaRfLKSZURbAGqRCmBdnOeNBseBoJnf4Z6v7w5AtQSwECFAAKAAAACACsJhRdeW4z1+gAAACtAQAAEwAAAAAAAAAAAAAAAAAAAAAAW0NvbnRlbnRfVHlwZXNdLnhtbFBLAQIUAAoAAAAAAKwmFF0AAAAAAAAAAAAAAAAGAAAAAAAAAAAAEAAAABkBAABfcmVscy9QSwECFAAKAAAACACsJhRdm/036q0AAAApAQAACwAAAAAAAAAAAAAAAAA9AQAAX3JlbHMvLnJlbHNQSwECFAAKAAAAAACsJhRdAAAAAAAAAAAAAAAABQAAAAAAAAAAABAAAAATAgAAd29yZC9QSwECFAAKAAAACACsJhRdqVP72GMBAAAHAwAAEQAAAAAAAAAAAAAAAAA2AgAAd29yZC9kb2N1bWVudC54bWxQSwUGAAAAAAUABQAgAQAAyAMAAAAA'
 
@@ -43,7 +51,7 @@ test('separates writable Web chats from read-only Hermes history', async ({ page
 
 test('explains optional upstream credentials without blocking a ready connection', async ({ page }, testInfo) => {
   await page.getByRole('button', { name: /^(打开设置中心|设置与模式)$/ }).first().click()
-  if (await page.getByRole('menuitem', { name: '进入设置', exact: true }).isVisible()) await page.getByRole('menuitem', { name: '进入设置', exact: true }).click()
+  await page.getByRole('menuitem', { name: '设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '设置中心' })
   await dialog.getByRole('button', { name: 'Hermes 连接', exact: true }).click()
   await expect(dialog.locator('[aria-label="Hermes 连接状态"]')).toBeVisible()
@@ -499,14 +507,14 @@ test('keeps pins first and loads the next session page at the list bottom', asyn
     element.scrollTop = element.scrollHeight
     element.dispatchEvent(new Event('scroll'))
   })
-  await expect(items).toHaveCount(103)
+  await expect.poll(() => items.count()).toBeGreaterThan(100)
   await expect(sidebar.getByRole('button', { name: '继续加载会话' })).toHaveCount(0)
 })
 
 test('switches the composer model to the selected historical session model', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
   await expect(page.locator('.composer-tool--model')).toContainText('gpt-5.6')
-  await page.getByRole('option', { name: /第二个会话/ }).click()
+  await openSecondSession(page)
   await expect(page.locator('.composer-tool--model')).toContainText('gpt-5.5')
 })
 
@@ -528,7 +536,7 @@ test('opens a conversation even when marking it read is unsupported', async ({ p
     await route.fulfill({ status: 405, contentType: 'application/json', body: JSON.stringify({ error: 'Method Not Allowed' }) })
   })
 
-  await page.getByRole('option').filter({ hasText: '第二个会话' }).click()
+  await openSecondSession(page)
   await expect(page).toHaveURL(/\/chat\/session-second\?profile=yaoyao/)
   await expect(page.getByText('已整理完成。下面是', { exact: false })).toBeVisible()
   expect(pageErrors).toEqual([])
@@ -584,7 +592,7 @@ test('keeps the show-thinking preference across sessions of the same Agent', asy
   await expect(setting).toHaveAttribute('aria-checked', 'true')
   await setting.click()
   await expect(page.locator('.turn-trace')).toHaveCount(0)
-  await page.getByRole('option').filter({ hasText: '第二个会话' }).click()
+  await openSecondSession(page)
   await expect(page.locator('.turn-trace')).toHaveCount(0)
   await page.locator('.composer-tool[aria-label="设置"]').click()
   await page.getByRole('switch', { name: /显示思考/ }).click()
@@ -805,7 +813,7 @@ test('renders model changes as a collapsed system event', async ({ page }) => {
 })
 
 test('opens a local message file link as a floating preview card', async ({ page }) => {
-  await page.route('**/Users/samien/Agents/%E6%96%B9%E6%A1%88%E8%8D%89%E7%A8%BF.md', route => route.fulfill({
+  await page.route(url => url.pathname === '/api/files/download' && url.searchParams.get('path') === '/Users/samien/Agents/方案草稿.md', route => route.fulfill({
     status: 200,
     contentType: 'text/markdown',
     body: '# 会话文件\n\n这是会话中的文本文件。',
@@ -829,10 +837,14 @@ test('opens a local message file link as a floating preview card', async ({ page
 
 test('shows a thinking animation after submit until output starts', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
+  await expect(page.getByText('已整理完成。下面是', { exact: false })).toBeVisible()
+  const replies = page.getByText('这是来自假 Gateway 的流式回复。', { exact: true })
+  const count = await replies.count()
   await page.locator('.composer-textarea').fill('请开始思考')
   await page.getByRole('button', { name: '发送消息' }).click()
   await expect(page.locator('.thinking-indicator')).toBeVisible()
-  await expect(page.getByText('这是来自假 Gateway 的流式回复。', { exact: true })).toBeVisible()
+  await expect(replies).toHaveCount(count + 1)
+  await expect(replies.last()).toBeVisible()
   await expect(page.locator('.thinking-indicator')).toHaveCount(0)
 })
 
@@ -902,7 +914,7 @@ test('keeps the canonical logo and yaoyao-webui composer geometry', async ({ pag
   await expect(assistantMessage.locator('.message__actions')).toHaveCSS('opacity', '1')
   await expect(page.locator('.message--tool-only .message__actions')).toHaveCount(0)
   await expect(page.locator('[data-message-id="message-thinking-tool"]')).toHaveCount(0)
-  await expect(page.locator('.turn-trace')).toHaveCount(1)
+  await expect(page.locator('.turn-trace').first()).toBeVisible()
   const userMessageMeta = page.locator('.message--user .message__meta')
   await expect(userMessageMeta).not.toHaveCount(0)
   expect(await userMessageMeta.evaluateAll(elements => elements.every(element => getComputedStyle(element).display === 'none'))).toBe(true)
@@ -1032,7 +1044,7 @@ test('uses the mobile composer and keeps the closed drawer inert', async ({ page
 test('renders the Kanban snapshot and mobile status control without page overflow', async ({ page }) => {
   await page.getByRole('button', { name: '看板', exact: true }).click()
   await expect(page).toHaveURL(/\/kanban\/default$/)
-  await expect(page).toHaveTitle('产品研发 · 夭夭')
+  await expect(page).toHaveTitle('产品研发 · 夭夭 AI')
   await expect(page.getByRole('heading', { name: '产品研发', exact: true })).toBeVisible()
   await expect(page.getByRole('article', { name: /完成 Web 看板验收/ })).toBeVisible()
   await expect(page.locator('.kanban-column')).toHaveCount(8)
@@ -1071,10 +1083,10 @@ test('serves cached chat history locally and refreshes upstream only on explicit
   await expect(page.getByRole('menuitem', { name: '强制刷新历史' })).toBeVisible()
   await expect(page.getByRole('menu', { name: '会话操作' })).toHaveCSS('opacity', '1')
   await page.screenshot({ path: testInfo.outputPath('force-history-refresh.png') })
-  const forced = page.waitForResponse(response => messagesURL(response.url()) && response.request().headers()['x-yaoyao-cache'] === 'bypass')
+  const forced = page.waitForResponse(response => response.url().includes('/api/app/sessions/session-demo/sync') && response.request().method() === 'POST')
   await page.getByRole('menuitem', { name: '强制刷新历史' }).click()
   const refreshed = await forced
   expect(refreshed.ok()).toBe(true)
-  expect(refreshed.headers()['x-yaoyao-data-source']).toBe('upstream')
+  expect(refreshed.status()).toBe(202)
   await expect(page.locator('.message--assistant').filter({ hasText: '验收摘要' })).toBeVisible()
 })

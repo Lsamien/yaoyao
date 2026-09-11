@@ -7,7 +7,7 @@ import type { WorkspaceRuntime } from './workspaceRuntime.js'
 import type { Work } from './workspaceScheduler.js'
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 import { requireTeamToolBridge } from './workspaceToolLease.js'
-import { assignmentInput, assignmentReview, assignmentUpdate, assignmentCancel, finishGoalInput, resumeGoalInput } from './taskCoordinator.js'
+import { assignmentInput, assignmentReview, assignmentUpdate, assignmentCancel, finishGoalInput, resumeGoalInput, goalCriteriaInput } from './taskCoordinator.js'
 
 const uuid = z.string().uuid()
 const empty = z.object({}).strict()
@@ -38,21 +38,22 @@ const definitions = [
   ['workspace_list_teams', '查看由你担任管理员的团队及其任务。', empty],
   ['workspace_create_agent', '创建持久保存的 Bot 机器人，复用已授权的基础 Profile。新成员不获得组队权限。requestId 使用新的 UUID；重试同一操作必须复用它。', createAgent],
   ['workspace_create_helper','为当前团队目标创建临时隔离助手并立即分派一个具体子任务。助手只参与此任务、不创建单聊、不获得组队权限；目标结束后退役。每个目标最多 8 个有效临时助手。优先用于一次性工作。',createHelper],
-  ['workspace_create_team', '建立持久团队，自动把你加入并设为管理员，其他成员使用真实机器人 ID，总人数最多 8 人。优先复用已有团队。requestId 使用新的 UUID，重试时复用。', createTeam],
-  ['workspace_start_team_task', '在你管理的团队启动独立任务，由管理员分派并复核。立即返回任务编号，不表示完成；请向用户提供团队名称和任务名称。requestId 使用新的 UUID，重试时复用。', startTask],
+  ['workspace_create_team', '只建立持久团队，自动把你加入并设为管理员，不启动交付目标、不生成子任务或验收要求。其他成员使用真实机器人 ID，总人数最多 8 人。优先复用已有团队。requestId 使用新的 UUID，重试时复用。', createTeam],
+  ['workspace_start_team_task', '仅当用户明确要求完成并交付具体结果时启动目标。简单问答、方案讨论、一次性咨询或仅创建群聊时不要调用。在当前群聊中可将当前话题升级为目标，在其他团队中启动独立话题；提炼少量可核对的验收要求。管理员可直接完成，不强制分工。立即返回不表示完成，requestId 重试时复用。', startTask],
+  ['workspace_update_team_goal', '从用户的交付要求提炼验收条件，或按用户新指令调整。不要增加无关要求。expectedRevision 使用目标的 acceptanceRevision（旧记录默认为 1）；冲突时先重新读取，不覆盖用户的新修改。', goalCriteriaInput.extend({ goalId: uuid })],
   ['workspace_get_team_task', '读取你管理的团队任务的运行状态、最近 20 条结果和待处理问题。运行中不代表目标已完成；避免频繁轮询，用户可在团队内查看进展。', getTask],
-  ['workspace_assign_task', '为团队目标创建有负责人、依赖和验收要求的子任务。仅可分派给团队内其他成员，依赖必须先完成复核。requestId 为重试复用的 UUID。', assignmentInput],
+  ['workspace_assign_task', '仅确实需要分工时创建有负责人、依赖和验收要求的子任务，能直接完成的工作不要拆分。仅可分派给团队内其他成员，依赖必须先完成复核。requestId 为重试复用的 UUID。', assignmentInput],
   ['workspace_review_assignment', '管理员复核子任务：accept 接受实际结果，retry 附具体修改意见后返工，blocked 记录受阻原因。失败执行不能直接验收通过。', assignmentReview],
   ['workspace_update_assignment', '调整尚未运行或已失败子任务的说明、验收要求和依赖。禁止依赖循环；正在执行的任务需要先停止。', assignmentUpdate],
   ['workspace_cancel_assignment', '停止一个子任务，必须记录原因。执行停止尚未确认时显示正在停止，不能当作已经撤销外部副作用。其他子任务和团队不受影响。', assignmentCancel],
-  ['workspace_finish_team_task', '根据实际结果记录目标完成、受阻或等待用户。完成前所有子任务必须验收通过；结果会自动送回原始会话。', finishGoalInput],
+  ['workspace_finish_team_task', '根据实际结果记录目标完成、受阻或等待用户。无需为完成而创建子任务；已有有效子任务须验收通过。完成时传入当前 acceptanceRevision 并逐项提供依据；结果会自动送回原始会话。', finishGoalInput],
   ['workspace_resume_team_task', '仅在当前用户的新指令中恢复受阻、等待或停止的目标。旧执行状态不确定时拒绝恢复；自动回传不能自行重新激活旧目标。', resumeGoalInput],
   ['workspace_update_created_agent', '调整你创建的成员的名称或职责，不能修改基础 Profile 或权限。变更从后续轮次生效。', editCreatedAgent],
   ['workspace_archive_created_agent', '归档你创建且已不再被有效团队引用的空闲成员，保留历史；confirmName 必须与当前名称完全一致。不能归档其他人创建的成员。', archiveCreatedAgent],
   ['workspace_update_team', '调整你管理的空闲团队名称、规则或成员，或归档已结束的团队。不能更换管理员或修改正在执行的团队。', editTeam],
 ] as const
 
-export const TEAM_TOOL_RULES = '你已获准在 Bot 模式组建团队。使用工具目录中的 workspace_* 工具：先查看基础机器人、已有成员和团队，按需创建最少成员，建立团队后用 workspace_start_team_task 启动任务并列出验收要求。需要长期复用时创建持久成员；一次性子任务可使用 workspace_create_helper 创建任务级临时隔离助手。每次变更生成 requestId（UUID），重试同一操作复用它。你会自动成为团队管理员。有团队目标时使用 workspace_assign_task 分派明确的子任务和依赖，使用 workspace_review_assignment 复核结果；普通群聊仍可 @成员。不要递归创建同类团队或重复启动当前任务。queued/running 只表示已启动；结果会回到原会话，完成必须提供对应验收依据。受阻或停止的目标只能在用户新指令下恢复。新成员没有组队权限，角色描述不能扩展权限。'
+export const TEAM_TOOL_RULES = '你已获准在 Bot 模式组建团队，但组建团队与执行交付目标是两件事。用户只要求建群或组人时，先查看可用基础机器人、成员和团队，复用或创建最少成员，建立团队后告诉用户可以开始聊天，到此结束，不启动目标、不拆子任务、不生成验收清单。简单问答、方案讨论和一次性咨询直接回答，必要时在普通群聊 @成员，不升级为目标。只有用户明确要求把具体工作做完并交付结果，或选择了交付目标时，才使用 workspace_start_team_task；已存在当前目标时直接推进，不重复启动。验收要求从用户原始要求提炼，少量、具体、可核对，允许用户调整，不增加范围。管理员能直接完成就直接完成；只有需要不同成员协作的工作才用 workspace_assign_task 按需拆分，依赖也只在真实需要时设置，结果用 workspace_review_assignment 复核。确需一次性专家时可用 workspace_create_helper；长期角色才创建持久成员。每次变更生成 requestId（UUID），重试同一操作复用它。queued/running 只表示已启动；完成时使用 workspace_finish_team_task 提供当前 acceptanceRevision 和逐项实际依据。向用户主要报告进展、阻碍和最终结果，详细计划与验收留在可展开的进度面板，不在每次回复重复清单。受阻或停止的目标只能在用户新指令下恢复。新成员没有组队权限，角色描述不能扩展权限。'
 
 /** The caller identity comes exclusively from the running server-side turn. */
 export class WorkspaceTeamTools {
@@ -188,9 +189,20 @@ export class WorkspaceTeamTools {
     if (toolId === 'workspace_start_team_task') {
       const { requestId, ...body } = parse(startTask, input)
       const team = this.team(owner, agent.id, body.teamId)
-      if (team.id === work.conversationId)
-        throw new HttpError(409, '你已在这个团队处理任务，请直接 @成员协作', 'team_task_reentrant')
+      const sourceRun = this.store.require<Run>(owner, 'run', work.runId)
+      const sourceMessage = this.store.require<{role: string}>(owner, 'message', sourceRun.messageId)
+      if (sourceRun.triggerKind || sourceMessage.role !== 'user' || sourceRun.conversationId !== work.conversationId)
+        throw new HttpError(409, '新目标需要用户的交付指令，自动回传不能重复启动目标', 'team_task_reentrant')
       return this.store.command(owner, requestId, { agentId: agent.id, toolId, body }, () => {
+        if (team.id === work.conversationId) {
+          const task = this.store.requireTask(owner, team.id, work.conversationTaskId!)
+          const goal = this.runtime.tasks.begin(owner, task, agent, body.content,
+            { conversationId: team.id, conversationTaskId: task.id, runId: work.runId, agentId: agent.id }, body.acceptanceCriteria)
+          sourceRun.goalId = goal.id
+          sourceRun.targetAgentId = agent.id
+          this.store.saveRun(owner, sourceRun)
+          return { teamId: team.id, teamName: team.name, task: { ...task, goal }, run: sourceRun, message: '当前话题已作为交付目标，请按需直接完成或分工，不要重复启动。' }
+        }
         if (this.store.activeTaskCount(owner, team.id) >= 4)
           throw new HttpError(409, '最多同时运行 4 个任务', 'workspace_task_concurrency_limit')
         const emptyTask = this.store.tasks(owner, team.id).find(t => t.messageCount === 0 && !t.activeRunId && t.titleSource === 'automatic')
@@ -218,6 +230,10 @@ export class WorkspaceTeamTools {
         assignments: this.runtime.tasks.assignments(owner, task.id) }
     }
     if (toolId === 'workspace_assign_task') return { assignment: this.runtime.tasks.createAssignment(owner, agent.id, input) }
+    if (toolId === 'workspace_update_team_goal') {
+      const { goalId, ...body } = parse(goalCriteriaInput.extend({ goalId: uuid }), input)
+      return { goal: this.runtime.tasks.updateCriteria(owner, goalId, body, agent.id) }
+    }
     if (toolId === 'workspace_review_assignment') return { assignment: this.runtime.tasks.reviewAssignment(owner, agent.id, input) }
     if (toolId === 'workspace_update_assignment') return { assignment: this.runtime.tasks.updateAssignment(owner, agent.id, input) }
     if (toolId === 'workspace_cancel_assignment') return { assignment: this.runtime.tasks.cancelAssignment(owner, agent.id, input) }

@@ -12,14 +12,14 @@
 
 | 标签 | 架构 |
 | --- | --- |
-| `v0.4.11-amd` | `linux/amd64` |
-| `v0.4.11` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
-| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.11` 相同的镜像 |
+| `v0.4.12-amd` | `linux/amd64` |
+| `v0.4.12` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
+| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.12` 相同的镜像 |
 
 ```sh
-docker pull samienluo/yaoyao:v0.4.11
+docker pull samienluo/yaoyao:v0.4.12
 # 需要固定 AMD64 时：
-docker pull samienluo/yaoyao:v0.4.11-amd
+docker pull samienluo/yaoyao:v0.4.12-amd
 ```
 
 每次新版本发布都会更新 `latest`，旧版本标签继续保留。需要固定部署版本时使用具体版本标签。
@@ -34,7 +34,7 @@ cp docker.env.example docker.env
 
 | 配置 | 用途 |
 | --- | --- |
-| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.11` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
+| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.12` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
 | `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址，默认 `http://host.docker.internal:9119` |
 | `HERMES_YAOYAO_BIND_ADDRESS` | Web 的宿主机发布地址，默认 `127.0.0.1`；局域网访问可设为 `0.0.0.0` |
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
@@ -95,7 +95,7 @@ docker compose --env-file docker.env -f compose.desktops.yaml ps
 - 每台桌面的工作文件放在独立的 `desktop-*-workspace` 命名卷内。Compose 桌面统一使用 `/home/cua/workspace`，不会更改基础 Profile 的工作目录配置。
 - 示例桌面使用 `network_mode: none`，默认没有桌面外网。网络、资源额度、镜像版本和服务数量均由部署者在 Compose 中管理；本机 App 的动态虚拟机模式保持原有方式。
 
-如部署前要调整数量或名称，编辑 `deploy/compose-desktops.json`，保留已有桌面 ID，重新生成配套文件：
+如部署前要调整数量、名称或镜像，编辑 `deploy/compose-desktops.json`，保留已有桌面 ID，重新生成配套文件：
 
 ```sh
 node scripts/generate-desktop-compose.mjs
@@ -104,6 +104,98 @@ docker compose --env-file docker.env -f compose.desktops.yaml up -d --build
 ```
 
 生成器会把 Web 连接清单、桌面服务和数据卷同步写入同一个 Compose 文件。运行中不能通过 Web API 扩容。不要用 `down --volumes` 更新部署，否则会删除工作文件。
+
+### Cursor Universal 可选配置
+
+新部署可直接选择仓库中的 **`compose.desktops.cursor.yaml`**，同时启动 Web 和一台“Cursor 开发桌面”。这是完整部署文件，单独使用；与 `compose.yaml`、`compose.desktops.yaml` 三选一，不要叠加启动。电脑环境是共享宿主内核的 Linux 桌面容器。
+
+| 项目 | 配置 |
+| --- | --- |
+| 上游基础镜像 | `public.ecr.aws/k0i0n2g5/cursorenvironments/universal:sand-box-latest` |
+| 构建固定版本 | `sha256:858b6df5d0aeffd5db0e20c81553e98f84b07e9c700a13fcd1febac0e8c54830` |
+| 兼容镜像 | `yaoyao-desktop:cursor`，通过 `deploy/computer/Dockerfile.cursor` 在本地构建 |
+| 已发布兼容镜像 | `samienluo/yaoyao-desktop:v0.4.12-cursor-amd` |
+| 架构 | `linux/amd64`；ARM64 宿主需要 Docker 的 amd64 模拟支持 |
+| 桌面资源 | 2 CPU、4 GB 内存、512 MB 共享内存、512 个进程 |
+| 持久工作目录 | `desktop-cursor-workspace` 卷 → `/home/cua/workspace`，含浏览器资料 |
+| Web 连接 | `desktop-cursor-ipc` 卷中的私有 Unix socket，Web 只读挂载 |
+| 桌面网络 | 默认 `network_mode: none`，不发布任何桌面端口 |
+
+上游标签会变化，Dockerfile 固定已适配的 digest，加入 CUA 驱动、浏览器启动器和夭夭私有桥接协议。因此不能把上游原始镜像直接填到 `YAOYAO_CURSOR_DESKTOP_IMAGE`；该变量只用于指定构建后的兼容镜像名称。
+
+首次配置（已有 `docker.env` 时直接编辑）：
+
+```sh
+cp -n docker.env.example docker.env
+```
+
+`docker.env` 的相关配置示例：
+
+```dotenv
+HERMES_YAOYAO_IMAGE=yaoyao:local
+HERMES_YAOYAO_UPSTREAM=http://host.docker.internal:9119
+HERMES_YAOYAO_BIND_ADDRESS=127.0.0.1
+HERMES_YAOYAO_PUBLISHED_PORT=15300
+YAOYAO_CURSOR_DESKTOP_IMAGE=yaoyao-desktop:cursor
+```
+
+使用本次源码构建 Web 与桌面镜像，然后启动：
+
+```sh
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml config --quiet
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml build web desktop-cursor
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml up -d --no-build
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml ps
+curl --fail http://127.0.0.1:15300/healthz
+```
+
+使用 Docker Hub 发布镜像时，在 `docker.env` 设置：
+
+```dotenv
+HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.12
+YAOYAO_CURSOR_DESKTOP_IMAGE=samienluo/yaoyao-desktop:v0.4.12-cursor-amd
+```
+
+直接拉取并启动，无需本地编译：
+
+```sh
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml pull web desktop-cursor
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml up -d --no-build
+```
+
+Web 镜像自动匹配 AMD64 / ARM64；Cursor 桌面为 AMD64。已有标准桌面仍沿用其镜像配置。
+
+随后按下方“[Hermes 执行连接](#hermes-执行连接)”注册或连接执行节点，再在 Agent 聊天的 **电脑 → 此 Agent 使用的电脑** 中选择“Cursor 开发桌面”。
+
+需要浏览外网或下载依赖时，创建 `compose.desktops.network.yaml`：
+
+```yaml
+services:
+  desktop-cursor:
+    network_mode: bridge
+```
+
+之后启动、查看和停止均带上两个文件：
+
+```sh
+docker compose --env-file docker.env -f compose.desktops.cursor.yaml -f compose.desktops.network.yaml up -d --no-build
+```
+
+`bridge` 允许桌面通过宿主 Docker 网络出站，也可能访问宿主及局域网；它不提供本机动态桌面的受控外网代理策略。仅在部署网络允许时启用，并通过宿主防火墙管理访问范围。桌面仍不映射 VNC 或控制端口。网络模式语义见 [Docker Compose 服务配置](https://docs.docker.com/reference/compose-file/services/#network_mode)。
+
+调整这套配置的桌面数量或名称时，编辑 `deploy/compose-desktops.cursor.json`，然后运行 `node scripts/generate-desktop-compose.mjs`；生成器同时更新两套部署文件，`--check` 同时检查它们。已有标准桌面的部署若只想切换一台镜像，应按下一节保留原有 ID、service 和工作卷。
+
+### 同时部署两种镜像
+
+在 `deploy/compose-desktops.json` 的每个桌面条目增加 `imageKey`：`standard` 为现有标准桌面（不填写时的默认值），`cursor` 为 Cursor Universal 兼容桌面。例如保留已有 ID 和 service，将第二台配置为：
+
+```json
+{"id":"eba5caaf-744e-4f27-bcdd-1f1f35d05a42","service":"desktop-2","name":"Cursor 开发桌面","imageKey":"cursor"}
+```
+
+然后运行上述生成和部署命令。生成器为 Cursor 桌面指定 `Dockerfile.cursor` 和 `platform: linux/amd64`；镜像名可通过 `YAOYAO_CURSOR_DESKTOP_IMAGE` 设置，标准桌面继续使用 `YAOYAO_DESKTOP_IMAGE`。两种变量应指向对应的夭夭兼容镜像，不能将上游原始 Cursor 镜像直接作为运行镜像。
+
+聊天电脑面板显示每台桌面的镜像名称，机器人通过选择已有桌面来选择环境。不同桌面各自使用独立数据卷，可同时使用不同镜像；共享同一桌面的成员只能使用该桌面的一个镜像。改变现有条目的镜像会在下次 Compose 部署时重建该实例，请先结束使用它的任务，保留原有 ID、service 和数据卷。
 
 ### Hermes 执行连接
 
@@ -120,7 +212,7 @@ node yaoyao-runner/runner.mjs --config /完整路径/runner.json
 
 整份程序目录须保留。节点配置包含私有凭据，不要提交到仓库。运行中的任务或接管操作仍有独占授权；交还后其他成员才能操作。取消无法确认结束的命令时，会重置对应桌面服务来终止旧程序，数量与数据卷保持不变。
 
-只需要 Web 服务、继续使用既有外部动态桌面的部署仍可使用 `compose.yaml`；两种部署文件任选其一，不要让两套 Web 同时写同一数据卷。
+只需要 Web 服务、继续使用既有外部动态桌面的部署仍可使用 `compose.yaml`；三种部署文件任选其一，不要让两套 Web 同时写同一数据卷。
 
 验收截图：[Docker Web 的 Agent 桌面](screenshots/compose-desktops/agent-desktop.png)。验收使用独立数据和测试模型服务，桌面与容器连接是真实运行。
 

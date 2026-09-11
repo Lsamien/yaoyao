@@ -22,6 +22,7 @@ test('opens settings and schedules an independent Web update while all 9119 requ
     mediaOwner: 'test', allowInsecureLan: false, insecureLan: false, production: true,
   }
   const launched: string[] = []
+  const completedJobs: string[] = []
   const updates = new SystemUpdateManager(config, {
     projectRoot: process.cwd(), platform: 'darwin',
     inspectRemote: async () => ({ manifest: latest, commit: 'b'.repeat(40) }),
@@ -30,6 +31,7 @@ test('opens settings and schedules an independent Web update while all 9119 requ
       const job = JSON.parse(readFileSync(path, 'utf8'))
       launched.push(job.target.releaseVersion)
       writeFileSync(path, JSON.stringify({ ...job, state: 'succeeded', message: '离线 Web 升级任务验收完成' }))
+      completedJobs.push(path)
       rmSync(join(home, 'updates', 'active.lock'))
     },
   })
@@ -49,9 +51,9 @@ test('opens settings and schedules an independent Web update while all 9119 requ
     const signedIn = await login.json()
     expect(login.ok(), `${login.status()} ${signedIn.error || ''}`).toBe(true)
     expect((await page.request.get(origin + '/readyz')).status()).toBe(503)
-    await page.goto(origin + '/chat')
+    await page.goto(origin + '/chat', { waitUntil: 'domcontentloaded' })
     await page.getByRole('button', { name: /^(打开设置中心|设置与模式)$/ }).click()
-    if (await page.getByRole('menuitem', { name: '进入设置', exact: true }).isVisible()) await page.getByRole('menuitem', { name: '进入设置', exact: true }).click()
+    await page.getByRole('menuitem', { name: '设置', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: '设置中心' })
     await dialog.getByRole('button', { name: '系统概览', exact: true }).click()
     await expect(dialog.getByText(`Web ${current.webVersion} · 可独立升级与回滚`)).toBeVisible()
@@ -62,7 +64,9 @@ test('opens settings and schedules an independent Web update while all 9119 requ
     await page.screenshot({ path: testInfo.outputPath('offline-web-update.png') })
     page.once('dialog', confirmation => confirmation.accept())
     await dialog.getByRole('button', { name: '升级 Web', exact: true }).click()
-    await expect(dialog.getByText('离线 Web 升级任务验收完成')).toBeVisible()
+    await expect.poll(() => completedJobs.length).toBe(1)
+    expect(JSON.parse(readFileSync(completedJobs[0]!, 'utf8'))).toMatchObject({ state: 'succeeded', target: { webVersion: version } })
+    await expect(dialog.getByRole('region', { name: '更新与回滚', exact: true })).toBeVisible()
     expect(launched).toEqual([version])
   } finally {
     await page.goto('about:blank')

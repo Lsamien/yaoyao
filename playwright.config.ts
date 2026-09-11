@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/e2e',
   // These suites own different fixtures and run with their dedicated configurations.
-  testIgnore: ['**/workspace-chat.spec.ts', '**/team-tools.spec.ts', '**/avatarReference.spec.ts', '**/avatarRoundTrip.spec.ts', '**/serverIdentity.spec.ts'],
+  testIgnore: ['**/workspace-chat.spec.ts', '**/team-tools.spec.ts', '**/avatarReference.spec.ts', '**/avatarRoundTrip.spec.ts', '**/serverIdentity.spec.ts', '**/bot-panels.spec.ts', '**/grok-auth.spec.ts', '**/native-environment.spec.ts'],
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,

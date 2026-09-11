@@ -130,6 +130,23 @@ it('executes a structured assignment on its actual worker and leaves acceptance 
   expect(submitted.params.text).toContain('执行子任务')
   expect(store.get<any>(owner,'goal',goal.id)?.status).not.toBe('complete')
 })
+it('keeps structured goal coordination on the lead and does not relay mention text as duplicate work', async () => {
+  const lead=store.updateAgent(owner,agent('交付负责人').id,{canManageTeam:true}),worker=agent('研究成员')
+  const target=nodes.target(owner,'local'), request=target.session.request.bind(target.session)
+  vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>path.startsWith('/api/plugins/yaoyao-bot-bridge/')
+    ? {status:200,body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,in_process:true,native_tools:true})),headers:new Headers()}
+    : request(path,options))
+  const team=store.createGroup(owner,{name:'自由协作交付',memberIds:[lead.id,worker.id],administratorId:lead.id,mode:'free',autoReplyIds:[worker.id]})
+  reply=(socket,p)=>socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'@研究成员 请核对资料',status:'complete'}}}))
+  const run=runtime.send(owner,team.id,{requestId:randomUUID(),content:'交付研究报告',mode:'goal'})
+  await vi.waitFor(()=>expect(['complete','failed']).toContain(store.require<WorkspaceRun>(owner,'run',run.id).status))
+  const settled=store.require<WorkspaceRun>(owner,'run',run.id)
+  expect(settled.status,settled.error).toBe('complete')
+  const work=store.list<Work>(owner,'turn').filter(w=>w.runId===run.id)
+  expect(work.map(w=>w.agentId)).toEqual([lead.id])
+  expect(runtime.tasks.assignments(owner,run.goalId!)).toEqual([])
+  expect(requests.filter(r=>r.method==='prompt.submit').every(r=>!String(r.params.text).startsWith('你是 研究成员'))).toBe(true)
+})
 function direct(id: string, user = owner) {
   return store
     .list<WorkspaceConversation>(user, 'conversation')

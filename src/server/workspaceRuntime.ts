@@ -57,6 +57,7 @@ export const sendInput = z
     requestId: z.string().uuid(),
     content: z.string().max(65_536).default(''),
     taskId: z.string().uuid().optional(),
+    mode: z.enum(['chat', 'goal']).optional(),
     mentionIds: z.array(z.string().uuid()).max(8).default([]),
     fileIds: z.array(z.string().uuid()).max(8).default([]),
   })
@@ -116,6 +117,19 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       const now = Date.now(),
         runId = randomUUID(),
         agents = this.store.taskMemberIds(owner,c,conversationTaskId).map((id) => this.store.require<Agent>(owner, 'agent', id))
+      let goal = conversationTaskId ? this.store.get<import('../shared/agentTasks.js').AgentGoal>(owner, 'goal', conversationTaskId) : undefined
+      if (body.mode === 'goal') {
+        if (source || c.kind !== 'group' || !conversationTask || !body.content.trim())
+          throw new HttpError(400, '请在群聊中说明需要交付的结果', 'goal_request_invalid')
+        if (goal) throw new HttpError(409, '当前话题已有目标，请继续原目标或新建话题', 'goal_exists')
+        const coordinator = this.store.require<Agent>(owner, 'agent', c.administratorId)
+        if (!coordinator.canManageTeam || coordinator.archived || coordinator.remoteAgentId)
+          throw new HttpError(403, '请先为负责人开启允许组建团队', 'goal_forbidden')
+        if (this.store.list<Run>(owner, 'run').some(r => r.conversationTaskId === conversationTaskId && !['complete', 'failed', 'interrupted'].includes(r.status)))
+          throw new HttpError(409, '请等待当前回复结束后再启动目标', 'goal_busy')
+        goal = this.tasks.begin(owner, conversationTask, coordinator, body.content.trim(),
+          { conversationId, conversationTaskId, runId, agentId: coordinator.id })
+      }
       const mentions = [
         ...new Set(
           [...body.mentionIds, ...mentionedAgents(body.content, agents)],
@@ -167,6 +181,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         updatedAt: now,
         authorizationVersion: this.authorizationVersion(owner),
         ...(source ? { assignmentId: source.assignmentId, targetAgentId: source.targetAgentId, triggerKind: source.kind, internalInstruction: source.instruction } : {}),
+        ...(goal && ['running', 'review', 'waiting'].includes(goal.status) ? { goalId: goal.id, targetAgentId: source?.targetAgentId ?? goal.coordinatorId } : {}),
       }
       this.admit(owner, run, c, message)
       this.uploads.markReferenced(body.fileIds, owner)
@@ -612,7 +627,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           `本轮用户指定成员：${this.store.require<Run>(owner, 'run', run.runId).mentionIds.map(id => members.find(a => a.id === id)).filter(Boolean).map(a => '@' + a!.name).join('、') || '未指定'}`,
           '角色规则不赋予额外工具权限；仍遵守基础 Hermes 的工具和安全约束。',
           this.store.require<Run>(owner, 'run', run.runId).internalInstruction || '',
-          goal ? `当前团队目标 ID：${goal.id}。目标：${goal.objective.slice(0,8000)}\n验收要求：${goal.acceptanceCriteria.join('；')}\n${assignmentId ? `你在执行子任务 ${assignmentId}，请完成分派并提交结果，不要扩大团队或再次委派。` : '优先使用 workspace_assign_task 进行有依赖和验收要求的结构化分派；成员结果需要通过 workspace_review_assignment 复核。最终使用 workspace_finish_team_task 记录完成、受阻或等待用户。不要将一次模型回复结束当作目标完成。'}` : '',
+          goal && ['running', 'review', 'waiting'].includes(goal.status) ? `当前团队目标 ID：${goal.id}。目标：${goal.objective.slice(0,8000)}\n验收要求（版本 ${goal.acceptanceRevision ?? 1}）：${goal.acceptanceCriteria.join('；')}\n${assignmentId ? `你在执行子任务 ${assignmentId}，请完成分派并提交结果，不要扩大团队或再次委派。` : '先从用户要求提炼少量具体、可核对的交付条件；若仍是默认验收要求，使用 workspace_update_team_goal 保存。尊重用户调整后的要求。能直接完成就直接完成，不必创建子任务；仅确实需要分工时使用 workspace_assign_task，成员结果通过 workspace_review_assignment 复核，不要再用 @ 重复派发同一工作。最终使用 workspace_finish_team_task 记录完成、受阻或等待用户，完成时提供实际依据。'}` : '',
           agent.temporaryGoalId ? `你是当前任务的临时助手，任务 ID：${agent.temporaryGoalId}。仅处理分派工作，使用 computer_export 回传产物。任务结束后会退役；不要创建团队或改变自身权限。` : '',
           team ? TEAM_TOOL_RULES : '',
           plugins ? '本轮已挂载用户为当前 Bot 授权的插件工具，工具名以 plugin_ 开头，说明中包含实际服务和操作。仅按用户当前任务使用；连接或重新授权应用请让用户打开 Bot 模式的工具 → 已连接应用。不要索取 API Key 或在回复中展示凭据。' : '',

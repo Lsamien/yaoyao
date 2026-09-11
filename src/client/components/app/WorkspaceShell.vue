@@ -504,7 +504,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       </section>
 
       <div class="sidebar-footer">
-        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><AppIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
+        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
           <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? 'menu' : 'listbox'" :aria-expanded="applicationWorkspace ? settingsMenuOpen : profileMenuOpen" @click="applicationWorkspace ? openSettingsMenu($event) : toggleProfileMenu($event)">
             <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
@@ -612,7 +612,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
       </section>
 
       <div class="sidebar-footer mobile-drawer__footer">
-        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><AppIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
+        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
           <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? 'menu' : 'listbox'" :aria-expanded="applicationWorkspace ? settingsMenuOpen : profileMenuOpen" @click="applicationWorkspace ? openSettingsMenu($event) : toggleProfileMenu($event)">
             <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />

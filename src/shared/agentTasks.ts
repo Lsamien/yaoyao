@@ -14,6 +14,8 @@ export interface AgentGoal {
   activation?: number
   objective: string
   acceptanceCriteria: string[]
+  /** Changes only when acceptance criteria change, independently of progress. */
+  acceptanceRevision?: number
   status: 'running' | 'review' | 'waiting' | 'blocked' | 'complete' | 'cancelling' | 'cancelled'
   origin: TaskOrigin
   result?: string

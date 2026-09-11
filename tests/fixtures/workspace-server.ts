@@ -1,7 +1,7 @@
 import {nativeEnvironmentFixture} from './native-environment.js'
 import {FixtureGrokAuthProvider} from './grok-auth-provider.js'
 import { FixtureBotPlugins } from './bot-plugins.js'
-/** Isolated, deterministic Hermes fixture. Optional team-tool readiness is only for editor UI tests. */
+/** Isolated, deterministic Hermes fixture. Team-tool transport is simulated, with no live model. */
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -72,6 +72,11 @@ const upstream = createServer((req, res) => {
     return
   }
   if (url.pathname.includes('/plugins/')) {
+    if (process.env.WORKSPACE_FIXTURE_TEAM_TOOLS === '1' && ['/api/plugins/yaoyao-bot-bridge/bind', '/api/plugins/yaoyao-bot-bridge/unbind'].includes(url.pathname)) {
+      req.resume()
+      send({ok:true,native_tools:true})
+      return
+    }
     if (process.env.WORKSPACE_FIXTURE_TEAM_TOOLS === '1' && url.pathname === '/api/plugins/yaoyao-bot-bridge/capabilities') {
       send({ version: 1, ready: true, native_tools: true, in_process: true })
       return

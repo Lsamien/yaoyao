@@ -61,9 +61,13 @@ const active = ref<Conversation>(),
   interactions = ref<Interaction[]>([]),
   context = ref<Record<string, unknown> | null>(null)
 const activeTask = ref<WorkspaceTask | null>(null), tasks = ref<WorkspaceTask[]>([]), assignments = ref<AgentAssignment[]>([])
+const deliveryMode = ref(false)
+const canRequestGoal = computed(() => active.value?.kind === 'group' && !active.value.archived && !activeTask.value?.goal
+  && members.value.some(a => a.id === active.value?.administratorId && a.canManageTeam && !a.archived && !a.remoteAgentId))
 const taskFiles = new Map<string,File[]>()
 const taskQuotes = new Map<string,UiMessage | null>()
 const composerKey = computed(() => `${auth.user?.id}:${active.value?.id}${activeTask.value ? `:${activeTask.value.id}` : ''}`)
+watch(composerKey, () => { deliveryMode.value = false })
 const text = ref(''),
   error = ref(''),
   busy = ref(false),
@@ -338,7 +342,7 @@ async function selectTask(event:Event){
     if(active.value?.id!==conversationId)return
     tasks.value=[result.task,...tasks.value.filter(task=>task.id!==result.task.id)]
     await router.push({query:{...route.query,taskId:result.task.id}})
-  }catch(cause){error.value=cause instanceof Error?cause.message:'新建任务失败'}finally{creatingTask.value=false}
+  }catch(cause){error.value=cause instanceof Error?cause.message:'新建话题失败'}finally{creatingTask.value=false}
 }
 async function stopTask() {
   if (!active.value || !activeTask.value) return
@@ -353,6 +357,17 @@ async function resumeTask() {
     await apiRequest(`/api/app/conversations/${active.value.id}/tasks/${activeTask.value.id}/resume`,{method:'POST',body:{requestId:createUuid()}})
     await load(undefined,true)
   } catch(cause) {error.value=cause instanceof Error?cause.message:'恢复任务失败'}
+}
+async function saveGoalCriteria(goalId: string, expectedRevision: number, acceptanceCriteria: string[]) {
+  const conversationId = active.value?.id
+  if (!conversationId || activeTask.value?.id !== goalId) throw new Error('话题已切换，请重新打开目标')
+  const result = await apiRequest<{goal: NonNullable<WorkspaceTask['goal']>}>(`/api/app/conversations/${conversationId}/tasks/${goalId}/plan`, {
+    method: 'PATCH', body: { requestId: createUuid(), expectedRevision, acceptanceCriteria },
+  })
+  if (active.value?.id === conversationId && activeTask.value?.id === goalId) {
+    activeTask.value.goal = result.goal
+    await load(conversationId, true)
+  }
 }
 function openTaskLink(event: MouseEvent) {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
@@ -534,7 +549,8 @@ async function send() {
   if (!c || busy.value || (!text.value.trim() && !files.value.length)) return
   busy.value = true
   error.value = ''
-  const fingerprint = JSON.stringify([c.id, activeTask.value?.id, text.value, mentions.value, files.value.map(f => f.id)])
+  const mode = deliveryMode.value ? 'goal' : 'chat'
+  const fingerprint = JSON.stringify([c.id, activeTask.value?.id, text.value, mentions.value, files.value.map(f => f.id), mode])
   if (!pendingRequestId || pendingFingerprint !== fingerprint) {
     pendingRequestId = createUuid()
     pendingFingerprint = fingerprint
@@ -544,6 +560,7 @@ async function send() {
       method: 'POST',
       body: {
         requestId: pendingRequestId,
+        mode,
         ...(activeTask.value ? { taskId: activeTask.value.id } : {}),
         content: text.value,
         mentionIds: mentions.value,
@@ -555,6 +572,7 @@ async function send() {
     mentions.value = []
     pendingRequestId = undefined
     pendingFingerprint = ''
+    deliveryMode.value = false
     await load(c.id, true)
     await refresh()
     return true
@@ -748,9 +766,9 @@ onBeforeUnmount(() => {
           <div v-if="active" class="header-actions">
             <button v-if="active.kind==='direct'" type="button" class="icon-button" aria-label="电脑与定时任务" title="电脑与定时任务" :aria-pressed="dockView==='computer'" @click="toggleDock('computer')"><AppIcon name="monitor"/></button>
             <span v-if="active.kind === 'group' && tasks.length" class="task-picker-shell">
-              <select class="task-picker" aria-label="当前任务" :aria-busy="creatingTask" :disabled="creatingTask" :value="activeTask?.id" @change="selectTask">
-                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
-                <option :value="CREATE_TASK_VALUE">新建任务</option>
+              <select class="task-picker" aria-label="当前话题" :aria-busy="creatingTask" :disabled="creatingTask" :value="activeTask?.id" @change="selectTask">
+                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ !task.messageCount && task.titleSource === 'automatic' ? '新话题' : task.title }}</option>
+                <option :value="CREATE_TASK_VALUE">新建话题</option>
               </select>
               <AppIcon name="chevron-down" :size="14"/>
             </span>
@@ -767,7 +785,11 @@ onBeforeUnmount(() => {
         :mention-options="active.kind === 'group' ? members.map(a => ({id:a.id,label:a.name,insertText:`@${a.name} `})) : []"
         @send="sendFromComposer" @stop="control('stop')" @tool-trace-toggle="showThinking = !showThinking" @clear-reference="quoted = null" @error="error = $event">
         <template #before-input>
-          <TaskPlan :goal="activeTask?.goal" :assignments="assignments" :agents="agents" @stop="stopTask" @resume="resumeTask" />
+          <TaskPlan :key="activeTask?.id" :goal="activeTask?.goal" :assignments="assignments" :agents="agents" :save-criteria="saveGoalCriteria" @stop="stopTask" @resume="resumeTask" />
+          <div v-if="active.kind === 'group' && !activeTask?.goal" class="delivery-mode">
+            <button type="button" :aria-pressed="deliveryMode" :disabled="!canRequestGoal || busy || loading || !!activeTask?.activeRunId" aria-describedby="delivery-mode-help" @click="deliveryMode = !deliveryMode">交付目标</button>
+            <small id="delivery-mode-help">{{ !canRequestGoal ? '负责人开启“允许组建团队”后可用' : deliveryMode ? '发送后由负责人推进交付；验收要求可随时查看和调整' : '默认直接聊天；需要持续完成具体交付时开启' }}</small>
+          </div>
         </template>
       </ComposerShell>
     </section>
@@ -796,14 +818,18 @@ onBeforeUnmount(() => {
           <h2 id="conversation-editor-title">
             {{ dialog === 'agent' ? '创建机器人' : dialog === 'group' ? '创建群聊' : dialog === 'editAgent' ? '机器人设置' : '群聊设置' }}
           </h2>
-          <button type="button" aria-label="关闭" @click="closeDialog">×</button>
+          <button type="button" class="icon-button" aria-label="关闭" @click="closeDialog"><AppIcon name="close" :size="18" /></button>
         </header>
+        <div class="editor-content">
         <p v-if="error" class="error" role="alert">{{ error }}</p>
-        <TeamPresetPicker v-if="dialog === 'group'" :selected="selectedPresetId" :available="agents.filter(a => !a.archived && !a.temporaryGoalId).length" @select="choosePreset" />
         <label>名称<input v-model="form.name" :readonly="isRemoteAgent" required maxlength="100" /></label>
+        <details v-if="dialog === 'group'" class="group-options">
+          <summary>从团队模板选择（可选）</summary>
+          <TeamPresetPicker :selected="selectedPresetId" :available="agents.filter(a => !a.archived && !a.temporaryGoalId).length" @select="choosePreset" />
+        </details>
         <p v-if="isRemoteAgent">引用的机器人配置由远端管理，请在远端修改名称、头像和角色规则。</p>
         <AgentIdentityPanel v-if="isAgentDialog && !isRemoteAgent" :key="`${dialog}:${editingId}`" :profile="avatarProfile" embedded :show-name="false" :show-default-model="false" :show-actions="false" @avatar-change="form.avatar = $event" />
-        <div v-else-if="!isAgentDialog" class="team-avatar-settings">
+        <div v-else-if="dialog === 'editGroup'" class="team-avatar-settings">
           <TeamAvatar :name="form.name" :members="workspaceAvatarMembers(form.memberIds, agents, dialog === 'editGroup' ? editingConversation : undefined)" :size="64" />
           <small>群聊头像由成员头像自动组合，随成员头像更新。</small>
         </div>
@@ -820,9 +846,8 @@ onBeforeUnmount(() => {
           ><small v-if="!sources.length"
             >{{ auth.isBotOnly ? '暂无可用的已分配机器人，请联系管理员分配或检查连接。' : '没有可用的基础机器人，请检查 Web 的 Hermes 连接。' }}</small
           ></label
-        ><label
-          >{{ isAgentDialog ? '角色提示词与规则' : '群规则'
-          }}<textarea
+        ><label v-if="isAgentDialog"
+          >角色提示词与规则<textarea
             v-model="form.instructions"
             :readonly="isRemoteAgent"
             rows="6"
@@ -838,7 +863,7 @@ onBeforeUnmount(() => {
           <span><input v-model="form.canManageTeam" type="checkbox" aria-label="允许组建团队" aria-describedby="team-management-help" />允许组建团队</span>
           <small id="team-management-help">允许自主创建成员、组建团队并启动任务。仅使用当前账号获准的基础机器人，新成员默认不获得此权限。发起者需使用已启用工具桥的同机 Hermes，或支持团队工具的 Runner。隔离发起者新建的成员也使用隔离电脑。</small>
         </label>
-        <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" @click="remotePickerOpen = true">添加远程机器人</button>
+        <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" class="remote-picker" @click="remotePickerOpen = true">添加远程机器人</button>
         <fieldset v-if="selectedPreset" class="preset-role-mapping">
           <legend>角色分配</legend>
           <label v-for="(role, index) in selectedPreset.roles" :key="role.name">
@@ -875,7 +900,7 @@ onBeforeUnmount(() => {
         </fieldset>
         <template v-if="!isAgentDialog"
           ><label
-            >管理员<select v-model="form.administratorId" required>
+            >负责人<select v-model="form.administratorId" required>
               <option
                 v-for="a in agents.filter((a) => form.memberIds.includes(a.id))"
                 :key="a.id"
@@ -884,7 +909,12 @@ onBeforeUnmount(() => {
                 {{ a.name }}
               </option>
             </select></label
-          ><label
+          >
+          <label>群规则（可选）<textarea v-model="form.instructions" rows="3" maxlength="24000" placeholder="例如：回答简洁，重要结论注明来源" /></label>
+          <p v-if="dialog === 'group'" class="group-help">创建后即可聊天。需要交付具体结果时，再开启交付目标。</p>
+          <details class="group-options">
+            <summary>高级协作设置</summary>
+          <label
             >协作方式<select v-model="form.mode">
               <option value="host">管理员协调</option>
               <option value="free">自由协作</option>
@@ -906,7 +936,10 @@ onBeforeUnmount(() => {
               min="1"
               max="100"
               required /></label
-        ></template>
+        >
+          </details>
+        </template>
+        </div>
         <footer>
           <button class="quiet-button" type="button" @click="closeDialog">取消</button
           ><button v-if="!isRemoteAgent" class="solid-button" :disabled="busy || (!isAgentDialog && (form.memberIds.length < (dialog === 'group' ? 2 : 1) || form.memberIds.length > 8))">
@@ -925,7 +958,7 @@ onBeforeUnmount(() => {
   border-radius: 18px;
   width: min(520px, calc(100vw - 48px));
   max-height: 85vh;
-  overflow: auto;
+  overflow: hidden;
   background: var(--surface);
   color: var(--text-primary);
   padding: 25px;
@@ -933,6 +966,15 @@ onBeforeUnmount(() => {
 .editor::backdrop {
   background: #0006;
 }
+.editor form{display:flex;flex-direction:column;max-height:calc(85dvh - 32px);min-height:0}
+.editor-content{min-height:0;overflow:auto;padding:0 4px;scrollbar-gutter:stable}
+.editor header,.editor footer{flex-shrink:0}
+.editor header{min-height:44px}
+.editor .remote-picker,.editor footer button{min-height:44px;padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--text-primary);font:inherit;font-size:13px;cursor:pointer}
+.editor .remote-picker:hover,.editor footer .quiet-button:hover{background:var(--surface-hover)}
+.editor footer .solid-button{background:var(--text-primary);color:var(--surface);border-color:var(--text-primary)}
+.editor footer button:disabled{opacity:.5;cursor:default}
+.editor .remote-picker:focus-visible,.editor footer button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .editor header,
 .editor footer {
   display: flex;
@@ -942,6 +984,7 @@ onBeforeUnmount(() => {
 }
 .editor h2 {
   font-size: 20px;
+  margin: 12px 0;
 }
 .editor label {
   display: flex;
@@ -952,6 +995,8 @@ onBeforeUnmount(() => {
 }
 .task-picker-shell{position:relative;display:inline-flex;align-items:center;max-width:210px;min-width:0}.task-picker-shell>.app-icon{position:absolute;right:11px;pointer-events:none;color:var(--text-muted)}.task-picker{width:100%;min-width:0;max-width:210px;min-height:38px;appearance:none;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text-primary);padding:6px 34px 6px 14px;font:inherit;font-size:12px;font-weight:520;text-overflow:ellipsis;cursor:pointer;box-shadow:0 1px 2px color-mix(in srgb,var(--text-primary) 5%,transparent);transition:border-color 140ms ease,background-color 140ms ease,box-shadow 140ms ease}.task-picker:hover{border-color:var(--line-strong);background:var(--surface-hover)}.task-picker:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.task-picker:disabled{cursor:wait;opacity:.55}
 .task-queue-status{margin:0 20px 8px;font-size:13px;color:var(--text-muted)}
+.group-options{margin:12px 0;border-top:1px solid var(--line)}.group-options summary{min-height:44px;align-content:center;cursor:pointer;font-size:13px;color:var(--text-secondary)}.group-options summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.group-help{font-size:13px;line-height:1.6;color:var(--text-secondary)}
+.delivery-mode{display:flex;align-items:center;gap:10px;margin:0 auto 8px;max-width:760px;width:100%;font-size:13px}.delivery-mode button{flex-shrink:0;min-height:44px;padding:7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text-secondary);font:inherit;cursor:pointer}.delivery-mode button:hover:not(:disabled){background:var(--surface-hover)}.delivery-mode button[aria-pressed=true]{border-color:var(--accent);color:var(--text-primary);background:var(--surface-hover)}.delivery-mode button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.delivery-mode button:disabled{opacity:.55;cursor:default}.delivery-mode small{font-size:12px;color:var(--text-secondary);line-height:1.5}
 @media(max-width:720px){.task-picker-shell,.task-picker{max-width:118px}.task-picker{min-height:44px;padding-left:12px}}
 .team-management-permission > span {
   display: flex;
@@ -984,7 +1029,7 @@ onBeforeUnmount(() => {
 }
 .editor footer {
   justify-content: flex-end;
-  margin-top: 25px;
+  margin-top: 12px;
 }
 .status {
   margin-top: 8px;
