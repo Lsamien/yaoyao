@@ -6,6 +6,24 @@
 - 准备容器可访问的 Hermes Dashboard/Gateway，通常使用 9119 端口。
 - 获取本项目源码，在仓库目录执行后续命令。
 
+## 已发布的远程镜像
+
+镜像仓库：[samienluo/yaoyao](https://hub.docker.com/r/samienluo/yaoyao)。
+
+| 标签 | 架构 |
+| --- | --- |
+| `v0.4.9-amd` | `linux/amd64` |
+| `v0.4.9` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
+| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.9` 相同的镜像 |
+
+```sh
+docker pull samienluo/yaoyao:v0.4.9
+# 需要固定 AMD64 时：
+docker pull samienluo/yaoyao:v0.4.9-amd
+```
+
+每次新版本发布都会更新 `latest`，旧版本标签继续保留。需要固定部署版本时使用具体版本标签。
+
 ## 配置与启动
 
 ```sh
@@ -16,6 +34,7 @@ cp docker.env.example docker.env
 
 | 配置 | 用途 |
 | --- | --- |
+| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.9` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
 | `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址，默认 `http://host.docker.internal:9119` |
 | `HERMES_YAOYAO_BIND_ADDRESS` | Web 的宿主机发布地址，默认 `127.0.0.1`；局域网访问可设为 `0.0.0.0` |
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
@@ -23,6 +42,17 @@ cp docker.env.example docker.env
 | `HERMES_YAOYAO_CHAT_CACHE_MODE` | 普通聊天缓存策略，默认 `prefer-local` |
 
 Docker Desktop 可通过 `host.docker.internal` 访问宿主机。Linux 上 Compose 将该名称映射到宿主机网关；Hermes 需要监听容器可访问的宿主机地址。远程 Hermes 直接填写其可访问地址。
+
+使用远程镜像时，在 `docker.env` 设置上述镜像标签后执行：
+
+```sh
+docker compose --env-file docker.env config --quiet
+docker compose --env-file docker.env pull web
+docker compose --env-file docker.env up -d --no-build web
+docker compose --env-file docker.env ps
+```
+
+从本地源码构建时执行：
 
 ```sh
 docker compose --env-file docker.env config --quiet
@@ -47,6 +77,8 @@ docker compose --env-file docker.env logs --tail=100 web
 登录后创建会话、收发消息、上传并下载附件，验证实际使用流程。
 
 ## 随 Web 一起部署固定共享桌面
+
+`samienluo/yaoyao` 是 Web 服务镜像；共享桌面使用独立的桌面镜像。
 
 使用配套的 **单个 `compose.desktops.yaml`** 部署文件，同时创建 Web 和共享桌面容器。默认示例为两台桌面；不是在 Web 页面里临时创建虚拟机。
 
@@ -108,6 +140,14 @@ docker compose --env-file docker.env start web
 为每次备份使用独立目录，并保留文件权限。恢复时将完整备份放回数据卷，确认容器内 `node` 用户可以读写后再启动服务。
 
 ## 升级与停止
+
+使用远程镜像时，更新 `docker.env` 中的固定版本标签，或继续使用 `latest`，然后拉取并重新创建 Web 容器：
+
+```sh
+docker compose --env-file docker.env pull web
+docker compose --env-file docker.env up -d --no-build web
+docker compose --env-file docker.env ps
+```
 
 更新仓库源码后重新构建和启动：
 

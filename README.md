@@ -44,7 +44,22 @@ Web 数据默认保存在 `~/.yaoyao`，可用 `YAOYAO_HOME` 指定（兼容 `HE
 
 ## Docker 安装
 
-准备 Docker Engine 或 Docker Desktop，以及容器可访问的 Hermes 9119 服务。在仓库目录执行：
+远程镜像发布在 [Docker Hub](https://hub.docker.com/r/samienluo/yaoyao)：
+
+| 镜像 | 架构 |
+| --- | --- |
+| `samienluo/yaoyao:v0.4.9-amd` | AMD64 |
+| `samienluo/yaoyao:v0.4.9` | 自动匹配 AMD64 / ARM64 |
+| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.9` 相同 |
+
+准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.9`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
+
+```sh
+docker compose --env-file docker.env pull web
+docker compose --env-file docker.env up -d --no-build web
+```
+
+从本地源码构建时，在仓库目录执行：
 
 ```sh
 cp docker.env.example docker.env
@@ -65,7 +80,9 @@ iOS 统一连接 Web 地址，通过设置中的手机登录二维码或账号�
 
 Web 默认从 [GitHub Releases](https://github.com/Lsamien/yaoyao/releases) 检查稳定版本；桌面菜单“检查 App 更新…”可下载并校验 DMG 后手动安装。旧官方发布源会自动归一化为 GitHub，自定义仓库保留。详见 [GitHub 版本升级](docs/github-updates.md)。
 
-发布版本由 `release.json` 记录。macOS 本机服务支持在系统设置中升级 Web 或回滚到上一个版本；其他源码部署更新代码、重新构建并重启服务，Docker 部署通过重新构建镜像并重建容器更新。升级前备份 Web 数据目录，客户端版本要求见对应发布说明。
+发布版本由 `release.json` 记录。macOS 本机服务支持在系统设置中升级 Web 或回滚到上一个版本；其他源码部署更新代码、重新构建并重启服务，Docker 部署通过拉取远程镜像（或自行构建）并重建容器更新。升级前备份 Web 数据目录，客户端版本要求见对应发布说明。
+
+后续发布同时交付本地构建和 Docker Hub 远程镜像，验证固定版本后更新 `latest`，保留旧版本标签。发布者按 [发布流程](docs/release-process.md) 执行，并将镜像地址、架构和验证结果写入发布说明。
 
 ## 开发验证
 
