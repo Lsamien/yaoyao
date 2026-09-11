@@ -425,14 +425,32 @@ export function workspaceAvatarState(conversation: import('@shared/workspace').W
   return conversation.activeRunStatus === 'waiting' || conversation.activeRunStatus === 'uncertain' ? 'waiting' : 'working'
 }
 
-export function workspaceConversationItem(c: import('@shared/workspace').WorkspaceConversation, agents: import('@shared/workspace').WorkspaceAgent[]): SidebarItem {
+type WorkspaceAgentActivity = 'working' | 'waiting' | 'loading'
+
+/** A Bot can be busy in several chats; one finished run must not hide another. */
+export function workspaceAgentActivity(conversations: import('@shared/workspace').WorkspaceConversation[]): Map<string, WorkspaceAgentActivity> {
+  const activity = new Map<string, WorkspaceAgentActivity>()
+  const priority = { working: 3, waiting: 2, loading: 1 }
+  for (const conversation of conversations) {
+    for (const id of conversation.memberIds) {
+      const state = workspaceAvatarState(conversation, id)
+      if (state !== 'working' && state !== 'waiting' && state !== 'loading') continue
+      const previous = activity.get(id)
+      if (!previous || priority[state] > priority[previous]) activity.set(id, state)
+    }
+  }
+  return activity
+}
+
+export function workspaceConversationItem(c: import('@shared/workspace').WorkspaceConversation, agents: import('@shared/workspace').WorkspaceAgent[], agentActivity?: ReadonlyMap<string, WorkspaceAgentActivity>): SidebarItem {
+  const activity = c.kind === 'direct' ? agentActivity?.get(c.memberIds[0] || '') : undefined
   return {
     id: c.id, title: c.name, subtitle: c.preview || '开始聊天', pinned: c.pinned,
     section: c.pinned ? '已置顶' : '聊天', avatar: c.kind === 'group' ? '' : c.avatar,
     avatarMembers: c.kind === 'group' ? workspaceAvatarMembers(c.memberIds, agents, c) : [],
     meta: formatConversationTime(c.lastMessageAt ?? c.createdAt),
     avatarKind: c.kind === 'direct' ? 'agent' : 'team',
-    avatarState: workspaceAvatarState(c, c.memberIds[0] || ''), avatarActivityKey: c.lastSeq,
-    unread: c.unreadCount ?? Math.max(0, c.lastSeq - c.readSeq), status: c.activeRunId ? 'working' : undefined,
+    avatarState: activity ?? workspaceAvatarState(c, c.memberIds[0] || ''), avatarActivityKey: c.lastSeq,
+    unread: c.unreadCount ?? Math.max(0, c.lastSeq - c.readSeq), status: activity || c.activeRunId ? 'working' : undefined,
   }
 }

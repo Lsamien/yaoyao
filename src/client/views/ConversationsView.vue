@@ -31,7 +31,7 @@ import TeamPresetPicker from '@/components/workspace/TeamPresetPicker.vue'
 import { TEAM_PRESETS, type TeamPreset } from '@/components/groups/teamPresets'
 import type { WorkspaceMemberRole } from '@shared/workspace'
 import AppIcon from '@/components/common/AppIcon.vue'
-import { workspaceAvatarMembers, workspaceAvatarState, workspaceConversationItem, workspaceMessagesToUi } from '@/components/workspace/viewModels'
+import { workspaceAgentActivity, workspaceAvatarMembers, workspaceAvatarState, workspaceConversationItem, workspaceMessagesToUi } from '@/components/workspace/viewModels'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { apiRequest, ApiError } from '@/api/client'
@@ -74,8 +74,9 @@ const text = ref(''),
 const identityBusy = ref(false),
   identityError = ref(''),
   identityResetVersion = ref(0)
+const agentActivity = computed(() => workspaceAgentActivity(conversations.value))
 const searchItems = computed<SidebarItem[]>(() => [false, true].map(archived => {
-  const items = conversations.value.filter(c => c.archived === archived).map(c => workspaceConversationItem(c, agents.value))
+  const items = conversations.value.filter(c => c.archived === archived).map(c => workspaceConversationItem(c, agents.value, agentActivity.value))
   return { id: archived ? 'archived' : 'unarchived', title: archived ? '已归档' : '未归档', children: items, emptyText: archived ? '没有已归档聊天' : '没有未归档聊天' }
 }))
 const archivedIds = computed(() => new Set(conversations.value.filter(c => c.archived).map(c => c.id)))
@@ -129,9 +130,11 @@ async function sendFromComposer(payload: ComposerSubmit) {
 }
 const dialog = ref<'agent' | 'group' | 'editAgent' | 'editGroup' | null>(null),
   editingId = ref(''),
+  editingConversationId = ref(''),
   scroller = ref<HTMLElement>(),
   fileInput = ref<HTMLInputElement>(),
   dialogElement = ref<HTMLDialogElement>()
+const editingConversation = computed(() => conversations.value.find(c => c.id === editingConversationId.value) ?? (active.value?.id === editingConversationId.value ? active.value : undefined))
 const remotePickerOpen=ref(false)
 const isRemoteAgent=computed(()=>dialog.value==='editAgent' && !!agents.value.find(a=>a.id===editingId.value)?.remoteAgentId)
 async function remoteAdded(agent:Agent){
@@ -191,7 +194,10 @@ let cursor = 0,
 const selected = computed(() => (typeof route.params.id === 'string' ? route.params.id : undefined))
 const selectedTask = computed(() => typeof route.query.taskId === 'string' ? route.query.taskId : '')
 const shell=ref<InstanceType<typeof WorkspaceShell>>(),vmWorkspace=ref<InstanceType<typeof LocalVmWorkspace>>(),desktopViewer=ref<InstanceType<typeof ComputerPanel>>()
-const computerOpen=ref(false),computerDockOpen=ref(false),twoDesktops=ref(false),desktopAgent=ref<Agent>()
+const computerOpen=ref(false),dockView=ref<'computer'|'inspector'>(),twoDesktops=ref(false),desktopAgent=ref<Agent>()
+const creatingTask=ref(false)
+const CREATE_TASK_VALUE='__create_task__'
+function toggleDock(view:'computer'|'inspector'){dockView.value=dockView.value===view?undefined:view}
 async function openComputer(agent:Agent){
   if(window.yaoyaoDesktop?.openComputer){try{await window.yaoyaoDesktop.openComputer(agent.id)}catch(cause){error.value=cause instanceof Error?cause.message:'无法打开电脑窗口'}return}
   desktopAgent.value=agent;computerOpen.value=true
@@ -320,6 +326,20 @@ async function markRead() {
   })
   read.readSeq = read.lastSeq
 }
+async function selectTask(event:Event){
+  const select=event.currentTarget as HTMLSelectElement,value=select.value
+  if(value!==CREATE_TASK_VALUE){await router.push({query:{...route.query,taskId:value}});return}
+  select.value=activeTask.value?.id??''
+  if(!active.value||active.value.kind!=='group'||creatingTask.value)return
+  const conversationId=active.value.id
+  creatingTask.value=true;error.value=''
+  try{
+    const result=await apiRequest<{task:WorkspaceTask}>(`/api/app/conversations/${conversationId}/tasks`,{method:'POST',body:{}})
+    if(active.value?.id!==conversationId)return
+    tasks.value=[result.task,...tasks.value.filter(task=>task.id!==result.task.id)]
+    await router.push({query:{...route.query,taskId:result.task.id}})
+  }catch(cause){error.value=cause instanceof Error?cause.message:'新建任务失败'}finally{creatingTask.value=false}
+}
 async function stopTask() {
   if (!active.value || !activeTask.value) return
   try {
@@ -374,10 +394,15 @@ async function select(id: string) {
   pendingRequestId = undefined
   await router.push(`/conversations/${id}`)
 }
-async function openDialog(kind: NonNullable<typeof dialog.value>) {
+function openConversationSettings(id: string) {
+  const conversation = conversations.value.find(c => c.id === id)
+  if (conversation) void openDialog(conversation.kind === 'direct' ? 'editAgent' : 'editGroup', conversation)
+}
+async function openDialog(kind: NonNullable<typeof dialog.value>, conversation = active.value) {
   error.value = ''
   dialog.value = kind
   editingId.value = ''
+  editingConversationId.value = kind === 'editAgent' || kind === 'editGroup' ? conversation?.id ?? '' : ''
   selectedPresetId.value = 'custom'
   Object.assign(form, {
     name: '',
@@ -400,8 +425,8 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
       form.source = s.sources[0] ? JSON.stringify([s.sources[0].nodeId, s.sources[0].profile]) : ''
     }
     if (kind === 'editAgent') {
-      const a = members.value[0]
-      if (!a) return
+      const a = agents.value.find(a => a.id === conversation?.memberIds[0])
+      if (!a) throw new Error('机器人不存在，请刷新后重试')
       editingId.value = a.id
       Object.assign(form, a)
       form.source=JSON.stringify([a.nodeId,a.profile])
@@ -410,12 +435,12 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
         if(remote)Object.assign(form,remote)
       }
     }
-    if (kind === 'editGroup' && active.value) {
-      editingId.value = active.value.id
-      Object.assign(form, active.value, {
-        memberIds: [...active.value.memberIds],
-        autoReplyIds: [...active.value.autoReplyIds],
-        memberRoles: Object.fromEntries(Object.entries(active.value.memberRoles ?? {}).map(([id, role]) => [id, { ...role }])),
+    if (kind === 'editGroup' && conversation) {
+      editingId.value = conversation.id
+      Object.assign(form, conversation, {
+        memberIds: [...conversation.memberIds],
+        autoReplyIds: [...conversation.autoReplyIds],
+        memberRoles: Object.fromEntries(Object.entries(conversation.memberRoles ?? {}).map(([id, role]) => [id, { ...role }])),
       })
     }
     await nextTick()
@@ -428,6 +453,7 @@ async function openDialog(kind: NonNullable<typeof dialog.value>) {
 function closeDialog() {
   dialogElement.value?.close()
   dialog.value = null
+  editingConversationId.value = ''
 }
 watch(
   () => form.memberIds.slice(),
@@ -594,9 +620,9 @@ async function changeLifecycle(operation: WorkspaceLifecycleAction, id: string, 
   }
 }
 async function stopMember(id: string) {
-  if (!active.value) return
+  if (!editingConversation.value) return
   try {
-    await apiRequest(`/api/app/conversations/${active.value.id}/agents/${id}/stop`, { method: 'POST', body: {} })
+    await apiRequest(`/api/app/conversations/${editingConversation.value.id}/agents/${id}/stop`, { method: 'POST', body: {} })
     await load(); await refresh()
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '停止失败' }
 }
@@ -653,6 +679,7 @@ watch([selected,selectedTask], () => {
   pendingRequestId = undefined;uploadedSources = [];uploadedReferences = []
   void load()
 })
+watch(selected,()=>{dockView.value=undefined})
 onMounted(async () => {
   void auth.refreshProfileAvatars().catch(() => undefined)
   try {
@@ -696,10 +723,10 @@ onBeforeUnmount(() => {
     @create-remote-agent="remotePickerOpen = true"
   >
     <template #sidebar
-      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
+      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <template #mobile-sidebar
-      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
+      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">
@@ -719,24 +746,32 @@ onBeforeUnmount(() => {
         <template #header-leading><button v-if="active" class="workspace-list-back icon-button" aria-label="返回 Bot 列表" @click="router.push('/conversations')"><AppIcon name="chevron-left" /></button></template>
         <template #header-actions>
           <div v-if="active" class="header-actions">
-            <button type="button" class="icon-button" :aria-label="active.kind==='group'?'Inspector':'电脑与定时任务'" :title="active.kind==='group'?'Inspector':'电脑与定时任务'" @click="computerDockOpen=!computerDockOpen"><AppIcon :name="active.kind==='group'?'tools':'monitor'"/></button>
-            <select v-if="active.kind === 'group' && tasks.length" class="task-picker" aria-label="当前任务" :value="activeTask?.id" @change="router.push({query:{...route.query,taskId:($event.target as HTMLSelectElement).value}})">
-              <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
-            </select>
+            <button v-if="active.kind==='direct'" type="button" class="icon-button" aria-label="电脑与定时任务" title="电脑与定时任务" :aria-pressed="dockView==='computer'" @click="toggleDock('computer')"><AppIcon name="monitor"/></button>
+            <span v-if="active.kind === 'group' && tasks.length" class="task-picker-shell">
+              <select class="task-picker" aria-label="当前任务" :aria-busy="creatingTask" :disabled="creatingTask" :value="activeTask?.id" @change="selectTask">
+                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
+                <option :value="CREATE_TASK_VALUE">新建任务</option>
+              </select>
+              <AppIcon name="chevron-down" :size="14"/>
+            </span>
             <button class="icon-button" aria-label="聊天设置" title="聊天设置" @click="openDialog(active.kind === 'direct' ? 'editAgent' : 'editGroup')"><AppIcon name="settings" /></button>
+            <button type="button" class="icon-button" aria-label="Inspector" title="Inspector" :aria-pressed="dockView==='inspector'" @click="toggleDock('inspector')"><AppIcon name="bug"/></button>
           </div>
         </template>
       </MessageTimeline>
       <p v-if="run?.status === 'queued'" class="task-queue-status" role="status">正在等待可用机器人</p>
-      <TaskPlan :goal="activeTask?.goal" :assignments="assignments" :agents="agents" @stop="stopTask" @resume="resumeTask" />
       <p v-if="error" class="error" role="alert">{{ error }}<button class="icon-button" @click="error = ''" aria-label="关闭错误"><AppIcon name="close" /></button></p>
       <ComposerShell v-if="active" :key="composerKey" ref="composer" mode="group" :draft-key="composerKey"
         :disabled="active.archived || loading || active.id !== selected" :sending="busy" stop-while-running :streaming="!!active.activeRunId"
         :tool-trace-visible="showThinking" :reference="reference" :context-used="Number(context?.usedTokens || 0)" :context-limit="Number(context?.limitTokens || 0)"
         :mention-options="active.kind === 'group' ? members.map(a => ({id:a.id,label:a.name,insertText:`@${a.name} `})) : []"
-        @send="sendFromComposer" @stop="control('stop')" @tool-trace-toggle="showThinking = !showThinking" @clear-reference="quoted = null" @error="error = $event" />
+        @send="sendFromComposer" @stop="control('stop')" @tool-trace-toggle="showThinking = !showThinking" @clear-reference="quoted = null" @error="error = $event">
+        <template #before-input>
+          <TaskPlan :goal="activeTask?.goal" :assignments="assignments" :agents="agents" @stop="stopTask" @resume="resumeTask" />
+        </template>
+      </ComposerShell>
     </section>
-    <WorkspaceBotPanel v-if="computerDockOpen&&active" :conversation-id="active.id" :task-id="activeTask?.id" :group="active.kind==='group'" :active="!twoDesktops" :agents="computerCandidates" :is-admin="auth.user?.role === 'admin'" @close="computerDockOpen=false" @changed="refresh()" @settings="shell?.openLocalVm()" @desktop="openComputer" @workspace="desktopAgent=$event;twoDesktops=true" />
+    <WorkspaceBotPanel v-if="dockView&&active" :conversation-id="active.id" :task-id="activeTask?.id" :mode="dockView" :active="!twoDesktops" :agents="computerCandidates" :is-admin="auth.user?.role === 'admin'" @close="dockView=undefined" @changed="refresh()" @settings="shell?.openLocalVm()" @desktop="openComputer" @workspace="desktopAgent=$event;twoDesktops=true" />
     </div>
     <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" auto-take @changed="load()" @close="computerOpen=false" />
     <LocalVmWorkspace ref="vmWorkspace" v-if="twoDesktops&&desktopAgent" :agents="agents.filter(a=>a.execution==='computer'&&!a.archived&&!a.computerEnvironmentId)" :primary="desktopAgent.id" @close="twoDesktops=false" />
@@ -755,11 +790,11 @@ onBeforeUnmount(() => {
     <PreviewModal v-if="preview" :item="preview" :items="media" @close="preview = null" />
     <ImagePreviewLightbox v-model="mediaIndex" :images="lightboxMedia" />
     <RemoteAgentPicker v-if="remotePickerOpen && !auth.isBotOnly" @close="remotePickerOpen = false" @added="remoteAdded" />
-    <Teleport to="body"><dialog v-if="dialog" ref="dialogElement" class="editor" @cancel.prevent="closeDialog">
+    <Teleport to="body"><dialog v-if="dialog" ref="dialogElement" class="editor" aria-labelledby="conversation-editor-title" @cancel.prevent="closeDialog">
       <form @submit.prevent="save">
         <header>
-          <h2>
-            {{ dialog === 'agent' ? '创建机器人' : dialog === 'group' ? '创建群聊' : '编辑资料' }}
+          <h2 id="conversation-editor-title">
+            {{ dialog === 'agent' ? '创建机器人' : dialog === 'group' ? '创建群聊' : dialog === 'editAgent' ? '机器人设置' : '群聊设置' }}
           </h2>
           <button type="button" aria-label="关闭" @click="closeDialog">×</button>
         </header>
@@ -769,7 +804,7 @@ onBeforeUnmount(() => {
         <p v-if="isRemoteAgent">引用的机器人配置由远端管理，请在远端修改名称、头像和角色规则。</p>
         <AgentIdentityPanel v-if="isAgentDialog && !isRemoteAgent" :key="`${dialog}:${editingId}`" :profile="avatarProfile" embedded :show-name="false" :show-default-model="false" :show-actions="false" @avatar-change="form.avatar = $event" />
         <div v-else-if="!isAgentDialog" class="team-avatar-settings">
-          <TeamAvatar :name="form.name" :members="workspaceAvatarMembers(form.memberIds, agents, dialog === 'editGroup' ? active : undefined)" :size="64" />
+          <TeamAvatar :name="form.name" :members="workspaceAvatarMembers(form.memberIds, agents, dialog === 'editGroup' ? editingConversation : undefined)" :size="64" />
           <small>群聊头像由成员头像自动组合，随成员头像更新。</small>
         </div>
         <label
@@ -819,20 +854,20 @@ onBeforeUnmount(() => {
           <legend>选择成员</legend>
           <label
             v-for="a in agents.filter((a) =>
-              !a.temporaryGoalId && (!a.archived || (dialog === 'editGroup' && active?.memberIds.includes(a.id))),
+              !a.temporaryGoalId && (!a.archived || (dialog === 'editGroup' && editingConversation?.memberIds.includes(a.id))),
             )"
             :key="a.id"
             ><input
               v-model="form.memberIds"
               type="checkbox"
               :value="a.id"
-              :disabled="busy || (dialog === 'editGroup' && (a.id === active?.administratorId || a.id === form.administratorId)) || (!form.memberIds.includes(a.id) && form.memberIds.length >= 8)"
+              :disabled="busy || (dialog === 'editGroup' && (a.id === editingConversation?.administratorId || a.id === form.administratorId)) || (!form.memberIds.includes(a.id) && form.memberIds.length >= 8)"
             />{{ a.name }}</label
           ><small v-if="dialog === 'group' && agents.filter((a) => !a.archived && !a.temporaryGoalId).length < 2"
             >至少需要两个机器人才能创建群聊。</small
           >
           <small v-if="dialog === 'editGroup'">可增减成员，最多 8 位。当前管理员不能移除；如需移除，请先更换管理员并保存。</small>
-          <button v-for="a in agents.filter(a => active?.activeAgentStates?.[a.id])" :key="`stop:${a.id}`" type="button" @click="stopMember(a.id)">停止 {{ a.name }}</button>
+          <button v-for="a in agents.filter(a => editingConversation?.activeAgentStates?.[a.id])" :key="`stop:${a.id}`" type="button" @click="stopMember(a.id)">停止 {{ a.name }}</button>
         </fieldset>
         <fieldset v-if="dialog === 'editGroup' && Object.keys(form.memberRoles).length">
           <legend>角色分工</legend>
@@ -915,9 +950,9 @@ onBeforeUnmount(() => {
   margin: 15px 0;
   font-size: 13px;
 }
-.task-picker { max-width:180px;min-height:36px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text-primary);padding:4px 8px;font:inherit }
+.task-picker-shell{position:relative;display:inline-flex;align-items:center;max-width:210px;min-width:0}.task-picker-shell>.app-icon{position:absolute;right:11px;pointer-events:none;color:var(--text-muted)}.task-picker{width:100%;min-width:0;max-width:210px;min-height:38px;appearance:none;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text-primary);padding:6px 34px 6px 14px;font:inherit;font-size:12px;font-weight:520;text-overflow:ellipsis;cursor:pointer;box-shadow:0 1px 2px color-mix(in srgb,var(--text-primary) 5%,transparent);transition:border-color 140ms ease,background-color 140ms ease,box-shadow 140ms ease}.task-picker:hover{border-color:var(--line-strong);background:var(--surface-hover)}.task-picker:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.task-picker:disabled{cursor:wait;opacity:.55}
 .task-queue-status{margin:0 20px 8px;font-size:13px;color:var(--text-muted)}
-@media(max-width:720px){.task-picker{max-width:100px}}
+@media(max-width:720px){.task-picker-shell,.task-picker{max-width:118px}.task-picker{min-height:44px;padding-left:12px}}
 .team-management-permission > span {
   display: flex;
   align-items: center;

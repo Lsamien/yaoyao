@@ -26,7 +26,7 @@ const labels: Record<string,string> = {pending:'待执行',running:'进行中',r
   </details>
 </template>
 <style scoped>
-.task-plan{margin:0 18px 10px;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-size:13px;max-height:34vh;overflow:auto}
+.task-plan{width:100%;max-width:760px;margin:0 auto 8px;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-size:13px;max-height:34vh;overflow:auto}
 summary{min-height:44px;display:flex;align-items:center;gap:12px;cursor:pointer;list-style:revert}summary span,small{color:var(--text-muted)}
 button{min-height:44px;padding:8px 12px;margin-bottom:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text-primary);cursor:pointer}
 ol{padding-left:18px;margin-top:0}li{padding:7px 0}li div{display:flex;gap:12px;justify-content:space-between}li div span{white-space:nowrap;color:var(--text-muted)}p{white-space:pre-wrap;line-height:1.6}.criteria{padding-left:18px}.criteria span{font-size:12px;color:var(--text-muted)}summary:focus-visible{outline:2px solid var(--text-primary);outline-offset:3px}

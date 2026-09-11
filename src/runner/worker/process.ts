@@ -5,6 +5,8 @@ import {HttpError} from '../../server/errors.js'
 
 export interface WorkerTool {id?:string;name:string;description:string;inputSchema:Record<string,unknown>}
 export interface WorkerModel {provider:string;api_mode:string;base_url?:string;api_key?:string;model:string}
+const proxyEnvKeys=['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy'] as const
+export type WorkerProxyEnvironment=Partial<Record<typeof proxyEnvKeys[number],string>>
 export interface WorkerFrame {type:string;[key:string]:any}
 const configurationErrors:Record<string,string>={
   computer_profile_invalid:'基础 Profile 名称无效',
@@ -26,7 +28,15 @@ export class HermesWorkerProcess {
   onEvent:(frame:WorkerFrame)=>void=()=>{}
   onTool:(name:string,args:unknown,id:string,callId?:string)=>Promise<unknown>=async()=>{throw new Error('工具未授权')}
   constructor(python:string,script:string,input:Record<string,unknown>,onDiagnostic?:(text:string)=>void){
-    this.child=spawn(python,['-u',script],{stdio:'pipe',env:{PATH:process.env.PATH??'/usr/bin:/bin',HOME:homedir(),PYTHONNOUSERSITE:'1',PYTHONDONTWRITEBYTECODE:'1'}})
+    const {proxyEnv,...boot}=input
+    const env:NodeJS.ProcessEnv={PATH:process.env.PATH??'/usr/bin:/bin',HOME:homedir(),PYTHONNOUSERSITE:'1',PYTHONDONTWRITEBYTECODE:'1'}
+    // Only the selected Profile's proxy snapshot crosses this boundary. Never
+    // inherit the Runner's proxy settings, credentials or Python overrides.
+    if(proxyEnv&&typeof proxyEnv==='object'&&!Array.isArray(proxyEnv))for(const key of proxyEnvKeys){
+      const value=(proxyEnv as Record<string,unknown>)[key]
+      if(typeof value==='string')env[key]=value
+    }
+    this.child=spawn(python,['-u',script],{stdio:'pipe',env})
     if(onDiagnostic)this.child.stderr.on('data',chunk=>onDiagnostic(String(chunk)));else this.child.stderr.resume()
     this.exited=new Promise(resolve=>{
       const done=()=>{if(this.finished)return;this.finished=true;this.fail(new Error('Hermes Worker 已退出'));resolve()}
@@ -38,7 +48,7 @@ export class HermesWorkerProcess {
       for(;;){const end=this.output.indexOf('\n');if(end<0)break;const line=this.output.slice(0,end);this.output=this.output.slice(end+1);try{const frame=JSON.parse(line);if(frame.nonce===this.nonce)this.receive(frame)}catch{/* non-protocol output has no authority */}}
     })
     this.child.stdin.on('error',()=>{})
-    this.child.stdin.write(JSON.stringify({...input,nonce:this.nonce})+'\n')
+    this.child.stdin.write(JSON.stringify({...boot,nonce:this.nonce})+'\n')
   }
   private receive(frame:WorkerFrame){
     const waiting=this.waiters.get(frame.type)

@@ -17,7 +17,9 @@ describe('workspace chat uses the established presentation', () => {
 })
 
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import ConversationList from '@/components/workspace/ConversationList.vue'
+import ResourceSidebar from '@/components/app/ResourceSidebar.vue'
 import TeamAvatar from '@/components/common/TeamAvatar.vue'
 import type { WorkspaceAgent, WorkspaceConversation } from '../../src/shared/workspace'
 
@@ -47,6 +49,42 @@ it('composes real member avatars and refreshes them without changing group membe
   wrapper.unmount()
 })
 
+it.each([
+  ['direct', '机器人设置'],
+  ['group', '群聊设置'],
+] as const)('opens settings for a %s conversation from its actions menu', async (kind, label) => {
+  const conversation: WorkspaceConversation = {
+    id: kind,
+    kind,
+    name: kind === 'direct' ? '机器人' : '群聊',
+    avatar: '',
+    memberIds: [],
+    instructions: '',
+    administratorId: '',
+    mode: 'host',
+    autoReplyIds: [],
+    maxReplyRounds: 1,
+    archived: false,
+    pinned: false,
+    readSeq: 0,
+    lastSeq: 0,
+    preview: '',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const wrapper = mount(ConversationList, { attachTo: document.body, props: { conversations: [conversation] } })
+  wrapper.getComponent(ResourceSidebar).vm.$emit('more', conversation.id, new MouseEvent('click', { clientX: 100, clientY: 100 }))
+  await nextTick()
+  const menu = document.body.querySelector<HTMLElement>('[aria-label="聊天操作"]')!
+  const view = [...menu.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === label)!
+  view.click()
+  await nextTick()
+  expect(wrapper.emitted('settings')).toEqual([[conversation.id]])
+  expect(wrapper.emitted('select')).toBeUndefined()
+  expect(document.body.querySelector('[aria-label="聊天操作"]')).toBeNull()
+  wrapper.unmount()
+})
+
 
 it('keeps inline thinking in the process trace and its media out of the message body', () => {
   const messages = workspaceMessagesToUi([{
@@ -56,4 +94,24 @@ it('keeps inline thinking in the process trace and its media out of the message 
   }])
   expect(messages[0].content).toBe('[报告](/tmp/report.pdf)')
   expect(messages[0].reasoning).toBe('![过程图](/tmp/process.png)')
+})
+
+
+it('keeps a Bot busy across group replies until its final active conversation finishes', async () => {
+  const base: WorkspaceConversation = { id: 'direct', kind: 'direct', name: 'Bot', avatar: '', memberIds: ['a'], instructions: '', administratorId: 'a', mode: 'host', autoReplyIds: [], maxReplyRounds: 1, archived: false, pinned: false, readSeq: 0, lastSeq: 0, preview: '', createdAt: 1, updatedAt: 1 }
+  const group: WorkspaceConversation = { ...base, id: 'group', kind: 'group', memberIds: ['a', 'b'], activeRunId: 'g-run', activeAgentStates: { a: 'running', b: 'waiting' } }
+  const other: WorkspaceConversation = { ...group, id: 'other', activeRunId: 'other-run', activeAgentStates: { a: 'waiting' } }
+  const wrapper = mount(ConversationList, { props: { conversations: [base, group, other, { ...base, id: 'unrelated', memberIds: ['unrelated'] }] } })
+  const bot = () => wrapper.get('[data-sidebar-id="direct"]')
+  expect(bot().find('.agent-avatar--working').exists()).toBe(true)
+  expect(bot().find('.presence--working').exists()).toBe(true)
+  expect(wrapper.get('[data-sidebar-id="unrelated"]').find('.agent-avatar--working').exists()).toBe(false)
+  await wrapper.setProps({ conversations: [base, { ...group, activeRunId: undefined, activeAgentStates: {}, avatarSignals: { a: { id: 'done', state: 'success', at: Date.now() } } }, other] })
+  expect(bot().find('.agent-avatar--waiting').exists()).toBe(true)
+  await wrapper.setProps({ conversations: [base, { ...other, activeAgentStates: { a: 'queued' } }] })
+  expect(bot().find('.agent-avatar--loading').exists()).toBe(true)
+  await wrapper.setProps({ conversations: [base] })
+  expect(bot().find('.agent-avatar--idle').exists()).toBe(true)
+  expect(bot().find('.presence--working').exists()).toBe(false)
+  wrapper.unmount()
 })

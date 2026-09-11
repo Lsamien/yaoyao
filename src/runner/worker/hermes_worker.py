@@ -18,6 +18,8 @@ WIRE = sys.stdout
 WRITE_LOCK = threading.Lock()
 BOOT = json.loads(sys.stdin.readline())
 NONCE = BOOT["nonce"]
+PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                  "http_proxy", "https_proxy", "all_proxy", "no_proxy")
 
 def emit(kind, **values):
     with WRITE_LOCK:
@@ -42,14 +44,19 @@ def load_profile():
     os.environ["HERMES_HOME"] = str(home)
     sys.path.insert(0, str(source))
     from dotenv import dotenv_values
-    for key, value in dotenv_values(home / ".env").items():
+    profile_env = dotenv_values(home / ".env")
+    for key, value in profile_env.items():
         if value is not None:
             os.environ[key] = value
+    # Capture only this Profile's values, before Hermes imports can load any
+    # fallback environment. Preserve case and explicit empty values for its SDK.
+    proxy_env = {key: profile_env[key] for key in PROXY_ENV_KEYS
+                 if isinstance(profile_env.get(key), str)}
     from hermes_constants import set_hermes_home_override
     set_hermes_home_override(str(home))
     from hermes_cli.config import load_config_readonly
     try:
-        return load_config_readonly()
+        return load_config_readonly(), proxy_env
     except Exception:
         raise ConfigurationError("computer_profile_config_invalid") from None
 
@@ -75,7 +82,7 @@ def resolve_workspace(config):
 
 
 def resolve_model():
-    config = load_profile()
+    config, proxy_env = load_profile()
     workspace = resolve_workspace(config)
     model = config.get("model", {})
     if not isinstance(model, dict) or not model.get("default"):
@@ -87,7 +94,8 @@ def resolve_model():
         raise ConfigurationError("computer_model_unavailable") from None
     if runtime.get("api_mode") not in ("chat_completions", "anthropic_messages", "codex_responses"):
         raise ConfigurationError("computer_model_unsupported")
-    emit("resolved", model={key: runtime[key] for key in ("provider", "api_mode", "base_url", "api_key") if key in runtime} | {"model": model["default"]}, **workspace)
+    emit("resolved", model={key: runtime[key] for key in ("provider", "api_mode", "base_url", "api_key") if key in runtime} | {"model": model["default"]}, **workspace,
+         **({"proxyEnv": proxy_env} if proxy_env else {}))
 
 
 def run_model():
@@ -193,7 +201,7 @@ def run_model():
 try:
     with contextlib.redirect_stdout(sys.stderr):
         if BOOT.get("mode") == "resolve-workspace":
-            emit("resolved", **resolve_workspace(load_profile()))
+            emit("resolved", **resolve_workspace(load_profile()[0]))
         elif BOOT.get("mode") == "resolve":
             resolve_model()
         else:

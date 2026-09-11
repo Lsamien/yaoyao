@@ -15,11 +15,11 @@ import {ComposeComputerProvider} from '../computers/compose.js'
 import {COMPOSE_DESKTOP_IMAGE,type DesktopRelay} from '../../shared/composeDesktops.js'
 import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
-import {HermesWorkerProcess,type WorkerModel,type WorkerTool,type WorkerFrame} from './process.js'
+import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerTool,type WorkerFrame} from './process.js'
 
 export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string}
 export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain'}
-interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
+interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;proxyEnv?:WorkerProxyEnvironment;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
 const text={type:'string'}
 const TOOLS:WorkerTool[]=[
@@ -141,7 +141,7 @@ export class ComputerGateway {
       await this.authorized()
       const controller=new AbortController(),lease=await this.runtime.pool.acquire(this.spec(session),this.workId,()=>{this.guard();if(controller.signal.aborted)throw new Error('cancelled')},controller.signal)
       if(this.closed){controller.abort();await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
-      this.live={session,lease,controller,model:resolved.model as WorkerModel,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
+      this.live={session,lease,controller,model:resolved.model as WorkerModel,proxyEnv:resolved.proxyEnv,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
       this.runtime.save(session);this.runtime.gateways.set(this.meta.environmentId,this)
       if(this.runtime.config.network==='public-proxy'){
         const live=this.live
@@ -188,7 +188,7 @@ export class ComputerGateway {
       live.received=false;live.running=true;live.session.outcome='uncertain';live.session.history.push({role:'user',content:prompt});this.runtime.save(live.session)
       const directory=join(this.runtime.home,'workers',live.session.id,this.workId,String(live.segment=(live.segment??0)+1))
       await mkdir(directory,{recursive:true,mode:0o700})
-      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
+      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
       live.worker=worker
       this.runtime.workers.set(this.workId,{environmentId:this.meta.environmentId,ownerKey:this.meta.ownerKey,process:worker});void worker.exited.then(()=>{if(this.runtime.workers.get(this.workId)?.process===worker)this.runtime.workers.delete(this.workId)})
       worker.onTool=(name,args,id,callId)=>{

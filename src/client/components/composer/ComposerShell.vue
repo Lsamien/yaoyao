@@ -424,6 +424,8 @@ defineExpose({
       </Transition>
     </div>
 
+    <slot name="before-input" />
+
     <div
       class="composer-shell"
       :class="{ 'composer-shell--drag': dragOver, 'composer-shell--disabled': disabled }"

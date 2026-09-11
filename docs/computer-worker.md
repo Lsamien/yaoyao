@@ -28,6 +28,10 @@ Worker 复用已安装 Hermes 的模型循环。它截获整个工具执行入�
 
 当前 Worker 模型连接支持 Hermes 的 `chat_completions`、`anthropic_messages`、`codex_responses` API 模式；不启动宿主 CLI 模型后端。模型设置和凭据来自允许列表内的 Profile。
 
+模型 Worker 自动继承所选基础 Profile `.env` 中的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及其小写形式，无需单独配置 Worker。变量大小写和显式空值原样保留，由 Hermes SDK 决定代理选择与绕过规则；Profile 未配置时保持直连，不回退到 Runner 的全局代理。新建或恢复会话时重新读取，人工接管后交还控制时沿用本轮快照。代理仅在 Runner 内存和模型子进程环境中使用，不写入会话数据库或发送到客户端。
+
+模型连接代理与隔离电脑的 `none` / `public-proxy` 联网策略相互独立。模型进程运行在 Runner 侧，因此代理地址中的 `127.0.0.1` 指向 Runner 所在运行环境，不会自动改写成虚拟电脑或 Docker 宿主地址。网络探测收到 HTTP 403 只能证明可达；验收模型连接需要收到完整模型回复。
+
 ## 权限和生命周期
 
 - 控制面在执行节点、账号、基础 Profile、Agent、聊天成员关系和任务状态上共同检查授权。检查发生在命令准入、电脑操作、续期和产物传输时。
