@@ -20,6 +20,15 @@ beforeEach(()=>{home=mkdtempSync(join(tmpdir(),'desktop-env-'));store=new Worksp
 afterEach(()=>{clearInterval(poller);service.close();store.close();rmSync(home,{recursive:true,force:true});vi.useRealTimers()})
 const app=()=>{const a=new Koa();a.use(async(ctx,next)=>{try{await next()}catch(e:any){ctx.status=e.status??500;ctx.body={error:e.message,code:e.code}}});a.use(bodyParser());a.use(service.router().routes());return a.callback()}
 const base=()=>'/api/app/agents/'+agent.id
+it('adds an authorized native desktop to hybrid tools while leaving the default viewer on the VM',async()=>{
+ agent=store.updateAgent('owner',agent.id,{computer:'vm',execution:'computer',allowHostEnvironment:true})
+ expect(agent.execution).toBe('computer');expect(service.toolMode('owner',agent)).toBeUndefined()
+ drive();expect(service.selected('owner',agent)).toBeUndefined();expect(service.toolMode('owner',agent)).toBe('local')
+ const result=await service.call('owner',agent.id,'desktop_environment_view',{},new AbortController().signal,()=>{},'local',service.epoch)
+ expect(result.content[0].type).toBe('image')
+ agent=store.updateAgent('owner',agent.id,{computer:'vm',allowHostEnvironment:false});expect(service.toolMode('owner',agent)).toBeUndefined()
+ await expect(service.call('owner',agent.id,'desktop_environment_view',{},new AbortController().signal,()=>{},'local',service.epoch)).rejects.toMatchObject({code:'computer_control_expired'})
+})
 function drive(handle:(c:any)=>unknown=c=>c.operation==='view'?{data:Buffer.from('fixture frame').toString('base64'),width:1280,height:800}:{ok:true}){let results:any[]=[];service.exchange({host,results});poller=setInterval(()=>{const value=service.exchange({host,results});results=value.commands.map(c=>({id:c.id,value:handle(c)}))},5)}
 async function take(){return (await request(app()).post(base()+'/computer/take').send({requestId:randomUUID()}).expect(200)).body}
 async function frame(){return (await request(app()).get(base()+'/computer/frame').expect(200)).body}

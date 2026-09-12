@@ -23,6 +23,19 @@ async function fixture(){
  vi.spyOn(runtime.provider,'deleteWorkspace').mockResolvedValue()
  return {db,runtime,running,async close(){await runtime.controls.close();await runtime.pool.close();db.close();await rm(home,{recursive:true,force:true})}}
 }
+it('defaults older settings to five minutes and persists never-stop independently of sharing policy',async()=>{
+ const f=await fixture(),manager=new LocalVmImages(f.runtime,f.db)
+ try{
+  await manager.ready;expect((await manager.status()).idleStopMinutes).toBe(5)
+  await manager.idlePolicy(0);await manager.policy('shared',3)
+  expect(f.runtime.pool.idleStopMinutes).toBe(0)
+  expect(JSON.parse(String(f.db.prepare('SELECT value FROM local_vm_runtime').get()?.value)).idleStopMinutes).toBe(0)
+  for(const minutes of [-1,1.5,10081,NaN])await expect(manager.idlePolicy(minutes)).rejects.toMatchObject({code:'local_vm_idle_policy_invalid'})
+  await manager.close();const restored=new LocalVmImages(f.runtime,f.db)
+  await restored.ready;expect((await restored.status()).idleStopMinutes).toBe(0)
+  await restored.idlePolicy(30);expect(f.runtime.pool.idleStopMinutes).toBe(30);await restored.close()
+ }finally{await manager.close();await f.close()}
+})
 it('prepares one managed image, verifies the desktop, applies it and persists it without a catalog step',async()=>{
  const f=await fixture(),manager=new LocalVmImages(f.runtime,f.db),imageId='sha256:'+'a'.repeat(64)
  try{

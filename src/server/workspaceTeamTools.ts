@@ -11,7 +11,7 @@ import { assignmentInput, assignmentReview, assignmentUpdate, assignmentCancel, 
 
 const uuid = z.string().uuid()
 const empty = z.object({}).strict()
-const createAgent = agentInput.omit({ canManageTeam: true }).extend({ requestId: uuid,execution:z.enum(['profile','computer']).optional() }).strict()
+const createAgent = agentInput.omit({ canManageTeam: true, allowHostEnvironment:true }).extend({ requestId: uuid,execution:z.enum(['profile','computer']).optional() }).strict()
 const createHelper=agentInput.pick({name:true,instructions:true}).extend({requestId:uuid,goalId:uuid,profile:z.string().min(1).max(256).optional(),title:z.string().trim().min(1).max(100),brief:z.string().trim().min(1).max(16000),acceptanceCriteria:z.array(z.string().trim().min(1).max(1000)).max(12).default([]),dependsOn:z.array(uuid).max(12).default([])}).strict()
 const createTeam = z.object({
   requestId: uuid,

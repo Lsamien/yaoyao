@@ -1,5 +1,5 @@
 import {DESKTOP_ENVIRONMENT_TOOLS,DESKTOP_ENVIRONMENT_RULES,type DesktopEnvironments} from './desktopEnvironments.js'
-import {GROK_COMPUTER_TOOLS,GROK_COMPUTER_RULES,type GrokCloud} from './grokCloud.js'
+import {GROK_COMPUTER_TOOLS,grokComputerRules,type GrokCloud} from './grokCloud.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -212,7 +212,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     },authorize:()=>{
       this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
       const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id),conversation=this.store.require<Conversation>(owner,'conversation',c.id)
-      if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId||(latest.execution??'profile')!==(agent.execution??'profile')||latest.teamAuthorizationVersion!==agent.teamAuthorizationVersion)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
+      if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId||(latest.allowHostEnvironment===true)!==(agent.allowHostEnvironment===true)||(latest.execution??'profile')!==(agent.execution??'profile')||latest.teamAuthorizationVersion!==agent.teamAuthorizationVersion)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
     }})
     gateway.onTrace=entry=>this.inspector?.record(owner,c.id,{...entry,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
@@ -564,7 +564,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const team=agent.canManageTeam===true&&!this.store.require<Run>(owner,'run',run.runId).assignmentId
         const cloud=!!this.cloud?.selected(owner,agent)
         const plugins=!!this.plugins?.selected(owner,agent)
-        const desktop=this.desktopEnvironments?.selected(owner,agent),desktopEpoch=this.desktopEnvironments?.epoch??''
+        const desktop=this.desktopEnvironments?.toolMode(owner,agent),desktopEpoch=this.desktopEnvironments?.epoch??''
         if(team||cloud||desktop||plugins){
           if(team){
             const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)
@@ -632,7 +632,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           team ? TEAM_TOOL_RULES : '',
           plugins ? '本轮已挂载用户为当前 Bot 授权的插件工具，工具名以 plugin_ 开头，说明中包含实际服务和操作。仅按用户当前任务使用；连接或重新授权应用请让用户打开 Bot 模式的工具 → 已连接应用。不要索取 API Key 或在回复中展示凭据。' : '',
           desktop ? DESKTOP_ENVIRONMENT_RULES : '',
-          cloud ? GROK_COMPUTER_RULES : '',
+          cloud ? grokComputerRules(agent.computer==='cloud'&&agent.allowHostEnvironment===true) : '',
           `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
         ]
           .filter(Boolean)

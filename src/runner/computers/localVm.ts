@@ -5,12 +5,12 @@ import { ComputerImages } from './images.js'
 import { ComputerError } from './container.js'
 import { UNCONFIGURED_COMPUTER_IMAGE } from '../../shared/runner.js'
 import type { LocalVmMode, LocalVmStatus } from '../../shared/localVm.js'
-import {LOCAL_VM_IMAGES, type LocalVmImageKey, type LocalVmImageOption} from '../../shared/localVm.js'
+import {LOCAL_VM_IMAGES, DEFAULT_VM_IDLE_STOP_MINUTES, MAX_VM_IDLE_STOP_MINUTES, type LocalVmImageKey, type LocalVmImageOption} from '../../shared/localVm.js'
 import type { ComputerRuntime, ComputerTarget } from '../worker/gateway.js'
 import {ComposeComputerProvider} from './compose.js'
 import {COMPOSE_DESKTOP_IMAGE} from '../../shared/composeDesktops.js'
 
-type State = { imageId: string; images?: Partial<Record<LocalVmImageKey,string>>; mode: LocalVmMode; maxInstances: number; job?: LocalVmStatus['job'] }
+type State = { imageId: string; images?: Partial<Record<LocalVmImageKey,string>>; mode: LocalVmMode; maxInstances: number; idleStopMinutes?: number; job?: LocalVmStatus['job'] }
 
 /** Settings prepares trusted recipes; each desktop keeps one immutable image. */
 export class LocalVmImages {
@@ -34,6 +34,7 @@ export class LocalVmImages {
     runtime.config.imageId = this.state.imageId
     this.state.images??={standard:this.state.imageId}
     runtime.pool.limits.concurrent = this.state.maxInstances
+    runtime.pool.idleStopMinutes = this.state.idleStopMinutes ?? DEFAULT_VM_IDLE_STOP_MINUTES
     runtime.retainDesktops = true
     this.releaseMaintenance = runtime.pool.holdMaintenance()
     this.ready = runtime.ready.then(async () => {
@@ -93,8 +94,15 @@ export class LocalVmImages {
       try { await this.images.inspect(this.state.imageId);image=true } catch { problem='本地虚拟机镜像尚未就绪，请重新准备' }
     }
     return {configured:true,runtime:this.runtime.config.runtime,daemonUp,image,imageId:image?this.state.imageId:undefined,images:await this.options(),
-      mode:this.state.mode,maxInstances:this.state.maxInstances,busy:!!this.pending||!!this.releaseMaintenance,problem,job:this.state.job,
+      mode:this.state.mode,maxInstances:this.state.maxInstances,idleStopMinutes:this.runtime.pool.idleStopMinutes,busy:!!this.pending||!!this.releaseMaintenance,problem,job:this.state.job,
       instances:owner?this.runtime.pool.status(owner).map(row=>({id:row.environmentId,status:row.status})):[]}
+  }
+  async idlePolicy(minutes:number) {
+    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面的停止策略由 Compose 管理')
+    if(!Number.isSafeInteger(minutes)||minutes<0||minutes>MAX_VM_IDLE_STOP_MINUTES)throw new ComputerError('local_vm_idle_policy_invalid','请选择有效的空闲停止时间')
+    await this.ready
+    this.state.idleStopMinutes=minutes;this.runtime.pool.idleStopMinutes=minutes;this.save()
+    return this.status()
   }
   async policy(mode:LocalVmMode,maxInstances:number) {
     if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面数量与共享方式由 Compose 固定，不能在界面修改')

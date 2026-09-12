@@ -6,7 +6,7 @@ import {HttpError} from './errors.js'
 import {parse,type WorkspaceStore} from './workspaceStore.js'
 import type {LocalAuthStore} from './localAuth.js'
 import type {WorkspaceNodes,GatewayTarget} from './workspaceGateway.js'
-import type {WorkspaceAgent} from '../shared/workspace.js'
+import {allowsHostEnvironment,type WorkspaceAgent} from '../shared/workspace.js'
 import type {ComputerFrame,ComputerControlStatus} from '../shared/computerControl.js'
 import {requireTeamToolBridge} from './workspaceToolLease.js'
 
@@ -58,10 +58,11 @@ export class DesktopEnvironments {
  private ownerKey(owner:string){return digest((this.nodes.localNodeID??this.nodes.local.url.toString())+':'+owner)}
  private ready(owner:string){return this.online&&this.host!.platform==='darwin'&&this.host!.screen&&this.host!.accessibility&&this.host!.approved.includes(this.ownerKey(owner))}
  selected(owner:string,agent:WorkspaceAgent):Mode|undefined {if(agent.archived||agent.remoteAgentId||agent.temporaryGoalId)return undefined;if(agent.computer==='local'||agent.computer==='browser')return agent.computer;if(agent.computer==='auto'&&agent.execution!=='computer'&&this.ready(owner))return 'local';return undefined}
+ toolMode(owner:string,agent:WorkspaceAgent):Mode|undefined {if(allowsHostEnvironment(agent)&&this.ready(owner))return 'local';return this.selected(owner,agent)}
  private agent(owner:string,id:string){const a=this.store.require<WorkspaceAgent>(owner,'agent',id);this.nodes.requireSource(owner,a);if(a.archived||a.remoteAgentId||a.temporaryGoalId)throw new HttpError(409,'此机器人无法使用桌面环境','computer_unavailable');return a}
  private resource(owner:string,agent:WorkspaceAgent,mode:Mode){return mode==='local'?'local':digest(this.ownerKey(owner)+':'+agent.id+':'+(agent.browserProfile??'persistent'))}
  state(owner:string,agent:WorkspaceAgent){const mode=this.selected(owner,agent);return {online:this.online,host:this.online?{name:this.host!.name,platform:this.host!.platform}:null,local:{supported:this.online&&this.host!.platform==='darwin',authorized:this.online&&this.host!.approved.includes(this.ownerKey(owner)),screen:this.online&&this.host!.screen,accessibility:this.online&&this.host!.accessibility,ready:this.ready(owner)},browser:{available:this.online,profile:agent.browserProfile??'persistent'},selected:mode??null,agent:this.store.agentSummary(agent)}}
- private check(owner:string,agentId:string,mode:Mode,epoch:string,version:number){const a=this.agent(owner,agentId);if(!this.online||this.host!.id!==epoch)throw new HttpError(409,'桌面端已断开，请在电脑上打开夭夭后重试。','desktop_offline');if(this.auth.pushAuthorizationVersion(owner)!==version||this.selected(owner,a)!==mode)throw new HttpError(410,'电脑授权已改变，请重新连接。','computer_control_expired');if(mode==='local'&&!this.ready(owner))throw new HttpError(403,'请在桌面端授权本机控制，并开启屏幕录制和辅助功能。','desktop_permission_required')}
+ private check(owner:string,agentId:string,mode:Mode,epoch:string,version:number){const a=this.agent(owner,agentId);if(!this.online||this.host!.id!==epoch)throw new HttpError(409,'桌面端已断开，请在电脑上打开夭夭后重试。','desktop_offline');if(this.auth.pushAuthorizationVersion(owner)!==version||this.toolMode(owner,a)!==mode)throw new HttpError(410,'电脑授权已改变，请重新连接。','computer_control_expired');if(mode==='local'&&!this.ready(owner))throw new HttpError(403,'请在桌面端授权本机控制，并开启屏幕录制和辅助功能。','desktop_permission_required')}
  private invalidate(){for(const p of this.pending.values()){if(p.sent&&['input','browser'].includes(String(p.command.operation)))this.paused.add(String(p.command.resource));clearTimeout(p.timer);p.reject(new HttpError(409,'桌面连接已改变；执行结果未确认，不会重试。','desktop_disconnected'))}this.pending.clear();this.frames.clear();for(const [key,m] of this.manual){this.paused.add(key);this.store.remove('_system','computer-control',m.id)}this.manual.clear()}
  close(){this.closed=true;this.invalidate()}
  async bridge(ctx:Koa.Context){
@@ -96,7 +97,7 @@ export class DesktopEnvironments {
  }
  private status(owner:string,a:WorkspaceAgent,mode:Mode):ComputerControlStatus {const key=this.resource(owner,a,mode),m=this.current(key);return {backend:mode,hostName:this.online?this.host!.name:undefined,mode:!this.online?'off':m?(m.owner===owner&&m.ready?'human':'pausing'):this.paused.has(key)?'error':this.activity.get(key)?'agent':'idle',controlId:m?.owner===owner?m.id:undefined,generation:this.generation.get(key)??0,canResume:!!this.activity.get(key),error:!this.online?'请在电脑上打开夭夭桌面端':this.paused.has(key)?'接管已断开，请重新接管并交还后继续':undefined}}
  assertIdle(owner:string,agentId:string){const a=this.agent(owner,agentId),mode=this.selected(owner,a);if(mode&&this.current(this.resource(owner,a,mode)))throw new HttpError(409,'请先交还电脑控制权','computer_busy')}
- async requireAvailable(owner:string,a:WorkspaceAgent,target:GatewayTarget){const mode=this.selected(owner,a);if(!mode)throw new HttpError(409,'当前未选择桌面环境','desktop_unselected');this.context(owner,a,mode).check();await requireTeamToolBridge(target,a.profile)}
+ async requireAvailable(owner:string,a:WorkspaceAgent,target:GatewayTarget){const mode=this.toolMode(owner,a);if(!mode)throw new HttpError(409,'当前未选择桌面环境','desktop_unselected');this.context(owner,a,mode).check();await requireTeamToolBridge(target,a.profile)}
  async call(owner:string,agentId:string,id:string,input:unknown,signal:AbortSignal,assertActive:()=>void,expected:Mode,epoch:string){
   const a=this.agent(owner,agentId),c=this.context(owner,a,expected),check=()=>{signal.throwIfAborted();assertActive();c.check();if(this.host!.id!==epoch)throw new HttpError(410,'桌面连接已改变','desktop_disconnected')};check()
   this.activity.set(c.key,(this.activity.get(c.key)??0)+1)

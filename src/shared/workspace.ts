@@ -7,6 +7,7 @@ export interface WorkspaceAgent {
   /** Explicit account-owner grant; absent on older records means disabled. */
   execution?: 'profile' | 'computer'
   computer?: 'auto' | 'cloud' | 'vm' | 'local' | 'browser' | 'off'
+  allowHostEnvironment?: boolean
   browserProfile?: 'persistent' | 'temporary'
   computerEnvironmentId?:string
   computerEnvironmentName?:string
@@ -26,6 +27,12 @@ export interface WorkspaceAgent {
   revision: number
   createdAt: number
   updatedAt: number
+}
+export function supportsHostEnvironment(agent: Pick<WorkspaceAgent,'computer'|'execution'>):boolean {
+  return agent.computer==='vm'||agent.computer==='cloud'||(!agent.computer&&agent.execution==='computer')
+}
+export function allowsHostEnvironment(agent: Pick<WorkspaceAgent,'computer'|'execution'|'allowHostEnvironment'|'archived'|'remoteAgentId'|'temporaryGoalId'>):boolean {
+  return agent.allowHostEnvironment===true&&supportsHostEnvironment(agent)&&!agent.archived&&!agent.remoteAgentId&&!agent.temporaryGoalId
 }
 export interface WorkspaceMemberRole {
   name: string

@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto'
 import {DatabaseSync} from 'node:sqlite'
 import type {ComputerProvider,ComputerSpecification} from './container.js'
 import {ComputerError} from './container.js'
+import {DEFAULT_VM_IDLE_STOP_MINUTES} from '../../shared/localVm.js'
 
 export interface ComputerLease {id:string;environmentId:string;ownerKey:string;holderId:string;generation:number}
 type Status='free'|'idle'|'preparing'|'active'|'stopping'|'uncertain'
@@ -11,6 +12,7 @@ interface Active {lease:ComputerLease;authorize():void;controller:AbortControlle
 /** Durable exclusive use. A generation is invalidated before cancellation; no
  * successor is admitted until the old private environment is confirmed stopped. */
 export class ComputerPool {
+  idleStopMinutes = DEFAULT_VM_IDLE_STOP_MINUTES
   private active=new Map<string,Active>()
   private changing=new Map<string,Promise<unknown>>()
   private ready=false
@@ -193,7 +195,7 @@ export class ComputerPool {
   async expire():Promise<void>{
     for(const id of this.rows().map(entry=>entry.spec.id)){
       const entry=this.get(id)!
-      if(entry.status==='idle'&&this.now()-entry.updatedAt>=300000){this.invalidate(entry);await this.serial(id,()=>this.stopEntry(entry)).catch(()=>{});continue}
+      if(entry.status==='idle'&&this.idleStopMinutes>0&&this.now()-entry.updatedAt>=this.idleStopMinutes*60000){this.invalidate(entry);await this.serial(id,()=>this.stopEntry(entry)).catch(()=>{});continue}
       if((entry.status==='active'||entry.status==='preparing')&&entry.expiresAt<=this.now()){
         this.invalidate(entry);await this.serial(id,()=>this.stopEntry(entry)).catch(()=>{})
       }

@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { RunnerAgent } from '../runner/agent.js'
 import { UNCONFIGURED_COMPUTER_IMAGE, type RunnerConfiguration } from '../shared/runner.js'
 import type { LocalVmMode, LocalVmStatus } from '../shared/localVm.js'
-import {LOCAL_VM_IMAGE_KEYS} from '../shared/localVm.js'
+import {LOCAL_VM_IMAGE_KEYS,MAX_VM_IDLE_STOP_MINUTES} from '../shared/localVm.js'
 import type { WorkspaceAgent } from '../shared/workspace.js'
 import { parse, type WorkspaceStore } from './workspaceStore.js'
 import type { LocalAuthStore } from './localAuth.js'
@@ -142,6 +142,12 @@ export class LocalVmService {
       const actor=this.auth.requireAdmin(ctx),body=parse(z.object({requestId:z.string().uuid(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional()}).strict(),(ctx.request as any).body)
       const record=await this.ensure(actor.id);this.grant(actor.id,body.requestId,record.id)
       ctx.body=await this.hub.localVm(actor.id,record.id,{op:'prepare',id:body.requestId,...(body.imageKey?{imageKey:body.imageKey}:{})})
+    })
+    router.put('/api/app/admin/local-vm/idle-policy',async ctx=>{
+      const owner=this.auth.requireAdmin(ctx).id;this.assertManaged()
+      const body=parse(z.object({requestId:z.string().uuid(),idleStopMinutes:z.number().int().min(0).max(MAX_VM_IDLE_STOP_MINUTES)}).strict(),(ctx.request as any).body)
+      const record=await this.ensure(owner);this.grant(owner,body.requestId,record.id)
+      ctx.body=await this.hub.localVm(owner,record.id,{op:'idle-policy',id:body.requestId,idleStopMinutes:body.idleStopMinutes})
     })
     router.put('/api/app/admin/local-vm/policy',async ctx=>{
       this.auth.requireAdmin(ctx);this.assertManaged()

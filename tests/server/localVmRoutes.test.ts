@@ -28,6 +28,10 @@ it('protects preparation, removes the old catalog API and scopes sharing to the 
   store.put('alice','turn','ordinary-chat',{agentId:chatting.id,status:'running'})
   const other=store.createAgent('bob',{name:'其他账号',profile:'default',execution:'computer'})
   const id=randomUUID(),base='/api/app/admin/local-vm'
+  await request(app.callback()).put(base+'/idle-policy').send({requestId:randomUUID(),idleStopMinutes:0}).expect(403)
+  for(const minutes of [-1,0.5,10081,null])await request(app.callback()).put(base+'/idle-policy').set('x-admin','yes').send({requestId:randomUUID(),idleStopMinutes:minutes}).expect(400)
+  await request(app.callback()).put(base+'/idle-policy').set('x-admin','yes').send({requestId:randomUUID(),idleStopMinutes:0}).expect(200)
+  expect(hub.localVm).toHaveBeenLastCalledWith('alice',runner.id,expect.objectContaining({op:'idle-policy',idleStopMinutes:0}))
   await request(app.callback()).post(base+'/prepare').send({requestId:id}).expect(403)
   await request(app.callback()).post(base+'/prepare').set('x-admin','yes').send({requestId:id,imageId:'arbitrary'}).expect(400)
   await request(app.callback()).post(base+'/prepare').set('x-admin','yes').send({requestId:id}).expect(200)

@@ -37,7 +37,7 @@ export class SharedComputers {
     group.archived=false;if(!group.memberIds.includes(agent.id))group.memberIds.push(agent.id)
     this.store.put('_system','compose-desktop-owner',desktop.id,{owner,runnerId})
     this.store.put(owner,'shared-computer',group.id,group)
-    agent.execution='computer';agent.computerEnvironmentId=desktop.id;agent.computerEnvironmentName=desktop.name
+    agent.execution='computer';agent.computer='vm';agent.computerEnvironmentId=desktop.id;agent.computerEnvironmentName=desktop.name
     if(persist){agent.revision++;agent.updatedAt=Date.now();this.store.put(owner,'agent',agent.id,agent);this.store.event(owner,'agent.changed',agent)}
   }
   attachLocalVm(owner:string,agent:WorkspaceAgent,runnerId:string){

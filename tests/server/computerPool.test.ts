@@ -7,6 +7,20 @@ import {ContainerComputerProvider,type ComputerProvider,type ComputerSpecificati
 const databases:DatabaseSync[]=[]
 afterEach(()=>{for(const db of databases.splice(0))db.close()})
 const spec=():ComputerSpecification=>({id:randomUUID(),ownerKey:'owner',imageId:`sha256:${'a'.repeat(64)}`})
+it('uses the configured idle deadline, resets it after reuse, and never exempts active leases from expiry',async()=>{
+  const f=fixture();await f.pool.recover();const resource=spec()
+  f.pool.idleStopMinutes=15
+  await f.pool.desktop(resource,'start',()=>{})
+  f.advance(5*60000);await f.pool.expire();expect(f.pool.status('owner')[0]?.status).toBe('idle')
+  const lease=await f.pool.acquire(resource,'next',()=>{});await f.pool.release(lease,true)
+  f.advance(15*60000-1);await f.pool.expire();expect(f.pool.status('owner')[0]?.status).toBe('idle')
+  f.advance(1);await f.pool.expire();expect(f.pool.status('owner')[0]?.status).toBe('free')
+  f.pool.idleStopMinutes=0;await f.pool.desktop(resource,'start',()=>{})
+  f.advance(30*24*60*60000);await f.pool.expire();expect(f.pool.status('owner')[0]?.status).toBe('idle')
+  await f.pool.acquire(resource,'expired-holder',()=>{});f.advance(30001);await f.pool.expire()
+  expect(f.pool.status('owner')[0]?.status).toBe('free')
+  await f.pool.desktop(resource,'start',()=>{});await f.pool.close();expect(f.pool.status('owner')[0]?.status).toBe('free')
+})
 function fixture(limits={concurrent:2,environments:32,ttlMs:30000}){
   let clock=100000
   const db=new DatabaseSync(':memory:');databases.push(db)

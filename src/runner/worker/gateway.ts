@@ -16,8 +16,10 @@ import {COMPOSE_DESKTOP_IMAGE,type DesktopRelay} from '../../shared/composeDeskt
 import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
 import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerTool,type WorkerFrame} from './process.js'
+import {HOST_TOOLS,hostTool,hostPath,readHostFile,writeHostFile} from './hostTools.js'
+import {homedir,platform} from 'node:os'
 
-export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string}
+export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean}
 export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain'}
 interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;proxyEnv?:WorkerProxyEnvironment;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
@@ -124,6 +126,7 @@ export class ComputerGateway {
   private controller=new AbortController()
   private timer?:ReturnType<typeof setInterval>
   private checking=false
+  private hostCwd=homedir()
   private team?:{id:string;catalog:WorkerTool[];call(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>}
   constructor(readonly runtime:ComputerRuntime,readonly meta:ComputerTarget,readonly workId:string,readonly check:()=>Promise<void>,readonly publish:(body:Record<string,unknown>)=>Promise<any>){ }
   async connect(){this.runtime.assertTarget(this.meta);await this.runtime.ready;await this.authorized()}
@@ -141,6 +144,7 @@ export class ComputerGateway {
       if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderId===this.workId)await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
       if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
       const profile=String(params.profile),resolved=await this.runtime.resolve(profile,this.controller.signal)
+      if(this.meta.hostAccess){const configured=String(resolved.configuredCwd??'.');this.hostCwd=['.','auto','cwd'].includes(configured)?homedir():hostPath(homedir(),configured)}
       await this.authorized();this.guard()
       const session:WorkerSession=method==='session.resume'?this.runtime.session(String(params.session_id),this.meta,profile):{id:randomUUID(),agentId:this.meta.agentId,ownerKey:this.meta.ownerKey,environmentId:this.meta.environmentId,profile,cwd:resolved.cwd,configuredCwd:resolved.configuredCwd,history:[]}
       session.cwd=this.meta.environmentId!==this.meta.agentId?(this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd;session.configuredCwd=resolved.configuredCwd
@@ -195,7 +199,7 @@ export class ComputerGateway {
       live.received=false;live.running=true;live.session.outcome='uncertain';live.session.history.push({role:'user',content:prompt});this.runtime.save(live.session)
       const directory=join(this.runtime.home,'workers',live.session.id,this.workId,String(live.segment=(live.segment??0)+1))
       await mkdir(directory,{recursive:true,mode:0o700})
-      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
+      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.meta.hostAccess?HOST_TOOLS:[]),...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
       live.worker=worker
       this.runtime.workers.set(this.workId,{environmentId:this.meta.environmentId,ownerKey:this.meta.ownerKey,process:worker});void worker.exited.then(()=>{if(this.runtime.workers.get(this.workId)?.process===worker)this.runtime.workers.delete(this.workId)})
       worker.onTool=(name,args,id,callId)=>{
@@ -224,6 +228,27 @@ export class ComputerGateway {
       if(team)return await this.team!.call(team.id??name,z.record(z.string(),z.unknown()).parse(args),id)
       return await this.runtime.pool.use(live.lease,async context=>{
         const execute=(argv:string[],input?:Buffer)=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input})
+        if(this.meta.hostAccess&&name.startsWith('host_'))return hostTool(name,args,{...context,cwd:this.hostCwd})
+        if(this.meta.hostAccess&&name==='computer_copy_file'){
+          const body=z.object({from:z.enum(['host','vm']),source:pathField,destination:pathField}).strict().parse(args),host={...context,cwd:this.hostCwd}
+          if(body.from==='host'){
+            const bytes=await readHostFile(hostPath(this.hostCwd,body.source),25*1024*1024,host)
+            await execute(['python3','-c','import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read())',body.destination],bytes)
+          }else{
+            const snapshot=`/tmp/yaoyao-copy-${randomUUID()}`,chunks:Buffer[]=[]
+            try{
+              const size=Number((await execute(['python3','-c','import pathlib,sys,shutil; p=pathlib.Path(sys.argv[1]); assert p.is_file() and p.stat().st_size<=25*1024*1024; shutil.copyfile(p,sys.argv[2]); n=pathlib.Path(sys.argv[2]).stat().st_size; assert n<=25*1024*1024; print(n)',body.source,snapshot])).stdout.trim())
+              if(!Number.isSafeInteger(size)||size<0||size>25*1024*1024)throw new Error('文件大小无效')
+              for(let offset=0;offset<size;offset+=524288){
+                const data=(await execute(['python3','-c','import sys,base64; f=open(sys.argv[1],"rb"); f.seek(int(sys.argv[2])); print(base64.b64encode(f.read(524288)).decode())',snapshot,String(offset)])).stdout.trim()
+                chunks.push(Buffer.from(data,'base64'))
+              }
+              const bytes=Buffer.concat(chunks);if(bytes.length!==size)throw new Error('文件复制不完整')
+              await writeHostFile(hostPath(this.hostCwd,body.destination),bytes,host)
+            }finally{await execute(['rm','-f','--',snapshot]).catch(()=>{})}
+          }
+          return {ok:true}
+        }
         if(name==='computer_export'){
           const body=z.object({path:pathField,name:z.string().min(1).max(240).optional()}).strict().parse(args)
           const snapshot=`/tmp/yaoyao-export-${randomUUID()}`

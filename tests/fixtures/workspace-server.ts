@@ -409,7 +409,7 @@ runtime.runners.computerRunner=(owner,agent)=>computerFixtures.has(agent.id)?{id
 runtime.runners.computer=async(owner,agent,op,data,authorize)=>{
   const state=computerFixtures.get(agent.id);if(!state)return originalComputer(owner,agent,op,data,authorize)
   authorize()
-  if(op==='detail')return {enabled:agent.execution==='computer',container:state.mode==='off'?'missing':state.mode==='stopped'?'stopped':'running',ready:!['off','stopped'].includes(state.mode),inUse:state.mode==='human',controlMode:state.mode,image:vmFixture.image,mode:agent.computerEnvironmentId?'shared':'per-bot',maxInstances:vmFixture.maxInstances}
+  if(op==='detail')return {enabled:agent.execution==='computer',container:state.mode==='off'?'missing':state.mode==='stopped'?'stopped':'running',ready:!['off','stopped'].includes(state.mode),inUse:state.mode==='human',controlMode:state.mode,image:vmFixture.image,mode:agent.computerEnvironmentId?'shared':'per-bot',maxInstances:vmFixture.maxInstances,idleStopMinutes:vmFixture.idleStopMinutes}
   if(op==='lifecycle'){state.mode=data.action==='remove'?'off':data.action==='stop'?'stopped':'idle';state.generation++;return {ok:true}}
   if(op==='frame'){const png=readFileSync(process.env.YAOYAO_VM_PREVIEW_PNG||resolve('public/icons/icon-512.png'));return {id:'22222222-2222-4222-8222-222222222222',generation:state.generation,width:png.readUInt32BE(16),height:png.readUInt32BE(20),capturedAt:Date.now(),data:png.toString('base64')}}
   if(op==='take'){state.controlId=String(data.controlId);state.mode='human';state.generation++}
@@ -433,7 +433,7 @@ runtime.app.use((ctx,next)=>{
   }
   ctx.body={actions:[...computerFixtures.values()].flatMap(state=>state.actions)}
 })
-const vmFixture={configured:true,runtime:'docker',daemonUp:true,image:false,mode:'per-bot',maxInstances:2,busy:false,job:undefined as any}
+const vmFixture={configured:true,runtime:'docker',daemonUp:true,image:false,mode:'per-bot',maxInstances:2,idleStopMinutes:5,busy:false,job:undefined as any}
 let vmRunnerId=''
 const originalSummary=runtime.runners.summary.bind(runtime.runners),originalLocalVm=runtime.runners.localVm.bind(runtime.runners)
 runtime.runners.summary=record=>record.id===vmRunnerId?{...originalSummary(record),online:true,features:['computer-worker-v1','computer-control-v1','local-vm-v1','image-ready-v1']}:originalSummary(record)
@@ -441,9 +441,17 @@ runtime.runners.localVm=async(owner,id,p)=>{
  if(id!==vmRunnerId)return originalLocalVm(owner,id,p)
  if(p.op==='prepare'){vmFixture.image=true;vmFixture.job={id:p.id,state:'complete',message:'本地虚拟机已就绪'}}
  if(p.op==='policy'){vmFixture.mode=String(p.mode);vmFixture.maxInstances=Number(p.maxInstances)}
+ if(p.op==='idle-policy')vmFixture.idleStopMinutes=Number(p.idleStopMinutes)
  return {...vmFixture}
 }
-runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/local-vm')return next();const owner=auth.requireAdmin(ctx).id;vmFixture.image=ctx.query.ready==='1';vmFixture.mode='per-bot';vmFixture.maxInstances=2;if(!vmRunnerId){for(const record of runtime.runners.records())if(record.sourceNodeId==='local'&&record.enabled)runtime.runners.remove(record.id);vmRunnerId=runtime.runners.enroll(owner,{name:'本机虚拟机',allowedProfiles:['default']}).runner.id;}ctx.body={runnerId:vmRunnerId}})
+runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/local-vm')return next();const owner=auth.requireAdmin(ctx).id;vmFixture.image=ctx.query.ready==='1';vmFixture.mode='per-bot';vmFixture.maxInstances=2;vmFixture.idleStopMinutes=5;vmFixture.job=undefined;(runtime.runners as any).online.delete(vmRunnerId);if(!vmRunnerId){for(const record of runtime.runners.records())if(record.sourceNodeId==='local'&&record.enabled)runtime.runners.remove(record.id);vmRunnerId=runtime.runners.enroll(owner,{name:'本机虚拟机',allowedProfiles:['default']}).runner.id;}ctx.body={runnerId:vmRunnerId}})
+runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/hybrid-runner')return next();auth.requireAdmin(ctx);(runtime.runners as any).online.set(vmRunnerId,{instance:randomUUID(),epoch:'fixture',seen:Date.now(),features:['computer-worker-v1','computer-control-v1','local-vm-v1','image-ready-v1','host-computer-tools-v1','idle-stop-policy-v1']});ctx.body={ok:true}})
+runtime.app.use((ctx,next)=>{
+ if(ctx.path!=='/__test/cloud-host-option')return next();const owner=auth.requireAdmin(ctx).id,cloud=runtime.workspaceRuntime.cloud!
+ cloud.state=async()=>({configured:true,running:false});cloud.status=async()=>({backend:'grok',mode:'off'});cloud.requireAvailable=async()=>{};cloud.connect=async()=>({} as any)
+ const agent=runtime.workspace.createAgent(owner,{name:'云虚拟机本机选项',computer:'cloud',profile:'default'})
+ ctx.body={agentId:agent.id,conversationId:runtime.workspace.list<any>(owner,'conversation').find(c=>c.memberIds[0]===agent.id)!.id}
+})
 runtime.app.use(serve(resolve('dist')))
 runtime.app.use((ctx) => {
   if (!ctx.path.startsWith('/api/')) {

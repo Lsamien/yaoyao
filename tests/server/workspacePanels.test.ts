@@ -12,7 +12,7 @@ import {WorkspaceNodes} from '../../src/server/workspaceGateway'
 import {loadServerConfig} from '../../src/server/config'
 import {WorkspaceRoutines,nextRoutineAt} from '../../src/server/workspaceRoutines'
 import {WorkspaceInspector,redactInspector} from '../../src/server/workspaceInspector'
-import {GrokCloud} from '../../src/server/grokCloud'
+import {GrokCloud,grokComputerRules} from '../../src/server/grokCloud'
 
 let home:string,store:WorkspaceStore,nodes:WorkspaceNodes
 const auth={require:(ctx:any)=>({id:ctx.get('x-user')||'owner',role:'admin'}),requireAdmin:(ctx:any)=>({id:ctx.get('x-user')||'owner',role:'admin'}),isUserActive:()=>true,pushAuthorizationVersion:()=>1} as any
@@ -112,6 +112,54 @@ function fakeCloud(){
  const token='header.'+Buffer.from(JSON.stringify({sub:'fixture',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')+'.signature'
  return {cloud,token,fetcher,counts:()=>({ensure,exec})}
 }
+it('persists the separate host option, checks the Runner grant and refuses changes during active work',async()=>{
+ const {cloud}=fakeCloud(),agent=store.createAgent('owner',{name:'双环境',profile:'default',computer:'vm',execution:'computer'})
+ const target=vi.fn(()=>({runner:{id:'fixture'}} as any));nodes.runnerTarget=target
+ const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(error:any){ctx.status=error.status??500;ctx.body={error:error.message}}});app.use(bodyParser());app.use(cloud.router().routes())
+ const path=`/api/app/agents/${agent.id}/computer-selection`
+ const response=await request(app.callback()).put(path).send({computer:'vm',allowHostEnvironment:true}).expect(200)
+ expect(response.body.agent).toMatchObject({computer:'vm',execution:'computer',allowHostEnvironment:true})
+ expect(target).toHaveBeenCalledWith('owner','local',expect.objectContaining({agentId:agent.id,hostAccess:true}))
+ await request(app.callback()).put(path).set('x-user','other').send({computer:'vm',allowHostEnvironment:true}).expect(404)
+ store.put('owner','turn','active-hybrid',{agentId:agent.id,status:'running'})
+ await request(app.callback()).put(path).send({computer:'vm',allowHostEnvironment:false}).expect(409)
+ expect(store.require<any>('owner','agent',agent.id).allowHostEnvironment).toBe(true)
+ store.remove('owner','turn','active-hybrid');await request(app.callback()).put(path).send({computer:'vm',allowHostEnvironment:false}).expect(200)
+ target.mockClear();nodes.targetForAgent('owner',store.require<any>('owner','agent',agent.id))
+ expect(target.mock.calls[0]?.[2]).not.toHaveProperty('hostAccess')
+})
+it('allows the host option for cloud and VM only and clears it when selecting another environment',async()=>{
+ const {cloud}=fakeCloud(),agent=store.createAgent('owner',{name:'云端本机选项',profile:'default',computer:'cloud'})
+ const available=vi.spyOn(cloud,'requireAvailable').mockResolvedValue(),connect=vi.spyOn(cloud,'connect').mockResolvedValue({} as any)
+ nodes.runnerTarget=()=>({runner:{id:'fixture'}} as any)
+ const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(error:any){ctx.status=error.status??500;ctx.body={error:error.message}}});app.use(bodyParser());app.use(cloud.router().routes())
+ const path=`/api/app/agents/${agent.id}/computer-selection`
+ for(const computer of ['cloud','vm']){
+  const enabled=await request(app.callback()).put(path).send({computer,allowHostEnvironment:true}).expect(200)
+  expect(enabled.body.agent).toMatchObject({computer,allowHostEnvironment:true})
+ }
+ expect(connect).not.toHaveBeenCalled();expect(available).not.toHaveBeenCalled()
+ for(const computer of ['auto','off','local','browser']){
+  store.updateAgent('owner',agent.id,{computer:'vm',execution:'computer',allowHostEnvironment:true})
+  const switched=await request(app.callback()).put(path).send({computer,allowHostEnvironment:true}).expect(200)
+  expect(switched.body.agent.allowHostEnvironment).toBe(false)
+  const returned=await request(app.callback()).put(path).send({computer:'vm'}).expect(200)
+  expect(returned.body.agent.allowHostEnvironment).toBe(false)
+ }
+ await request(app.callback()).put(path).send({computer:'hybrid'}).expect(400)
+ expect(grokComputerRules(true)).toContain('基础 Profile 已授权的本机文件和终端工具')
+ expect(grokComputerRules(false)).toContain('本轮不要使用本机终端')
+})
+it('clears inapplicable host grants through generic updates and migrates the previous combined choice once',()=>{
+ const agent=store.createAgent('owner',{name:'权限迁移',profile:'default',computer:'vm',execution:'computer',allowHostEnvironment:true})
+ expect(store.updateAgent('owner',agent.id,{computer:'auto'}).allowHostEnvironment).toBe(false)
+ store.put('owner','agent',agent.id,{...agent,computer:'hybrid',allowHostEnvironment:undefined})
+ store.db.prepare('DELETE FROM workspace_migrations WHERE id=?').run('host-environment-option-v1')
+ store.close();store=new WorkspaceStore(home)
+ expect(store.require<any>('owner','agent',agent.id)).toMatchObject({computer:'vm',allowHostEnvironment:true})
+ store.updateAgent('owner',agent.id,{computer:'off'});store.close();store=new WorkspaceStore(home)
+ expect(store.require<any>('owner','agent',agent.id)).toMatchObject({computer:'off',allowHostEnvironment:false})
+})
 
 it('auto observation never provisions; multiple robots share one cloud connection with private credentials',async()=>{
  const {cloud,token,counts}=fakeCloud();await cloud.configure('owner',token,'0.47.0')

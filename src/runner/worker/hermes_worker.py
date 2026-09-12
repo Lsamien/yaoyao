@@ -194,8 +194,13 @@ def run_model():
                 slot["event"].set()
     threading.Thread(target=receive, daemon=True).start()
     emit("ready", tools=sorted(allowed))
+    environment = "Computer tools operate on your assigned isolated Linux computer, with working directory " + BOOT["cwd"] + ". Its network access follows the configured computer policy. "
+    if BOOT.get("host"):
+        environment += "The user also enabled host tools. host_* tools operate on the Runner host (" + BOOT["host"]["platform"] + "), with working directory " + BOOT["host"]["cwd"] + ". Use the appropriate OS syntax for each tool. computer_* tools operate in Linux; computer_copy_file explicitly copies between host and VM. These environments have separate files, processes and installed software. "
+    else:
+        environment += "Host files and commands are not available through computer tools. Never attempt to execute a host command through them. "
     result = agent.run_conversation(BOOT["prompt"], conversation_history=BOOT.get("history", []), task_id=BOOT["taskId"],
-        system_message="You are a controlled Hermes worker. All tools operate on your assigned isolated Linux computer. Use Linux paths and shell syntax. Network access follows the configured computer policy. Use only the supplied tools. The working directory is " + BOOT["cwd"] + ". Never claim host files or credentials are available. Follow the user's task and permission scope.")
+        system_message="You are a controlled Hermes worker. " + environment + "Other supplied application and team tools follow their descriptions. Use only supplied tools and follow the user's task and permission scope.")
     emit("complete", text=str(result.get("final_response") or ""), messages=result.get("messages", []), interrupted=stopped.is_set(), completed=result.get("completed", True))
 
 try:

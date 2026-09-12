@@ -39,10 +39,11 @@ it('locks Compose capacity and binds existing desktops without allowing cross-ac
  try{
   expect(await service.status('alice')).toMatchObject({fixedCapacity:true,maxInstances:2,mode:'shared'})
   for(const [verb,path,body] of [['post','/prepare',{requestId:randomUUID()}],['put','/policy',{requestId:randomUUID(),maxInstances:4,mode:'per-bot'}],['post',`/instances/${desktops[0]!.id}/remove`,{requestId:randomUUID()}]] as const){await request(app.callback())[verb]('/api/app/admin/local-vm'+path).set('x-admin','yes').send(body).expect(409,{code:'compose_desktop_managed'})}
-  const first=store.createAgent('alice',{name:'研究员',profile:'default'}),second=store.createAgent('alice',{name:'写作者',profile:'writer'}),other=store.createAgent('bob',{name:'其他账号',profile:'default'})
+  const first=store.createAgent('alice',{name:'研究员',profile:'default',computer:'cloud',allowHostEnvironment:true}),second=store.createAgent('alice',{name:'写作者',profile:'writer'}),other=store.createAgent('bob',{name:'其他账号',profile:'default'})
   const bind=(id:string,desktopId:string,owner='alice')=>request(app.callback()).put(`/api/app/agents/${id}/local-vm`).set('x-owner',owner).send({enabled:true,desktopId})
   await bind(first.id,randomUUID()).expect(400)
   await bind(first.id,desktops[0]!.id).expect(200);await bind(second.id,desktops[0]!.id).expect(200)
+  expect(store.require('alice','agent',first.id)).toMatchObject({computer:'vm',execution:'computer',allowHostEnvironment:true})
   await request(app.callback()).put(`/api/app/agents/${first.id}/local-vm/image`).send({imageKey:'cursor'}).expect(409,{code:'compose_desktop_managed'})
   for(const id of [first.id,second.id])expect(()=>nodes.requireSource('alice',store.require('alice','agent',id))).not.toThrow()
   await bind(other.id,desktops[0]!.id,'bob').expect(403)

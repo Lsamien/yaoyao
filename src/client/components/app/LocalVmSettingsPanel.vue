@@ -5,7 +5,7 @@ import {createUuid} from '@/utils/id'
 import AppIcon from '@/components/common/AppIcon.vue'
 import RunnerSettingsPanel from './RunnerSettingsPanel.vue'
 import type {LocalVmStatus,LocalVmMode,LocalVmAction,LocalVmInstance} from '@shared/localVm'
-import {LOCAL_VM_IMAGES,type LocalVmImageKey} from '@shared/localVm'
+import {LOCAL_VM_IMAGES,VM_IDLE_STOP_OPTIONS,vmIdleStopLabel,type LocalVmImageKey} from '@shared/localVm'
 import type {WorkspaceAgent} from '@shared/workspace'
 const state=ref<LocalVmStatus>(),error=ref(''),loading=ref(false),acting=ref(false)
 const runnerSettingsOpen=ref(false)
@@ -50,6 +50,10 @@ onMounted(cycle);onBeforeUnmount(()=>{closed=true;clearTimeout(timer)})
    <div class="segmented" role="group" aria-label="虚拟机隔离方式"><button :aria-pressed="state?.mode==='shared'" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @click="policy('shared')">共享虚拟机</button><button :aria-pressed="state?.mode==='per-bot'" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @click="policy('per-bot')">每个机器人独立</button></div>
    <p class="sharing-explanation">共享指多个机器人操作同一台虚拟机，共用桌面和工作文件；与可同时运行的虚拟机数量无关。</p>
    <label class="row">虚拟机运行数量上限<select aria-label="虚拟机数量上限" :value="state?.maxInstances??2" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @change="policy(state!.mode,Number(($event.target as HTMLSelectElement).value))"><option v-for="n in [1,2,3,4]" :key="n" :value="n">{{n}}</option></select></label>
+  </article>
+  <article v-if="state&&!state.fixedCapacity"><h3>空闲自动停止</h3><p>从任务结束或交还控制权后开始计时，适用于该执行节点上的所有本地虚拟机。</p>
+   <label class="row">停止时间<select aria-label="虚拟机空闲停止时间" :value="state.idleStopMinutes??5" :disabled="acting||!state.configured||state.idleStopMinutes===undefined" @change="action(()=>apiRequest('/api/app/admin/local-vm/idle-policy',{method:'PUT',body:{requestId:createUuid(),idleStopMinutes:Number(($event.target as HTMLSelectElement).value)}}))"><option v-for="minutes in VM_IDLE_STOP_OPTIONS" :key="minutes" :value="minutes">{{vmIdleStopLabel(minutes)}}</option><option v-if="state.idleStopMinutes!==undefined&&!VM_IDLE_STOP_OPTIONS.some(n=>n===state!.idleStopMinutes)" :value="state.idleStopMinutes">{{vmIdleStopLabel(state.idleStopMinutes)}}</option></select></label>
+   <p v-if="state.idleStopMinutes===undefined">连接并更新执行节点后可修改。</p><p v-else-if="state.idleStopMinutes===0">空闲时保持运行；仍可手动停止，执行节点关闭时也会停止。</p>
   </article>
   <article v-if="state&&!state.fixedCapacity&&!state.setupRequired"><h3>准备运行环境</h3><p v-if="state?.executionHost==='runner'">以下检查和镜像准备均在执行节点所在电脑完成。</p><ol>
    <li><span class="step">{{state?.runtime?'✓':'1'}}</span><div><strong>安装 Docker 或 Podman</strong><p>{{state?.runtime?`已检测到 ${state.runtime}`:'请先安装 Docker Desktop 或 Podman。'}}</p></div></li>

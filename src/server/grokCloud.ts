@@ -28,6 +28,11 @@ export const GROK_COMPUTER_TOOLS=[
   {id:'cloud_computer_action',name:'cloud_computer_action',description:'操作 Grok Bot 云端电脑。先查看桌面，再使用 click、text、key 或 scroll。',inputSchema:schema({kind:{enum:['click','text','key','scroll']},x:{type:'integer'},y:{type:'integer'},text:field,key:field,direction:{enum:['up','down','left','right']}},['kind'])},
 ]
 export const GROK_COMPUTER_RULES='当前电脑为 Grok Bot 云端共享虚拟机，工作目录 /workspace。电脑操作、文件读写和命令必须使用 cloud_computer_* 工具。本机路径和本机终端不属于这台电脑。多个机器人共享工作文件和浏览器登录，避免覆盖其他机器人的工作；人工接管时等待交还。'
+export function grokComputerRules(allowHostEnvironment:boolean){
+  return allowHostEnvironment
+    ? '当前电脑为 Grok Bot 云端共享虚拟机，工作目录 /workspace；云端操作必须使用 cloud_computer_* 工具。用户同时勾选了“允许本机环境”，可按任务需要使用基础 Profile 已授权的本机文件和终端工具，以及另行授权的本机桌面工具。调用前明确目标环境，本机与云端的路径、程序、文件和浏览器资料互不通用。多个机器人共享云端工作文件和浏览器登录，避免覆盖其他机器人的工作；人工接管时等待交还。'
+    : GROK_COMPUTER_RULES+' 用户未勾选“允许本机环境”：本轮不要使用本机终端、本机文件或本机桌面完成电脑操作。'
+}
 
 /** Credentials and network tokens stay on the Web server. Every robot of an
  * account addresses the same existing cloud computer; robots keep their own
@@ -182,11 +187,14 @@ export class GrokCloud {
       if(!token)throw new HttpError(400,'请先通过浏览器完成 Grok Bot 授权。','grok_login_missing');ctx.body=await this.configure(owner,token,body.version,refreshToken)
     })
     router.put('/api/app/agents/:id/computer-selection',async ctx=>{
-      const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),body=parse(z.object({computer:z.enum(['auto','cloud','vm','local','browser','off'])}).strict(),(ctx.request as any).body)
+      const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),body=parse(z.object({computer:z.enum(['auto','cloud','vm','local','browser','off']),allowHostEnvironment:z.boolean().optional()}).strict(),(ctx.request as any).body)
       this.beforeSelection?.(owner,agent.id);this.shared.assertLocalVmIdle(owner,[agent.id]);if(this.current(owner))throw new HttpError(409,'请先交还云端电脑','computer_busy')
-      if(body.computer==='cloud')await this.requireAvailable(owner,agent,this.nodes.target(owner,agent.nodeId))
-      this.store.atomic(()=>{const execution=body.computer==='vm'?'computer':body.computer==='auto'?(agent.execution??'profile'):'profile';if(execution!=='computer'&&agent.computerEnvironmentId)this.shared.detachLocalVm(owner,agent);this.store.updateAgent(owner,agent.id,{computer:body.computer,execution});const current=this.store.require<WorkspaceAgent>(owner,'agent',agent.id);this.store.prepareAgent?.(owner,current);this.store.put(owner,'agent',agent.id,current)})
-      if(body.computer==='cloud')await this.connect(owner)
+      const allowHostEnvironment=['vm','cloud'].includes(body.computer)&&(body.allowHostEnvironment??agent.allowHostEnvironment??false)
+      if(body.computer==='vm'&&allowHostEnvironment)this.nodes.targetForAgent(owner,{...agent,execution:'computer',computer:'vm',allowHostEnvironment:true})
+      const enteringCloud=body.computer==='cloud'&&agent.computer!=='cloud'
+      if(enteringCloud)await this.requireAvailable(owner,agent,this.nodes.target(owner,agent.nodeId))
+      this.store.atomic(()=>{const execution=body.computer==='vm'?'computer':body.computer==='auto'?(agent.execution??'profile'):'profile';if(execution!=='computer'&&agent.computerEnvironmentId)this.shared.detachLocalVm(owner,agent);this.store.updateAgent(owner,agent.id,{computer:body.computer,execution,allowHostEnvironment});const current=this.store.require<WorkspaceAgent>(owner,'agent',agent.id);this.store.prepareAgent?.(owner,current);this.store.put(owner,'agent',agent.id,current)})
+      if(enteringCloud)await this.connect(owner)
       ctx.body={agent:this.store.agentSummary(this.store.require<WorkspaceAgent>(owner,'agent',agent.id))}
     })
     router.get('/api/app/agents/:id/cloud-computer',async ctx=>{const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id);ctx.body={...await this.state(owner),selected:this.selected(owner,agent),connected:!!this.descriptors.get(owner)&&this.descriptors.get(owner)!.expiresAt>Date.now(),shared:true,...await this.status(owner)}})

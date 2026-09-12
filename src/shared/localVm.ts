@@ -1,4 +1,8 @@
 export type LocalVmMode = 'shared' | 'per-bot'
+export const DEFAULT_VM_IDLE_STOP_MINUTES = 5
+export const MAX_VM_IDLE_STOP_MINUTES = 10080
+export const VM_IDLE_STOP_OPTIONS = [1, 5, 10, 15, 30, 60, 120, 0] as const
+export function vmIdleStopLabel(minutes = DEFAULT_VM_IDLE_STOP_MINUTES) { return minutes === 0 ? '永不自动停止' : `空闲 ${minutes} 分钟后自动停止` }
 export const LOCAL_VM_IMAGE_KEYS = ['standard', 'cursor'] as const
 export type LocalVmImageKey = typeof LOCAL_VM_IMAGE_KEYS[number]
 export const LOCAL_VM_IMAGES = [
@@ -21,12 +25,14 @@ export interface LocalVmStatus {
   images?: LocalVmImageOption[]
   mode: LocalVmMode
   maxInstances: number
+  idleStopMinutes?: number
   busy: boolean
   problem?: string
   job?: { id: string; state: 'running' | 'complete' | 'failed'; message: string; imageKey?: LocalVmImageKey }
   instances?: Array<{id:string;status:string;name?:string;orphaned?:boolean}>
 }
 export interface LocalVmInstance {
+  idleStopMinutes?: number
   desktopId?:string
   fixedCapacity?:boolean
   desktops?:Array<{id:string;name:string;online:boolean;ready:boolean;available?:boolean;imageKey?:LocalVmImageKey}>

@@ -72,6 +72,10 @@ async function channel(){
   await gateway.connect();const session=await gateway.rpc('session.create',{profile:'default'})
   return {gateway,session}
 }
+it('requires an upgraded Runner before granting mixed host and VM tools',()=>{
+ const id=randomUUID()
+ expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true})).toThrow('不支持同时使用本机和虚拟机')
+})
 async function machine(path:string,body?:unknown,overrides:Record<string,string>={}){
   return fetch(`${config.serverURL}/api/runner/v1/${config.runnerId}/${path}`,{
     method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${config.token}`,'x-runner-instance':runner.instance,'x-runner-protocol':'1','x-runner-epoch':(runner as any).serverEpoch,'Content-Type':'application/json',...overrides},...(body===undefined?{}:{body:JSON.stringify(body)})

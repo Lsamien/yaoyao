@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { realpath,access } from 'node:fs/promises'
 import { resolve, sep, join } from 'node:path'
 import {LocalVmImages} from './computers/localVm.js'
-import {LOCAL_VM_IMAGE_KEYS} from '../shared/localVm.js'
+import {LOCAL_VM_IMAGE_KEYS,MAX_VM_IDLE_STOP_MINUTES} from '../shared/localVm.js'
 import {ComputerError} from './computers/container.js'
 import {z} from 'zod'
 import {ComputerRuntime,ComputerGateway,type ComputerTarget} from './worker/gateway.js'
@@ -55,7 +55,7 @@ export class RunnerAgent {
     if(url.hostname==='localhost')url.hostname='127.0.0.1'
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
       method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'host-computer-tools-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
@@ -96,7 +96,7 @@ export class RunnerAgent {
     if(!this.active||!this.connected)throw new Error('执行节点已断开')
     if(command.kind==='local-vm.manage'){
       if(!this.localVm)throw new HttpError(409,'本地虚拟机尚未配置','computer_unavailable')
-      const input=z.object({owner:z.string().regex(/^[a-f0-9]{64}$/),op:z.enum(['status','prepare','policy','instance']),id:z.string().uuid().optional(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),mode:z.enum(['shared','per-bot']).optional(),maxInstances:z.number().int().min(1).max(4).optional(),environmentId:z.string().uuid().optional(),action:z.enum(['stop','remove']).optional()}).strict().parse(p)
+      const input=z.object({owner:z.string().regex(/^[a-f0-9]{64}$/),op:z.enum(['status','prepare','policy','idle-policy','instance']),idleStopMinutes:z.number().int().min(0).max(MAX_VM_IDLE_STOP_MINUTES).optional(),id:z.string().uuid().optional(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),mode:z.enum(['shared','per-bot']).optional(),maxInstances:z.number().int().min(1).max(4).optional(),environmentId:z.string().uuid().optional(),action:z.enum(['stop','remove']).optional()}).strict().parse(p)
       const check=async()=>{if(!this.connected||!this.active||(await this.api('local-vm-check',{id:input.id})).allowed!==true)throw new ComputerError('local_vm_authorization_revoked','本地虚拟机配置授权已失效')}
       if(input.op==='status')return this.localVm.status(input.owner)
       if(input.op==='instance'){
@@ -106,7 +106,8 @@ export class RunnerAgent {
         await check();return {ok:true}
       }
       if(input.op==='prepare')return this.localVm.prepare(input.id!,check,input.imageKey)
-      await check();return this.localVm.policy(input.mode!,input.maxInstances!)
+      await check();if(input.op==='idle-policy')return this.localVm.idlePolicy(input.idleStopMinutes!)
+      return this.localVm.policy(input.mode!,input.maxInstances!)
     }
     if(command.kind==='computer.control'){
       if(!this.computers)throw new HttpError(409,'电脑服务未配置','computer_unavailable')
@@ -124,7 +125,7 @@ export class RunnerAgent {
         const imageId=this.computers.imageFor(input.target),option=vm.images?.find(image=>image.imageId===imageId)
         let image=!!option?.ready
         if(!image&&!vm.fixedCapacity&&imageId!==UNCONFIGURED_COMPUTER_IMAGE)try{await this.localVm!.images.inspect(imageId);image=true}catch{}
-        return {...state,container:actual?.running?'running':spec?'stopped':'missing',ready,inUse:['agent','pausing','human','resuming'].includes(state.mode),mode:vm.mode,maxInstances:vm.maxInstances,image:vm.fixedCapacity?vm.image:image,imageId,images:vm.images,imageKey:option?.key,controlMode:state.mode,fixedCapacity:vm.fixedCapacity}
+        return {...state,container:actual?.running?'running':spec?'stopped':'missing',ready,inUse:['agent','pausing','human','resuming'].includes(state.mode),mode:vm.mode,maxInstances:vm.maxInstances,idleStopMinutes:vm.idleStopMinutes,image:vm.fixedCapacity?vm.image:image,imageId,images:vm.images,imageKey:option?.key,controlMode:state.mode,fixedCapacity:vm.fixedCapacity}
       }
       if(input.op==='image')return this.localVm!.select(input.target,z.enum(LOCAL_VM_IMAGE_KEYS).parse(input.imageKey),authorize)
       if(input.op==='lifecycle'){

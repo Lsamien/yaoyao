@@ -8,6 +8,7 @@ import { HttpError } from './errors.js'
 import { isVisibleMessageFile } from '../shared/messageFiles.js'
 import type { StoredWorkspaceFile } from './workspaceAssets.js'
 import { notificationPlainText } from './notificationText.js'
+import {supportsHostEnvironment} from '../shared/workspace.js'
 import type { WorkspaceLifecycleAction, WorkspaceLifecyclePreview } from '../shared/workspaceLifecycle.js'
 import { decodeAgentMascotAvatar, isAgentImageAvatar, defaultAgentIdentity, encodeAgentAvatar, normalizeAvatar, randomAgentIdentity, MAX_AVATAR_DESCRIPTOR_LENGTH } from '../shared/agentIdentity.js'
 import type {
@@ -40,6 +41,7 @@ export const agentInput = z
     instructions: z.string().max(24_000).default(''),
     execution:z.enum(['profile','computer']).default('profile'),
     computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
+    allowHostEnvironment:z.boolean().default(false),
     browserProfile:z.enum(['persistent','temporary']).optional(),
     canManageTeam: z.boolean().default(false),
     nodeId: z.string().default('local'),
@@ -53,6 +55,7 @@ export const agentPatch = z
     instructions: z.string().max(24_000).optional(),
     execution:z.enum(['profile','computer']).optional(),
     computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
+    allowHostEnvironment:z.boolean().optional(),
     browserProfile:z.enum(['persistent','temporary']).optional(),
     nodeId:z.string().min(1).max(256).optional(),
     profile:z.string().min(1).max(256).optional(),
@@ -209,6 +212,15 @@ export class WorkspaceStore {
       }
       this.db.prepare('INSERT INTO workspace_migrations VALUES(?)').run(migration)
     })
+    this.atomic(() => {
+      const migration='host-environment-option-v1'
+      if(this.db.prepare('SELECT id FROM workspace_migrations WHERE id=?').get(migration))return
+      for(const row of this.db.prepare("SELECT owner,id,data FROM workspace_entities WHERE kind='agent' AND json_extract(data,'$.computer')='hybrid'").all()){
+        const agent=JSON.parse(String(row.data))
+        this.put(String(row.owner),'agent',String(row.id),{...agent,computer:'vm',execution:'computer',allowHostEnvironment:!agent.temporaryGoalId&&!agent.remoteAgentId,revision:(agent.revision??0)+1})
+      }
+      this.db.prepare('INSERT INTO workspace_migrations VALUES(?)').run(migration)
+    })
   }
   private hasUnreadTask(owner: string, conversationId: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM workspace_entities WHERE owner=? AND kind='conversation-task' AND json_extract(data,'$.conversationId')=? AND json_extract(data,'$.unread')=1 LIMIT 1").get(owner, conversationId)
@@ -327,6 +339,7 @@ export class WorkspaceStore {
   }
   createAgent(owner: string, input: unknown, origin?: { createdByAgentId: string; createdFromRunId: string;temporaryGoalId?:string;helperActivation?:number;helperRunnerId?:string }): Agent {
     const body = parse(agentInput, input)
+    if(!supportsHostEnvironment(body)||origin)body.allowHostEnvironment=false
     if (origin) this.require<Agent>(owner, 'agent', origin.createdByAgentId)
     return this.atomic(() => {
       if (
@@ -383,8 +396,10 @@ export class WorkspaceStore {
     if (patch.avatar !== undefined) patch.avatar = normalizeAvatar(patch.avatar)
     return this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
+      if(!supportsHostEnvironment({...agent,...patch})&&(agent.allowHostEnvironment===true||patch.allowHostEnvironment!==undefined))patch.allowHostEnvironment=false
       const sourceChanged=(patch.nodeId!==undefined&&patch.nodeId!==agent.nodeId)||(patch.profile!==undefined&&patch.profile!==agent.profile)
-      const destinationChanged=(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
+      const hostPermissionChanged=patch.allowHostEnvironment!==undefined&&patch.allowHostEnvironment!==(agent.allowHostEnvironment===true)
+      const destinationChanged=hostPermissionChanged||(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
       if(sourceChanged||destinationChanged){
         if(this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['queued','running','waiting','uncertain','cancelling'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再修改机器人来源或电脑','agent_execution_busy')
         if(this.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(grant.agentId===id||grant.environmentId===(agent.computerEnvironmentId??id))))throw new HttpError(409,'请先交还电脑控制权','agent_execution_busy')
