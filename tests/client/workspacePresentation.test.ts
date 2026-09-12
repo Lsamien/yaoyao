@@ -23,6 +23,18 @@ import ResourceSidebar from '@/components/app/ResourceSidebar.vue'
 import TeamAvatar from '@/components/common/TeamAvatar.vue'
 import type { WorkspaceAgent, WorkspaceConversation } from '../../src/shared/workspace'
 
+it('renders Bot unread as a dot and treats explicit false as authoritative over legacy counts', async () => {
+  const conversation: WorkspaceConversation = { id: 'dot', kind: 'direct', name: '未读测试', avatar: '', memberIds: [], instructions: '', administratorId: '', mode: 'host', autoReplyIds: [], maxReplyRounds: 1, archived: false, pinned: false, readSeq: 0, lastSeq: 999, unreadCount: 999, unread: true, preview: '完成', createdAt: 1, updatedAt: 1 }
+  const wrapper = mount(ConversationList, { props: { conversations: [conversation], agents: [] } })
+  expect(wrapper.find('[aria-label="未读"]').exists()).toBe(true)
+  expect(wrapper.find('.sidebar-item__row b').exists()).toBe(false)
+  await wrapper.setProps({ conversations: [{ ...conversation, unread: false }] })
+  expect(wrapper.find('[aria-label="未读"]').exists()).toBe(false)
+  await wrapper.setProps({ conversations: [{ ...conversation, unread: undefined }] })
+  expect(wrapper.find('[aria-label="未读"]').exists()).toBe(true)
+  wrapper.unmount()
+})
+
 it('composes real member avatars and refreshes them without changing group membership', async () => {
   const agents: WorkspaceAgent[] = ['first','second'].map((id,index) => ({id,name:id,avatar:`yaoyao-mascot:v1:${index ? 'square' : 'circle'}:377fe6:friendly`,instructions:'',nodeId:'local',profile:'default',archived:false,revision:1,createdAt:1,updatedAt:1}))
   const c: WorkspaceConversation = {id:'g',kind:'group',name:'群聊',avatar:'data:image/png;base64,AA==',memberIds:['second','first'],instructions:'',administratorId:'first',mode:'host',autoReplyIds:[],maxReplyRounds:1,archived:false,pinned:false,readSeq:0,lastSeq:0,preview:'',createdAt:Date.now(),updatedAt:Date.now(),lastMessageAt:Date.now()}

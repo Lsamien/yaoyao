@@ -369,7 +369,7 @@ describe('Web-owned workspace', () => {
     expect(store.get<any>(owner, 'context', firstTask.id)).toMatchObject({ conversationTaskId: firstTask.id, percent: 40 })
     expect(store.get<any>(owner, 'context', secondTask.id)).toMatchObject({ conversationTaskId: secondTask.id, percent: 40 })
     const firstSummary = store.require<any>(owner, 'conversation-task', firstTask.id)
-    expect(firstSummary).toMatchObject({ title: '第一项工作', titleSource: 'automatic', messageCount: 2, unreadCount: 2 })
+    expect(firstSummary).toMatchObject({ title: '第一项工作', titleSource: 'automatic', messageCount: 2, unread: true, unreadCount: 1 })
     expect(store.require<any>(owner, 'conversation-task', secondTask.id)).toMatchObject({ title: '显式标题', titleSource: 'user', messageCount: 2 })
     expect(store.markTaskRead(owner, conversation.id, firstTask.id, firstSummary.lastSeq).unreadCount).toBe(0)
     store.deleteTask(owner, conversation.id, firstTask.id)
@@ -1112,7 +1112,7 @@ it('continues free discussion automatically and hides irrelevant automatic repli
   await finished(root.id)
   expect(requests.filter(r=>r.method==='prompt.submit'&&speaker(r.params)===b.name)).toHaveLength(2)
   expect(store.messages(owner,g.id).map(m=>m.content)).toEqual(['一个问题','我来回答'])
-  expect(store.conversationSummary(owner,store.require(owner,'conversation',g.id)).unreadCount).toBe(2)
+  expect(store.conversationSummary(owner,store.require(owner,'conversation',g.id))).toMatchObject({unread:true, unreadCount:1})
   expect(store.hiddenMessageIds(owner,g.id)).toHaveLength(2)
 })
 

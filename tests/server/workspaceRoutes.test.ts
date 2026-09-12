@@ -95,6 +95,33 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it.each(['direct', 'group'] as const)('uses versioned unread acknowledgments for %s without recounting history', async kind => {
+    const store = runtime.workspace
+    const first = store.createAgent('first', { name: '未读甲', profile: 'default' })
+    const second = store.createAgent('first', { name: '未读乙', profile: 'default' })
+    const conversation = kind === 'group'
+      ? store.createGroup('first', { name: '未读群', memberIds: [first.id, second.id], administratorId: first.id })
+      : store.list<any>('first', 'conversation').find(c => c.memberIds[0] === first.id)
+    const task = kind === 'group' ? store.tasks('first', conversation.id)[0] : undefined
+    const message: import('../../src/shared/workspace').WorkspaceMessage = { id: randomUUID(), conversationId: conversation.id, conversationTaskId: task?.id,
+      seq: 0, role: 'assistant', content: '进行中', reasoning: '', status: 'streaming', attachments: [], tools: [], createdAt: Date.now() }
+    store.saveMessage('first', message)
+    const snapshot = (await req('get', `/api/app/conversations/${conversation.id}`).expect(200)).body
+    const read = snapshot.task ?? snapshot.conversation
+    expect(read.unread).toBe(false)
+    message.status = 'complete'; message.content = '已完成'; store.saveMessage('first', message)
+    const path = `/api/app/conversations/${conversation.id}${task ? `/tasks/${task.id}` : ''}/read`
+    const display = vi.spyOn(store, 'messageForDisplay')
+    const stale = (await req('put', path).send({ seq: read.lastSeq, unreadVersion: read.unreadVersion }).expect(200)).body
+    expect(stale.conversation.unread).toBe(true)
+    const current = stale.task ?? stale.conversation
+    const acknowledged = (await req('put', path).send({ seq: current.lastSeq, unreadVersion: current.unreadVersion }).expect(200)).body
+    expect(acknowledged.conversation).toMatchObject({ unread: false, unreadCount: 0 })
+    expect(display).not.toHaveBeenCalled()
+    await req('put', path, 'foreign').send({ seq: current.lastSeq, unreadVersion: current.unreadVersion }).expect(404)
+    await req('put', path).send({ seq: current.lastSeq, unreadVersion: -1 }).expect(400)
+    display.mockRestore()
+  })
   it.each(['archive', 'delete'] as const)('%s removes a confirmed ordinary member from all groups atomically', async action => {
     const store = runtime.workspace
     const lead = store.createAgent('first', { name: '管理者', profile: 'default' })

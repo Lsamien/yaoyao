@@ -56,6 +56,10 @@ export interface WorkspaceConversation {
   activeAgentStates?: Record<string, 'running' | 'waiting' | 'uncertain' | 'queued'>
   avatarSignals?: Record<string, { id: string; state: 'success' | 'failure'; at: number }>
   queuedMessageCount?: number
+  unread?: boolean
+  /** Changes when new attention arrives, so an older read cannot clear it. */
+  unreadVersion?: number
+  /** Compatibility signal for older clients: always 0 or 1. */
   unreadCount?: number
   createdAt: number
   updatedAt: number
@@ -68,6 +72,9 @@ export interface WorkspaceTask {
   messageCount: number
   readSeq: number
   lastSeq: number
+  unread?: boolean
+  unreadVersion?: number
+  /** Compatibility signal for older clients: always 0 or 1. */
   unreadCount: number
   activeRunId?: string
   activeRunStatus?: WorkspaceRun['status']
@@ -75,6 +82,9 @@ export interface WorkspaceTask {
   createdAt: number
   updatedAt: number
   goal?: import('./agentTasks.js').AgentGoal
+}
+export function workspaceHasUnread(value: { unread?: boolean; unreadCount?: number; lastSeq: number; readSeq: number }): boolean {
+  return value.unread ?? (value.unreadCount !== undefined ? value.unreadCount > 0 : value.lastSeq > value.readSeq)
 }
 export interface WorkspaceFile {
   id: string

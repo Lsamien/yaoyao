@@ -6,6 +6,7 @@ export type SidebarItemBase = {
   section?: string
   active?: boolean
   unread?: number
+  unreadDot?: boolean
   pinned?: boolean
   nested?: boolean
   topic?: boolean

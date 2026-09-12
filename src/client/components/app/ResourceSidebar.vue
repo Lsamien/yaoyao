@@ -165,7 +165,8 @@ defineExpose({ focusSearch })
               </span>
               <span v-if="!singleLine && row.item.subtitle" class="sidebar-item__row sidebar-item__row--secondary">
                 <span>{{ row.item.subtitle }}</span>
-                <b v-if="row.item.unread">{{ row.item.unread > 99 ? '99+' : row.item.unread }}</b>
+                <i v-if="row.item.unreadDot" class="sidebar-unread-dot" role="img" aria-label="未读" />
+                <b v-else-if="row.item.unread">{{ row.item.unread > 99 ? '99+' : row.item.unread }}</b>
               </span>
             </span>
             <button v-if="row.item.showMore !== false" class="sidebar-item__more" type="button" aria-label="更多操作" @click.stop="emit('more', row.item.id, $event)">
@@ -228,6 +229,7 @@ defineExpose({ focusSearch })
 .sidebar-item__row small { flex: 0 0 auto; color: var(--text-muted); font-size: 9.5px; font-variant-numeric: tabular-nums; }
 .sidebar-item__row--secondary { color: var(--text-muted); font-size: 10.5px; line-height: 13px; }
 .sidebar-item__row b { display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--text-on-solid); font-size: 9px; }
+.sidebar-unread-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--accent); }
 .sidebar-item__more { display: none; position: absolute; right: 5px; top: 7px; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: var(--surface-raised); color: var(--text-secondary); cursor: pointer; box-shadow: 0 1px 5px rgba(0,0,0,.07); }
 .sidebar-item:hover .sidebar-item__more, .sidebar-item:focus-within .sidebar-item__more { display: grid; }
 .sidebar-load-more { display: block; width: calc(100% - 14px); min-height: 32px; margin: 8px 7px 2px; border: 0; border-radius: 8px; background: var(--surface-soft); color: var(--text-secondary); cursor: pointer; font: 11px var(--font-ui); }

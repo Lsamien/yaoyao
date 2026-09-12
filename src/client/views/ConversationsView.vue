@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { publishServerIdentity } from '@/api/serverIdentity'
 import type { ServerIdentity } from '@shared/serverIdentity'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate, onBeforeRouteLeave } from 'vue-router'
 import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
 import RemoteAgentPicker from '@/components/workspace/RemoteAgentPicker.vue'
@@ -12,12 +12,14 @@ import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import TaskPlan from '@/components/workspace/TaskPlan.vue'
 import type { AgentAssignment } from '@shared/agentTasks'
 import type { WorkspaceTask } from '@shared/workspace'
+import { workspaceHasUnread } from '@shared/workspace'
 import type { WorkspaceLifecycleAction, WorkspaceLifecyclePreview } from '@shared/workspaceLifecycle'
 import FloatingResourceSearch from '@/components/app/FloatingResourceSearch.vue'
 import type { SidebarItem } from '@/components/app/types'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import { createUuid } from '@/utils/id'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
+import MessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
+import { WorkspaceTranscriptStore, transcriptKey, type WorkspaceDetail, type WorkspaceSnapshot } from '@/components/workspace/transcriptStore'
 import ComposerShell from '@/components/composer/ComposerShell.vue'
 import type { ComposerSubmit, ComposerReference } from '@/components/composer/types'
 import PreviewModal from '@/components/library/PreviewModal.vue'
@@ -54,7 +56,7 @@ const auth = useAuthStore(),
   router = useRouter()
 const agents = ref<Agent[]>([]),
   conversations = ref<Conversation[]>([]),
-  messages = ref<Message[]>([]),
+  messages = shallowRef<Message[]>([]),
   sources = ref<Source[]>([])
 const active = ref<Conversation>(),
   run = ref<Run | null>(null),
@@ -91,7 +93,14 @@ const quoted = ref<UiMessage | null>(null)
 const preview = ref<UiLibraryItem | null>(null)
 const mediaIndex = ref<number | null>(null)
 const showThinking = ref(true)
-const uiMessages = computed(() => workspaceMessagesToUi(messages.value))
+const transcriptStore = new WorkspaceTranscriptStore()
+const renderedMessages = new WeakMap<Message, UiMessage>()
+const uiMessages = computed(() => messages.value.filter(m => m.visible !== false).map(message => {
+  let rendered = renderedMessages.get(message)
+  if (!rendered) { rendered = workspaceMessagesToUi([message])[0]!; renderedMessages.set(message, rendered) }
+  return rendered
+}))
+const loadingOlder = ref(false)
 const media = computed(() => mediaItemsFromMessages(uiMessages.value))
 const lightboxMedia = computed(() => media.value.filter(item => item.kind === 'image' || item.kind === 'video').map(item => ({ url: item.previewUrl || item.downloadUrl || '', name: item.name, type: item.kind as 'image' | 'video' })))
 const reference = computed<ComposerReference | null>(() => quoted.value ? { id: quoted.value.id, content: quoted.value.content, author: quoted.value.author } : null)
@@ -233,14 +242,23 @@ async function saveProfileIdentity(input: ProfileIdentityInput) {
   }
 }
 async function refresh() {
+  const startedAtCursor = transcriptStore.cursor
+  const owner = auth.user?.id
   const [a, c] = await Promise.all([
     apiRequest<{ agents: Agent[] }>('/api/app/agents'),
     apiRequest<{ conversations: Conversation[]; cursor: number }>('/api/app/conversations'),
   ])
-  if (disposed) return
+  if (disposed || auth.user?.id !== owner || transcriptStore.cursor !== startedAtCursor) return
   agents.value = a.agents
-  conversations.value = c.conversations
-  if (!cursor) cursor = c.cursor
+  const localConversations = new Map(conversations.value.map(row => [row.id, row]))
+  conversations.value = c.conversations.map(conversation => {
+    const local = localConversations.get(conversation.id)
+    return local && local.unreadVersion === conversation.unreadVersion && [...pendingReads].some(key => key.startsWith(`${conversation.id}:`))
+      ? { ...conversation, unread: local.unread, unreadCount: local.unreadCount } : conversation
+  })
+  transcriptStore.agents = agents.value
+  transcriptStore.conversations = conversations.value
+  if (!cursor) { cursor = c.cursor; transcriptStore.cursor = c.cursor }
 }
 async function load(id = selected.value, append = false) {
   if (!id) {
@@ -255,36 +273,32 @@ async function load(id = selected.value, append = false) {
   }
   const own = ++generation
   const previousComposer = composerKey.value
+  const previousFiles = composer.value?.filesSnapshot() ?? []
+  const previousQuote = quoted.value
   const requestedTask = selectedTask.value || (active.value?.id === id ? activeTask.value?.id : undefined)
-  if (!append) loading.value = true
+  const cached = !append ? transcriptStore.get(id, requestedTask) : undefined
+  const readToken = transcriptStore.beginRead()
+  if (!append) loading.value = !cached
+  if (active.value?.id !== id) {
+    active.value = conversations.value.find(c => c.id === id)
+    messages.value = cached?.messages ?? [];run.value = null;interactions.value = [];context.value = null
+    activeTask.value = null;tasks.value = [];assignments.value = [];quoted.value = null;older.value = false
+  }
   try {
-    const r = await apiRequest<{
-      conversation: Conversation
-      messages: Message[]
-      run: Run | null
-      interactions: Interaction[]
-      context: Record<string, unknown> | null
-      hiddenMessageIds?: string[]
-      task?: WorkspaceTask | null
-      tasks?: WorkspaceTask[]
-      assignments?: AgentAssignment[]
-    }>(`/api/app/conversations/${id}${requestedTask ? `?taskId=${encodeURIComponent(requestedTask)}` : ''}`)
+    const incoming = cached ?? await apiRequest<WorkspaceDetail>(`/api/app/conversations/${id}?limit=50${requestedTask ? `&taskId=${encodeURIComponent(requestedTask)}` : ''}`)
     if (disposed || own !== generation) return
+    const r = cached ?? transcriptStore.finishRead(readToken, incoming)
     const atBottom = timeline.value?.isFollowingBottom() ?? true
     active.value = r.conversation
+    if (r.task) transcriptStore.selectedTasks.set(id, r.task.id)
     activeTask.value = r.task ?? null;tasks.value = r.tasks ?? [];assignments.value = r.assignments ?? []
-    messages.value = append
-      ? [...new Map([...messages.value, ...r.messages].map((m) => [m.id, m])).values()].sort(
-          (a, b) => a.seq - b.seq,
-        )
-      : r.messages
-    messages.value = messages.value.filter(m => m.visible !== false && !r.hiddenMessageIds?.includes(m.id))
+    messages.value = r.messages
     run.value = r.run
     interactions.value = r.interactions
     context.value = r.context
     if (previousComposer !== composerKey.value) {
-      taskFiles.set(previousComposer,composer.value?.filesSnapshot() ?? [])
-      taskQuotes.set(previousComposer,quoted.value)
+      taskFiles.set(previousComposer,previousFiles)
+      taskQuotes.set(previousComposer,previousQuote)
       if (activeTask.value && !requestedTask) {
         const legacy = `hermes-yaoyao:composer:group:${auth.user?.id}:${active.value.id}`
         const current = `hermes-yaoyao:composer:group:${composerKey.value}`
@@ -298,11 +312,11 @@ async function load(id = selected.value, append = false) {
       if (saved?.length) await composer.value?.attachFiles(saved)
       quoted.value = taskQuotes.get(composerKey.value) ?? null
     }
-    if (!append) older.value = r.messages.length === 100
+    if (!append) older.value = r.hasOlder ?? r.messages.length === 50
     if (!append || atBottom) {
       await nextTick()
       if (!append) timeline.value?.scrollToBottom('auto')
-      await markRead()
+      void markRead().catch(e => { if (own === generation) error.value = e instanceof Error ? e.message : '同步已读失败' })
     }
   } catch (e) {
     if (own === generation && requestedTask && e instanceof ApiError && e.status === 404) {
@@ -317,18 +331,48 @@ async function load(id = selected.value, append = false) {
     }
     if (own === generation) error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
+    transcriptStore.cancelRead(readToken)
     if (own === generation) loading.value = false
   }
 }
+const pendingReads = new Set<string>()
 async function markRead() {
   const c = active.value
   const read = activeTask.value ?? c
-  if (!c || !read || read.readSeq >= read.lastSeq) return
-  await apiRequest(`/api/app/conversations/${c.id}/read${activeTask.value ? `?taskId=${activeTask.value.id}` : ''}`, {
-    method: 'PUT',
-    body: { seq: read.lastSeq },
-  })
-  read.readSeq = read.lastSeq
+  if (!c || !read || (!workspaceHasUnread(read) && read.readSeq >= read.lastSeq)) return
+  const task = activeTask.value, seq = read.lastSeq, version = read.unreadVersion
+  const key = `${c.id}:${task?.id ?? ''}:${version}:${seq}`
+  if (pendingReads.has(key)) return
+  pendingReads.add(key)
+  const previous = { unread: read.unread, unreadCount: read.unreadCount, readSeq: read.readSeq }
+  const previousConversation = { unread: c.unread, unreadCount: c.unreadCount }
+  read.unread = false;read.unreadCount = 0;read.readSeq = seq
+  if (task) tasks.value = tasks.value.map(t => t.id === task.id ? { ...t, unread: false, unreadCount: 0, readSeq: seq } : t)
+  const publishUnread = () => {
+    c.unread = task ? tasks.value.some(workspaceHasUnread) : read.unread
+    c.unreadCount = c.unread ? 1 : 0
+    const row = conversations.value.find(row => row.id === c.id)
+    if (row && row.unreadVersion === c.unreadVersion) { row.unread = c.unread;row.unreadCount = c.unreadCount }
+  }
+  publishUnread()
+  try {
+    const result = await apiRequest<{conversation: Conversation}>(`/api/app/conversations/${c.id}/read${task ? `?taskId=${task.id}` : ''}`, {
+      method: 'PUT', body: { seq, ...(version === undefined ? {} : {unreadVersion:version}) },
+    })
+    const row = conversations.value.find(row => row.id === c.id)
+    if (row && result.conversation && (row.unreadVersion ?? 0) <= (result.conversation.unreadVersion ?? 0)) {
+      row.unread = result.conversation.unread;row.unreadCount = result.conversation.unreadCount;row.unreadVersion = result.conversation.unreadVersion
+    }
+  } catch (error) {
+    const row = conversations.value.find(row => row.id === c.id)
+    if (row && row.unreadVersion === c.unreadVersion) Object.assign(row, previousConversation)
+    if (active.value?.id === c.id && activeTask.value?.id === task?.id && (activeTask.value ?? active.value)?.unreadVersion === version) {
+      Object.assign(activeTask.value ?? active.value!, previous)
+      if (task) tasks.value = tasks.value.map(t => t.id === task.id ? { ...t, ...previous, unreadCount: previous.unreadCount ?? 0 } : t)
+      publishUnread()
+    }
+    throw error
+  } finally { pendingReads.delete(key) }
 }
 async function selectTask(event:Event){
   const select=event.currentTarget as HTMLSelectElement,value=select.value
@@ -380,23 +424,78 @@ function openTaskLink(event: MouseEvent) {
     void router.push(url.pathname+url.search)
   } catch { /* Leave other links to their normal handler. */ }
 }
-async function poll() {
-  try {
-    const r = await apiRequest<{ events: WorkspaceEvent[]; cursor: number; serverIdentity?: ServerIdentity }>(
-      `/api/app/events?after=${cursor}`,
-    )
-    if (disposed) return
-    publishServerIdentity(r.serverIdentity)
-    cursor = r.cursor
-    if (r.events.length) {
-      await refresh()
-      if (r.events.some((e) => e.conversationId === selected.value || e.type === 'agent.changed'))
-        await load(selected.value, true)
+let eventSource: EventSource | undefined
+let eventFrame: number | undefined
+let eventQueue: WorkspaceEvent[] = []
+function presentDetail(detail: WorkspaceDetail) {
+  const atBottom = timeline.value?.isFollowingBottom() ?? true
+  active.value = detail.conversation
+  messages.value = detail.messages
+  activeTask.value = detail.task ?? null; tasks.value = detail.tasks ?? []
+  run.value = detail.run; interactions.value = detail.interactions
+  context.value = detail.context; assignments.value = detail.assignments ?? []
+  older.value = detail.hasOlder ?? false
+  if (atBottom) void markRead().catch(() => {})
+}
+function flushEvents() {
+  eventFrame = undefined
+  for (const event of eventQueue) transcriptStore.apply(event)
+  eventQueue = []
+  cursor = transcriptStore.cursor
+  agents.value = transcriptStore.agents
+  conversations.value = transcriptStore.conversations
+  if (selected.value) {
+    const detail = transcriptStore.get(selected.value, selectedTask.value || activeTask.value?.id)
+    if (detail) presentDetail(detail)
+    else if (!conversations.value.some(c => c.id === selected.value)) void router.replace('/conversations')
+    else if (activeTask.value && !transcriptStore.details.has(transcriptKey(selected.value, activeTask.value.id))) {
+      void router.replace(`/conversations/${selected.value}`); void load(selected.value, true)
     }
-  } catch (e) {
-    if (!disposed) error.value = e instanceof Error ? e.message : '连接中断，正在重连'
-  } finally {
-    if (!disposed) timer = setTimeout(() => void poll(), 1200)
+  }
+}
+async function hydrateWorkspace() {
+  const owner = auth.user?.id
+  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity }>('/api/app/workspace/snapshot')
+  if (disposed || auth.user?.id !== owner) return
+  transcriptStore.hydrate(snapshot)
+  agents.value = snapshot.agents; conversations.value = snapshot.conversations; cursor = snapshot.cursor
+  publishServerIdentity(snapshot.serverIdentity)
+}
+function connectEvents() {
+  eventSource?.close()
+  if (disposed) return
+  const source = new EventSource(`/api/app/events/stream?after=${cursor}`)
+  eventSource = source
+  source.addEventListener('workspace', event => {
+    if (disposed || eventSource !== source) return
+    try {
+      eventQueue.push(JSON.parse((event as MessageEvent).data))
+      if (eventFrame === undefined) eventFrame = requestAnimationFrame(flushEvents)
+    } catch { source.close(); error.value = '消息同步失败，正在恢复'; void recoverEvents() }
+  })
+  source.addEventListener('ready', event => {
+    if (eventSource !== source) return
+    flushEvents(); error.value = ''
+    publishServerIdentity(JSON.parse((event as MessageEvent).data).serverIdentity)
+  })
+  source.addEventListener('reset', () => { source.close(); void recoverEvents() })
+  source.onerror = () => {
+    if (disposed || eventSource !== source) return
+    error.value = '连接中断，正在重连'
+    void apiRequest('/api/app/capabilities').catch(cause => {
+      if (cause instanceof ApiError && cause.status === 401) source.close()
+    })
+  }
+}
+async function recoverEvents() {
+  eventSource?.close(); eventSource = undefined; eventQueue = []
+  if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
+  eventFrame = undefined
+  try { await hydrateWorkspace(); await load(); connectEvents() }
+  catch (cause) {
+    if (disposed) return
+    error.value = cause instanceof Error ? cause.message : '连接中断'
+    timer = setTimeout(() => void recoverEvents(), 1500)
   }
 }
 async function select(id: string) {
@@ -663,18 +762,23 @@ async function respond(i: Interaction, answer: string) {
 }
 async function loadOlder() {
   const c = active.value
-  if (!c) return
+  if (!c || loadingOlder.value) return
+  loadingOlder.value = true
+  const readToken = transcriptStore.beginRead()
   const taskId = activeTask.value?.id, own = generation
   try {
-    const r = await apiRequest<{ messages: Message[] }>(
-      `/api/app/conversations/${c.id}/messages?before=${messages.value[0]?.seq ?? 0}${activeTask.value ? `&taskId=${activeTask.value.id}` : ''}`,
+    const r = await apiRequest<{ messages: Message[]; cursor?: number }>(
+      `/api/app/conversations/${c.id}/messages?limit=50&before=${messages.value[0]?.seq ?? 0}${activeTask.value ? `&taskId=${activeTask.value.id}` : ''}`,
     )
     if (own !== generation || active.value?.id !== c.id || activeTask.value?.id !== taskId) return
-    messages.value = [...r.messages, ...messages.value]
-    older.value = r.messages.length === 100
+    const current = transcriptStore.get(c.id, taskId)
+    if (!current) return
+    const detail = transcriptStore.finishRead(readToken, { ...current, messages: r.messages, cursor: r.cursor })
+    detail.hasOlder = r.messages.length === 50
+    messages.value = detail.messages; older.value = detail.hasOlder
   } catch (e) {
     error.value = String(e)
-  }
+  } finally { transcriptStore.cancelRead(readToken); loadingOlder.value = false }
 }
 function rendered(m: Message) {
   return m.content.replace(
@@ -698,19 +802,33 @@ watch([selected,selectedTask], () => {
   void load()
 })
 watch(selected,()=>{dockView.value=undefined})
+watch(() => auth.user?.id, (owner, previous) => {
+  if (owner === previous) return
+  generation++
+  eventSource?.close(); eventSource = undefined; eventQueue = []
+  if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
+  eventFrame = undefined; cursor = 0
+  transcriptStore.hydrate({ agents: [], conversations: [], details: [], cursor: 0 })
+  transcriptStore.selectedTasks.clear()
+  agents.value = []; conversations.value = []; messages.value = []; active.value = undefined
+  tasks.value = []; activeTask.value = null; run.value = null; interactions.value = []; context.value = null
+  taskFiles.clear(); taskQuotes.clear()
+  if (owner) void recoverEvents()
+})
 onMounted(async () => {
   void auth.refreshProfileAvatars().catch(() => undefined)
   try {
-    await apiRequest('/api/app/capabilities')
-    await refresh()
+    await hydrateWorkspace()
+    if (!disposed) connectEvents()
     await load()
-    if (!disposed) void poll()
   } catch (e) {
     error.value = String(e)
   }
 })
 onBeforeUnmount(() => {
   disposed = true
+  eventSource?.close()
+  if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
   generation++
   if (timer) clearTimeout(timer)
 })
@@ -748,7 +866,7 @@ onBeforeUnmount(() => {
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">
-      <MessageTimeline ref="timeline" :messages="uiMessages" :title="active?.name || 'Bot 模式'"
+      <MessageTimeline ref="timeline" :identity="`${selected}:${activeTask?.id ?? ''}`" :loading-older="loadingOlder" :messages="uiMessages" :title="active?.name || 'Bot 模式'"
         :subtitle="active?.kind === 'group' ? `${members.length} 位成员` : ''"
         :loading="loading" :has-older="older && !!active" :connected="!error" :synced="!loading"
         :show-tools="showThinking" :allow-branch="false" :thinking="!!run && ['running','waiting','uncertain'].includes(run.status)"

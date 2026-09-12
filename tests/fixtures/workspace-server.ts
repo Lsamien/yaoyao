@@ -355,6 +355,23 @@ const grokAuth=process.env.WORKSPACE_FIXTURE_GROK_AUTH==='1'?new FixtureGrokAuth
 const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch, pluginFetch: pluginsFixture?.fetch }),
   node = createNodeServer(runtime)
 const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?nativeEnvironmentFixture(runtime,home,port):undefined
+runtime.app.use((ctx, next) => {
+  if (ctx.path !== '/__test/workspace-transcript' || ctx.method !== 'POST') return next()
+  const owner = auth.require(ctx).id
+  if (typeof ctx.query.id === 'string') {
+    const message = runtime.workspace.messages(owner, ctx.query.id, Number.MAX_SAFE_INTEGER, 1)[0]!
+    runtime.workspace.saveMessage(owner, { ...message, content: message.content + '\n\n实时追加的内容', status: 'streaming' })
+    ctx.body = { ok: true }; return
+  }
+  const agent = runtime.workspace.createAgent(owner, { name: '长会话性能验收', profile: 'default' })
+  const conversation = runtime.workspace.list<any>(owner, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === agent.id)!
+  for (let index = 1; index <= 300; index++) runtime.workspace.saveMessage(owner, {
+    id: randomUUID(), conversationId: conversation.id, seq: index, role: index % 2 ? 'user' : 'assistant',
+    content: `消息 ${index}\n\n${'用于验证长会话缓存与滚动位置。'.repeat(12)}`, reasoning: '', status: 'complete',
+    attachments: [], tools: [], createdAt: Date.now() + index,
+  })
+  ctx.body = { agentId: agent.id, conversationId: conversation.id }
+})
 runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/browser-page')return next();ctx.type='html';ctx.body='<!doctype html><meta charset="utf-8"><title>浏览器操作验收</title><body style="font:22px sans-serif;padding:48px;background:#edf4ff"><h1>机器人的独立浏览器</h1><p>这是隔离的真实浏览器验收页面。</p><input aria-label="输入内容"><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">确认</button><output></output></body>'})
 runtime.app.use((ctx,next) => {
   if (ctx.path !== '/__test/task-plan' || ctx.method !== 'POST') return next()

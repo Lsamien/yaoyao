@@ -23,6 +23,82 @@ async function createAgent(page: Page, name: string) {
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
 }
 
+test('Bot unread dots sync across viewers and neither detail nor read requests delay navigation', async ({ page, context }, testInfo) => {
+  await login(page)
+  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
+  const create = async (name: string) => {
+    const response = await page.request.post('/api/app/agents', { headers, data: { name, profile: 'default' } })
+    expect(response.ok(), await response.text()).toBe(true)
+    return (await response.json()).agent
+  }
+  const first = await create('红点测试甲'), second = await create('红点测试乙')
+  const conversations = (await (await page.request.get('/api/app/conversations')).json()).conversations
+  const direct = conversations.find((c: any) => c.kind === 'direct' && c.memberIds[0] === first.id)
+  const other = conversations.find((c: any) => c.kind === 'direct' && c.memberIds[0] === second.id)
+  const groupResponse = await page.request.post('/api/app/conversations', { headers, data: { name: '红点测试群', memberIds: [first.id, second.id], administratorId: first.id } })
+  expect(groupResponse.ok(), await groupResponse.text()).toBe(true)
+  const group = (await groupResponse.json()).conversation
+  await page.goto(`/conversations/${other.id}`)
+  const viewer = await context.newPage()
+  await viewer.goto(`/conversations/${other.id}`)
+  try {
+    for (const target of [direct, group]) {
+      const sent = await page.request.post(`/api/app/conversations/${target.id}/messages`, { headers, data: { requestId: crypto.randomUUID(), content: '给出测试结果' } })
+      expect(sent.ok(), await sent.text()).toBe(true)
+      const row = page.locator(`.desktop-sidebar [data-sidebar-id="${target.id}"]`)
+      const viewerRow = viewer.locator(`.desktop-sidebar [data-sidebar-id="${target.id}"]`)
+      await expect(row.getByRole('img', { name: '未读', exact: true })).toBeVisible()
+      await expect(viewerRow.getByRole('img', { name: '未读', exact: true })).toBeVisible()
+      await expect(row.locator('b')).toHaveCount(0)
+      await page.screenshot({ path: testInfo.outputPath(`unread-${target.kind}-dot.png`) })
+      let releaseDetail!: () => void, releaseRead!: () => void
+      const detailGate = new Promise<void>(resolve => { releaseDetail = resolve })
+      const readGate = new Promise<void>(resolve => { releaseRead = resolve })
+      const detailPattern = new RegExp(`/api/app/conversations/${target.id}(?:\\?.*)?$`)
+      const readPattern = new RegExp(`/api/app/conversations/${target.id}/read(?:\\?.*)?$`)
+      await page.route(detailPattern, async route => { await detailGate; await route.continue() })
+      await page.route(readPattern, async route => { await readGate; await route.continue() })
+      try {
+        // Warm transcripts are already in the snapshot; a detail request is optional.
+        await row.click()
+        await expect(page.getByRole('heading', { name: target.name, exact: true })).toBeVisible()
+        releaseDetail()
+        await expect(page.getByRole('textbox', { name: '输入消息，Enter 发送，Shift + Enter 换行' })).toBeEnabled()
+        await expect(row.getByRole('img', { name: '未读', exact: true })).toHaveCount(0)
+        releaseRead()
+        await expect(viewerRow.getByRole('img', { name: '未读', exact: true })).toHaveCount(0)
+      } finally {
+        releaseDetail(); releaseRead()
+        await page.unroute(detailPattern); await page.unroute(readPattern)
+      }
+      await page.locator(`.desktop-sidebar [data-sidebar-id="${other.id}"]`).click()
+    }
+    await expect(page.getByRole('textbox', { name: '输入消息，Enter 发送，Shift + Enter 换行' })).toBeEnabled()
+    await page.screenshot({ path: testInfo.outputPath('unread-desktop.png') })
+    const sent = await page.request.post(`/api/app/conversations/${group.id}/messages`, { headers, data: { requestId: crypto.randomUUID(), content: '再次确认结果' } })
+    expect(sent.ok(), await sent.text()).toBe(true)
+    await page.setViewportSize({ width: 375, height: 812 })
+    await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+    await page.goto('/conversations')
+    await expect(page.getByRole('option').filter({ hasText: group.name }).getByRole('img', { name: '未读', exact: true })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('unread-mobile.png') })
+  } finally {
+    await viewer.close()
+    // This suite shares its fixture account; remove only the records created above.
+    const archived = await page.request.patch(`/api/app/conversations/${group.id}`, { headers, data: { archived: true } })
+    expect(archived.ok(), await archived.text()).toBe(true)
+    const removed = await page.request.delete(`/api/app/conversations/${group.id}`, { headers })
+    expect(removed.ok(), await removed.text()).toBe(true)
+    for (const agent of [first, second]) {
+      const archived = await page.request.patch(`/api/app/agents/${agent.id}`, { headers, data: { archived: true } })
+      expect(archived.ok(), await archived.text()).toBe(true)
+      const removed = await page.request.delete(`/api/app/agents/${agent.id}`, { headers })
+      expect(removed.ok(), await removed.text()).toBe(true)
+    }
+  }
+})
+
 test('an open Web chat list receives cross-client sessions and real title events without reload', async ({
   page,
   context,
@@ -580,4 +656,50 @@ test('only chat messages introduce files across transcript and library', async (
   await page.locator('.turn-trace summary').first().click()
   await page.setViewportSize({ width: 1280, height: 1100 })
   await page.screenshot({ path: testInfo.outputPath('message-files-web.png') })
+})
+
+
+test('Bot transcript switches from cache and preserves the viewport during history and live updates', async ({ page }, testInfo) => {
+  await login(page)
+  const bootstrap = await (await page.request.get('/api/app/bootstrap')).json()
+  const headers = { 'X-CSRF-Token': bootstrap.csrfToken }
+  const seed = await (await page.request.post('/__test/workspace-transcript', { headers })).json()
+  try {
+    await page.goto(`/conversations/${seed.conversationId}`)
+    await expect(page.locator('.message')).toHaveCount(50)
+    const scroller = page.locator('.timeline')
+    for (let index = 0; index < 4; index++) {
+      await scroller.evaluate(el => { el.scrollTop = 0 })
+      const before = await page.locator('.message').first().getAttribute('data-message-id')
+      await page.getByRole('button', { name: '加载更早消息', exact: true }).click()
+      await expect(page.locator('.message')).toHaveCount(100 + index * 50)
+      expect(await page.locator(`[data-message-id="${before}"]`).evaluate(el => {
+        const scroller = el.closest('.timeline')!; return el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      })).toBeGreaterThanOrEqual(-10)
+    }
+    // Returning keeps loaded history in memory but mounts only the 120-message tail.
+    await page.locator('.desktop-sidebar .bot-logo-trigger').click()
+    await expect(page.locator('.desktop-sidebar .sidebar-item').filter({ hasText: '长会话性能验收' })).toBeVisible()
+    const requests: string[] = []
+    page.on('request', request => { if (request.method() === 'GET') requests.push(new URL(request.url()).pathname) })
+    await page.locator(`.desktop-sidebar [data-sidebar-id="${seed.conversationId}"]`).click()
+    await expect(page.locator('.message')).toHaveCount(120)
+    expect(requests).not.toContain(`/api/app/conversations/${seed.conversationId}`)
+    await scroller.hover(); await page.mouse.wheel(0, -600)
+    await expect(page.getByRole('button', { name: '回到底部', exact: true })).toBeVisible()
+    const top = await scroller.evaluate(el => el.scrollTop)
+    await page.request.post(`/__test/workspace-transcript?id=${seed.conversationId}`, { headers })
+    await expect(page.locator('.message').last()).toContainText('实时追加的内容')
+    expect(Math.abs(await scroller.evaluate(el => el.scrollTop) - top)).toBeLessThan(4)
+    expect(requests).not.toContain('/api/app/agents')
+    expect(requests).not.toContain('/api/app/events')
+    await page.screenshot({ path: testInfo.outputPath('bot-cached-transcript.png') })
+    await page.setViewportSize({ width: 375, height: 812 })
+    await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+    await expect(page.getByRole('textbox', { name: '输入消息，Enter 发送，Shift + Enter 换行' })).toBeVisible()
+    await page.screenshot({ path: testInfo.outputPath('bot-cached-transcript-mobile-dark.png') })
+  } finally {
+    await page.request.patch(`/api/app/agents/${seed.agentId}`, { headers, data: { archived: true } })
+    await page.request.delete(`/api/app/agents/${seed.agentId}`, { headers })
+  }
 })

@@ -136,6 +136,9 @@ export class WorkspaceStore {
       CREATE INDEX IF NOT EXISTS workspace_turn_status ON workspace_entities(owner, json_extract(data,'$.status'), json_extract(data,'$.planned')) WHERE kind='turn';
       CREATE INDEX IF NOT EXISTS workspace_turn_conversation ON workspace_entities(owner, json_extract(data,'$.conversationId')) WHERE kind='turn';
       CREATE INDEX IF NOT EXISTS workspace_message_task ON workspace_entities(owner, json_extract(data,'$.conversationTaskId'), json_extract(data,'$.seq')) WHERE kind='message';
+      CREATE INDEX IF NOT EXISTS workspace_message_conversation ON workspace_entities(owner, json_extract(data,'$.conversationId'), json_extract(data,'$.seq')) WHERE kind='message';
+      CREATE INDEX IF NOT EXISTS workspace_message_hidden ON workspace_entities(owner, json_extract(data,'$.conversationId'), json_extract(data,'$.conversationTaskId'), json_extract(data,'$.seq')) WHERE kind='message' AND json_extract(data,'$.visible')=0;
+      CREATE INDEX IF NOT EXISTS workspace_task_unread ON workspace_entities(owner, json_extract(data,'$.conversationId'), json_extract(data,'$.unread')) WHERE kind='conversation-task';
       CREATE INDEX IF NOT EXISTS workspace_run_task ON workspace_entities(owner, json_extract(data,'$.conversationTaskId'), json_extract(data,'$.status')) WHERE kind='run';
       CREATE INDEX IF NOT EXISTS workspace_turn_task ON workspace_entities(owner, json_extract(data,'$.conversationTaskId'), json_extract(data,'$.status')) WHERE kind='turn';`)
     this.db.exec('CREATE TABLE IF NOT EXISTS server_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1), server_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL)')
@@ -185,6 +188,30 @@ export class WorkspaceStore {
       }
       this.db.prepare('INSERT INTO workspace_migrations VALUES(?)').run(migration)
     })
+    this.atomic(() => {
+      const migration = 'workspace-unread-flag-v1'
+      if (this.db.prepare('SELECT id FROM workspace_migrations WHERE id=?').get(migration)) return
+      for (const owner of this.owners()) {
+        for (const task of this.list<Task>(owner, 'conversation-task')) {
+          task.unread ??= task.unreadCount > 0
+          task.unreadVersion ??= task.unread ? 1 : 0
+          task.unreadCount = task.unread ? 1 : 0
+          this.put(owner, 'conversation-task', task.id, task)
+        }
+        for (const conversation of this.list<Conversation>(owner, 'conversation')) {
+          conversation.unread ??= conversation.kind === 'group'
+            ? this.hasUnreadTask(owner, conversation.id)
+            : !!this.db.prepare("SELECT 1 FROM workspace_entities WHERE owner=? AND kind='message' AND json_extract(data,'$.conversationId')=? AND json_extract(data,'$.seq')>? AND coalesce(json_extract(data,'$.visible'),1)!=0 LIMIT 1").get(owner, conversation.id, conversation.readSeq)
+          conversation.unreadVersion ??= conversation.unread ? 1 : 0
+          conversation.unreadCount = conversation.unread ? 1 : 0
+          this.put(owner, 'conversation', conversation.id, conversation)
+        }
+      }
+      this.db.prepare('INSERT INTO workspace_migrations VALUES(?)').run(migration)
+    })
+  }
+  private hasUnreadTask(owner: string, conversationId: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM workspace_entities WHERE owner=? AND kind='conversation-task' AND json_extract(data,'$.conversationId')=? AND json_extract(data,'$.unread')=1 LIMIT 1").get(owner, conversationId)
   }
   get<T>(owner: string, kind: string, id: string): T | undefined {
     const row = this.db
@@ -338,6 +365,8 @@ export class WorkspaceStore {
         archived: false,
         pinned: false,
         readSeq: 0,
+        unread: false,
+        unreadVersion: 0,
         lastSeq: 0,
         preview: '',
         createdAt: now,
@@ -514,6 +543,8 @@ export class WorkspaceStore {
       archived: false,
       pinned: false,
       readSeq: 0,
+      unread: false,
+      unreadVersion: 0,
       lastSeq: 0,
       preview: '',
       createdAt: now,
@@ -580,7 +611,7 @@ export class WorkspaceStore {
         messageCount: visibleMessages.length,
         readSeq,
         lastSeq,
-        unreadCount: visibleMessages.filter(message => message.seq > readSeq).length,
+        unreadCount: visibleMessages.some(message => message.seq > readSeq) ? 1 : 0,
         lastMessageAt: lastMessage.createdAt,
         createdAt: firstMessage.createdAt,
         updatedAt: lastMessage.createdAt,
@@ -672,6 +703,8 @@ export class WorkspaceStore {
         messageCount: 0,
         readSeq: 0,
         lastSeq: 0,
+        unread: false,
+        unreadVersion: 0,
         unreadCount: 0,
         createdAt: now,
         updatedAt: now,
@@ -707,15 +740,31 @@ export class WorkspaceStore {
       return next
     })
   }
-  markTaskRead(owner: string, conversationId: string, taskId: string, seq: number): Task {
+  markTaskRead(owner: string, conversationId: string, taskId: string, seq: number, unreadVersion?: number): Task {
     return this.atomic(() => {
       const task = this.requireTask(owner, conversationId, taskId)
       task.readSeq = Math.max(task.readSeq, Math.min(seq, task.lastSeq))
-      task.unreadCount = this.messages(owner, conversationId, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, false, task.id)
-        .filter(message => message.seq > task.readSeq).length
+      if (unreadVersion === undefined ? seq >= task.lastSeq : unreadVersion === (task.unreadVersion ?? 0)) task.unread = false
+      task.unreadCount = task.unread ? 1 : 0
       this.put(owner, 'conversation-task', task.id, task)
+      const conversation = this.require<Conversation>(owner, 'conversation', conversationId)
+      conversation.unread = this.hasUnreadTask(owner, conversationId)
+      conversation.unreadCount = conversation.unread ? 1 : 0
+      this.put(owner, 'conversation', conversationId, conversation)
       this.event(owner, 'task.changed', task, conversationId)
+      this.event(owner, 'conversation.changed', conversation, conversationId)
       return task
+    })
+  }
+  markConversationRead(owner: string, conversationId: string, seq: number, unreadVersion?: number): Conversation {
+    return this.atomic(() => {
+      const conversation = this.require<Conversation>(owner, 'conversation', conversationId)
+      conversation.readSeq = Math.max(conversation.readSeq, Math.min(seq, conversation.lastSeq))
+      if (conversation.kind === 'direct' && (unreadVersion === undefined ? seq >= conversation.lastSeq : unreadVersion === (conversation.unreadVersion ?? 0))) conversation.unread = false
+      conversation.unreadCount = conversation.unread ? 1 : 0
+      this.put(owner, 'conversation', conversationId, conversation)
+      this.event(owner, 'conversation.changed', conversation, conversationId)
+      return this.conversationSummary(owner, conversation)
     })
   }
   deleteTask(owner: string, conversationId: string, taskId: string): void {
@@ -742,6 +791,8 @@ export class WorkspaceStore {
       conversation.previewAgentId = last?.role === 'assistant' ? last.agentId : undefined
       conversation.lastMessageAt = last?.createdAt
       conversation.updatedAt = Date.now()
+      conversation.unread = this.hasUnreadTask(owner, conversationId)
+      conversation.unreadCount = conversation.unread ? 1 : 0
       this.projectConversationRuns(owner, conversation)
       this.put(owner, 'conversation', conversationId, conversation)
       this.event(owner, 'conversation.changed', conversation, conversationId)
@@ -831,6 +882,15 @@ export class WorkspaceStore {
       if (previous?.visible === false && message.visible !== false) message.seq = 0
       if (!message.seq) message.seq = c.lastSeq + 1
       c.lastSeq = Math.max(c.lastSeq, message.seq)
+      const needsAttention = (value: Message | undefined) => !!value && value.role !== 'user' && value.visible !== false
+        && ['complete', 'failed', 'interrupted'].includes(value.status)
+        && !!(value.content.trim() || value.error || this.messageForDisplay(owner, value).attachments.length)
+      if (needsAttention(message) && !needsAttention(previous)) {
+        c.unread = true
+        c.unreadVersion = (c.unreadVersion ?? 0) + 1
+        if (task) { task.unread = true; task.unreadVersion = (task.unreadVersion ?? 0) + 1 }
+      }
+      c.unreadCount = c.unread ? 1 : 0
       if (message.visible !== false && (message.content.trim() || message.attachments.length)) {
         c.updatedAt = Date.now()
         c.lastMessageAt = Math.max(c.lastMessageAt ?? 0, message.createdAt)
@@ -845,8 +905,7 @@ export class WorkspaceStore {
         if (becameVisible) task.messageCount += 1
         if (becameHidden) task.messageCount = Math.max(0, task.messageCount - 1)
         task.lastSeq = Math.max(task.lastSeq, message.seq)
-        if (becameVisible && message.seq > task.readSeq) task.unreadCount += 1
-        if (becameHidden && message.seq > task.readSeq) task.unreadCount = Math.max(0, task.unreadCount - 1)
+        task.unreadCount = task.unread ? 1 : 0
         if (message.visible !== false && (message.content.trim() || message.attachments.length)) {
           if (message.role === 'user' && task.titleSource === 'automatic' && task.messageCount <= 1) {
             const source = notificationPlainText(message.content, { maximum: 48, fallback: message.attachments[0]?.name ?? '' }).trim()
@@ -866,13 +925,12 @@ export class WorkspaceStore {
     return { ...agent, avatar: agent.avatar || encodeAgentAvatar(defaultAgentIdentity(agent.id, agent.name)) }
   }
   conversationSummary(owner: string, conversation: Conversation): Conversation {
-    const member = conversation.kind === 'direct' ? this.get<Agent>(owner, 'agent', conversation.memberIds[0] ?? '') : undefined,
-      unreadCount = conversation.kind === 'group'
-        ? this.tasks(owner, conversation.id).reduce((count, task) => count + task.unreadCount, 0)
-        : this.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).filter(message => message.seq > conversation.readSeq).length
+    const member = conversation.kind === 'direct' ? this.get<Agent>(owner, 'agent', conversation.memberIds[0] ?? '') : undefined
     return {
       ...conversation,
-      unreadCount,
+      unread: conversation.unread ?? false,
+      unreadVersion: conversation.unreadVersion ?? 0,
+      unreadCount: conversation.unread ? 1 : 0,
       ...(member ? { avatar: this.agentSummary(member).avatar } : {}),
       lastMessageAt: conversation.lastMessageAt
         ?? (conversation.lastSeq > 0 ? this.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 1).at(-1)?.createdAt : undefined)
@@ -880,7 +938,11 @@ export class WorkspaceStore {
     }
   }
   hiddenMessageIds(owner: string, conversationId: string, conversationTaskId?: string): string[] {
-    return this.messages(owner, conversationId, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true, conversationTaskId).filter(m => m.visible === false).map(m => m.id)
+    this.require(owner, 'conversation', conversationId)
+    if (conversationTaskId) this.requireTask(owner, conversationId, conversationTaskId)
+    const taskClause = conversationTaskId ? "AND json_extract(data,'$.conversationTaskId')=?" : ''
+    return this.db.prepare(`SELECT id FROM workspace_entities WHERE owner=? AND kind='message' AND json_extract(data,'$.conversationId')=? AND json_extract(data,'$.visible')=0 ${taskClause} ORDER BY json_extract(data,'$.seq') ASC`)
+      .all(...(conversationTaskId ? [owner, conversationId, conversationTaskId] : [owner, conversationId])).map(row => String(row.id))
   }
   saveRun(owner: string, run: Run): void {
     this.atomic(() => {
@@ -936,6 +998,7 @@ export class WorkspaceStore {
     )
   }
   close(): void {
+    this.changes.emit('workspace.close')
     this.changes.removeAllListeners()
     this.db.close()
   }

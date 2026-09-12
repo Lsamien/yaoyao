@@ -1,4 +1,5 @@
 import { visibleMessageText, messageReasoningText } from '@shared/messageFiles'
+import { workspaceHasUnread } from '@shared/workspace'
 import { toolResultFailed } from '@shared/chatTools'
 import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
 import type {
@@ -421,7 +422,7 @@ export function workspaceAvatarState(conversation: import('@shared/workspace').W
   const signal = conversation?.avatarSignals?.[agentId]
   if (signal && Date.now() - signal.at < 2000) return signal.state
   if (conversation?.activeRunStatus === 'queued' && conversation.memberIds[0] === agentId) return 'loading'
-  if (!conversation?.activeRunId || conversation.activeAgentId !== agentId) return conversation?.previewAgentId === agentId && (conversation.unreadCount ?? Math.max(0, conversation.lastSeq - conversation.readSeq)) > 0 ? 'notifying' : 'idle'
+  if (!conversation?.activeRunId || conversation.activeAgentId !== agentId) return conversation?.previewAgentId === agentId && workspaceHasUnread(conversation) ? 'notifying' : 'idle'
   return conversation.activeRunStatus === 'waiting' || conversation.activeRunStatus === 'uncertain' ? 'waiting' : 'working'
 }
 
@@ -451,6 +452,6 @@ export function workspaceConversationItem(c: import('@shared/workspace').Workspa
     meta: formatConversationTime(c.lastMessageAt ?? c.createdAt),
     avatarKind: c.kind === 'direct' ? 'agent' : 'team',
     avatarState: activity ?? workspaceAvatarState(c, c.memberIds[0] || ''), avatarActivityKey: c.lastSeq,
-    unread: c.unreadCount ?? Math.max(0, c.lastSeq - c.readSeq), status: activity || c.activeRunId ? 'working' : undefined,
+    unreadDot: workspaceHasUnread(c), status: activity || c.activeRunId ? 'working' : undefined,
   }
 }

@@ -11,13 +11,15 @@ vi.mock('../../src/client/stores/auth', () => ({ useAuthStore: () => ({ user: { 
 vi.mock('../../src/client/stores/theme', () => ({ useThemeStore: () => ({}) }))
 
 let wrapper: VueWrapper | undefined
-afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.restoreAllMocks(); vi.mocked(apiRequest).mockReset() })
+afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.mocked(apiRequest).mockReset() })
 
 async function setup(kind: 'direct' | 'group', remove: () => Promise<void> = async () => {}, groups: WorkspaceLifecyclePreview['groups'] = [], initiallyArchived = true) {
   let archived = [{ id: 'archived', name: '旧聊天', kind, archived: initiallyArchived, memberIds: ['bot'], updatedAt: 1 }]
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/conversations/:id?', component: { template: '<div />' } }] })
   await router.push('/conversations'); await router.isReady()
+  vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+    if (path === '/api/app/workspace/snapshot') return { agents: [{ id: 'bot', name: '旧聊天', archived: true }], conversations: archived, details: [], cursor: 1 } as never
     if (path.endsWith('/lifecycle')) {
       if (options?.method !== 'POST') return { name: '旧聊天', kind, groups, confirmationToken: 'a'.repeat(64) } as never
       await remove()

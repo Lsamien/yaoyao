@@ -1,3 +1,4 @@
+import { workspaceDetail, streamWorkspace } from './workspaceSync.js'
 import { readServerIdentity } from './serverIdentity.js'
 import { randomUUID } from 'node:crypto'
 import Router from '@koa/router'
@@ -72,7 +73,7 @@ export function workspaceRouter(
         'voice',
         'context',
         ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'remoteAgentReferences', 'editableNodeAddress'] : []),
-        'events',
+        'events', 'workspace-stream-v1',
       ],
     }
   })
@@ -223,8 +224,10 @@ export function workspaceRouter(
     ctx.body = { task: store.updateTask(owner(ctx), ctx.params.id, ctx.params.taskId, body(ctx)) }
   })
   router.put('/api/app/conversations/:id/tasks/:taskId/read', (ctx) => {
-    const seq = parse(z.object({ seq: z.number().int().nonnegative() }).strict(), body(ctx)).seq
-    ctx.body = { task: store.markTaskRead(owner(ctx), ctx.params.id, ctx.params.taskId, seq) }
+    const { seq, unreadVersion } = parse(z.object({ seq: z.number().int().nonnegative(), unreadVersion: z.number().int().nonnegative().optional() }).strict(), body(ctx))
+    const user = owner(ctx)
+    ctx.body = { task: store.markTaskRead(user, ctx.params.id, ctx.params.taskId, seq, unreadVersion),
+      conversation: store.conversationSummary(user, store.require(user, 'conversation', ctx.params.id)) }
   })
   router.delete('/api/app/conversations/:id/tasks/:taskId', async (ctx) => {
     const user = owner(ctx)
@@ -233,27 +236,9 @@ export function workspaceRouter(
     ctx.body = { ok: true }
   })
   router.get('/api/app/conversations/:id', (ctx) => {
-    const user = owner(ctx),
-      conversation = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id),
-      requestedTaskId = typeof ctx.query.taskId === 'string' ? ctx.query.taskId : undefined,
-      task = store.resolveTask(user, conversation.id, requestedTaskId),
-      tasks = conversation.kind === 'group' ? store.tasks(user, conversation.id) : [],
-      activeRunId = task?.activeRunId ?? (conversation.kind === 'direct' ? conversation.activeRunId : undefined)
-    ctx.body = {
-      conversation: store.conversationSummary(user, conversation),
-      task: task ?? null,
-      tasks,
-      assignments: task ? runtime.tasks.assignments(user, task.id) : [],
-      messages: store.messages(user, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, task?.id),
-      hiddenMessageIds: store.hiddenMessageIds(user, conversation.id, task?.id),
-      run: activeRunId
-        ? store.require<WorkspaceRun>(user, 'run', activeRunId)
-        : null,
-      interactions: store
-        .list<WorkspaceInteraction>(user, 'interaction')
-        .filter((i) => i.conversationId === conversation.id && i.conversationTaskId === task?.id && !i.resolved),
-      context: store.get(user, 'context', task?.id ?? conversation.id) ?? null,
-    }
+    ctx.body = workspaceDetail(store, runtime, owner(ctx), ctx.params.id,
+      typeof ctx.query.taskId === 'string' ? ctx.query.taskId : undefined,
+      Math.max(1, Math.min(100, number(ctx.query.limit, 100))))
   })
   router.patch('/api/app/conversations/:id', async (ctx) => {
     const user = owner(ctx), input = body(ctx)
@@ -284,6 +269,7 @@ export function workspaceRouter(
         false,
         task?.id,
       ),
+      cursor: store.cursor(user),
     }
   })
   router.post('/api/app/conversations/:id/messages', async (ctx) => {
@@ -301,18 +287,13 @@ export function workspaceRouter(
   router.put('/api/app/conversations/:id/read', (ctx) => {
     const user = owner(ctx),
       c = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id)
-    const seq = parse(z.object({ seq: z.number().int().nonnegative() }).strict(), body(ctx)).seq
+    const { seq, unreadVersion } = parse(z.object({ seq: z.number().int().nonnegative(), unreadVersion: z.number().int().nonnegative().optional() }).strict(), body(ctx))
     if (c.kind === 'group') {
       const taskId = typeof ctx.query.taskId === 'string' ? ctx.query.taskId : undefined,
         task = store.resolveTask(user, c.id, taskId)!
-      store.markTaskRead(user, c.id, task.id, seq)
+      store.markTaskRead(user, c.id, task.id, seq, unreadVersion)
     }
-    c.readSeq = Math.max(c.readSeq, Math.min(seq, c.lastSeq))
-    store.atomic(() => {
-      store.put(user, 'conversation', c.id, c)
-      store.event(user, 'conversation.changed', c, c.id)
-    })
-    ctx.body = { conversation: c }
+    ctx.body = { conversation: store.markConversationRead(user, c.id, seq, unreadVersion) }
   })
   router.post('/api/app/runs/:id/stop', async (ctx) => {
     await runtime.stop(owner(ctx), ctx.params.id)
@@ -330,6 +311,15 @@ export function workspaceRouter(
     await runtime.respond(owner(ctx), ctx.params.id, b.answer)
     ctx.body = { ok: true }
   })
+  router.get('/api/app/workspace/snapshot', ctx => {
+    const user = owner(ctx)
+    const conversations = store.list<WorkspaceConversation>(user, 'conversation').map(c => store.conversationSummary(user, c))
+    const details = conversations.filter(c => !c.archived).map(c => workspaceDetail(store, runtime, user, c.id))
+    ctx.set('Cache-Control', 'no-store')
+    ctx.body = { agents: store.list<WorkspaceAgent>(user, 'agent').map(a => store.agentSummary(a)),
+      conversations, details, cursor: store.cursor(user), serverIdentity: readServerIdentity(store) }
+  })
+  router.get('/api/app/events/stream', ctx => streamWorkspace(ctx, store, auth))
   router.get('/api/app/events', (ctx) => {
     const user = owner(ctx),
       after = number(ctx.query.after, 0),
