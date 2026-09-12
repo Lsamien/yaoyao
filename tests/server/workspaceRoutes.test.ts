@@ -10,6 +10,7 @@ import { createApplication, type ApplicationRuntime } from '../../src/server/app
 import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth'
 import { WorkspaceAssets } from '../../src/server/workspaceAssets'
+import { WorkspaceTranscriptStore } from '../../src/client/components/workspace/transcriptStore'
 
 let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, upstream: string[], bridgeReady: boolean
 const first: LocalUser = {
@@ -95,6 +96,35 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it('uses the same ordering for snapshots, list refreshes and pin/message events', async () => {
+    const store = runtime.workspace
+    store.createAgent('first', { name: '排序验证', profile: 'default' })
+    const base = store.list<import('../../src/shared/workspace').WorkspaceConversation>('first', 'conversation')[0]!
+    store.remove('first', 'conversation', base.id)
+    for (const item of [
+      { id: 'a-old', lastMessageAt: 100, pinned: false },
+      { id: 'b-new', lastMessageAt: 200, pinned: false },
+      { id: 'z-pin', lastMessageAt: 50, pinned: true },
+    ]) store.put('first', 'conversation', item.id, { ...base, ...item })
+    const snapshot = (await req('get', '/api/app/workspace/snapshot').expect(200)).body
+    const list = (await req('get', '/api/app/conversations').expect(200)).body.conversations
+    expect(snapshot.conversations.map((c: { id: string }) => c.id)).toEqual(['z-pin', 'b-new', 'a-old'])
+    expect(list.map((c: { id: string }) => c.id)).toEqual(snapshot.conversations.map((c: { id: string }) => c.id))
+    const clients = [new WorkspaceTranscriptStore(), new WorkspaceTranscriptStore()]
+    clients.forEach(client => client.hydrate(snapshot))
+    const stop = store.observe((owner, event) => { if (owner === 'first') clients.forEach(client => client.apply(event)) })
+    try {
+      store.saveMessage('first', { id: randomUUID(), conversationId: 'a-old', seq: 0, role: 'assistant',
+        content: '新的回复', reasoning: '', status: 'complete', attachments: [], tools: [], createdAt: 300 })
+      clients.forEach(client => expect(client.conversations.map(c => c.id)).toEqual(['z-pin', 'a-old', 'b-new']))
+      await req('patch', '/api/app/conversations/a-old').send({ pinned: true }).expect(200)
+      const expected = ['a-old', 'z-pin', 'b-new']
+      clients.forEach(client => expect(client.conversations.map(c => c.id)).toEqual(expected))
+      expect((await req('get', '/api/app/workspace/snapshot').expect(200)).body.conversations.map((c: { id: string }) => c.id)).toEqual(expected)
+      expect((await req('get', '/api/app/conversations').expect(200)).body.conversations.map((c: { id: string }) => c.id)).toEqual(expected)
+    } finally { stop() }
+  })
+
   it.each(['direct', 'group'] as const)('uses versioned unread acknowledgments for %s without recounting history', async kind => {
     const store = runtime.workspace
     const first = store.createAgent('first', { name: '未读甲', profile: 'default' })

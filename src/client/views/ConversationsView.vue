@@ -251,13 +251,13 @@ async function refresh() {
   if (disposed || auth.user?.id !== owner || transcriptStore.cursor !== startedAtCursor) return
   agents.value = a.agents
   const localConversations = new Map(conversations.value.map(row => [row.id, row]))
-  conversations.value = c.conversations.map(conversation => {
+  transcriptStore.conversations = c.conversations.map(conversation => {
     const local = localConversations.get(conversation.id)
     return local && local.unreadVersion === conversation.unreadVersion && [...pendingReads].some(key => key.startsWith(`${conversation.id}:`))
       ? { ...conversation, unread: local.unread, unreadCount: local.unreadCount } : conversation
   })
   transcriptStore.agents = agents.value
-  transcriptStore.conversations = conversations.value
+  conversations.value = transcriptStore.conversations
   if (!cursor) { cursor = c.cursor; transcriptStore.cursor = c.cursor }
 }
 async function load(id = selected.value, append = false) {
@@ -458,7 +458,7 @@ async function hydrateWorkspace() {
   const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity }>('/api/app/workspace/snapshot')
   if (disposed || auth.user?.id !== owner) return
   transcriptStore.hydrate(snapshot)
-  agents.value = snapshot.agents; conversations.value = snapshot.conversations; cursor = snapshot.cursor
+  agents.value = snapshot.agents; conversations.value = transcriptStore.conversations; cursor = snapshot.cursor
   publishServerIdentity(snapshot.serverIdentity)
 }
 function connectEvents() {

@@ -18,6 +18,7 @@ import { receiveGroupUploads, type UploadStore } from './uploads.js'
 import { HttpError } from './errors.js'
 import type { PushCoordinator } from './pushCoordinator.js'
 import type { LocalAuthStore } from './localAuth.js'
+import { compareWorkspaceConversations } from '../shared/workspace.js'
 import type {
   WorkspaceMessage,
   WorkspaceAgent,
@@ -155,12 +156,7 @@ export function workspaceRouter(
       conversations: store
         .list<WorkspaceConversation>(user, 'conversation')
         .map(c => store.conversationSummary(user, c))
-        .sort(
-          (a, b) =>
-            Number(b.pinned) - Number(a.pinned) ||
-            (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt) ||
-            a.id.localeCompare(b.id),
-        ),
+        .sort(compareWorkspaceConversations),
       cursor: store.cursor(user),
     }
   })
@@ -313,7 +309,8 @@ export function workspaceRouter(
   })
   router.get('/api/app/workspace/snapshot', ctx => {
     const user = owner(ctx)
-    const conversations = store.list<WorkspaceConversation>(user, 'conversation').map(c => store.conversationSummary(user, c))
+    const conversations = store.list<WorkspaceConversation>(user, 'conversation')
+      .map(c => store.conversationSummary(user, c)).sort(compareWorkspaceConversations)
     const details = conversations.filter(c => !c.archived).map(c => workspaceDetail(store, runtime, user, c.id))
     ctx.set('Cache-Control', 'no-store')
     ctx.body = { agents: store.list<WorkspaceAgent>(user, 'agent').map(a => store.agentSummary(a)),

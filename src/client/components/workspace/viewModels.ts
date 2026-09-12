@@ -1,5 +1,5 @@
 import { visibleMessageText, messageReasoningText } from '@shared/messageFiles'
-import { workspaceHasUnread } from '@shared/workspace'
+import { workspaceConversationTimestamp, workspaceHasUnread } from '@shared/workspace'
 import { toolResultFailed } from '@shared/chatTools'
 import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
 import type {
@@ -449,7 +449,7 @@ export function workspaceConversationItem(c: import('@shared/workspace').Workspa
     id: c.id, title: c.name, subtitle: c.preview || '开始聊天', pinned: c.pinned,
     section: c.pinned ? '已置顶' : '聊天', avatar: c.kind === 'group' ? '' : c.avatar,
     avatarMembers: c.kind === 'group' ? workspaceAvatarMembers(c.memberIds, agents, c) : [],
-    meta: formatConversationTime(c.lastMessageAt ?? c.createdAt),
+    meta: formatConversationTime(workspaceConversationTimestamp(c)),
     avatarKind: c.kind === 'direct' ? 'agent' : 'team',
     avatarState: activity ?? workspaceAvatarState(c, c.memberIds[0] || ''), avatarActivityKey: c.lastSeq,
     unreadDot: workspaceHasUnread(c), status: activity || c.activeRunId ? 'working' : undefined,

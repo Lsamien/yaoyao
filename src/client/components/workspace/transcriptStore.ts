@@ -1,4 +1,5 @@
 import type { AgentAssignment, AgentGoal } from '@shared/agentTasks'
+import { compareWorkspaceConversations } from '@shared/workspace'
 import type { WorkspaceAgent, WorkspaceConversation, WorkspaceEvent, WorkspaceInteraction, WorkspaceMessage, WorkspaceRun, WorkspaceTask } from '@shared/workspace'
 
 export interface WorkspaceDetail {
@@ -60,7 +61,11 @@ export function foldDetail(detail: WorkspaceDetail, event: WorkspaceEvent): Work
 
 export class WorkspaceTranscriptStore {
   agents: WorkspaceAgent[] = []
-  conversations: WorkspaceConversation[] = []
+  private conversationRows: WorkspaceConversation[] = []
+  get conversations(): WorkspaceConversation[] { return this.conversationRows }
+  set conversations(rows: WorkspaceConversation[]) {
+    this.conversationRows = [...rows].sort(compareWorkspaceConversations)
+  }
   readonly details = new Map<string, WorkspaceDetail>()
   cursor = 0
   readonly selectedTasks = new Map<string, string>()

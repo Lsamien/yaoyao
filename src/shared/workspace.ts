@@ -64,6 +64,16 @@ export interface WorkspaceConversation {
   createdAt: number
   updatedAt: number
 }
+/** Shared by the HTTP lists, snapshots and Web/desktop incremental state. */
+export function workspaceConversationTimestamp(value: Pick<WorkspaceConversation, 'lastMessageAt' | 'createdAt'>): number {
+  return value.lastMessageAt ?? value.createdAt
+}
+export function compareWorkspaceConversations(a: WorkspaceConversation, b: WorkspaceConversation): number {
+  return Number(b.pinned) - Number(a.pinned)
+    || workspaceConversationTimestamp(b) - workspaceConversationTimestamp(a)
+    || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+}
+
 export interface WorkspaceTask {
   id: string
   conversationId: string

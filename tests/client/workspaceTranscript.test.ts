@@ -8,6 +8,40 @@ const detail = (): WorkspaceDetail => ({ conversation, messages: [message('old',
 const event = (seq: number, value: WorkspaceMessage): WorkspaceEvent => ({ seq, type: 'message.changed', conversationId: value.conversationId, data: value })
 
 describe('Bot transcript cache', () => {
+  it('keeps independent clients ordered after snapshots, pin changes and new activity', () => {
+    const rows: WorkspaceConversation[] = [
+      { ...conversation, id: 'tie-b', lastMessageAt: 200 },
+      { ...conversation, id: 'zero', lastMessageAt: 0, createdAt: 5000 },
+      { ...conversation, id: 'old', lastMessageAt: 100, updatedAt: 99999 },
+      { ...conversation, id: 'pin', pinned: true, lastMessageAt: 50 },
+      { ...conversation, id: 'new', lastMessageAt: 400 },
+      { ...conversation, id: 'tie-a', lastMessageAt: 200 },
+      { ...conversation, id: 'fallback', lastMessageAt: undefined, createdAt: 300 },
+    ]
+    const before = rows.map(c => c.id)
+    const clients = [new WorkspaceTranscriptStore(), new WorkspaceTranscriptStore()]
+    clients[0]!.hydrate({ agents: [], conversations: rows, details: [], cursor: 0 })
+    clients[1]!.hydrate({ agents: [], conversations: [...rows].reverse(), details: [], cursor: 0 })
+    const ordered = (expected: string[]) => clients.forEach(client => expect(client.conversations.map(c => c.id)).toEqual(expected))
+    ordered(['pin', 'new', 'fallback', 'tie-a', 'tie-b', 'old', 'zero'])
+    expect(rows.map(c => c.id)).toEqual(before)
+    const change = (seq: number, id: string, patch: Partial<WorkspaceConversation>) => clients.forEach(client => {
+      const current = client.conversations.find(c => c.id === id) ?? { ...conversation, id }
+      client.apply({ seq, type: 'conversation.changed', conversationId: id, data: { ...current, ...patch } })
+    })
+    change(1, 'old', { lastMessageAt: 500 })
+    ordered(['pin', 'old', 'new', 'fallback', 'tie-a', 'tie-b', 'zero'])
+    change(2, 'tie-b', { pinned: true })
+    ordered(['tie-b', 'pin', 'old', 'new', 'fallback', 'tie-a', 'zero'])
+    change(3, 'pin', { pinned: false })
+    change(4, 'new-2', { lastMessageAt: 400 })
+    ordered(['tie-b', 'old', 'new', 'new-2', 'fallback', 'tie-a', 'pin', 'zero'])
+    change(3, 'pin', { pinned: true })
+    ordered(['tie-b', 'old', 'new', 'new-2', 'fallback', 'tie-a', 'pin', 'zero'])
+    clients[0]!.conversations = [...clients[1]!.conversations].reverse()
+    ordered(['tie-b', 'old', 'new', 'new-2', 'fallback', 'tie-a', 'pin', 'zero'])
+  })
+
   it('returns a warm transcript without losing its older pages and preserves settled identities on a live update', () => {
     const store = new WorkspaceTranscriptStore(), initial = detail()
     store.hydrate({ agents: [], conversations: [conversation], details: [initial], cursor: 10 })
