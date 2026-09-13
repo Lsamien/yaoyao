@@ -17,7 +17,7 @@ import type {
   WorkspaceInteraction,
 } from '../shared/workspace.js'
 
-import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK } from './workspaceScheduler.js'
+import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK, WORKSPACE_CONCURRENCY_LIMIT } from './workspaceScheduler.js'
 import type { WorkspacePlugins, OpenBotPlugins } from './botPlugins/workspacePlugins.js'
 import { mentionedAgents } from './workspaceMentions.js'
 import { WorkspaceTeamTools, TEAM_TOOL_RULES } from './workspaceTeamTools.js'
@@ -108,8 +108,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         conversationTaskId = conversationTask?.id
       if (conversationTaskId) {
         const alreadyActive = this.store.list<Run>(owner, 'run').some(run => run.conversationTaskId === conversationTaskId && !['complete', 'failed', 'interrupted'].includes(run.status))
-        if (!alreadyActive && this.store.activeTaskCount(owner, conversationId) >= 4)
-          throw new HttpError(409, '最多同时运行 4 个任务', 'workspace_task_concurrency_limit')
+        if (!alreadyActive && this.store.activeTaskCount(owner, conversationId) >= WORKSPACE_CONCURRENCY_LIMIT)
+          throw new HttpError(409, `最多同时运行 ${WORKSPACE_CONCURRENCY_LIMIT} 个任务`, 'workspace_task_concurrency_limit')
       }
       if (body.mentionIds.some((a) => !this.store.taskMemberIds(owner,c,conversationTaskId).includes(a)))
         throw new HttpError(400, '只能 @ 群内成员', 'invalid_mentions')
@@ -260,6 +260,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       runtimeId = '',
       lastFlush = 0
     let flushTimer: ReturnType<typeof setTimeout> | undefined
+    let usageCompletion: Promise<void> | undefined
     const toolController = new AbortController()
     let toolLease: WorkspaceToolLease | undefined
     let pluginLease: OpenBotPlugins | undefined
@@ -320,7 +321,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         if (error) rejectTurn(error)
         else resolveTurn(resultMessage)
       } catch (failure) { rejectTurn(failure instanceof Error ? failure : new Error('无法保存执行状态')) }
-      finally { gateway.close() }
+      finally { if (usageCompletion) void usageCompletion.finally(() => gateway.close()); else gateway.close() }
     }
     gateway.onDisconnect = () =>
       finish(completedEvidence ? undefined : new Error('Hermes 连接断开'))
@@ -329,6 +330,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       this.inspector?.record(owner,c.id,{direction:'event',method:frame.type,data:frame.payload,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
       const p = frame.payload ?? {},
         type = frame.type
+      const firstContent = type === 'message.delta' && !resultMessage.content.trim()
       if(type==='computer.paused'||type==='computer.resumed'){const current=this.getWork(owner,run.id);current.status=type==='computer.paused'?'waiting':'running';this.saveWork(owner,current);return}
       if (type === 'message.delta') {
         resultMessage.content += String(p.text ?? p.delta ?? '')
@@ -390,14 +392,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           completedEvidence = true
           completing = true
           let timeout: ReturnType<typeof setTimeout>
-          void Promise.race([
+          usageCompletion = Promise.race([
             gateway.rpc('session.usage', { session_id: runtimeId }),
             new Promise<undefined>((resolve) => {
               timeout = setTimeout(() => resolve(undefined), 1000)
             }),
           ])
             .then((usage) => {
-              if (usage && !this.closing) {
+              if (usage && !this.closing && this.store.get<{ taskId: string }>(owner, 'binding', key)?.taskId === run.id) {
                 const used = usage.context_used ?? usage.used_tokens,
                   limit = usage.context_max ?? usage.context_limit
                 const contextKey = run.conversationTaskId ?? c.id,
@@ -423,8 +425,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             .catch(() => {})
             .finally(() => {
               clearTimeout(timeout)
-              finish()
             })
+          finish()
         }
         return
       } else if (['error', 'message.error', 'run.failed'].includes(type)) {
@@ -454,8 +456,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           finish(error instanceof Error ? error : new Error('无法保存流式消息'))
         }
       }
-      const remaining = 100 - (Date.now() - lastFlush)
-      if (remaining <= 0) flush()
+      const remaining = (this.store.messagePatchesEnabled ? 33 : 100) - (Date.now() - lastFlush)
+      if (firstContent || !['message.delta', 'reasoning.delta', 'message.interim'].includes(type) || remaining <= 0) flush()
       // A stream may pause after any chunk. Publish the latest text even when
       // no subsequent event arrives to trigger the next leading-edge flush.
       else if (flushTimer === undefined) flushTimer = setTimeout(flush, remaining)

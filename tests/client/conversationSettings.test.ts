@@ -6,7 +6,7 @@ import ConversationsView from '@/views/ConversationsView.vue'
 import { apiRequest } from '@/api/client'
 import type { WorkspaceConversation } from '@shared/workspace'
 
-vi.mock('@/api/client', () => ({ apiRequest: vi.fn(), ApiError: class extends Error {} }))
+vi.mock('@/api/client', () => ({ apiRequest: vi.fn(), setApiCsrfToken: vi.fn(), ApiError: class extends Error {} }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 'owner' }, profiles: [], refreshProfileAvatars: async () => {} }) }))
 vi.mock('@/stores/theme', () => ({ useThemeStore: () => ({}) }))
 
@@ -22,6 +22,7 @@ it.each(['direct', 'group'] as const)('opens and saves the menu target %s while 
   const agents = ['current-bot', 'target-bot'].map(id => ({ id, name: id === 'target-bot' ? '目标机器人' : '当前机器人', avatar: '', instructions: `${id}规则`, nodeId: 'local', profile: 'default', archived: false }))
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.mocked(apiRequest).mockImplementation(async path => {
+    if (path === '/api/app/capabilities') return { features: [], csrfToken: 'fixture-csrf' } as never
     if (path === '/api/app/workspace/snapshot') return { agents, conversations, cursor: 1, details: [] } as never
     if (path === '/api/app/agents') return { agents } as never
     if (path === '/api/app/agents/sources') return { sources: [{ nodeId: 'local', profile: 'default', name: '基础机器人' }] } as never

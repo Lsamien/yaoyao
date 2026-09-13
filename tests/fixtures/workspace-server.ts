@@ -262,6 +262,31 @@ wss.on('connection', (socket) => {
         timestamp: Date.now() / 1000,
       })
       respond({ status: 'streaming' })
+      const latencyMarker = /\[latency:([^\]]+)\]/.exec(String(f.params.text))?.[1]
+      if (latencyMarker) {
+        const chunks = latencyMarker.includes('long')
+          ? Array.from({ length: 200 }, (_, i) => `第${String(i + 1).padStart(3, '0')}段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n`)
+          : Array.from({ length: 40 }, (_, i) => `${String(i + 1).padStart(2, '0')}测试文字 `)
+        let text = '', index = 0
+        setTimeout(() => {
+          const tick = () => {
+            if (socket.readyState !== 1 || !stored!.running) return
+            if (index === chunks.length) {
+              const tail = ` END-${latencyMarker}`; text += tail
+              event('message.delta', { text: tail }, f.params.session_id)
+              stored!.running = false
+              stored!.messages.push({ id: randomUUID(), role: 'assistant', content: text, timestamp: Date.now() / 1000 })
+              event('message.complete', { text, status: 'complete' }, f.params.session_id)
+              return
+            }
+            const part = chunks[index++]!; text += part
+            event('message.delta', { text: part }, f.params.session_id)
+            setTimeout(tick, 20)
+          }
+          tick()
+        }, 250)
+        return
+      }
       const name = /你是 (.*?)。/.exec(f.params.text)?.[1] || '助手'
       const requested = /本轮用户指定成员：([^\n]*)/.exec(f.params.text)?.[1] ?? ''
       const delegates = f.params.text.includes('你是管理员。') && !f.params.text.includes('本批次执行结果：') && requested.startsWith('@')

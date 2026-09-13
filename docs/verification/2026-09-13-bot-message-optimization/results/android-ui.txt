@@ -1,0 +1,25 @@
+INSTRUMENTATION_STATUS: class=cn.samien.yaoyao.hermes.WorkspaceLatencyTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+cn.samien.yaoyao.hermes.WorkspaceLatencyTest:
+INSTRUMENTATION_STATUS: test=measureActualBotScreen
+INSTRUMENTATION_STATUS_CODE: 1
+s_glBindAttribLocation: bind attrib 0 name position
+s_glBindAttribLocation: bind attrib 1 name localCoord
+INSTRUMENTATION_STATUS: class=cn.samien.yaoyao.hermes.WorkspaceLatencyTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=.
+INSTRUMENTATION_STATUS: test=measureActualBotScreen
+INSTRUMENTATION_STATUS_CODE: 0
+INSTRUMENTATION_RESULT: stream=
+
+Time: 31.065
+
+OK (1 test)
+
+
+INSTRUMENTATION_CODE: -1

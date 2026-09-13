@@ -560,3 +560,22 @@ describe('application workspace HTTP contract', () => {
     expect(upstream.some((p) => p.includes('internal-session') || p.includes('old-id'))).toBe(false)
   })
 })
+
+it('prepares CSRF with capabilities and returns an idempotent committed send receipt', async () => {
+  const caps = await req('get', '/api/app/capabilities').expect(200)
+  expect(caps.body.csrfToken).toBe(csrf)
+  expect(caps.headers['cache-control']).toBe('no-store')
+  const store = runtime.workspace
+  store.createAgent('first', { name: '回执测试', profile: 'default' })
+  const conversation = store.list<any>('first', 'conversation')[0]
+  const input = { requestId: randomUUID(), content: '确认后立即恢复' }
+  const send = () => req('post', `/api/app/conversations/${conversation.id}/messages`).send(input).expect(202)
+  const a = (await send()).body, b = (await send()).body
+  expect(a.requestId).toBe(input.requestId)
+  expect(a.message.id).toBe(a.run.messageId)
+  expect(a.conversation.id).toBe(conversation.id)
+  expect(a.cursor).toBeGreaterThan(0)
+  expect(b.message.id).toBe(a.message.id)
+  expect(b.run.id).toBe(a.run.id)
+  expect(store.messages('first', conversation.id).filter(m => m.role === 'user')).toHaveLength(1)
+})

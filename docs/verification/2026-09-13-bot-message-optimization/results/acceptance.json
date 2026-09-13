@@ -1,0 +1,9 @@
+{
+  "iosSendMedianUnder250": true,
+  "confirmationOverheadUnder50": true,
+  "textUpdateUnder50": true,
+  "firstTextWithin33OfBaseline": true,
+  "totalSseReductionAtLeast60Percent": true,
+  "fiveBotsSaveP95Under10": true,
+  "optimizedTextExact": true
+}

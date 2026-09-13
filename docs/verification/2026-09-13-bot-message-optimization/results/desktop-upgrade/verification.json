@@ -1,0 +1,19 @@
+{
+  "version": "0.4.17-bot-latency.1",
+  "bundleId": "cn.samien.yaoyao.desktop",
+  "commit": "49971c62b324d5ee562b99da42ec79af60133489",
+  "branch": "codex/bot-message-latency",
+  "architecture": "arm64",
+  "sha256": "b57e1d2860024ea5306b22d5a7a00a36e16934184e9496f3173d16b96f9b1699",
+  "bytes": 203320508,
+  "signing": "Apple Development",
+  "notarized": false,
+  "checks": {
+    "historicalUpgrade": true,
+    "newerServiceRetained": true,
+    "packagedTests": 2,
+    "runtimeIntegrity": true,
+    "signature": true,
+    "dmgIntegrity": true
+  }
+}

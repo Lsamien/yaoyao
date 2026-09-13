@@ -12,6 +12,7 @@ import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
 const props = withDefaults(defineProps<{
   content: string
   streaming?: boolean
+  streamIntervalMs?: number
   legacyMedia?: boolean
   plain?: boolean
   mentionNames?: string[]
@@ -19,7 +20,7 @@ const props = withDefaults(defineProps<{
   processContent?: boolean
   outlinePrefix?: string
   fileProfile?: string
-}>(), { streaming: false, legacyMedia: false, plain: false, fileCards: false, processContent: false, outlinePrefix: '' })
+}>(), { streaming: false, streamIntervalMs: 80, legacyMedia: false, plain: false, fileCards: false, processContent: false, outlinePrefix: '' })
 
 const emit = defineEmits<{ fileLink: [name: string, url: string]; rendered: [] }>()
 
@@ -33,14 +34,14 @@ function cancelRenderTimer() {
 }
 // Throttle, not debounce: a continuous token stream must keep making progress.
 watch(() => [props.content, props.streaming, props.plain] as const, ([content, streaming, plain]) => {
-  if (!streaming || plain || !content.startsWith(displayedContent.value) || !displayedContent.value) {
+  if (!streaming || plain || props.streamIntervalMs === 0 || !content.startsWith(displayedContent.value) || !displayedContent.value) {
     cancelRenderTimer()
     displayedContent.value = content
   } else if (renderTimer === undefined) {
     renderTimer = setTimeout(() => {
       renderTimer = undefined
       displayedContent.value = props.content
-    }, 80)
+    }, props.streamIntervalMs)
   }
 })
 onBeforeUnmount(cancelRenderTimer)
@@ -134,8 +135,9 @@ function highlightMentions(html: string): string {
   return html.replace(re, match => `<span class="mention-highlight">${match}</span>`)
 }
 
-function sanitize(html: string): string {
-  return DOMPurify.sanitize(highlightMentions(html), {
+// Reuse the identical policy for every block instead of rebuilding DOMPurify's
+// allowlists hundreds of times for a long answer. Every block is still sanitized.
+  const sanitizeOptions = {
     USE_PROFILES: { html: true },
     // MarkdownIt generates the inert code-copy button above. User-provided HTML
     // remains disabled, and DOMPurify still strips event-handler attributes.
@@ -143,7 +145,11 @@ function sanitize(html: string): string {
     FORBID_ATTR: ['style', 'onerror', 'onclick', 'onload'],
     ALLOW_UNKNOWN_PROTOCOLS: false,
     ADD_ATTR: ['target'],
-  })
+  }
+const sanitizer = DOMPurify(window)
+sanitizer.setConfig(sanitizeOptions)
+function sanitize(html: string): string {
+  return sanitizer.sanitize(highlightMentions(html))
 }
 
 const renderedBlocks = computed(() => {

@@ -1,0 +1,4041 @@
+[
+  {
+    "run": "baseline-web-short-1",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279288.584,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279288.693,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279288.762,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279288.763,
+        "name": "dom_text",
+        "detail": "assistant|complete|7838"
+      },
+      {
+        "time": 1789279289.056,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279289.056,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279289.124,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279289.184,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279289.264,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279289.265,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279289.329,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279289.421,
+        "name": "view_text",
+        "detail": "assistant|streaming|133"
+      },
+      {
+        "time": 1789279289.422,
+        "name": "dom_text",
+        "detail": "assistant|streaming|133"
+      },
+      {
+        "time": 1789279289.523,
+        "name": "view_text",
+        "detail": "assistant|streaming|168"
+      },
+      {
+        "time": 1789279289.624,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279289.625,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279289.724,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279289.822,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279289.823,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279289.891,
+        "name": "view_text",
+        "detail": "assistant|complete|320"
+      },
+      {
+        "time": 1789279289.891,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-baseline-web-short-1-mtzeoslx"
+      },
+      {
+        "time": 1789279289.892,
+        "name": "dom_text",
+        "detail": "assistant|complete|321"
+      }
+    ]
+  },
+  {
+    "run": "baseline-web-short-2",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279291.519,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279291.631,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279291.69,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279291.994,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279291.994,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279292.061,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279292.123,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279292.193,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279292.194,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279292.259,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279292.359,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279292.36,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279292.456,
+        "name": "view_text",
+        "detail": "assistant|streaming|168"
+      },
+      {
+        "time": 1789279292.591,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279292.592,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279292.667,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279292.791,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279292.85,
+        "name": "view_text",
+        "detail": "assistant|complete|320"
+      },
+      {
+        "time": 1789279292.85,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-baseline-web-short-2-mtzeoslx"
+      },
+      {
+        "time": 1789279292.85,
+        "name": "dom_text",
+        "detail": "assistant|complete|321"
+      }
+    ]
+  },
+  {
+    "run": "baseline-web-short-3",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279294.52,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279294.631,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279294.692,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279294.992,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279294.992,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279295.057,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279295.115,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279295.173,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279295.175,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279295.257,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279295.358,
+        "name": "view_text",
+        "detail": "assistant|streaming|133"
+      },
+      {
+        "time": 1789279295.359,
+        "name": "dom_text",
+        "detail": "assistant|streaming|133"
+      },
+      {
+        "time": 1789279295.459,
+        "name": "view_text",
+        "detail": "assistant|streaming|168"
+      },
+      {
+        "time": 1789279295.558,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279295.559,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279295.655,
+        "name": "view_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279295.76,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279295.761,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279295.825,
+        "name": "view_text",
+        "detail": "assistant|complete|320"
+      },
+      {
+        "time": 1789279295.825,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-baseline-web-short-3-mtzeoslx"
+      },
+      {
+        "time": 1789279295.825,
+        "name": "dom_text",
+        "detail": "assistant|complete|321"
+      }
+    ]
+  },
+  {
+    "run": "baseline-web-short-4",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279297.524,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279297.633,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279297.691,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279297.971,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279297.971,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279298.06,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279298.117,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279298.175,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279298.176,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279298.258,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279298.356,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279298.357,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279298.49,
+        "name": "view_text",
+        "detail": "assistant|streaming|168"
+      },
+      {
+        "time": 1789279298.589,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279298.59,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279298.691,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279298.765,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279298.829,
+        "name": "view_text",
+        "detail": "assistant|complete|320"
+      },
+      {
+        "time": 1789279298.829,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-baseline-web-short-4-mtzeoslx"
+      },
+      {
+        "time": 1789279298.83,
+        "name": "dom_text",
+        "detail": "assistant|complete|321"
+      }
+    ]
+  },
+  {
+    "run": "baseline-web-short-5",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279300.526,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279300.638,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279300.701,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279300.991,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279300.991,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279301.058,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279301.116,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279301.175,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279301.176,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279301.259,
+        "name": "view_text",
+        "detail": "assistant|streaming|98"
+      },
+      {
+        "time": 1789279301.358,
+        "name": "view_text",
+        "detail": "assistant|streaming|133"
+      },
+      {
+        "time": 1789279301.36,
+        "name": "dom_text",
+        "detail": "assistant|streaming|133"
+      },
+      {
+        "time": 1789279301.463,
+        "name": "view_text",
+        "detail": "assistant|streaming|168"
+      },
+      {
+        "time": 1789279301.59,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279301.591,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279301.691,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279301.79,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279301.791,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279301.858,
+        "name": "view_text",
+        "detail": "assistant|complete|320"
+      },
+      {
+        "time": 1789279301.858,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-baseline-web-short-5-mtzeoslx"
+      },
+      {
+        "time": 1789279301.859,
+        "name": "dom_text",
+        "detail": "assistant|complete|321"
+      }
+    ]
+  },
+  {
+    "run": "baseline-web-short-6",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279303.353,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279303.464,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279303.531,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279303.824,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279303.824,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279303.891,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279303.949,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279304.007,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279304.008,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279304.093,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279304.191,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279304.192,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279304.322,
+        "name": "view_text",
+        "detail": "assistant|streaming|168"
+      },
+      {
+        "time": 1789279304.4,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279304.402,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279304.492,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279304.599,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279304.601,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279304.66,
+        "name": "view_text",
+        "detail": "assistant|complete|320"
+      },
+      {
+        "time": 1789279304.66,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-baseline-web-short-6-mtzeoslx"
+      },
+      {
+        "time": 1789279304.66,
+        "name": "dom_text",
+        "detail": "assistant|complete|321"
+      }
+    ]
+  },
+  {
+    "run": "baseline-web-long-1",
+    "mode": "baseline",
+    "trace": [
+      {
+        "time": 1789279306.357,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279306.47,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279306.558,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279306.826,
+        "name": "view_text",
+        "detail": "assistant|streaming|40"
+      },
+      {
+        "time": 1789279306.826,
+        "name": "dom_text",
+        "detail": "assistant|streaming|39"
+      },
+      {
+        "time": 1789279306.894,
+        "name": "view_text",
+        "detail": "assistant|streaming|200"
+      },
+      {
+        "time": 1789279306.953,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279307.027,
+        "name": "view_text",
+        "detail": "assistant|streaming|400"
+      },
+      {
+        "time": 1789279307.029,
+        "name": "dom_text",
+        "detail": "assistant|streaming|390"
+      },
+      {
+        "time": 1789279307.094,
+        "name": "view_text",
+        "detail": "assistant|streaming|600"
+      },
+      {
+        "time": 1789279307.226,
+        "name": "view_text",
+        "detail": "assistant|streaming|760"
+      },
+      {
+        "time": 1789279307.228,
+        "name": "dom_text",
+        "detail": "assistant|streaming|741"
+      },
+      {
+        "time": 1789279307.328,
+        "name": "view_text",
+        "detail": "assistant|streaming|960"
+      },
+      {
+        "time": 1789279307.401,
+        "name": "view_text",
+        "detail": "assistant|streaming|1160"
+      },
+      {
+        "time": 1789279307.409,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1131"
+      },
+      {
+        "time": 1789279307.523,
+        "name": "view_text",
+        "detail": "assistant|streaming|1360"
+      },
+      {
+        "time": 1789279307.623,
+        "name": "view_text",
+        "detail": "assistant|streaming|1520"
+      },
+      {
+        "time": 1789279307.626,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1482"
+      },
+      {
+        "time": 1789279307.725,
+        "name": "view_text",
+        "detail": "assistant|streaming|1720"
+      },
+      {
+        "time": 1789279307.824,
+        "name": "view_text",
+        "detail": "assistant|streaming|1920"
+      },
+      {
+        "time": 1789279307.827,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1872"
+      },
+      {
+        "time": 1789279307.928,
+        "name": "view_text",
+        "detail": "assistant|streaming|2080"
+      },
+      {
+        "time": 1789279308.029,
+        "name": "view_text",
+        "detail": "assistant|streaming|2280"
+      },
+      {
+        "time": 1789279308.033,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2223"
+      },
+      {
+        "time": 1789279308.128,
+        "name": "view_text",
+        "detail": "assistant|streaming|2480"
+      },
+      {
+        "time": 1789279308.227,
+        "name": "view_text",
+        "detail": "assistant|streaming|2680"
+      },
+      {
+        "time": 1789279308.232,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2613"
+      },
+      {
+        "time": 1789279308.332,
+        "name": "view_text",
+        "detail": "assistant|streaming|2840"
+      },
+      {
+        "time": 1789279308.432,
+        "name": "view_text",
+        "detail": "assistant|streaming|3040"
+      },
+      {
+        "time": 1789279308.437,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2964"
+      },
+      {
+        "time": 1789279308.53,
+        "name": "view_text",
+        "detail": "assistant|streaming|3240"
+      },
+      {
+        "time": 1789279308.629,
+        "name": "view_text",
+        "detail": "assistant|streaming|3440"
+      },
+      {
+        "time": 1789279308.635,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3354"
+      },
+      {
+        "time": 1789279308.761,
+        "name": "view_text",
+        "detail": "assistant|streaming|3600"
+      },
+      {
+        "time": 1789279308.861,
+        "name": "view_text",
+        "detail": "assistant|streaming|3800"
+      },
+      {
+        "time": 1789279308.868,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3705"
+      },
+      {
+        "time": 1789279308.966,
+        "name": "view_text",
+        "detail": "assistant|streaming|4000"
+      },
+      {
+        "time": 1789279309.066,
+        "name": "view_text",
+        "detail": "assistant|streaming|4200"
+      },
+      {
+        "time": 1789279309.073,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4095"
+      },
+      {
+        "time": 1789279309.163,
+        "name": "view_text",
+        "detail": "assistant|streaming|4360"
+      },
+      {
+        "time": 1789279309.263,
+        "name": "view_text",
+        "detail": "assistant|streaming|4560"
+      },
+      {
+        "time": 1789279309.27,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4446"
+      },
+      {
+        "time": 1789279309.366,
+        "name": "view_text",
+        "detail": "assistant|streaming|4760"
+      },
+      {
+        "time": 1789279309.464,
+        "name": "view_text",
+        "detail": "assistant|streaming|4920"
+      },
+      {
+        "time": 1789279309.471,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4797"
+      },
+      {
+        "time": 1789279309.567,
+        "name": "view_text",
+        "detail": "assistant|streaming|5120"
+      },
+      {
+        "time": 1789279309.665,
+        "name": "view_text",
+        "detail": "assistant|streaming|5320"
+      },
+      {
+        "time": 1789279309.673,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5187"
+      },
+      {
+        "time": 1789279309.767,
+        "name": "view_text",
+        "detail": "assistant|streaming|5480"
+      },
+      {
+        "time": 1789279309.869,
+        "name": "view_text",
+        "detail": "assistant|streaming|5680"
+      },
+      {
+        "time": 1789279309.877,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5538"
+      },
+      {
+        "time": 1789279309.967,
+        "name": "view_text",
+        "detail": "assistant|streaming|5880"
+      },
+      {
+        "time": 1789279310.069,
+        "name": "view_text",
+        "detail": "assistant|streaming|6040"
+      },
+      {
+        "time": 1789279310.077,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5889"
+      },
+      {
+        "time": 1789279310.168,
+        "name": "view_text",
+        "detail": "assistant|streaming|6240"
+      },
+      {
+        "time": 1789279310.298,
+        "name": "view_text",
+        "detail": "assistant|streaming|6440"
+      },
+      {
+        "time": 1789279310.308,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6279"
+      },
+      {
+        "time": 1789279310.4,
+        "name": "view_text",
+        "detail": "assistant|streaming|6600"
+      },
+      {
+        "time": 1789279310.499,
+        "name": "view_text",
+        "detail": "assistant|streaming|6800"
+      },
+      {
+        "time": 1789279310.509,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6630"
+      },
+      {
+        "time": 1789279310.582,
+        "name": "view_text",
+        "detail": "assistant|streaming|7000"
+      },
+      {
+        "time": 1789279310.703,
+        "name": "view_text",
+        "detail": "assistant|streaming|7160"
+      },
+      {
+        "time": 1789279310.714,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6981"
+      },
+      {
+        "time": 1789279310.804,
+        "name": "view_text",
+        "detail": "assistant|streaming|7360"
+      },
+      {
+        "time": 1789279310.903,
+        "name": "view_text",
+        "detail": "assistant|streaming|7560"
+      },
+      {
+        "time": 1789279310.914,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7371"
+      },
+      {
+        "time": 1789279311.005,
+        "name": "view_text",
+        "detail": "assistant|streaming|7760"
+      },
+      {
+        "time": 1789279311.105,
+        "name": "view_text",
+        "detail": "assistant|streaming|7920"
+      },
+      {
+        "time": 1789279311.117,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7722"
+      },
+      {
+        "time": 1789279311.189,
+        "name": "view_text",
+        "detail": "assistant|complete|8038"
+      },
+      {
+        "time": 1789279311.189,
+        "name": "completed_text",
+        "detail": "第001段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第002段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第003段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第004段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第005段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第006段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第007段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第008段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第009段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第010段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第011段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第012段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第013段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第014段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第015段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第016段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第017段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第018段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第019段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第020段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第021段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第022段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第023段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第024段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第025段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第026段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第027段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第028段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第029段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第030段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第031段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第032段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第033段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第034段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第035段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第036段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第037段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第038段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第039段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第040段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第041段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第042段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第043段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第044段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第045段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第046段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第047段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第048段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第049段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第050段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第051段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第052段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第053段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第054段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第055段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第056段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第057段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第058段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第059段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第060段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第061段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第062段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第063段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第064段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第065段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第066段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第067段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第068段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第069段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第070段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第071段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第072段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第073段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第074段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第075段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第076段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第077段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第078段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第079段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第080段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第081段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第082段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第083段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第084段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第085段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第086段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第087段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第088段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第089段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第090段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第091段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第092段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第093段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第094段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第095段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第096段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第097段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第098段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第099段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第100段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第101段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第102段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第103段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第104段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第105段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第106段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第107段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第108段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第109段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第110段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第111段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第112段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第113段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第114段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第115段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第116段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第117段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第118段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第119段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第120段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第121段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第122段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第123段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第124段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第125段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第126段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第127段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第128段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第129段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第130段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第131段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第132段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第133段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第134段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第135段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第136段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第137段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第138段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第139段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第140段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第141段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第142段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第143段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第144段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第145段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第146段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第147段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第148段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第149段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第150段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第151段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第152段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第153段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第154段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第155段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第156段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第157段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第158段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第159段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第160段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第161段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第162段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第163段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第164段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第165段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第166段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第167段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第168段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第169段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第170段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第171段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第172段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第173段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第174段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第175段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第176段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第177段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第178段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第179段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第180段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第181段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第182段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第183段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第184段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第185段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第186段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第187段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第188段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第189段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第190段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第191段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第192段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第193段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第194段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第195段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第196段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第197段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第198段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第199段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第200段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n END-long-baseline-web-long-1-mtzeoslx"
+      },
+      {
+        "time": 1789279311.189,
+        "name": "dom_text",
+        "detail": "assistant|complete|7838"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-short-1",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279314.77,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279314.932,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279314.948,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279314.948,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279314.949,
+        "name": "dom_text",
+        "detail": "assistant|complete|7839"
+      },
+      {
+        "time": 1789279315.216,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279315.217,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279315.248,
+        "name": "view_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279315.248,
+        "name": "dom_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279315.281,
+        "name": "view_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279315.282,
+        "name": "dom_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279315.347,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279315.347,
+        "name": "dom_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279315.361,
+        "name": "view_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279315.361,
+        "name": "dom_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279315.384,
+        "name": "view_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279315.384,
+        "name": "dom_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279315.446,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279315.447,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279315.46,
+        "name": "view_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279315.46,
+        "name": "dom_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279315.514,
+        "name": "view_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279315.514,
+        "name": "dom_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279315.551,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279315.551,
+        "name": "dom_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279315.583,
+        "name": "view_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279315.584,
+        "name": "dom_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279315.597,
+        "name": "view_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279315.597,
+        "name": "dom_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279315.647,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279315.647,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279315.68,
+        "name": "view_text",
+        "detail": "assistant|streaming|154"
+      },
+      {
+        "time": 1789279315.68,
+        "name": "dom_text",
+        "detail": "assistant|streaming|154"
+      },
+      {
+        "time": 1789279315.711,
+        "name": "view_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279315.711,
+        "name": "dom_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279315.745,
+        "name": "view_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279315.745,
+        "name": "dom_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279315.779,
+        "name": "view_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279315.779,
+        "name": "dom_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279315.813,
+        "name": "view_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279315.813,
+        "name": "dom_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279315.845,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279315.846,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279315.88,
+        "name": "view_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279315.88,
+        "name": "dom_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279315.912,
+        "name": "view_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279315.913,
+        "name": "dom_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279315.945,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279315.945,
+        "name": "dom_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279315.979,
+        "name": "view_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279315.979,
+        "name": "dom_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279316.013,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279316.013,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279316.046,
+        "name": "view_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279316.046,
+        "name": "dom_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279316.082,
+        "name": "view_text",
+        "detail": "assistant|complete|321"
+      },
+      {
+        "time": 1789279316.082,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-optimized-web-short-1-mtzeoslx"
+      },
+      {
+        "time": 1789279316.082,
+        "name": "dom_text",
+        "detail": "assistant|complete|322"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-short-2",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279317.754,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279317.911,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279317.924,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279317.924,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279318.186,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279318.186,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279318.213,
+        "name": "view_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279318.214,
+        "name": "dom_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279318.277,
+        "name": "view_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279318.277,
+        "name": "dom_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279318.29,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279318.29,
+        "name": "dom_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279318.345,
+        "name": "view_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279318.345,
+        "name": "dom_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279318.378,
+        "name": "view_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279318.378,
+        "name": "dom_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279318.39,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279318.39,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279318.446,
+        "name": "view_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279318.446,
+        "name": "dom_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279318.479,
+        "name": "view_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279318.479,
+        "name": "dom_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279318.491,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279318.491,
+        "name": "dom_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279318.545,
+        "name": "view_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279318.545,
+        "name": "dom_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279318.579,
+        "name": "view_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279318.579,
+        "name": "dom_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279318.59,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279318.591,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279318.645,
+        "name": "view_text",
+        "detail": "assistant|streaming|147"
+      },
+      {
+        "time": 1789279318.645,
+        "name": "dom_text",
+        "detail": "assistant|streaming|147"
+      },
+      {
+        "time": 1789279318.679,
+        "name": "view_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279318.679,
+        "name": "dom_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279318.713,
+        "name": "view_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279318.713,
+        "name": "dom_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279318.746,
+        "name": "view_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279318.746,
+        "name": "dom_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279318.78,
+        "name": "view_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279318.78,
+        "name": "dom_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279318.812,
+        "name": "view_text",
+        "detail": "assistant|streaming|210"
+      },
+      {
+        "time": 1789279318.813,
+        "name": "dom_text",
+        "detail": "assistant|streaming|210"
+      },
+      {
+        "time": 1789279318.845,
+        "name": "view_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279318.845,
+        "name": "dom_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279318.878,
+        "name": "view_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279318.878,
+        "name": "dom_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279318.908,
+        "name": "view_text",
+        "detail": "assistant|streaming|245"
+      },
+      {
+        "time": 1789279318.908,
+        "name": "dom_text",
+        "detail": "assistant|streaming|245"
+      },
+      {
+        "time": 1789279318.944,
+        "name": "view_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279318.945,
+        "name": "dom_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279318.978,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279318.978,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279319.01,
+        "name": "view_text",
+        "detail": "assistant|streaming|280"
+      },
+      {
+        "time": 1789279319.011,
+        "name": "dom_text",
+        "detail": "assistant|streaming|280"
+      },
+      {
+        "time": 1789279319.046,
+        "name": "view_text",
+        "detail": "assistant|complete|321"
+      },
+      {
+        "time": 1789279319.046,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-optimized-web-short-2-mtzeoslx"
+      },
+      {
+        "time": 1789279319.046,
+        "name": "dom_text",
+        "detail": "assistant|complete|322"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-short-3",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279319.92,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279320.08,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279320.095,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279320.095,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279320.361,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279320.361,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279320.395,
+        "name": "view_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279320.395,
+        "name": "dom_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279320.431,
+        "name": "view_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279320.431,
+        "name": "dom_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279320.462,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279320.462,
+        "name": "dom_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279320.495,
+        "name": "view_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279320.496,
+        "name": "dom_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279320.529,
+        "name": "view_text",
+        "detail": "assistant|streaming|56"
+      },
+      {
+        "time": 1789279320.53,
+        "name": "dom_text",
+        "detail": "assistant|streaming|56"
+      },
+      {
+        "time": 1789279320.567,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279320.568,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279320.598,
+        "name": "view_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279320.599,
+        "name": "dom_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279320.631,
+        "name": "view_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279320.631,
+        "name": "dom_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279320.696,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279320.696,
+        "name": "dom_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279320.708,
+        "name": "view_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279320.709,
+        "name": "dom_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279320.765,
+        "name": "view_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279320.765,
+        "name": "dom_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279320.796,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279320.796,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279320.808,
+        "name": "view_text",
+        "detail": "assistant|streaming|147"
+      },
+      {
+        "time": 1789279320.808,
+        "name": "dom_text",
+        "detail": "assistant|streaming|147"
+      },
+      {
+        "time": 1789279320.868,
+        "name": "view_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279320.869,
+        "name": "dom_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279320.883,
+        "name": "view_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279320.883,
+        "name": "dom_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279320.929,
+        "name": "view_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279320.929,
+        "name": "dom_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279320.96,
+        "name": "view_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279320.96,
+        "name": "dom_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279320.972,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279320.972,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279321.026,
+        "name": "view_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279321.027,
+        "name": "dom_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279321.061,
+        "name": "view_text",
+        "detail": "assistant|streaming|224"
+      },
+      {
+        "time": 1789279321.061,
+        "name": "dom_text",
+        "detail": "assistant|streaming|224"
+      },
+      {
+        "time": 1789279321.073,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279321.073,
+        "name": "dom_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279321.126,
+        "name": "view_text",
+        "detail": "assistant|streaming|245"
+      },
+      {
+        "time": 1789279321.126,
+        "name": "dom_text",
+        "detail": "assistant|streaming|245"
+      },
+      {
+        "time": 1789279321.159,
+        "name": "view_text",
+        "detail": "assistant|streaming|259"
+      },
+      {
+        "time": 1789279321.159,
+        "name": "dom_text",
+        "detail": "assistant|streaming|259"
+      },
+      {
+        "time": 1789279321.193,
+        "name": "view_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279321.193,
+        "name": "dom_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279321.226,
+        "name": "view_text",
+        "detail": "assistant|complete|321"
+      },
+      {
+        "time": 1789279321.226,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-optimized-web-short-3-mtzeoslx"
+      },
+      {
+        "time": 1789279321.227,
+        "name": "dom_text",
+        "detail": "assistant|complete|322"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-short-4",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279322.923,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279323.079,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279323.091,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279323.091,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279323.358,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279323.359,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279323.393,
+        "name": "view_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279323.393,
+        "name": "dom_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279323.428,
+        "name": "view_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279323.428,
+        "name": "dom_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279323.46,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279323.46,
+        "name": "dom_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279323.492,
+        "name": "view_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279323.492,
+        "name": "dom_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279323.527,
+        "name": "view_text",
+        "detail": "assistant|streaming|56"
+      },
+      {
+        "time": 1789279323.527,
+        "name": "dom_text",
+        "detail": "assistant|streaming|56"
+      },
+      {
+        "time": 1789279323.564,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279323.565,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279323.596,
+        "name": "view_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279323.596,
+        "name": "dom_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279323.629,
+        "name": "view_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279323.629,
+        "name": "dom_text",
+        "detail": "assistant|streaming|91"
+      },
+      {
+        "time": 1789279323.662,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279323.662,
+        "name": "dom_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279323.695,
+        "name": "view_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279323.695,
+        "name": "dom_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279323.729,
+        "name": "view_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279323.729,
+        "name": "dom_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279323.762,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279323.762,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279323.795,
+        "name": "view_text",
+        "detail": "assistant|streaming|154"
+      },
+      {
+        "time": 1789279323.796,
+        "name": "dom_text",
+        "detail": "assistant|streaming|154"
+      },
+      {
+        "time": 1789279323.83,
+        "name": "view_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279323.831,
+        "name": "dom_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279323.895,
+        "name": "view_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279323.896,
+        "name": "dom_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279323.928,
+        "name": "view_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279323.928,
+        "name": "dom_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279323.962,
+        "name": "view_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279323.962,
+        "name": "dom_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279323.995,
+        "name": "view_text",
+        "detail": "assistant|streaming|210"
+      },
+      {
+        "time": 1789279323.995,
+        "name": "dom_text",
+        "detail": "assistant|streaming|210"
+      },
+      {
+        "time": 1789279324.028,
+        "name": "view_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279324.029,
+        "name": "dom_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279324.062,
+        "name": "view_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279324.062,
+        "name": "dom_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279324.095,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279324.095,
+        "name": "dom_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279324.13,
+        "name": "view_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279324.13,
+        "name": "dom_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279324.164,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279324.164,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279324.197,
+        "name": "view_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279324.197,
+        "name": "dom_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279324.232,
+        "name": "view_text",
+        "detail": "assistant|complete|321"
+      },
+      {
+        "time": 1789279324.232,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-optimized-web-short-4-mtzeoslx"
+      },
+      {
+        "time": 1789279324.232,
+        "name": "dom_text",
+        "detail": "assistant|complete|322"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-short-5",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279325.926,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279326.085,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279326.097,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279326.097,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279326.36,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279326.36,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279326.393,
+        "name": "view_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279326.393,
+        "name": "dom_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279326.426,
+        "name": "view_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279326.426,
+        "name": "dom_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279326.461,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279326.461,
+        "name": "dom_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279326.526,
+        "name": "view_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279326.526,
+        "name": "dom_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279326.54,
+        "name": "view_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279326.54,
+        "name": "dom_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279326.592,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279326.593,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279326.605,
+        "name": "view_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279326.605,
+        "name": "dom_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279326.659,
+        "name": "view_text",
+        "detail": "assistant|streaming|98"
+      },
+      {
+        "time": 1789279326.659,
+        "name": "dom_text",
+        "detail": "assistant|streaming|98"
+      },
+      {
+        "time": 1789279326.695,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279326.695,
+        "name": "dom_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279326.707,
+        "name": "view_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279326.707,
+        "name": "dom_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279326.761,
+        "name": "view_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279326.761,
+        "name": "dom_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279326.795,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279326.795,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279326.807,
+        "name": "view_text",
+        "detail": "assistant|streaming|147"
+      },
+      {
+        "time": 1789279326.808,
+        "name": "dom_text",
+        "detail": "assistant|streaming|147"
+      },
+      {
+        "time": 1789279326.861,
+        "name": "view_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279326.861,
+        "name": "dom_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279326.896,
+        "name": "view_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279326.896,
+        "name": "dom_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279326.909,
+        "name": "view_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279326.909,
+        "name": "dom_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279326.96,
+        "name": "view_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279326.961,
+        "name": "dom_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279326.993,
+        "name": "view_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279326.994,
+        "name": "dom_text",
+        "detail": "assistant|streaming|203"
+      },
+      {
+        "time": 1789279327.026,
+        "name": "view_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279327.026,
+        "name": "dom_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279327.06,
+        "name": "view_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279327.06,
+        "name": "dom_text",
+        "detail": "assistant|streaming|231"
+      },
+      {
+        "time": 1789279327.094,
+        "name": "view_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279327.094,
+        "name": "dom_text",
+        "detail": "assistant|streaming|238"
+      },
+      {
+        "time": 1789279327.126,
+        "name": "view_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279327.126,
+        "name": "dom_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279327.159,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279327.159,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279327.193,
+        "name": "view_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279327.193,
+        "name": "dom_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279327.229,
+        "name": "view_text",
+        "detail": "assistant|complete|321"
+      },
+      {
+        "time": 1789279327.229,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-optimized-web-short-5-mtzeoslx"
+      },
+      {
+        "time": 1789279327.229,
+        "name": "dom_text",
+        "detail": "assistant|complete|322"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-short-6",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279328.931,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279329.089,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279329.102,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279329.102,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279329.364,
+        "name": "view_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279329.364,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7"
+      },
+      {
+        "time": 1789279329.399,
+        "name": "view_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279329.399,
+        "name": "dom_text",
+        "detail": "assistant|streaming|14"
+      },
+      {
+        "time": 1789279329.46,
+        "name": "view_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279329.461,
+        "name": "dom_text",
+        "detail": "assistant|streaming|28"
+      },
+      {
+        "time": 1789279329.496,
+        "name": "view_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279329.496,
+        "name": "dom_text",
+        "detail": "assistant|streaming|35"
+      },
+      {
+        "time": 1789279329.51,
+        "name": "view_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279329.51,
+        "name": "dom_text",
+        "detail": "assistant|streaming|49"
+      },
+      {
+        "time": 1789279329.563,
+        "name": "view_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279329.563,
+        "name": "dom_text",
+        "detail": "assistant|streaming|63"
+      },
+      {
+        "time": 1789279329.596,
+        "name": "view_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279329.596,
+        "name": "dom_text",
+        "detail": "assistant|streaming|70"
+      },
+      {
+        "time": 1789279329.63,
+        "name": "view_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279329.631,
+        "name": "dom_text",
+        "detail": "assistant|streaming|84"
+      },
+      {
+        "time": 1789279329.663,
+        "name": "view_text",
+        "detail": "assistant|streaming|98"
+      },
+      {
+        "time": 1789279329.664,
+        "name": "dom_text",
+        "detail": "assistant|streaming|98"
+      },
+      {
+        "time": 1789279329.697,
+        "name": "view_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279329.697,
+        "name": "dom_text",
+        "detail": "assistant|streaming|105"
+      },
+      {
+        "time": 1789279329.729,
+        "name": "view_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279329.729,
+        "name": "dom_text",
+        "detail": "assistant|streaming|119"
+      },
+      {
+        "time": 1789279329.761,
+        "name": "view_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279329.761,
+        "name": "dom_text",
+        "detail": "assistant|streaming|126"
+      },
+      {
+        "time": 1789279329.793,
+        "name": "view_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279329.793,
+        "name": "dom_text",
+        "detail": "assistant|streaming|140"
+      },
+      {
+        "time": 1789279329.828,
+        "name": "view_text",
+        "detail": "assistant|streaming|154"
+      },
+      {
+        "time": 1789279329.828,
+        "name": "dom_text",
+        "detail": "assistant|streaming|154"
+      },
+      {
+        "time": 1789279329.864,
+        "name": "view_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279329.865,
+        "name": "dom_text",
+        "detail": "assistant|streaming|161"
+      },
+      {
+        "time": 1789279329.893,
+        "name": "view_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279329.894,
+        "name": "dom_text",
+        "detail": "assistant|streaming|175"
+      },
+      {
+        "time": 1789279329.927,
+        "name": "view_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279329.927,
+        "name": "dom_text",
+        "detail": "assistant|streaming|182"
+      },
+      {
+        "time": 1789279329.961,
+        "name": "view_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279329.961,
+        "name": "dom_text",
+        "detail": "assistant|streaming|196"
+      },
+      {
+        "time": 1789279329.993,
+        "name": "view_text",
+        "detail": "assistant|streaming|210"
+      },
+      {
+        "time": 1789279329.993,
+        "name": "dom_text",
+        "detail": "assistant|streaming|210"
+      },
+      {
+        "time": 1789279330.026,
+        "name": "view_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279330.026,
+        "name": "dom_text",
+        "detail": "assistant|streaming|217"
+      },
+      {
+        "time": 1789279330.092,
+        "name": "view_text",
+        "detail": "assistant|streaming|245"
+      },
+      {
+        "time": 1789279330.092,
+        "name": "dom_text",
+        "detail": "assistant|streaming|245"
+      },
+      {
+        "time": 1789279330.162,
+        "name": "view_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279330.162,
+        "name": "dom_text",
+        "detail": "assistant|streaming|252"
+      },
+      {
+        "time": 1789279330.195,
+        "name": "view_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279330.195,
+        "name": "dom_text",
+        "detail": "assistant|streaming|266"
+      },
+      {
+        "time": 1789279330.228,
+        "name": "view_text",
+        "detail": "assistant|complete|321"
+      },
+      {
+        "time": 1789279330.228,
+        "name": "completed_text",
+        "detail": "01测试文字 02测试文字 03测试文字 04测试文字 05测试文字 06测试文字 07测试文字 08测试文字 09测试文字 10测试文字 11测试文字 12测试文字 13测试文字 14测试文字 15测试文字 16测试文字 17测试文字 18测试文字 19测试文字 20测试文字 21测试文字 22测试文字 23测试文字 24测试文字 25测试文字 26测试文字 27测试文字 28测试文字 29测试文字 30测试文字 31测试文字 32测试文字 33测试文字 34测试文字 35测试文字 36测试文字 37测试文字 38测试文字 39测试文字 40测试文字  END-short-optimized-web-short-6-mtzeoslx"
+      },
+      {
+        "time": 1789279330.229,
+        "name": "dom_text",
+        "detail": "assistant|complete|322"
+      }
+    ]
+  },
+  {
+    "run": "optimized-web-long-1",
+    "mode": "optimized",
+    "trace": [
+      {
+        "time": 1789279331.787,
+        "name": "send_start",
+        "detail": ""
+      },
+      {
+        "time": 1789279331.945,
+        "name": "post_ack",
+        "detail": ""
+      },
+      {
+        "time": 1789279331.958,
+        "name": "send_ready",
+        "detail": ""
+      },
+      {
+        "time": 1789279331.958,
+        "name": "view_text",
+        "detail": "assistant|streaming|0"
+      },
+      {
+        "time": 1789279332.227,
+        "name": "view_text",
+        "detail": "assistant|streaming|40"
+      },
+      {
+        "time": 1789279332.227,
+        "name": "dom_text",
+        "detail": "assistant|streaming|39"
+      },
+      {
+        "time": 1789279332.26,
+        "name": "view_text",
+        "detail": "assistant|streaming|80"
+      },
+      {
+        "time": 1789279332.261,
+        "name": "dom_text",
+        "detail": "assistant|streaming|78"
+      },
+      {
+        "time": 1789279332.292,
+        "name": "view_text",
+        "detail": "assistant|streaming|160"
+      },
+      {
+        "time": 1789279332.293,
+        "name": "dom_text",
+        "detail": "assistant|streaming|156"
+      },
+      {
+        "time": 1789279332.325,
+        "name": "view_text",
+        "detail": "assistant|streaming|200"
+      },
+      {
+        "time": 1789279332.325,
+        "name": "dom_text",
+        "detail": "assistant|streaming|195"
+      },
+      {
+        "time": 1789279332.359,
+        "name": "view_text",
+        "detail": "assistant|streaming|280"
+      },
+      {
+        "time": 1789279332.359,
+        "name": "dom_text",
+        "detail": "assistant|streaming|273"
+      },
+      {
+        "time": 1789279332.396,
+        "name": "view_text",
+        "detail": "assistant|streaming|360"
+      },
+      {
+        "time": 1789279332.396,
+        "name": "dom_text",
+        "detail": "assistant|streaming|351"
+      },
+      {
+        "time": 1789279332.428,
+        "name": "view_text",
+        "detail": "assistant|streaming|400"
+      },
+      {
+        "time": 1789279332.428,
+        "name": "dom_text",
+        "detail": "assistant|streaming|390"
+      },
+      {
+        "time": 1789279332.459,
+        "name": "view_text",
+        "detail": "assistant|streaming|480"
+      },
+      {
+        "time": 1789279332.459,
+        "name": "dom_text",
+        "detail": "assistant|streaming|468"
+      },
+      {
+        "time": 1789279332.495,
+        "name": "view_text",
+        "detail": "assistant|streaming|560"
+      },
+      {
+        "time": 1789279332.495,
+        "name": "dom_text",
+        "detail": "assistant|streaming|546"
+      },
+      {
+        "time": 1789279332.529,
+        "name": "view_text",
+        "detail": "assistant|streaming|600"
+      },
+      {
+        "time": 1789279332.529,
+        "name": "dom_text",
+        "detail": "assistant|streaming|585"
+      },
+      {
+        "time": 1789279332.564,
+        "name": "view_text",
+        "detail": "assistant|streaming|680"
+      },
+      {
+        "time": 1789279332.564,
+        "name": "dom_text",
+        "detail": "assistant|streaming|663"
+      },
+      {
+        "time": 1789279332.598,
+        "name": "view_text",
+        "detail": "assistant|streaming|720"
+      },
+      {
+        "time": 1789279332.598,
+        "name": "dom_text",
+        "detail": "assistant|streaming|702"
+      },
+      {
+        "time": 1789279332.661,
+        "name": "view_text",
+        "detail": "assistant|streaming|800"
+      },
+      {
+        "time": 1789279332.661,
+        "name": "dom_text",
+        "detail": "assistant|streaming|780"
+      },
+      {
+        "time": 1789279332.695,
+        "name": "view_text",
+        "detail": "assistant|streaming|880"
+      },
+      {
+        "time": 1789279332.695,
+        "name": "dom_text",
+        "detail": "assistant|streaming|858"
+      },
+      {
+        "time": 1789279332.708,
+        "name": "view_text",
+        "detail": "assistant|streaming|920"
+      },
+      {
+        "time": 1789279332.708,
+        "name": "dom_text",
+        "detail": "assistant|streaming|897"
+      },
+      {
+        "time": 1789279332.76,
+        "name": "view_text",
+        "detail": "assistant|streaming|1000"
+      },
+      {
+        "time": 1789279332.76,
+        "name": "dom_text",
+        "detail": "assistant|streaming|975"
+      },
+      {
+        "time": 1789279332.774,
+        "name": "view_text",
+        "detail": "assistant|streaming|1040"
+      },
+      {
+        "time": 1789279332.774,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1014"
+      },
+      {
+        "time": 1789279332.826,
+        "name": "view_text",
+        "detail": "assistant|streaming|1120"
+      },
+      {
+        "time": 1789279332.826,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1092"
+      },
+      {
+        "time": 1789279332.838,
+        "name": "view_text",
+        "detail": "assistant|streaming|1200"
+      },
+      {
+        "time": 1789279332.838,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1170"
+      },
+      {
+        "time": 1789279332.894,
+        "name": "view_text",
+        "detail": "assistant|streaming|1240"
+      },
+      {
+        "time": 1789279332.894,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1209"
+      },
+      {
+        "time": 1789279332.927,
+        "name": "view_text",
+        "detail": "assistant|streaming|1320"
+      },
+      {
+        "time": 1789279332.927,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1287"
+      },
+      {
+        "time": 1789279332.961,
+        "name": "view_text",
+        "detail": "assistant|streaming|1400"
+      },
+      {
+        "time": 1789279332.961,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1365"
+      },
+      {
+        "time": 1789279332.995,
+        "name": "view_text",
+        "detail": "assistant|streaming|1440"
+      },
+      {
+        "time": 1789279332.995,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1404"
+      },
+      {
+        "time": 1789279333.028,
+        "name": "view_text",
+        "detail": "assistant|streaming|1520"
+      },
+      {
+        "time": 1789279333.028,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1482"
+      },
+      {
+        "time": 1789279333.061,
+        "name": "view_text",
+        "detail": "assistant|streaming|1600"
+      },
+      {
+        "time": 1789279333.061,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1560"
+      },
+      {
+        "time": 1789279333.094,
+        "name": "view_text",
+        "detail": "assistant|streaming|1640"
+      },
+      {
+        "time": 1789279333.094,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1599"
+      },
+      {
+        "time": 1789279333.126,
+        "name": "view_text",
+        "detail": "assistant|streaming|1720"
+      },
+      {
+        "time": 1789279333.126,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1677"
+      },
+      {
+        "time": 1789279333.159,
+        "name": "view_text",
+        "detail": "assistant|streaming|1760"
+      },
+      {
+        "time": 1789279333.159,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1716"
+      },
+      {
+        "time": 1789279333.196,
+        "name": "view_text",
+        "detail": "assistant|streaming|1840"
+      },
+      {
+        "time": 1789279333.196,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1794"
+      },
+      {
+        "time": 1789279333.227,
+        "name": "view_text",
+        "detail": "assistant|streaming|1920"
+      },
+      {
+        "time": 1789279333.227,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1872"
+      },
+      {
+        "time": 1789279333.261,
+        "name": "view_text",
+        "detail": "assistant|streaming|1960"
+      },
+      {
+        "time": 1789279333.261,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1911"
+      },
+      {
+        "time": 1789279333.295,
+        "name": "view_text",
+        "detail": "assistant|streaming|2040"
+      },
+      {
+        "time": 1789279333.295,
+        "name": "dom_text",
+        "detail": "assistant|streaming|1989"
+      },
+      {
+        "time": 1789279333.328,
+        "name": "view_text",
+        "detail": "assistant|streaming|2120"
+      },
+      {
+        "time": 1789279333.329,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2067"
+      },
+      {
+        "time": 1789279333.363,
+        "name": "view_text",
+        "detail": "assistant|streaming|2160"
+      },
+      {
+        "time": 1789279333.363,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2106"
+      },
+      {
+        "time": 1789279333.396,
+        "name": "view_text",
+        "detail": "assistant|streaming|2240"
+      },
+      {
+        "time": 1789279333.397,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2184"
+      },
+      {
+        "time": 1789279333.428,
+        "name": "view_text",
+        "detail": "assistant|streaming|2280"
+      },
+      {
+        "time": 1789279333.429,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2223"
+      },
+      {
+        "time": 1789279333.463,
+        "name": "view_text",
+        "detail": "assistant|streaming|2360"
+      },
+      {
+        "time": 1789279333.463,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2301"
+      },
+      {
+        "time": 1789279333.527,
+        "name": "view_text",
+        "detail": "assistant|streaming|2440"
+      },
+      {
+        "time": 1789279333.527,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2379"
+      },
+      {
+        "time": 1789279333.56,
+        "name": "view_text",
+        "detail": "assistant|streaming|2480"
+      },
+      {
+        "time": 1789279333.56,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2418"
+      },
+      {
+        "time": 1789279333.574,
+        "name": "view_text",
+        "detail": "assistant|streaming|2560"
+      },
+      {
+        "time": 1789279333.574,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2496"
+      },
+      {
+        "time": 1789279333.625,
+        "name": "view_text",
+        "detail": "assistant|streaming|2640"
+      },
+      {
+        "time": 1789279333.625,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2574"
+      },
+      {
+        "time": 1789279333.659,
+        "name": "view_text",
+        "detail": "assistant|streaming|2680"
+      },
+      {
+        "time": 1789279333.659,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2613"
+      },
+      {
+        "time": 1789279333.694,
+        "name": "view_text",
+        "detail": "assistant|streaming|2760"
+      },
+      {
+        "time": 1789279333.694,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2691"
+      },
+      {
+        "time": 1789279333.727,
+        "name": "view_text",
+        "detail": "assistant|streaming|2840"
+      },
+      {
+        "time": 1789279333.727,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2769"
+      },
+      {
+        "time": 1789279333.759,
+        "name": "view_text",
+        "detail": "assistant|streaming|2880"
+      },
+      {
+        "time": 1789279333.759,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2808"
+      },
+      {
+        "time": 1789279333.794,
+        "name": "view_text",
+        "detail": "assistant|streaming|2960"
+      },
+      {
+        "time": 1789279333.795,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2886"
+      },
+      {
+        "time": 1789279333.829,
+        "name": "view_text",
+        "detail": "assistant|streaming|3040"
+      },
+      {
+        "time": 1789279333.829,
+        "name": "dom_text",
+        "detail": "assistant|streaming|2964"
+      },
+      {
+        "time": 1789279333.861,
+        "name": "view_text",
+        "detail": "assistant|streaming|3080"
+      },
+      {
+        "time": 1789279333.861,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3003"
+      },
+      {
+        "time": 1789279333.894,
+        "name": "view_text",
+        "detail": "assistant|streaming|3160"
+      },
+      {
+        "time": 1789279333.894,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3081"
+      },
+      {
+        "time": 1789279333.929,
+        "name": "view_text",
+        "detail": "assistant|streaming|3200"
+      },
+      {
+        "time": 1789279333.929,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3120"
+      },
+      {
+        "time": 1789279333.962,
+        "name": "view_text",
+        "detail": "assistant|streaming|3280"
+      },
+      {
+        "time": 1789279333.962,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3198"
+      },
+      {
+        "time": 1789279333.997,
+        "name": "view_text",
+        "detail": "assistant|streaming|3360"
+      },
+      {
+        "time": 1789279333.998,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3276"
+      },
+      {
+        "time": 1789279334.029,
+        "name": "view_text",
+        "detail": "assistant|streaming|3400"
+      },
+      {
+        "time": 1789279334.029,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3315"
+      },
+      {
+        "time": 1789279334.062,
+        "name": "view_text",
+        "detail": "assistant|streaming|3480"
+      },
+      {
+        "time": 1789279334.062,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3393"
+      },
+      {
+        "time": 1789279334.092,
+        "name": "view_text",
+        "detail": "assistant|streaming|3520"
+      },
+      {
+        "time": 1789279334.092,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3432"
+      },
+      {
+        "time": 1789279334.127,
+        "name": "view_text",
+        "detail": "assistant|streaming|3600"
+      },
+      {
+        "time": 1789279334.127,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3510"
+      },
+      {
+        "time": 1789279334.16,
+        "name": "view_text",
+        "detail": "assistant|streaming|3680"
+      },
+      {
+        "time": 1789279334.16,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3588"
+      },
+      {
+        "time": 1789279334.196,
+        "name": "view_text",
+        "detail": "assistant|streaming|3720"
+      },
+      {
+        "time": 1789279334.196,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3627"
+      },
+      {
+        "time": 1789279334.229,
+        "name": "view_text",
+        "detail": "assistant|streaming|3800"
+      },
+      {
+        "time": 1789279334.23,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3705"
+      },
+      {
+        "time": 1789279334.264,
+        "name": "view_text",
+        "detail": "assistant|streaming|3840"
+      },
+      {
+        "time": 1789279334.264,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3744"
+      },
+      {
+        "time": 1789279334.299,
+        "name": "view_text",
+        "detail": "assistant|streaming|3920"
+      },
+      {
+        "time": 1789279334.299,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3822"
+      },
+      {
+        "time": 1789279334.33,
+        "name": "view_text",
+        "detail": "assistant|streaming|3960"
+      },
+      {
+        "time": 1789279334.33,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3861"
+      },
+      {
+        "time": 1789279334.364,
+        "name": "view_text",
+        "detail": "assistant|streaming|4040"
+      },
+      {
+        "time": 1789279334.364,
+        "name": "dom_text",
+        "detail": "assistant|streaming|3939"
+      },
+      {
+        "time": 1789279334.398,
+        "name": "view_text",
+        "detail": "assistant|streaming|4120"
+      },
+      {
+        "time": 1789279334.398,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4017"
+      },
+      {
+        "time": 1789279334.461,
+        "name": "view_text",
+        "detail": "assistant|streaming|4160"
+      },
+      {
+        "time": 1789279334.461,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4056"
+      },
+      {
+        "time": 1789279334.475,
+        "name": "view_text",
+        "detail": "assistant|streaming|4240"
+      },
+      {
+        "time": 1789279334.475,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4134"
+      },
+      {
+        "time": 1789279334.529,
+        "name": "view_text",
+        "detail": "assistant|streaming|4320"
+      },
+      {
+        "time": 1789279334.529,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4212"
+      },
+      {
+        "time": 1789279334.562,
+        "name": "view_text",
+        "detail": "assistant|streaming|4360"
+      },
+      {
+        "time": 1789279334.562,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4251"
+      },
+      {
+        "time": 1789279334.596,
+        "name": "view_text",
+        "detail": "assistant|streaming|4440"
+      },
+      {
+        "time": 1789279334.596,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4329"
+      },
+      {
+        "time": 1789279334.63,
+        "name": "view_text",
+        "detail": "assistant|streaming|4520"
+      },
+      {
+        "time": 1789279334.631,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4407"
+      },
+      {
+        "time": 1789279334.644,
+        "name": "view_text",
+        "detail": "assistant|streaming|4560"
+      },
+      {
+        "time": 1789279334.645,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4446"
+      },
+      {
+        "time": 1789279334.696,
+        "name": "view_text",
+        "detail": "assistant|streaming|4640"
+      },
+      {
+        "time": 1789279334.696,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4524"
+      },
+      {
+        "time": 1789279334.73,
+        "name": "view_text",
+        "detail": "assistant|streaming|4720"
+      },
+      {
+        "time": 1789279334.73,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4602"
+      },
+      {
+        "time": 1789279334.764,
+        "name": "view_text",
+        "detail": "assistant|streaming|4760"
+      },
+      {
+        "time": 1789279334.764,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4641"
+      },
+      {
+        "time": 1789279334.798,
+        "name": "view_text",
+        "detail": "assistant|streaming|4840"
+      },
+      {
+        "time": 1789279334.798,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4719"
+      },
+      {
+        "time": 1789279334.828,
+        "name": "view_text",
+        "detail": "assistant|streaming|4880"
+      },
+      {
+        "time": 1789279334.828,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4758"
+      },
+      {
+        "time": 1789279334.859,
+        "name": "view_text",
+        "detail": "assistant|streaming|4960"
+      },
+      {
+        "time": 1789279334.86,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4836"
+      },
+      {
+        "time": 1789279334.894,
+        "name": "view_text",
+        "detail": "assistant|streaming|5040"
+      },
+      {
+        "time": 1789279334.894,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4914"
+      },
+      {
+        "time": 1789279334.929,
+        "name": "view_text",
+        "detail": "assistant|streaming|5080"
+      },
+      {
+        "time": 1789279334.929,
+        "name": "dom_text",
+        "detail": "assistant|streaming|4953"
+      },
+      {
+        "time": 1789279334.963,
+        "name": "view_text",
+        "detail": "assistant|streaming|5160"
+      },
+      {
+        "time": 1789279334.963,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5031"
+      },
+      {
+        "time": 1789279334.996,
+        "name": "view_text",
+        "detail": "assistant|streaming|5200"
+      },
+      {
+        "time": 1789279334.996,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5070"
+      },
+      {
+        "time": 1789279335.027,
+        "name": "view_text",
+        "detail": "assistant|streaming|5280"
+      },
+      {
+        "time": 1789279335.028,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5148"
+      },
+      {
+        "time": 1789279335.061,
+        "name": "view_text",
+        "detail": "assistant|streaming|5360"
+      },
+      {
+        "time": 1789279335.062,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5226"
+      },
+      {
+        "time": 1789279335.096,
+        "name": "view_text",
+        "detail": "assistant|streaming|5400"
+      },
+      {
+        "time": 1789279335.096,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5265"
+      },
+      {
+        "time": 1789279335.132,
+        "name": "view_text",
+        "detail": "assistant|streaming|5480"
+      },
+      {
+        "time": 1789279335.132,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5343"
+      },
+      {
+        "time": 1789279335.163,
+        "name": "view_text",
+        "detail": "assistant|streaming|5520"
+      },
+      {
+        "time": 1789279335.163,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5382"
+      },
+      {
+        "time": 1789279335.227,
+        "name": "view_text",
+        "detail": "assistant|streaming|5600"
+      },
+      {
+        "time": 1789279335.227,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5460"
+      },
+      {
+        "time": 1789279335.241,
+        "name": "view_text",
+        "detail": "assistant|streaming|5680"
+      },
+      {
+        "time": 1789279335.241,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5538"
+      },
+      {
+        "time": 1789279335.293,
+        "name": "view_text",
+        "detail": "assistant|streaming|5720"
+      },
+      {
+        "time": 1789279335.293,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5577"
+      },
+      {
+        "time": 1789279335.308,
+        "name": "view_text",
+        "detail": "assistant|streaming|5800"
+      },
+      {
+        "time": 1789279335.308,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5655"
+      },
+      {
+        "time": 1789279335.36,
+        "name": "view_text",
+        "detail": "assistant|streaming|5880"
+      },
+      {
+        "time": 1789279335.36,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5733"
+      },
+      {
+        "time": 1789279335.394,
+        "name": "view_text",
+        "detail": "assistant|streaming|5920"
+      },
+      {
+        "time": 1789279335.395,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5772"
+      },
+      {
+        "time": 1789279335.409,
+        "name": "view_text",
+        "detail": "assistant|streaming|6000"
+      },
+      {
+        "time": 1789279335.409,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5850"
+      },
+      {
+        "time": 1789279335.46,
+        "name": "view_text",
+        "detail": "assistant|streaming|6040"
+      },
+      {
+        "time": 1789279335.46,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5889"
+      },
+      {
+        "time": 1789279335.493,
+        "name": "view_text",
+        "detail": "assistant|streaming|6120"
+      },
+      {
+        "time": 1789279335.494,
+        "name": "dom_text",
+        "detail": "assistant|streaming|5967"
+      },
+      {
+        "time": 1789279335.53,
+        "name": "view_text",
+        "detail": "assistant|streaming|6200"
+      },
+      {
+        "time": 1789279335.53,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6045"
+      },
+      {
+        "time": 1789279335.56,
+        "name": "view_text",
+        "detail": "assistant|streaming|6240"
+      },
+      {
+        "time": 1789279335.56,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6084"
+      },
+      {
+        "time": 1789279335.594,
+        "name": "view_text",
+        "detail": "assistant|streaming|6320"
+      },
+      {
+        "time": 1789279335.595,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6162"
+      },
+      {
+        "time": 1789279335.628,
+        "name": "view_text",
+        "detail": "assistant|streaming|6400"
+      },
+      {
+        "time": 1789279335.629,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6240"
+      },
+      {
+        "time": 1789279335.668,
+        "name": "view_text",
+        "detail": "assistant|streaming|6440"
+      },
+      {
+        "time": 1789279335.668,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6279"
+      },
+      {
+        "time": 1789279335.697,
+        "name": "view_text",
+        "detail": "assistant|streaming|6520"
+      },
+      {
+        "time": 1789279335.697,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6357"
+      },
+      {
+        "time": 1789279335.729,
+        "name": "view_text",
+        "detail": "assistant|streaming|6560"
+      },
+      {
+        "time": 1789279335.73,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6396"
+      },
+      {
+        "time": 1789279335.764,
+        "name": "view_text",
+        "detail": "assistant|streaming|6640"
+      },
+      {
+        "time": 1789279335.765,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6474"
+      },
+      {
+        "time": 1789279335.798,
+        "name": "view_text",
+        "detail": "assistant|streaming|6720"
+      },
+      {
+        "time": 1789279335.798,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6552"
+      },
+      {
+        "time": 1789279335.83,
+        "name": "view_text",
+        "detail": "assistant|streaming|6760"
+      },
+      {
+        "time": 1789279335.83,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6591"
+      },
+      {
+        "time": 1789279335.864,
+        "name": "view_text",
+        "detail": "assistant|streaming|6840"
+      },
+      {
+        "time": 1789279335.865,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6669"
+      },
+      {
+        "time": 1789279335.899,
+        "name": "view_text",
+        "detail": "assistant|streaming|6880"
+      },
+      {
+        "time": 1789279335.899,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6708"
+      },
+      {
+        "time": 1789279335.929,
+        "name": "view_text",
+        "detail": "assistant|streaming|6960"
+      },
+      {
+        "time": 1789279335.929,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6786"
+      },
+      {
+        "time": 1789279335.964,
+        "name": "view_text",
+        "detail": "assistant|streaming|7040"
+      },
+      {
+        "time": 1789279335.964,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6864"
+      },
+      {
+        "time": 1789279335.998,
+        "name": "view_text",
+        "detail": "assistant|streaming|7080"
+      },
+      {
+        "time": 1789279335.998,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6903"
+      },
+      {
+        "time": 1789279336.03,
+        "name": "view_text",
+        "detail": "assistant|streaming|7160"
+      },
+      {
+        "time": 1789279336.03,
+        "name": "dom_text",
+        "detail": "assistant|streaming|6981"
+      },
+      {
+        "time": 1789279336.071,
+        "name": "view_text",
+        "detail": "assistant|streaming|7240"
+      },
+      {
+        "time": 1789279336.071,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7059"
+      },
+      {
+        "time": 1789279336.126,
+        "name": "view_text",
+        "detail": "assistant|streaming|7280"
+      },
+      {
+        "time": 1789279336.126,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7098"
+      },
+      {
+        "time": 1789279336.161,
+        "name": "view_text",
+        "detail": "assistant|streaming|7360"
+      },
+      {
+        "time": 1789279336.161,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7176"
+      },
+      {
+        "time": 1789279336.175,
+        "name": "view_text",
+        "detail": "assistant|streaming|7440"
+      },
+      {
+        "time": 1789279336.176,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7254"
+      },
+      {
+        "time": 1789279336.226,
+        "name": "view_text",
+        "detail": "assistant|streaming|7480"
+      },
+      {
+        "time": 1789279336.227,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7293"
+      },
+      {
+        "time": 1789279336.261,
+        "name": "view_text",
+        "detail": "assistant|streaming|7560"
+      },
+      {
+        "time": 1789279336.261,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7371"
+      },
+      {
+        "time": 1789279336.277,
+        "name": "view_text",
+        "detail": "assistant|streaming|7600"
+      },
+      {
+        "time": 1789279336.278,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7410"
+      },
+      {
+        "time": 1789279336.328,
+        "name": "view_text",
+        "detail": "assistant|streaming|7680"
+      },
+      {
+        "time": 1789279336.329,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7488"
+      },
+      {
+        "time": 1789279336.342,
+        "name": "view_text",
+        "detail": "assistant|streaming|7720"
+      },
+      {
+        "time": 1789279336.343,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7527"
+      },
+      {
+        "time": 1789279336.395,
+        "name": "view_text",
+        "detail": "assistant|streaming|7800"
+      },
+      {
+        "time": 1789279336.395,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7605"
+      },
+      {
+        "time": 1789279336.43,
+        "name": "view_text",
+        "detail": "assistant|streaming|7880"
+      },
+      {
+        "time": 1789279336.431,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7683"
+      },
+      {
+        "time": 1789279336.464,
+        "name": "view_text",
+        "detail": "assistant|streaming|7920"
+      },
+      {
+        "time": 1789279336.464,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7722"
+      },
+      {
+        "time": 1789279336.497,
+        "name": "view_text",
+        "detail": "assistant|streaming|8000"
+      },
+      {
+        "time": 1789279336.497,
+        "name": "dom_text",
+        "detail": "assistant|streaming|7800"
+      },
+      {
+        "time": 1789279336.531,
+        "name": "view_text",
+        "detail": "assistant|complete|8039"
+      },
+      {
+        "time": 1789279336.531,
+        "name": "completed_text",
+        "detail": "第001段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第002段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第003段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第004段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第005段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第006段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第007段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第008段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第009段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第010段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第011段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第012段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第013段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第014段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第015段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第016段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第017段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第018段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第019段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第020段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第021段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第022段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第023段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第024段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第025段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第026段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第027段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第028段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第029段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第030段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第031段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第032段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第033段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第034段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第035段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第036段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第037段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第038段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第039段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第040段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第041段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第042段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第043段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第044段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第045段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第046段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第047段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第048段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第049段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第050段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第051段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第052段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第053段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第054段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第055段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第056段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第057段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第058段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第059段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第060段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第061段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第062段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第063段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第064段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第065段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第066段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第067段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第068段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第069段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第070段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第071段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第072段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第073段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第074段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第075段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第076段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第077段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第078段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第079段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第080段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第081段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第082段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第083段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第084段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第085段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第086段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第087段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第088段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第089段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第090段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第091段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第092段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第093段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第094段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第095段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第096段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第097段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第098段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第099段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第100段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第101段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第102段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第103段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第104段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第105段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第106段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第107段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第108段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第109段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第110段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第111段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第112段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第113段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第114段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第115段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第116段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第117段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第118段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第119段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第120段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第121段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第122段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第123段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第124段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第125段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第126段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第127段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第128段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第129段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第130段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第131段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第132段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第133段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第134段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第135段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第136段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第137段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第138段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第139段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第140段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第141段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第142段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第143段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第144段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第145段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第146段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第147段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第148段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第149段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第150段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第151段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第152段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第153段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第154段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第155段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第156段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第157段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第158段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第159段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第160段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第161段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第162段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第163段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第164段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第165段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第166段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第167段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第168段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第169段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第170段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第171段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第172段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第173段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第174段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第175段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第176段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第177段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第178段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第179段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第180段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第181段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第182段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第183段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第184段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第185段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第186段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第187段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第188段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第189段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第190段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第191段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第192段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第193段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第194段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第195段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第196段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第197段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第198段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第199段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n第200段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n END-long-optimized-web-long-1-mtzeoslx"
+      },
+      {
+        "time": 1789279336.531,
+        "name": "dom_text",
+        "detail": "assistant|complete|7839"
+      }
+    ]
+  }
+]

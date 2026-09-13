@@ -1,3 +1,4 @@
+import { WORKSPACE_PATCH_CAPABILITY } from '../shared/workspaceMessagePatch.js'
 import { workspaceDetail, streamWorkspace } from './workspaceSync.js'
 import { readServerIdentity } from './serverIdentity.js'
 import { randomUUID } from 'node:crypto'
@@ -18,6 +19,7 @@ import { receiveGroupUploads, type UploadStore } from './uploads.js'
 import { HttpError } from './errors.js'
 import type { PushCoordinator } from './pushCoordinator.js'
 import type { LocalAuthStore } from './localAuth.js'
+import type { CsrfProtection } from './security.js'
 import { compareWorkspaceConversations } from '../shared/workspace.js'
 import type {
   WorkspaceMessage,
@@ -38,6 +40,7 @@ export function workspaceRouter(
   uploads: UploadStore,
   auth: LocalAuthStore,
   push: PushCoordinator,
+  csrf?: CsrfProtection,
 ): Router {
   const router = new Router(),
     owner = (ctx: Koa.Context) => auth.require(ctx).id
@@ -60,7 +63,9 @@ export function workspaceRouter(
   }
   router.get('/api/app/capabilities', (ctx) => {
     owner(ctx)
+    ctx.set('Cache-Control', 'no-store')
     ctx.body = {
+      csrfToken: csrf?.issue(ctx),
       protocolVersion: 1,
       serverKind: 'yaoyao-web',
       features: [
@@ -75,6 +80,7 @@ export function workspaceRouter(
         'context',
         ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'remoteAgentReferences', 'editableNodeAddress'] : []),
         'events', 'workspace-stream-v1',
+        ...(store.messagePatchesEnabled ? [WORKSPACE_PATCH_CAPABILITY] : []),
       ],
     }
   })
@@ -277,7 +283,15 @@ export function workspaceRouter(
       await runtime.teamTools.requireAvailable(user, store.require<WorkspaceAgent>(user, 'agent', conversation.administratorId))
       if (auth.pushAuthorizationVersion(user) !== version) throw new HttpError(401, '账号授权已变化，请重新登录', 'session_revoked')
     }
-    ctx.body = { run: runtime.send(user, ctx.params.id, input) }
+    const accepted = runtime.send(user, ctx.params.id, input)
+    const run = store.require<WorkspaceRun>(user, 'run', accepted.id)
+    ctx.body = {
+      requestId: input.requestId, run,
+      message: store.messageForDisplay(user, store.require<WorkspaceMessage>(user, 'message', run.messageId)),
+      conversation: store.conversationSummary(user, store.require<WorkspaceConversation>(user, 'conversation', run.conversationId)),
+      task: run.conversationTaskId ? store.requireTask(user, run.conversationId, run.conversationTaskId) : null,
+      cursor: store.cursor(user),
+    }
     ctx.status = 202
   })
   router.put('/api/app/conversations/:id/read', (ctx) => {

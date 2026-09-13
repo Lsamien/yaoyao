@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { WORKSPACE_PATCH_CAPABILITY } from '@shared/workspaceMessagePatch'
+import { setApiCsrfToken } from '@/api/client'
 import { publishServerIdentity } from '@/api/serverIdentity'
 import type { ServerIdentity } from '@shared/serverIdentity'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
@@ -11,7 +13,7 @@ import LocalVmWorkspace from '@/components/workspace/LocalVmWorkspace.vue'
 import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import TaskPlan from '@/components/workspace/TaskPlan.vue'
 import type { AgentAssignment } from '@shared/agentTasks'
-import type { WorkspaceTask } from '@shared/workspace'
+import type { WorkspaceSendReceipt, WorkspaceTask } from '@shared/workspace'
 import { workspaceHasUnread } from '@shared/workspace'
 import type { WorkspaceLifecycleAction, WorkspaceLifecyclePreview } from '@shared/workspaceLifecycle'
 import FloatingResourceSearch from '@/components/app/FloatingResourceSearch.vue'
@@ -122,6 +124,8 @@ function openPreview(file: {name: string; url?: string; kind?: string}) {
 }
 let uploadedSources: File[] = [], uploadedReferences: WorkspaceFile[] = []
 async function sendFromComposer(payload: ComposerSubmit) {
+  const sourceComposer = composer.value, token = sourceComposer?.submissionToken()
+  const scope = composerKey.value, ownerEpoch = accountEpoch
   text.value = quoted.value ? `> ${(quoted.value.author || '我')}: ${quoted.value.content.replace(/\n/g, '\n> ')}\n\n${payload.text}` : payload.text
   mentions.value = payload.mentionIds
   if (payload.files.length) {
@@ -131,15 +135,23 @@ async function sendFromComposer(payload: ComposerSubmit) {
       else {
         const data = new FormData()
         for (const file of payload.files) data.append('files', file)
-        files.value = (await apiRequest<{ files: WorkspaceFile[] }>('/api/app/uploads', {method: 'POST', body: data})).files
+        const uploaded = await apiRequest<{ files: WorkspaceFile[] }>('/api/app/uploads', {method: 'POST', body: data})
+        if (scope !== composerKey.value || ownerEpoch !== accountEpoch) return
+        files.value = uploaded.files
         uploadedSources = [...payload.files]
         uploadedReferences = [...files.value]
       }
     } catch (cause) { error.value = cause instanceof Error ? cause.message : '上传失败'; return }
-    finally { busy.value = false }
+    finally { if (ownerEpoch === accountEpoch) busy.value = false }
   }
+  if (scope !== composerKey.value || ownerEpoch !== accountEpoch) return
   if (!payload.files.length) files.value = []
-  if (await send()) { composer.value?.clearAfterSend(); quoted.value = null; uploadedSources = []; uploadedReferences = [] }
+  if (await send()) {
+    const cleared = sourceComposer?.clearAfterSend(token)
+    if (cleared && composer.value === sourceComposer && composerKey.value === scope && accountEpoch === ownerEpoch) {
+      quoted.value = null; uploadedSources = []; uploadedReferences = []
+    }
+  }
 }
 const dialog = ref<'agent' | 'group' | 'editAgent' | 'editGroup' | null>(null),
   editingId = ref(''),
@@ -288,6 +300,9 @@ async function load(id = selected.value, append = false) {
     const incoming = cached ?? await apiRequest<WorkspaceDetail>(`/api/app/conversations/${id}?limit=50${requestedTask ? `&taskId=${encodeURIComponent(requestedTask)}` : ''}`)
     if (disposed || own !== generation) return
     const r = cached ?? transcriptStore.finishRead(readToken, incoming)
+    if (cached && transcriptStore.staleDetails.has(transcriptKey(id, cached.task?.id))) {
+      queueMicrotask(() => { if (!disposed && active.value?.id === id) void load(id, true) })
+    }
     const atBottom = timeline.value?.isFollowingBottom() ?? true
     active.value = r.conversation
     if (r.task) transcriptStore.selectedTasks.set(id, r.task.id)
@@ -424,6 +439,7 @@ function openTaskLink(event: MouseEvent) {
     void router.push(url.pathname+url.search)
   } catch { /* Leave other links to their normal handler. */ }
 }
+let patchEvents = false
 let eventSource: EventSource | undefined
 let eventFrame: number | undefined
 let eventQueue: WorkspaceEvent[] = []
@@ -439,7 +455,8 @@ function presentDetail(detail: WorkspaceDetail) {
 }
 function flushEvents() {
   eventFrame = undefined
-  for (const event of eventQueue) transcriptStore.apply(event)
+  try { for (const event of eventQueue) transcriptStore.apply(event) }
+  catch { eventQueue = []; eventSource?.close(); void recoverEvents(); return }
   eventQueue = []
   cursor = transcriptStore.cursor
   agents.value = transcriptStore.agents
@@ -454,17 +471,24 @@ function flushEvents() {
   }
 }
 async function hydrateWorkspace() {
-  const owner = auth.user?.id
+  const owner = auth.user?.id, epoch = accountEpoch
+  const capabilities = await apiRequest<{ features: string[]; csrfToken?: string }>('/api/app/capabilities')
+  if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
+  patchEvents = capabilities.features.includes(WORKSPACE_PATCH_CAPABILITY)
+  if (capabilities.csrfToken) setApiCsrfToken(capabilities.csrfToken)
+  const readToken = transcriptStore.beginRead()
+  try {
   const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity }>('/api/app/workspace/snapshot')
-  if (disposed || auth.user?.id !== owner) return
+  if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
   transcriptStore.hydrate(snapshot)
   agents.value = snapshot.agents; conversations.value = transcriptStore.conversations; cursor = snapshot.cursor
   publishServerIdentity(snapshot.serverIdentity)
+  } finally { transcriptStore.cancelRead(readToken) }
 }
 function connectEvents() {
   eventSource?.close()
   if (disposed) return
-  const source = new EventSource(`/api/app/events/stream?after=${cursor}`)
+  const source = new EventSource(`/api/app/events/stream?after=${cursor}${patchEvents ? '&format=patch-v1' : ''}`)
   eventSource = source
   source.addEventListener('workspace', event => {
     if (disposed || eventSource !== source) return
@@ -491,7 +515,15 @@ async function recoverEvents() {
   eventSource?.close(); eventSource = undefined; eventQueue = []
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
   eventFrame = undefined
-  try { await hydrateWorkspace(); await load(); connectEvents() }
+  try {
+    await hydrateWorkspace()
+    const detail = selected.value ? transcriptStore.get(selected.value, selectedTask.value || activeTask.value?.id) : undefined
+    if (detail) {
+      presentDetail(detail)
+      if (transcriptStore.staleDetails.has(transcriptKey(detail.conversation.id, detail.task?.id))) await load(detail.conversation.id, true)
+    } else await load()
+    connectEvents()
+  }
   catch (cause) {
     if (disposed) return
     error.value = cause instanceof Error ? cause.message : '连接中断'
@@ -643,11 +675,25 @@ async function upload(event: Event) {
     ;(event.target as HTMLInputElement).value = ''
   }
 }
+let draftRevision = 0, accountEpoch = 0
+watch([text, files, mentions], () => { draftRevision++ }, { deep: true, flush: 'sync' })
+const sendRefreshes = new Map<string, ReturnType<typeof setTimeout>>()
+function reconcileSend(receipt: WorkspaceSendReceipt, scope: string, id: string, owner: string | undefined) {
+  clearTimeout(sendRefreshes.get(scope))
+  sendRefreshes.set(scope, setTimeout(() => {
+    sendRefreshes.delete(scope)
+    if (disposed || auth.user?.id !== owner || composerKey.value !== scope) return
+    if (receipt.cursor !== undefined && transcriptStore.cursor >= receipt.cursor && eventSource?.readyState === EventSource.OPEN) return
+    void load(id, true).catch(() => { error.value = '消息已发送，正在恢复同步' })
+  }, receipt.cursor === undefined ? 0 : 2000))
+}
 async function send() {
   const c = active.value
   if (!c || busy.value || (!text.value.trim() && !files.value.length)) return
   busy.value = true
   error.value = ''
+  const owner = auth.user?.id, epoch = accountEpoch, revision = draftRevision, scope = composerKey.value, taskId = activeTask.value?.id
+  const submittedText = text.value, submittedFiles = files.value, submittedMentions = [...mentions.value]
   const mode = deliveryMode.value ? 'goal' : 'chat'
   const fingerprint = JSON.stringify([c.id, activeTask.value?.id, text.value, mentions.value, files.value.map(f => f.id), mode])
   if (!pendingRequestId || pendingFingerprint !== fingerprint) {
@@ -655,7 +701,7 @@ async function send() {
     pendingFingerprint = fingerprint
   }
   try {
-    await apiRequest(`/api/app/conversations/${c.id}/messages`, {
+    const receipt = await apiRequest<WorkspaceSendReceipt>(`/api/app/conversations/${c.id}/messages`, {
       method: 'POST',
       body: {
         requestId: pendingRequestId,
@@ -666,19 +712,24 @@ async function send() {
         fileIds: files.value.map((f) => f.id),
       },
     })
-    text.value = ''
-    files.value = []
-    mentions.value = []
-    pendingRequestId = undefined
-    pendingFingerprint = ''
-    deliveryMode.value = false
-    await load(c.id, true)
-    await refresh()
+    if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return true
+    busy.value = false
+    if (draftRevision === revision && composerKey.value === scope && text.value === submittedText && files.value === submittedFiles
+      && JSON.stringify(mentions.value) === JSON.stringify(submittedMentions)) {
+      text.value = ''; files.value = []; mentions.value = []
+      pendingRequestId = undefined; pendingFingerprint = ''; deliveryMode.value = false
+    }
+    flushEvents()
+    transcriptStore.acceptReceipt(receipt)
+    conversations.value = transcriptStore.conversations
+    const accepted = transcriptStore.get(c.id, taskId)
+    if (accepted && composerKey.value === scope) presentDetail(accepted)
+    reconcileSend(receipt, scope, c.id, owner)
     return true
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '发送失败'
+    if (accountEpoch === epoch) error.value = e instanceof Error ? e.message : '发送失败'
   } finally {
-    busy.value = false
+    if (accountEpoch === epoch) busy.value = false
   }
 }
 
@@ -804,6 +855,7 @@ watch([selected,selectedTask], () => {
 watch(selected,()=>{dockView.value=undefined})
 watch(() => auth.user?.id, (owner, previous) => {
   if (owner === previous) return
+  accountEpoch++; busy.value = false
   generation++
   eventSource?.close(); eventSource = undefined; eventQueue = []
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
@@ -826,6 +878,8 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  for (const timer of sendRefreshes.values()) clearTimeout(timer)
+  sendRefreshes.clear()
   disposed = true
   eventSource?.close()
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)

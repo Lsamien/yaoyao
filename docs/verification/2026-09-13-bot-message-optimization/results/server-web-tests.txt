@@ -1,0 +1,34 @@
+ ✓ tests/server/workspaceMessagePatch.test.ts (7 tests) 371ms
+ ✓ tests/client/composer.test.ts (7 tests) 53ms
+ ✓ tests/server/workspaceTeamTools.test.ts (25 tests) 382ms
+stderr | tests/server/workspaceRoutes.test.ts > application workspace HTTP contract > rejects a stale group confirmation and rolls back membership on a later deletion failure
+
+  Error: 模拟写入失败
+      at WorkspaceStore.<anonymous> (/Users/samien/git/bot-message-latency/yaoyao/tests/server/workspaceRoutes.test.ts:217:85)
+      at WorkspaceStore.mockCall (file:///Users/samien/git/yaoyao/node_modules/@vitest/spy/dist/index.js:96:15)
+      at WorkspaceStore.deleteAgent (file:///Users/samien/git/yaoyao/node_modules/tinyspy/dist/index.js:47:80)
+      at /Users/samien/git/bot-message-latency/yaoyao/src/server/workspaceStore.ts:519:39
+      at WorkspaceStore.atomic (/Users/samien/git/bot-message-latency/yaoyao/src/server/workspaceStore.ts:299:22)
+      at WorkspaceStore.changeConversationLifecycle (/Users/samien/git/bot-message-latency/yaoyao/src/server/workspaceStore.ts:493:10)
+      at /Users/samien/git/bot-message-latency/yaoyao/src/server/workspaceRoutes.ts:155:11
+      at dispatch (/Users/samien/git/yaoyao/node_modules/koa-compose/index.js:42:32)
+      at file:///Users/samien/git/yaoyao/node_modules/@koa/router/dist/index.mjs:1055:18
+      at dispatch (/Users/samien/git/yaoyao/node_modules/koa-compose/index.js:42:32)
+
+
+ ✓ tests/client/markdownContent.test.ts (15 tests) 495ms
+   ✓ streaming Markdown > renders split tables, links and emphasis safely and preserves the full long reply  383ms
+ ✓ tests/server/workspaceRoutes.test.ts (26 tests) 602ms
+ ✓ tests/server/taskCoordinator.test.ts (15 tests) 1312ms
+ ✓ tests/server/workspace.test.ts (76 tests) 13066ms
+   ✓ automatically reconciles lost completion without submitting the prompt again  532ms
+   ✓ keeps an unconfirmed turn separate from a later reply and retries history without resubmitting  1565ms
+   ✓ automatic relay termination > starts fresh for identical new requests in the same task and a different task  439ms
+   ✓ retries a rolled-back cascade plan without losing or duplicating delegation  592ms
+   ✓ pages backwards to find a long-running turn marker and never mistakes a tool call for a final answer  749ms
+   ✓ queues an unsubmitted turn while computer capacity is unavailable and submits it once after recovery  1052ms
+
+ Test Files  11 passed (11)
+      Tests  193 passed (193)
+   Start at  14:15:43
+   Duration  13.58s (transform 1.00s, setup 130ms, collect 2.86s, tests 16.46s, environment 1.47s, prepare 460ms)

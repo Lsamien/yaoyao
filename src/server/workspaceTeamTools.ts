@@ -4,7 +4,7 @@ import { HttpError } from './errors.js'
 import { agentInput, parse, type WorkspaceStore } from './workspaceStore.js'
 import type { WorkspaceNodes } from './workspaceGateway.js'
 import type { WorkspaceRuntime } from './workspaceRuntime.js'
-import type { Work } from './workspaceScheduler.js'
+import { WORKSPACE_CONCURRENCY_LIMIT, type Work } from './workspaceScheduler.js'
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 import { requireTeamToolBridge } from './workspaceToolLease.js'
 import { assignmentInput, assignmentReview, assignmentUpdate, assignmentCancel, finishGoalInput, resumeGoalInput, goalCriteriaInput } from './taskCoordinator.js'
@@ -203,8 +203,8 @@ export class WorkspaceTeamTools {
           this.store.saveRun(owner, sourceRun)
           return { teamId: team.id, teamName: team.name, task: { ...task, goal }, run: sourceRun, message: '当前话题已作为交付目标，请按需直接完成或分工，不要重复启动。' }
         }
-        if (this.store.activeTaskCount(owner, team.id) >= 4)
-          throw new HttpError(409, '最多同时运行 4 个任务', 'workspace_task_concurrency_limit')
+        if (this.store.activeTaskCount(owner, team.id) >= WORKSPACE_CONCURRENCY_LIMIT)
+          throw new HttpError(409, `最多同时运行 ${WORKSPACE_CONCURRENCY_LIMIT} 个任务`, 'workspace_task_concurrency_limit')
         const emptyTask = this.store.tasks(owner, team.id).find(t => t.messageCount === 0 && !t.activeRunId && t.titleSource === 'automatic')
         const task = emptyTask
           ? this.store.updateTask(owner, team.id, emptyTask.id, { title: body.title })

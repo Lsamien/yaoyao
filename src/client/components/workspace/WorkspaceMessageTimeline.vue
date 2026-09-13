@@ -81,7 +81,8 @@ const thinkingElapsedMs = ref(0)
 const windowStart = ref(0)
 const windowSize = 120
 const windowedMessages = computed(() => props.messages.slice(windowStart.value))
-const timelineRows = computed(() => buildMessageTimelineRows(windowedMessages.value))
+const messageBodies = new WeakMap<UiMessage, UiMessage>()
+const timelineRows = computed(() => buildMessageTimelineRows(windowedMessages.value, messageBodies))
 const mentionSignature = computed(() => props.mentionNames.join("\u0000"))
 let transcriptObserver: ResizeObserver | undefined
 let followFrame: number | undefined
@@ -337,7 +338,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
         </button>
 
         <template v-for="row in timelineRows" :key="row.id">
-        <TurnTrace v-if="row.kind === 'trace' && showTools" :group="row" />
+        <TurnTrace v-if="row.kind === 'trace' && showTools" :group="row" :stream-interval-ms="0" />
         <template v-else-if="row.kind === 'message'">
         <article
           v-for="message in [row.message]"
@@ -388,7 +389,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 
             <details v-if="message.reasoning" class="message__reasoning">
               <summary><AppIcon name="brain" :size="13" />思考过程 · {{ message.reasoning.length }} 字</summary>
-              <MarkdownContent process-content :content="message.reasoning" :streaming="message.status === 'streaming'" @rendered="onMarkdownRendered" />
+              <MarkdownContent process-content :content="message.reasoning" :streaming="message.status === 'streaming'" :stream-interval-ms="0" @rendered="onMarkdownRendered" />
             </details>
 
             <div v-if="message.role === 'user' && message.attachments?.length" class="message__attachments">
@@ -401,6 +402,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 
             <div class="message__content">
               <MarkdownContent
+                :stream-interval-ms="0"
                 :file-profile="message.profile"
                 :content="displayContentForMessage(message.role, message.content)"
                 :streaming="message.status === 'streaming'"

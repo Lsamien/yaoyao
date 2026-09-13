@@ -6,7 +6,7 @@ import ConversationsView from '../../src/client/views/ConversationsView.vue'
 import { apiRequest } from '../../src/client/api/client'
 import type { WorkspaceLifecyclePreview } from '../../src/shared/workspaceLifecycle'
 
-vi.mock('../../src/client/api/client', () => ({ apiRequest: vi.fn(), ApiError: class extends Error {} }))
+vi.mock('../../src/client/api/client', () => ({ apiRequest: vi.fn(), setApiCsrfToken: vi.fn(), ApiError: class extends Error {} }))
 vi.mock('../../src/client/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 'owner' }, profiles: [], refreshProfileAvatars: async () => {} }) }))
 vi.mock('../../src/client/stores/theme', () => ({ useThemeStore: () => ({}) }))
 
@@ -19,6 +19,7 @@ async function setup(kind: 'direct' | 'group', remove: () => Promise<void> = asy
   await router.push('/conversations'); await router.isReady()
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+    if (path === '/api/app/capabilities') return { features: [], csrfToken: 'fixture-csrf' } as never
     if (path === '/api/app/workspace/snapshot') return { agents: [{ id: 'bot', name: '旧聊天', archived: true }], conversations: archived, details: [], cursor: 1 } as never
     if (path.endsWith('/lifecycle')) {
       if (options?.method !== 'POST') return { name: '旧聊天', kind, groups, confirmationToken: 'a'.repeat(64) } as never

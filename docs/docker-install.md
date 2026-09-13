@@ -12,14 +12,14 @@
 
 | 标签 | 架构 |
 | --- | --- |
-| `v0.4.16-amd` | `linux/amd64` |
-| `v0.4.16` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
-| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.16` 相同的镜像 |
+| `v0.4.17-amd` | `linux/amd64` |
+| `v0.4.17` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
+| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.17` 相同的镜像 |
 
 ```sh
-docker pull samienluo/yaoyao:v0.4.16
+docker pull samienluo/yaoyao:v0.4.17
 # 需要固定 AMD64 时：
-docker pull samienluo/yaoyao:v0.4.16-amd
+docker pull samienluo/yaoyao:v0.4.17-amd
 ```
 
 每次新版本发布都会更新 `latest`，旧版本标签继续保留。需要固定部署版本时使用具体版本标签。
@@ -34,7 +34,7 @@ cp docker.env.example docker.env
 
 | 配置 | 用途 |
 | --- | --- |
-| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.16` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
+| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.17` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
 | `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址，默认 `http://host.docker.internal:9119` |
 | `HERMES_YAOYAO_BIND_ADDRESS` | Web 的宿主机发布地址，默认 `127.0.0.1`；局域网访问可设为 `0.0.0.0` |
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
@@ -152,7 +152,7 @@ curl --fail http://127.0.0.1:15300/healthz
 使用 Docker Hub 发布镜像时，在 `docker.env` 设置：
 
 ```dotenv
-HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.16
+HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.17
 YAOYAO_CURSOR_DESKTOP_IMAGE=samienluo/yaoyao-desktop:v0.4.12-cursor-amd
 ```
 

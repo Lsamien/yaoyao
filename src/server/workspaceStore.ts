@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { EventEmitter } from 'node:events'
+import { messageAppendPatch } from '../shared/workspaceMessagePatch.js'
 import { z } from 'zod'
 import { HttpError } from './errors.js'
 import { isVisibleMessageFile } from '../shared/messageFiles.js'
@@ -112,6 +113,35 @@ export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   return parsed.data
 }
 export class WorkspaceStore {
+  readonly messagePatchesEnabled: boolean
+  private summaryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private scheduleSummary(owner: string, conversation: Conversation): void {
+    const key = `${owner}\0${conversation.id}`
+    if (this.summaryTimers.has(key)) return
+    const timer = setTimeout(() => {
+      this.summaryTimers.delete(key)
+      try {
+        const current = this.get<Conversation>(owner, 'conversation', conversation.id)
+        if (!current || current.archived) return
+        const latest = this.messages(owner, current.id, Number.MAX_SAFE_INTEGER, 1)[0]
+        if (!latest || !latest.content.trim()) return
+        this.atomic(() => {
+          current.updatedAt = Date.now()
+          current.lastMessageAt = Math.max(current.lastMessageAt ?? 0, latest.createdAt)
+          current.preview = notificationPlainText(latest.content, { maximum: 160, fallback: '' })
+          current.previewAgentId = latest.role === 'assistant' ? latest.agentId : undefined
+          this.put(owner, 'conversation', current.id, current)
+          this.event(owner, 'conversation.changed', current, current.id)
+        })
+      } catch { /* The message is already durable; a later update can retry its list summary. */ }
+    }, Math.max(1, 250 - (Date.now() - conversation.updatedAt)))
+    timer.unref(); this.summaryTimers.set(key, timer)
+  }
+  private wireEvents = new WeakMap<WorkspaceEvent, WorkspaceEvent>()
+  wireEvent(event: WorkspaceEvent): WorkspaceEvent { return this.wireEvents.get(event) ?? event }
+  hasPatchEvents(owner: string, after: number, through: number): boolean {
+    return !!this.db.prepare("SELECT 1 FROM workspace_events WHERE owner=? AND seq>? AND seq<=? AND type='message.patch' LIMIT 1").get(owner, after, through)
+  }
   prepareAgent?: (owner:string,agent:Agent)=>void
   private observers = new Set<(owner: string, event: WorkspaceEvent) => void>()
   observe(listener: (owner: string, event: WorkspaceEvent) => void): () => void {
@@ -125,7 +155,8 @@ export class WorkspaceStore {
   readonly db: DatabaseSync
   readonly changes = new EventEmitter()
   private transactionEvents: Array<{ owner: string; event: WorkspaceEvent }> | undefined
-  constructor(home: string) {
+  constructor(home: string, options: { messagePatches?: boolean } = {}) {
+    this.messagePatchesEnabled = options.messagePatches ?? process.env.HERMES_YAOYAO_WORKSPACE_MESSAGE_PATCHES !== '0'
     mkdirSync(home, { recursive: true, mode: 0o700 })
     const path = join(home, 'workspace.sqlite3')
     this.db = new DatabaseSync(path)
@@ -277,13 +308,15 @@ export class WorkspaceStore {
       throw error
     }
   }
-  event(owner: string, type: string, data: unknown, conversationId?: string): number {
+  event(owner: string, type: string, data: unknown, conversationId?: string, projection?: { type: string; data: unknown }): number {
     const seq = Number(
       this.db
         .prepare('INSERT INTO workspace_events(owner,type,conversation_id,data) VALUES(?,?,?,?)')
         .run(owner, type, conversationId ?? null, JSON.stringify(data)).lastInsertRowid,
     )
-    const event = { seq, type, conversationId, data: this.eventDataForDisplay(owner, type, data) }
+    const wire = { seq, type, conversationId, data: this.eventDataForDisplay(owner, type, data) }
+    const event = projection ? { seq, conversationId, type: projection.type, data: this.eventDataForDisplay(owner, projection.type, projection.data) } : wire
+    if (projection) this.wireEvents.set(event, wire)
     if (this.transactionEvents) this.transactionEvents.push({ owner, event })
     else this.publish(owner, event)
     return seq
@@ -887,6 +920,11 @@ export class WorkspaceStore {
     this.atomic(() => {
       const c = this.require<Conversation>(owner, 'conversation', message.conversationId)
       const previous = this.get<Message>(owner, 'message', message.id)
+      // Do not emit revisions for gateway events which did not change the message.
+      if (previous?.status === 'streaming' && message.status === 'streaming' && JSON.stringify({ ...previous, revision: undefined }) === JSON.stringify({ ...message, revision: undefined })) return
+      message.revision = (previous?.revision ?? 0) + 1
+      const patch = this.messagePatchesEnabled ? messageAppendPatch(previous, message) : undefined
+      const updateSummary = !patch || Date.now() - c.updatedAt >= 250
       if (previous && previous.conversationTaskId !== message.conversationTaskId)
         throw new HttpError(409, '消息不能移入其他任务', 'message_task_mismatch')
       const task = c.kind === 'group'
@@ -906,15 +944,15 @@ export class WorkspaceStore {
         if (task) { task.unread = true; task.unreadVersion = (task.unreadVersion ?? 0) + 1 }
       }
       c.unreadCount = c.unread ? 1 : 0
-      if (message.visible !== false && (message.content.trim() || message.attachments.length)) {
+      if (updateSummary && message.visible !== false && (message.content.trim() || message.attachments.length)) {
         c.updatedAt = Date.now()
         c.lastMessageAt = Math.max(c.lastMessageAt ?? 0, message.createdAt)
         c.preview = notificationPlainText(message.content, { maximum: 160, fallback: '' })
         c.previewAgentId = message.role === 'assistant' ? message.agentId : undefined
       }
       this.put(owner, 'message', message.id, message)
-      this.put(owner, 'conversation', c.id, c)
-      if (task) {
+      if (updateSummary) this.put(owner, 'conversation', c.id, c)
+      if (task && updateSummary) {
         const becameVisible = message.visible !== false && (!previous || previous.visible === false),
           becameHidden = Boolean(previous && previous.visible !== false && message.visible === false)
         if (becameVisible) task.messageCount += 1
@@ -932,8 +970,13 @@ export class WorkspaceStore {
         this.put(owner, 'conversation-task', task.id, task)
         this.event(owner, 'task.changed', task, c.id)
       }
-      this.event(owner, 'message.changed', message, c.id)
-      this.event(owner, 'conversation.changed', c, c.id)
+      if (patch) this.event(owner, 'message.patch', patch, c.id, { type: 'message.changed', data: message })
+      else this.event(owner, 'message.changed', message, c.id)
+      if (updateSummary) {
+        const key = `${owner}\0${c.id}`
+        clearTimeout(this.summaryTimers.get(key)); this.summaryTimers.delete(key)
+        this.event(owner, 'conversation.changed', c, c.id)
+      } else this.scheduleSummary(owner, c)
     })
   }
   agentSummary(agent: Agent): Agent {
@@ -1013,6 +1056,8 @@ export class WorkspaceStore {
     )
   }
   close(): void {
+    for (const timer of this.summaryTimers.values()) clearTimeout(timer)
+    this.summaryTimers.clear()
     this.changes.emit('workspace.close')
     this.changes.removeAllListeners()
     this.db.close()

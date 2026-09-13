@@ -184,3 +184,29 @@ it('renders process media as text while retaining message media previews', async
   process.unmount()
   message.unmount()
 })
+
+it('allows Bot text to render at 33ms while keeping the default renderer cadence', async () => {
+  vi.useFakeTimers()
+  try {
+    const bot = mount(MarkdownContent, { props: { content: '开始', streaming: true, streamIntervalMs: 33 } })
+    const ordinary = mount(MarkdownContent, { props: { content: '开始', streaming: true } })
+    await bot.setProps({ content: '开始继续' }); await ordinary.setProps({ content: '开始继续' })
+    await vi.advanceTimersByTimeAsync(33)
+    expect(bot.text()).toContain('开始继续'); expect(ordinary.text()).not.toContain('继续')
+    await vi.advanceTimersByTimeAsync(47)
+    expect(ordinary.text()).toContain('开始继续')
+    bot.unmount(); ordinary.unmount()
+  } finally { vi.useRealTimers() }
+})
+
+it('renders server-batched Bot updates without a second throttle', async () => {
+  vi.useFakeTimers()
+  try {
+    const wrapper = mount(MarkdownContent, { props: { content: '开始', streaming: true, streamIntervalMs: 0 } })
+    await wrapper.setProps({ content: '开始第一批' })
+    expect(wrapper.text()).toContain('第一批')
+    await wrapper.setProps({ content: '开始第一批第二批' })
+    expect(wrapper.text()).toContain('第二批')
+    wrapper.unmount()
+  } finally { vi.useRealTimers() }
+})

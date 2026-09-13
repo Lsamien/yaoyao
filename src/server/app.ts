@@ -424,7 +424,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
   const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
-  const applicationRouter = workspaceRouter(workspace, workspaceRuntime, workspaceNodes, workspaceAssets, uploads, auth, push)
+  const applicationRouter = workspaceRouter(workspace, workspaceRuntime, workspaceNodes, workspaceAssets, uploads, auth, push, csrf)
   app.use(runners.adminRouter().routes())
   app.use(applicationRouter.routes())
   app.use(async (ctx, next) => {

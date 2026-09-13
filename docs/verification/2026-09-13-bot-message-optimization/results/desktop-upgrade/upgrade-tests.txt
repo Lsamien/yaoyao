@@ -1,0 +1,11 @@
+Historical upgrade fixture: 0.4.16 92415312524c564a58056d7a0f2a06fdbb484ea6 -> 0.4.17-bot-latency.1 49971c62b324d5ee562b99da42ec79af60133489
+✔ App first launch installs an independent Web; Web remains up after quit and a newer Web is retained (15934.493208ms)
+✔ built startup page shows a real helper error and Retry recovers into the Web (4000.408459ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 20273.384708

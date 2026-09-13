@@ -86,3 +86,55 @@ describe('Bot transcript cache', () => {
     expect(foldDetail(pending, { seq: 13, conversationId: 'c', type: 'interaction.changed', data: { id: 'approval', resolved: true } }).interactions).toHaveLength(0)
   })
 })
+
+it('merges send receipts without advancing replay or regressing newer events', () => {
+  const store = new WorkspaceTranscriptStore()
+  store.hydrate({ agents: [], conversations: [conversation], details: [detail()], cursor: 10 })
+  const run = { id: 'r', conversationId: 'c', messageId: 'sent', status: 'queued' as const, mentionIds: [], round: 0, createdAt: 1, updatedAt: 1 }
+  const receipt = { run, message: message('sent', 3, 'accepted'), conversation, cursor: 15 }
+  const pending = store.beginRead()
+  store.acceptReceipt(receipt)
+  expect(store.cursor).toBe(10)
+  store.apply(event(12, message('sent', 3, 'stale')))
+  expect(store.get('c')!.messages.at(-1)!.content).toBe('accepted')
+  store.apply(event(16, message('sent', 3, 'newer')))
+  store.acceptReceipt(receipt)
+  expect(store.get('c')!.messages.at(-1)!.content).toBe('newer')
+  expect(store.get('c')!.messages.filter(m => m.id === 'sent')).toHaveLength(1)
+  expect(store.finishRead(pending, detail()).messages.at(-1)!.content).toBe('newer')
+  expect(store.cursor).toBe(16)
+})
+
+it('normalizes revision patches before replay and detects a gap without advancing the cursor', () => {
+  const store = new WorkspaceTranscriptStore()
+  store.hydrate({ agents: [], conversations: [conversation], details: [{ ...detail(), messages: [{ ...message('live', 2, '初始'), status: 'streaming', revision: 1 }] }], cursor: 10 })
+  const patch = (seq: number, baseRevision: number, text: string): WorkspaceEvent => ({ seq, type: 'message.patch', conversationId: 'c',
+    data: { id: 'live', conversationId: 'c', baseRevision, revision: baseRevision + 1, contentAppend: text, reasoningAppend: '思考' } })
+  store.apply(patch(11, 1, '🙂'))
+  store.apply(patch(11, 1, '🙂'))
+  expect(store.get('c')!.messages[0]!.content).toBe('初始🙂')
+  expect(() => store.apply(patch(12, 3, '丢失基线'))).toThrow()
+  expect(store.cursor).toBe(11)
+  store.apply(patch(12, 2, 'e\u0301'))
+  expect(store.get('c')!.messages[0]!.content).toBe('初始🙂e\u0301')
+})
+
+it('preserves paged history across hydrate, removes hidden rows and rejects older reads', () => {
+  const store = new WorkspaceTranscriptStore()
+  store.hydrate({ agents: [], conversations: [conversation], details: [detail()], cursor: 10 })
+  const read = store.beginRead()
+  const updated = { ...detail(), conversation: { ...conversation, name: '新版' },
+    messages: [{ ...message('live', 2, '新内容'), revision: 2 }], hiddenMessageIds: ['old'], cursor: 20 }
+  store.hydrate({ agents: [], conversations: [updated.conversation], details: [updated], cursor: 20 })
+  const merged = store.finishRead(read, { ...detail(), cursor: 11 })
+  expect(merged.conversation.name).toBe('新版')
+  expect(merged.messages.map(m => m.content)).toEqual(['新内容'])
+})
+
+it('does not resurrect a previous account through pending reads on logout', () => {
+  const store = new WorkspaceTranscriptStore()
+  store.hydrate({ agents: [], conversations: [conversation], details: [detail()], cursor: 10 })
+  store.beginRead(); store.apply(event(11, message('private', 3)))
+  store.hydrate({ agents: [], conversations: [], details: [], cursor: 0 })
+  expect(store.conversations).toEqual([]); expect(store.details.size).toBe(0)
+})

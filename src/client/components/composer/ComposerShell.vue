@@ -110,9 +110,21 @@ function draftStorageKey(key = props.draftKey) {
   return key ? `hermes-yaoyao:composer:${props.mode}:${key}` : ''
 }
 
+let restoringDraft = false
+let tracksSubmissions = false
+const draftVersions = new Map<string, number>()
+watch([text, attachments, chosenMentionIds], () => {
+  if (tracksSubmissions && !restoringDraft) { const key = draftStorageKey(); draftVersions.set(key, (draftVersions.get(key) ?? 0) + 1) }
+}, { deep: true, flush: 'sync' })
+function submissionToken() {
+  tracksSubmissions = true
+  const key = draftStorageKey()
+  return { key, revision: draftVersions.get(key) ?? 0 }
+}
 function restoreDraft() {
   const key = draftStorageKey()
-  text.value = key ? localStorage.getItem(key) || '' : ''
+  restoringDraft = true
+  try { text.value = key ? localStorage.getItem(key) || '' : '' } finally { restoringDraft = false }
   nextTick(autoSize)
 }
 
@@ -336,13 +348,21 @@ function submit() {
   nextTick(() => textarea.value?.focus())
 }
 
-function clearAfterSend() {
+function clearAfterSend(expected?: ReturnType<typeof submissionToken>) {
+  if (expected) {
+    if ((draftVersions.get(expected.key) ?? 0) !== expected.revision) return false
+    if (expected.key !== draftStorageKey()) {
+      if (expected.key) localStorage.removeItem(expected.key)
+      return false
+    }
+  }
   text.value = ''
   chosenMentionIds.value = []
   persistDraft('')
   clearAttachments()
   resetHeight()
   nextTick(() => textarea.value?.focus())
+  return true
 }
 
 function onWrapperMouseDown(event: MouseEvent) {
@@ -395,6 +415,7 @@ defineExpose({
   filesSnapshot: () => attachments.value.map(attachment => attachment.file),
   focus: () => textarea.value?.focus(),
   clearAfterSend,
+  submissionToken,
 })
 </script>
 

@@ -1,0 +1,31 @@
+
+> yaoyao@0.4.17-bot-latency.1 test
+> vitest run tests/server/workspace.test.ts tests/server/workspaceSync.test.ts tests/server/workspaceTeamTools.test.ts tests/server/taskCoordinator.test.ts tests/server/runner.test.ts tests/server/computerPool.test.ts tests/server/desktopEnvironments.test.ts
+
+
+ RUN  v3.2.7 /Users/samien/git/session-continuity-10/yaoyao
+
+ ✓ tests/server/workspaceSync.test.ts (4 tests) 91ms
+ ✓ tests/server/computerPool.test.ts (9 tests) 166ms
+ ✓ tests/server/workspaceTeamTools.test.ts (25 tests) 377ms
+ ✓ tests/server/desktopEnvironments.test.ts (10 tests) 483ms
+ ✓ tests/server/taskCoordinator.test.ts (15 tests) 1312ms
+ ✓ tests/server/runner.test.ts (17 tests) 1946ms
+ ✓ tests/server/workspace.test.ts (78 tests) 13761ms
+   ✓ automatically reconciles lost completion without submitting the prompt again  538ms
+   ✓ keeps an unconfirmed turn separate from a later reply and retries history without resubmitting  1571ms
+   ✓ automatic relay termination > starts fresh for identical new requests in the same task and a different task  439ms
+   ✓ retries a rolled-back cascade plan without losing or duplicating delegation  592ms
+   ✓ pages backwards to find a long-running turn marker and never mistakes a tool call for a final answer  752ms
+   ✓ queues an unsubmitted turn while computer capacity is unavailable and submits it once after recovery  1052ms
+
+ Test Files  7 passed (7)
+      Tests  158 passed (158)
+   Start at  23:42:16
+   Duration  14.28s (transform 458ms, setup 135ms, collect 1.76s, tests 18.14s, environment 1ms, prepare 337ms)
+
+
+> yaoyao@0.4.17-bot-latency.1 release:verify
+> node scripts/verify-release.mjs
+
+发布版本校验通过：Web 0.4.17-bot-latency.1

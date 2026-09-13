@@ -1,0 +1,30 @@
+    t =    50.53s         Capturing element debug description
+    t =    51.06s     Checking `Expect predicate `existsNoRetry == 1` for object StaticText (First Match)`
+    t =    51.06s         Checking existence of `StaticText (First Match)`
+    t =    51.54s         Capturing element debug description
+    t =    52.06s     Checking `Expect predicate `existsNoRetry == 1` for object StaticText (First Match)`
+    t =    52.06s         Checking existence of `StaticText (First Match)`
+    t =    52.62s         Capturing element debug description
+    t =    53.03s     Checking `Expect predicate `existsNoRetry == 1` for object StaticText (First Match)`
+    t =    53.03s         Checking existence of `StaticText (First Match)`
+    t =    53.42s Find the Target Application 'cn.samien.yaoyao.hermes'
+    t =    53.61s Added attachment named 'optimized-ios-long-1'
+    t =    54.33s Terminate cn.samien.yaoyao.hermes:52517
+    t =    55.42s Tear Down
+Test Case '-[YaoYaoAIUITests.LaunchSmokeTests testLatencyCurrent]' passed (55.620 seconds).
+Test Suite 'LaunchSmokeTests' passed at 2026-09-13 13:35:24.649.
+	 Executed 1 test, with 0 failures (0 unexpected) in 55.620 (55.621) seconds
+Test Suite 'YaoYaoAIUITests.xctest' passed at 2026-09-13 13:35:24.650.
+	 Executed 1 test, with 0 failures (0 unexpected) in 55.620 (55.622) seconds
+Test Suite 'Selected tests' passed at 2026-09-13 13:35:24.650.
+	 Executed 1 test, with 0 failures (0 unexpected) in 55.620 (55.622) seconds
+2026-09-13 13:35:24.972 xcodebuild[52213:27825959] [MT] IDETestOperationsObserverDebug: 57.365 elapsed -- Testing started completed.
+2026-09-13 13:35:24.972 xcodebuild[52213:27825959] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-09-13 13:35:24.972 xcodebuild[52213:27825959] [MT] IDETestOperationsObserverDebug: 57.365 sec, +57.365 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/bot-latency-acceptance/evidence/ios-final.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

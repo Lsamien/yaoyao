@@ -5,6 +5,7 @@ import { botRelayIntent, relayFingerprint, relayMessageValue, REPEATED_RELAY_NOT
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceMessage as Message, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 
 export const NO_REPLY = '[[YAOYAO_NO_REPLY_V1]]'
+export const WORKSPACE_CONCURRENCY_LIMIT = 10
 export const HOST_FALLBACK = '我还不能确定你希望我处理什么，请补充具体目标、范围，或明确需要我协调的机器人。'
 const terminal = (status: string) => ['complete', 'failed', 'interrupted'].includes(status)
 export interface Work {
@@ -299,7 +300,7 @@ export abstract class WorkspaceScheduler {
           }
           continue
         }
-        if (this.executing.size >= 4 || !['queued', 'uncertain'].includes(work.status) || this.executing.has(work.id)) continue
+        if (this.executing.size >= WORKSPACE_CONCURRENCY_LIMIT || !['queued', 'uncertain'].includes(work.status) || this.executing.has(work.id)) continue
         if (!this.userActive(owner)) { this.retrySoon(); continue }
         const c = this.store.require<Conversation>(owner, 'conversation', work.conversationId), root = this.store.require<Run>(owner, 'run', work.runId)
         if (work.status === 'queued' && !root.assignmentId && c.mode === 'host' && work.depth === 0 && work.batchId === root.id && work.requiredReply && !work.currentMessageId) {
@@ -309,12 +310,12 @@ export abstract class WorkspaceScheduler {
           work.status = 'interrupted'; work.error = '执行前成员已移除或聊天已停止'; this.saveWork(owner, work); this.wake(); continue
         }
         const occupied = all.map(entry => this.getWork(entry.owner, entry.work.id)).filter(t => (['running', 'waiting', 'uncertain'].includes(t.status) || this.executing.has(t.id)) && t.id !== work.id)
-        // A persistent Agent has one mutable execution lane across every chat
-        // and task. Parallel work belongs to different Agents/resources.
-        if (occupied.some(t => t.agentId === work.agentId)) continue
+        // Only the conversation/task/Agent binding shares mutable session state.
+        // Other sessions may run concurrently; computer leases and tool queues
+        // continue to serialize access to their actual shared resources.
         if (occupied.some(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId && t.agentId === work.agentId)) continue
         const inTask = occupied.filter(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId)
-        if (work.status === 'queued' && (occupied.length >= 4 || inTask.length >= 3)) continue
+        if (work.status === 'queued' && (occupied.length >= WORKSPACE_CONCURRENCY_LIMIT || inTask.length >= 3)) continue
         if ((this.recoverAfter.get(work.id) ?? 0) > Date.now()) { this.retrySoon(); continue }
         if (c.mode === 'host' || c.kind === 'direct') {
           if (inTask.some(t => c.kind === 'direct'

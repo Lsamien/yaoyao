@@ -116,6 +116,7 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  revision?: number
   execution?:'profile'|'computer'
   id: string
   conversationId: string
@@ -136,6 +137,15 @@ export interface WorkspaceMessage {
   attachments: WorkspaceFile[]
   tools: Array<Record<string, unknown>>
   createdAt: number
+}
+export interface WorkspaceMessagePatch {
+  id: string
+  conversationId: string
+  conversationTaskId?: string
+  baseRevision: number
+  revision: number
+  contentAppend: string
+  reasoningAppend: string
 }
 export interface WorkspaceRun {
   id: string
@@ -174,6 +184,15 @@ export interface WorkspaceEvent {
   type: string
   conversationId?: string
   data: unknown
+}
+/** Additional fields are optional while clients can still connect to older servers. */
+export interface WorkspaceSendReceipt {
+  requestId?: string
+  run: WorkspaceRun
+  message?: WorkspaceMessage
+  conversation?: WorkspaceConversation
+  task?: WorkspaceTask | null
+  cursor?: number
 }
 export interface WorkspaceSource {
   nodeId: string

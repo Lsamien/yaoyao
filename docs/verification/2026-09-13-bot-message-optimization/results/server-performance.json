@@ -1,0 +1,39 @@
+{
+  "baseline": {
+    "format": "full-v1",
+    "concurrentBots": 5,
+    "sourceChunksPerBot": 200,
+    "finalCharactersPerBot": 8000,
+    "sseBytes": 2778172,
+    "events": 430,
+    "saveCount": 215,
+    "saveMedianMs": 1.1725000000001273,
+    "saveP95Ms": 3.9108750000000327,
+    "saveMaxMs": 5.212000000000103,
+    "elapsedMs": 4310.966291000001,
+    "cpuMs": 432.964,
+    "eventLoopP95Ms": 13.402111,
+    "walBytes": 4190072,
+    "eventLogBytes": 2719888,
+    "completedMessages": 5
+  },
+  "optimized": {
+    "format": "patch-v1",
+    "concurrentBots": 5,
+    "sourceChunksPerBot": 200,
+    "finalCharactersPerBot": 8000,
+    "sseBytes": 497075,
+    "events": 710,
+    "saveCount": 625,
+    "saveMedianMs": 0.607082999999875,
+    "saveP95Ms": 1.4260409999997137,
+    "saveMaxMs": 2.693959000000177,
+    "elapsedMs": 4271.697292,
+    "cpuMs": 568.734,
+    "eventLoopP95Ms": 13.549567,
+    "walBytes": 4165352,
+    "eventLogBytes": 403065,
+    "completedMessages": 5
+  },
+  "sseReduction": 0.8210783925545286
+}

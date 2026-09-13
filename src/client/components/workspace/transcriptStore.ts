@@ -1,6 +1,7 @@
+import { WorkspaceMessageReconciler } from '@shared/workspaceMessagePatch'
 import type { AgentAssignment, AgentGoal } from '@shared/agentTasks'
 import { compareWorkspaceConversations } from '@shared/workspace'
-import type { WorkspaceAgent, WorkspaceConversation, WorkspaceEvent, WorkspaceInteraction, WorkspaceMessage, WorkspaceRun, WorkspaceTask } from '@shared/workspace'
+import type { WorkspaceAgent, WorkspaceConversation, WorkspaceEvent, WorkspaceInteraction, WorkspaceMessage, WorkspaceRun, WorkspaceTask, WorkspaceSendReceipt } from '@shared/workspace'
 
 export interface WorkspaceDetail {
   conversation: WorkspaceConversation
@@ -70,15 +71,33 @@ export class WorkspaceTranscriptStore {
   cursor = 0
   readonly selectedTasks = new Map<string, string>()
   private reads = new Map<symbol, WorkspaceEvent[]>()
+  private entityVersions = new Map<string, number>()
+  private snapshotFloor = 0
+  private messageReconciler = new WorkspaceMessageReconciler()
+  readonly staleDetails = new Set<string>()
+  acceptReceipt(receipt: WorkspaceSendReceipt): void {
+    if (receipt.cursor === undefined) return
+    for (const [type, data] of [['message.changed', receipt.message], ['run.changed', receipt.run],
+      ['conversation.changed', receipt.conversation], ['task.changed', receipt.task]] as const) {
+      if (data) this.accept({ seq: receipt.cursor, type, conversationId: receipt.run.conversationId, data })
+    }
+  }
   beginRead(): symbol { const token = Symbol(); this.reads.set(token, []); return token }
   cancelRead(token: symbol): void { this.reads.delete(token) }
   finishRead(token: symbol, incoming: WorkspaceDetail, preserveHistory = true): WorkspaceDetail {
     const key = transcriptKey(incoming.conversation.id, incoming.task?.id)
     const previous = this.details.get(key)
+    if (previous && incoming.cursor !== undefined && incoming.cursor < this.snapshotFloor) {
+      incoming = { ...previous, cursor: incoming.cursor, messages: incoming.messages,
+        hiddenMessageIds: previous.hiddenMessageIds, hasOlder: previous.hasOlder }
+    }
     let detail = incoming
     if (previous && preserveHistory) {
       const messages = new Map(previous.messages.map(message => [message.id, message]))
-      for (const message of incoming.messages) messages.set(message.id, message)
+      for (const message of incoming.messages) {
+        const current = messages.get(message.id)
+        if (!current || (this.entityVersions.get(`message:${message.id}`) ?? this.snapshotFloor) <= (incoming.cursor ?? Number.MAX_SAFE_INTEGER)) messages.set(message.id, message)
+      }
       detail = { ...incoming, hasOlder: previous.hasOlder,
         messages: [...messages.values()].filter(m => m.visible !== false && !incoming.hiddenMessageIds?.includes(m.id)).sort((a, b) => a.seq - b.seq) }
     }
@@ -94,14 +113,37 @@ export class WorkspaceTranscriptStore {
       detail = foldDetail(detail, event)
     }
     this.reads.delete(token)
-    this.details.set(key, detail)
+    this.details.set(key, detail); this.staleDetails.delete(key)
+    for (const message of detail.messages) this.messageReconciler.remember(message)
     return detail
   }
   hydrate(snapshot: WorkspaceSnapshot): void {
+    const reset = snapshot.cursor === 0 && snapshot.conversations.length === 0
+    const previous = new Map(reset ? [] : this.details)
+    if (reset) this.reads.clear()
+    const concurrent = [...this.reads.values()].flat().filter(event => event.seq > snapshot.cursor).sort((a, b) => a.seq - b.seq)
+    this.entityVersions.clear(); this.snapshotFloor = snapshot.cursor; this.messageReconciler.clear()
     this.agents = snapshot.agents; this.conversations = snapshot.conversations; this.cursor = snapshot.cursor
-    this.details.clear()
-    for (const detail of snapshot.details) this.details.set(transcriptKey(detail.conversation.id, detail.task?.id), detail)
+    this.details.clear(); this.staleDetails.clear()
+    for (const incoming of snapshot.details) {
+      const key = transcriptKey(incoming.conversation.id, incoming.task?.id), old = previous.get(key)
+      const messages = new Map(old?.messages.map(m => [m.id, m]))
+      for (const message of incoming.messages) messages.set(message.id, message)
+      const detail = old ? { ...incoming, hasOlder: old?.hasOlder ?? incoming.hasOlder,
+        messages: [...messages.values()].filter(m => m.visible !== false && !incoming.hiddenMessageIds?.includes(m.id)).sort((a, b) => a.seq - b.seq) } : incoming
+      this.details.set(key, detail)
+      for (const message of detail.messages) this.messageReconciler.remember(message)
+    }
+    for (const [key, detail] of previous) {
+      const conversation = snapshot.conversations.find(c => c.id === detail.conversation.id)
+      const current = snapshot.details.find(d => d.conversation.id === detail.conversation.id)
+      if (!this.details.has(key) && conversation && (conversation.archived || current?.tasks?.some(t => t.id === detail.task?.id))) {
+        this.details.set(key, { ...detail, conversation }); this.staleDetails.add(key)
+      }
+    }
+    for (const event of concurrent) this.accept(event)
   }
+
   get(id: string, taskId?: string | null): WorkspaceDetail | undefined {
     if (taskId) return this.details.get(transcriptKey(id, taskId))
     const remembered = this.selectedTasks.get(id)
@@ -110,8 +152,16 @@ export class WorkspaceTranscriptStore {
   }
   apply(event: WorkspaceEvent): void {
     if (event.seq <= this.cursor) return
-    for (const events of this.reads.values()) events.push(event)
+    this.accept(event)
+    this.cursor = event.seq
+  }
+  private accept(event: WorkspaceEvent): void {
+    event = this.messageReconciler.normalize(event)
     const data = event.data as { id: string }
+    const key = `${event.type.split('.')[0]}:${data.id ?? event.conversationId}`
+    if (event.seq < (this.entityVersions.get(key) ?? this.snapshotFloor)) return
+    this.entityVersions.set(key, event.seq)
+    for (const events of this.reads.values()) events.push(event)
     if (event.type === 'agent.changed') this.agents = upsert(this.agents, event.data as WorkspaceAgent)
     if (event.type === 'agent.deleted') this.agents = this.agents.filter(a => a.id !== data.id)
     if (event.type === 'conversation.changed') this.conversations = upsert(this.conversations, event.data as WorkspaceConversation)
@@ -119,8 +169,7 @@ export class WorkspaceTranscriptStore {
     for (const [key, detail] of this.details) {
       if ((event.type === 'conversation.deleted' && detail.conversation.id === data.id)
         || (event.type === 'task.deleted' && detail.task?.id === data.id)) this.details.delete(key)
-      else this.details.set(key, foldDetail(detail, event))
+      else if (event.conversationId === detail.conversation.id) this.details.set(key, foldDetail(detail, event))
     }
-    this.cursor = event.seq
   }
 }

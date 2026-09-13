@@ -31,7 +31,7 @@ function traceStatus(messages: UiMessage[], entries: TurnTraceEntry[]): TurnTrac
   return 'success'
 }
 
-function appendAssistantSegment(rows: MessageTimelineRow[], segment: UiMessage[]): void {
+function appendAssistantSegment(rows: MessageTimelineRow[], segment: UiMessage[], bodies?: WeakMap<UiMessage, UiMessage>): void {
   if (!segment.length) return
   const entries: TurnTraceEntry[] = []
   for (const message of segment) {
@@ -47,16 +47,21 @@ function appendAssistantSegment(rows: MessageTimelineRow[], segment: UiMessage[]
   }
   for (const message of segment) {
     if (!hasVisibleMessage(message)) continue
-    rows.push({ id: `message:${message.id}`, kind: 'message', message: { ...message, reasoning: undefined, tools: undefined } })
+    let body = bodies?.get(message)
+    if (!body) {
+      body = { ...message, reasoning: undefined, tools: undefined }
+      bodies?.set(message, body)
+    }
+    rows.push({ id: `message:${message.id}`, kind: 'message', message: body })
   }
 }
 
 /** Groups contiguous assistant reasoning/tools by turn while preserving visible messages. */
-export function buildMessageTimelineRows(messages: UiMessage[]): MessageTimelineRow[] {
+export function buildMessageTimelineRows(messages: UiMessage[], bodies?: WeakMap<UiMessage, UiMessage>): MessageTimelineRow[] {
   const rows: MessageTimelineRow[] = []
   let segment: UiMessage[] = []
   let owner = ''
-  const flush = () => { appendAssistantSegment(rows, segment); segment = []; owner = '' }
+  const flush = () => { appendAssistantSegment(rows, segment, bodies); segment = []; owner = '' }
   for (const message of messages) {
     if (message.role === 'assistant' && !message.timelineKind) {
       const nextOwner = assistantOwner(message)

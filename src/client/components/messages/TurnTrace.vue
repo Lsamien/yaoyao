@@ -5,7 +5,7 @@ import MarkdownContent from './MarkdownContent.vue'
 import ToolTrace from './ToolTrace.vue'
 import type { TurnTraceGroup } from '@/utils/turnTrace'
 
-const props = defineProps<{ group: TurnTraceGroup }>()
+const props = defineProps<{ group: TurnTraceGroup; streamIntervalMs?: number }>()
 const reasoningCount = computed(() => props.group.entries.filter(entry => entry.type === 'reasoning').length)
 const toolCount = computed(() => props.group.entries.filter(entry => entry.type === 'tool').length)
 const summary = computed(() => [
@@ -28,7 +28,7 @@ const statusLabel = computed(() => props.group.status === 'running' ? '进行中
       <template v-for="entry in group.entries" :key="entry.id">
         <section v-if="entry.type === 'reasoning'" class="turn-trace__item turn-trace__reasoning">
           <header><AppIcon name="brain" :size="12" />思考过程 · {{ entry.content.length }} 字</header>
-          <MarkdownContent process-content :content="entry.content" :streaming="group.status === 'running'" />
+          <MarkdownContent process-content :content="entry.content" :streaming="group.status === 'running'" :stream-interval-ms="streamIntervalMs" />
         </section>
         <ToolTrace v-else class="turn-trace__item turn-trace__tool" :tool="entry.tool" expanded />
       </template>

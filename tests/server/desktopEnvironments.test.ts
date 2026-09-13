@@ -32,6 +32,28 @@ it('adds an authorized native desktop to hybrid tools while leaving the default 
 function drive(handle:(c:any)=>unknown=c=>c.operation==='view'?{data:Buffer.from('fixture frame').toString('base64'),width:1280,height:800}:{ok:true}){let results:any[]=[];service.exchange({host,results});poller=setInterval(()=>{const value=service.exchange({host,results});results=value.commands.map(c=>({id:c.id,value:handle(c)}))},5)}
 async function take(){return (await request(app()).post(base()+'/computer/take').send({requestId:randomUUID()}).expect(200)).body}
 async function frame(){return (await request(app()).get(base()+'/computer/frame').expect(200)).body}
+it('queues browser operations from concurrent sessions and cancels only the waiting session',async()=>{
+ service.exchange({host,results:[]})
+ const first=new AbortController(),cancelled=new AbortController(),third=new AbortController()
+ const navigate=(signal:AbortSignal,path:string)=>service.call('owner',agent.id,'desktop_browser',{kind:'navigate',url:`https://example.test/${path}`},signal,()=>{},'browser',service.epoch)
+ const one=navigate(first.signal,'first'),two=navigate(cancelled.signal,'cancelled').catch(error=>error),three=navigate(third.signal,'third')
+ let commands:any[]=[]
+ await vi.waitFor(()=>{commands=service.exchange({host,results:[]}).commands;expect(commands).toHaveLength(1)})
+ const initial=commands[0]
+ expect(initial.action.url).toBe('https://example.test/first')
+ expect(service.exchange({host,results:[]}).commands).toEqual([])
+ cancelled.abort()
+ service.exchange({host,results:[{id:initial.id,value:{ok:true}}]})
+ await one
+ expect(await two).toMatchObject({name:'AbortError'})
+ await vi.waitFor(()=>{commands=service.exchange({host,results:[]}).commands;expect(commands).toHaveLength(1)})
+ expect(commands[0].action.url).toBe('https://example.test/third')
+ expect(commands[0].resource).toBe(initial.resource)
+ service.exchange({host,results:[{id:commands[0].id,value:{ok:true}}]})
+ await expect(three).resolves.toEqual({ok:true})
+ expect(first.signal.aborted).toBe(false)
+ expect(third.signal.aborted).toBe(false)
+})
 it('keeps capability private and refuses origins before parsing native commands',async()=>{const instance=acquireServiceInstance(home,'0.4.3'),a=new Koa().use(instance.middleware(async()=>{},()=>true,ctx=>service.bridge(ctx)));try{await request(a.callback()).post('/desktop/environment').send({host,results:[]}).expect(403);await request(a.callback()).post('/desktop/environment').set('x-yaoyao-desktop-token',instance.record.token).set('Origin','http://evil.test').send({host,results:[]}).expect(403);await request(a.callback()).post('/desktop/environment').set('x-yaoyao-desktop-token',instance.record.token).send({host,results:[]}).expect(200);expect(service.online).toBe(true)}finally{instance.release()}})
 it('auto selects only an approved and ready local host; observing never opens a browser',async()=>{agent=store.updateAgent('owner',agent.id,{computer:'auto'});expect(service.selected('owner',agent)).toBeUndefined();expect(service.exchange({host:{...host,approved:[]},results:[]}).commands).toEqual([]);expect(service.selected('owner',agent)).toBeUndefined();service.exchange({host,results:[]});expect(service.selected('owner',agent)).toBe('local');host.screen=false;service.exchange({host,results:[]});expect(service.selected('owner',agent)).toBeUndefined();await request(app()).get(base()+'/desktop-environment').set('x-user','other').expect(404)})
 it('shares the physical desktop across owners and robots but scopes manual tokens to their owner and robot',async()=>{agent=store.updateAgent('owner',agent.id,{computer:'local'});const other=store.createAgent('other',{name:'Other',nodeId:'local',profile:'default',computer:'local'});host.approved.push(ownerKey('other'));drive();const ticket=await take();await request(app()).post('/api/app/agents/'+other.id+'/computer/take').set('x-user','other').send({requestId:randomUUID()}).expect(409);await request(app()).post('/api/app/agents/'+other.id+'/computer/renew').set('x-user','other').send(ticket).expect(410);const state=(await request(app()).get('/api/app/agents/'+other.id+'/computer').set('x-user','other')).body;expect(state.controlId).toBeUndefined();await request(app()).post(base()+'/computer/giveback').send(ticket).expect(200)})

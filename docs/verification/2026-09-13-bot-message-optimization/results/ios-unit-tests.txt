@@ -1,0 +1,35 @@
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testTranscriptActivityUsesDirectConversationAndTerminalRunState]' passed (0.000 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testTranscriptRestoresMarkdownImagesAndDocumentsWithoutToolFiles]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testTranscriptRestoresMarkdownImagesAndDocumentsWithoutToolFiles]' passed (0.002 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testUnreadFlagOverridesLegacyCountForChatsAndTasks]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testUnreadFlagOverridesLegacyCountForChatsAndTasks]' passed (0.000 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testUnsetMemberAvatarUsesTheSameAgentIdentityEverywhere]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testUnsetMemberAvatarUsesTheSameAgentIdentityEverywhere]' passed (0.001 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testVMEnableFailureRetainsDisabledStateAndAllowsRetry]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testVMEnableFailureRetainsDisabledStateAndAllowsRetry]' passed (0.003 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWebLoginDoesNotRequireAnAvailableHermesProfile]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWebLoginDoesNotRequireAnAvailableHermesProfile]' passed (0.010 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspaceCapabilitiesRemoveRemoteManagementOnRevocation]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspaceCapabilitiesRemoveRemoteManagementOnRevocation]' passed (0.002 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspaceGroupTasksUseTaskScopedRoutesAndKeepRemoteMembers]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspaceGroupTasksUseTaskScopedRoutesAndKeepRemoteMembers]' passed (0.005 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspacePushUsesApplicationConversationIdentity]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspacePushUsesApplicationConversationIdentity]' passed (0.001 seconds).
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspaceSourcesExposeRemoteAgentsWithoutBlankState]' started.
+Test Case '-[YaoYaoAITests.WorkspaceChatTests testWorkspaceSourcesExposeRemoteAgentsWithoutBlankState]' passed (0.002 seconds).
+Test Suite 'WorkspaceChatTests' passed at 2026-09-13 13:19:54.212.
+	 Executed 58 tests, with 0 failures (0 unexpected) in 0.435 (0.448) seconds
+Test Suite 'YaoYaoAITests.xctest' passed at 2026-09-13 13:19:54.212.
+	 Executed 58 tests, with 0 failures (0 unexpected) in 0.435 (0.448) seconds
+Test Suite 'Selected tests' passed at 2026-09-13 13:19:54.212.
+	 Executed 58 tests, with 0 failures (0 unexpected) in 0.435 (0.449) seconds
+2026-09-13 13:19:54.497 xcodebuild[45335:27786425] [MT] IDETestOperationsObserverDebug: 3.782 elapsed -- Testing started completed.
+2026-09-13 13:19:54.497 xcodebuild[45335:27786425] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-09-13 13:19:54.497 xcodebuild[45335:27786425] [MT] IDETestOperationsObserverDebug: 3.782 sec, +3.782 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/bot-latency-ios-cursor-final.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started

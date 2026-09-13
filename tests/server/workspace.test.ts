@@ -323,7 +323,7 @@ describe('Web-owned workspace', () => {
     }
   })
 
-  it('serializes one Agent across group tasks while keeping messages, sessions and context isolated', async () => {
+  it('runs one Agent across group tasks concurrently while keeping messages, sessions and context isolated', async () => {
     const administrator = store.createAgent(owner, { name: '多任务远程管理员', profile: 'remote-profile', nodeId: 'remote-node' }),
       member = agent('多任务成员'),
       conversation = store.createGroup(owner, {
@@ -346,13 +346,14 @@ describe('Web-owned workspace', () => {
     }
     const firstRun = runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: firstTask.id, content: '第一项工作' }),
       secondRun = runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '第二项工作' })
-    await vi.waitFor(()=>expect(pending).toHaveLength(1))
-    expect(store.require<WorkspaceRun>(owner,'run',secondRun.id).status).toBe('queued')
-    complete(pending[0]!)
-    await finished(firstRun.id)
     await vi.waitFor(()=>expect(pending).toHaveLength(2))
-    complete(pending[1]!)
+    expect(store.require<WorkspaceRun>(owner,'run',firstRun.id).status).toBe('running')
+    expect(store.require<WorkspaceRun>(owner,'run',secondRun.id).status).toBe('running')
+    complete(pending.find(item => item.params.text.includes('第二项工作'))!)
     await finished(secondRun.id)
+    expect(store.require<WorkspaceRun>(owner,'run',firstRun.id).status).toBe('running')
+    complete(pending.find(item => item.params.text.includes('第一项工作'))!)
+    await finished(firstRun.id)
     const firstMessages = store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, firstTask.id),
       secondMessages = store.messages(owner, conversation.id, Number.MAX_SAFE_INTEGER, 100, false, secondTask.id)
     expect(firstMessages.map(message => message.content)).toEqual(['第一项工作', '第一项结果'])
@@ -380,7 +381,7 @@ describe('Web-owned workspace', () => {
       .toEqual(['第二项工作', '第二项结果'])
   })
 
-  it('limits a group to four active conversation tasks while retaining the global scheduler limit', async () => {
+  it('admits ten active conversation tasks for one Agent and rejects the eleventh without stopping them', async () => {
     const administrator = agent('并发任务管理员'),
       member = agent('并发任务成员'),
       conversation = store.createGroup(owner, {
@@ -388,14 +389,17 @@ describe('Web-owned workspace', () => {
         memberIds: [administrator.id, member.id],
         administratorId: administrator.id,
       }),
-      tasks = [defaultTask(conversation.id), ...Array.from({ length: 4 }, (_, index) => store.createTask(owner, conversation.id, { title: `任务 ${index + 2}` }))]
+      tasks = [defaultTask(conversation.id), ...Array.from({ length: 10 }, (_, index) => store.createTask(owner, conversation.id, { title: `任务 ${index + 2}` }))]
     reply = () => {}
-    for (const [index, task] of tasks.slice(0, 4).entries())
+    for (const [index, task] of tasks.slice(0, 10).entries())
       runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: task.id, content: `执行 ${index + 1}` })
-    expect(store.activeTaskCount(owner, conversation.id)).toBe(4)
-    expect(() => runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: tasks[4]!.id, content: '第五项' }))
-      .toThrow('最多同时运行 4 个任务')
-    await Promise.all(tasks.slice(0, 4).map(task => runtime.stopTask(owner, conversation.id, task.id)))
+    expect(store.activeTaskCount(owner, conversation.id)).toBe(10)
+    await vi.waitFor(() => expect(requests.filter(r => r.method === 'prompt.submit')).toHaveLength(10))
+    expect(new Set(requests.filter(r => r.method === 'prompt.submit').map(r => r.params.session_id)).size).toBe(10)
+    expect(() => runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: tasks[10]!.id, content: '第十一项' }))
+      .toThrow('最多同时运行 10 个任务')
+    expect(requests.filter(r => r.method === 'session.interrupt')).toHaveLength(0)
+    await Promise.all(tasks.slice(0, 10).map(task => runtime.stopTask(owner, conversation.id, task.id)))
   })
 
   it('keeps same-named upstream interactions scoped to their conversation task', async () => {
@@ -422,11 +426,12 @@ describe('Web-owned workspace', () => {
     // insertion order. Establish the active task before testing its isolation.
     await vi.waitFor(() => expect(pending).toHaveLength(1))
     const secondRun=runtime.send(owner, conversation.id, { requestId: randomUUID(), taskId: secondTask.id, content: '任务乙' })
-    await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction').filter(interaction => !interaction.resolved)).toHaveLength(1))
+    await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction').filter(interaction => !interaction.resolved)).toHaveLength(2))
     const first=store.list<WorkspaceInteraction>(owner,'interaction').find(i=>i.conversationTaskId===firstTask.id)!
     expect(store.require<any>(owner, 'conversation-task', firstTask.id).activeRunStatus).toBe('waiting')
-    expect(store.require<WorkspaceRun>(owner,'run',secondRun.id).status).toBe('queued')
+    expect(store.require<WorkspaceRun>(owner,'run',secondRun.id).status).toBe('waiting')
     await runtime.respond(owner, first.id, 'once')
+    expect(requests.filter(r => r.method === 'approval.respond').map(r => r.params.session_id)).toEqual([pending[0]!.params.session_id])
     pending[0]!.socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:pending[0]!.params.session_id,payload:{text:'任务甲完成',status:'complete'}}}))
     await finished(firstRun.id)
     await vi.waitFor(()=>expect(store.list<WorkspaceInteraction>(owner,'interaction')).toHaveLength(2))
@@ -1196,22 +1201,69 @@ it('bounds long context while preserving the task beginning and ending', async (
   expect(prompt).toContain('保留首尾片段');expect(prompt.length).toBeLessThan(32_000)
 })
 
-it('enforces three tasks per group and four globally while preserving queued work', async () => {
-  const agents=['并发甲','并发乙','并发丙','并发丁','其他群'].map(n=>agent(n))
+it('serializes a session and stops only that task while the same Agent keeps replying elsewhere', async () => {
+  const a=agent('同一机器人'), b=agent('旁观成员')
+  const c=store.createGroup(owner,{name:'会话隔离',memberIds:[a.id,b.id],administratorId:a.id})
+  const first=defaultTask(c.id), second=store.createTask(owner,c.id,{})
+  const pending:Array<{socket:WebSocket;p:Record<string,any>}>=[]
+  reply=(socket,p)=>pending.push({socket,p})
+  const one=runtime.send(owner,c.id,{requestId:randomUUID(),taskId:first.id,content:'第一话题开始'})
+  await vi.waitFor(()=>expect(pending).toHaveLength(1))
+  const queued=runtime.send(owner,c.id,{requestId:randomUUID(),taskId:first.id,content:'第一话题追问'})
+  const other=runtime.send(owner,c.id,{requestId:randomUUID(),taskId:second.id,content:'第二话题独立执行'})
+  await vi.waitFor(()=>expect(pending).toHaveLength(2))
+  expect(store.require<WorkspaceRun>(owner,'run',queued.id).status).toBe('queued')
+  completeReply(pending[0]!.socket,pending[0]!.p,'第一话题首轮结果')
+  await finished(one.id)
+  await vi.waitFor(()=>expect(pending).toHaveLength(3))
+  const firstBinding=store.get<any>(owner,'binding',`${c.id}:${first.id}:${a.id}`)!
+  expect(requests.filter(r=>r.method==='session.resume').map(r=>r.params.session_id)).toEqual([firstBinding.storedId])
+  expect(pending[2]!.p.text).not.toContain('第二话题独立执行')
+  await runtime.stopTask(owner,c.id,first.id)
+  expect(requests.filter(r=>r.method==='session.interrupt').map(r=>r.params.session_id)).toEqual([pending[2]!.p.session_id])
+  expect(store.require<WorkspaceRun>(owner,'run',other.id).status).toBe('running')
+  expect(store.require<any>(owner,'conversation-task',second.id).activeRunStatus).toBe('running')
+  completeReply(pending[1]!.socket,pending[1]!.p,'第二话题独立完成')
+  await finished(other.id)
+  expect(store.messages(owner,c.id,Number.MAX_SAFE_INTEGER,100,false,second.id).map(m=>m.content)).toEqual(['第二话题独立执行','第二话题独立完成'])
+  expect(store.require<WorkspaceRun>(owner,'run',queued.id).status).toBe('interrupted')
+})
+
+it('recovers simultaneous sessions for one Agent after restart without replaying either prompt', async () => {
+  const a=agent('恢复机器人'),b=agent('恢复旁观者')
+  const c=store.createGroup(owner,{name:'并发恢复',memberIds:[a.id,b.id],administratorId:a.id})
+  const tasks=[defaultTask(c.id),store.createTask(owner,c.id,{})]
+  reply=(_socket,p)=>recoveryByStored.set(storedByRuntime.get(p.session_id)!,[
+    {role:'user',content:p.text},{role:'assistant',content:p.text.includes('恢复甲')?'甲的最终结果':'乙的最终结果'},
+  ])
+  const runs=tasks.map((task,i)=>runtime.send(owner,c.id,{requestId:randomUUID(),taskId:task.id,content:i===0?'恢复甲':'恢复乙'}))
+  await vi.waitFor(()=>expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(2))
+  runtime.close();runtime=new WorkspaceRuntime(store,nodes,uploads);runtime.start()
+  await Promise.all(runs.map(r=>finished(r.id)))
+  expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(2)
+  expect(requests.filter(r=>r.method==='session.interrupt')).toHaveLength(0)
+  expect(tasks.map(task=>store.messages(owner,c.id,Number.MAX_SAFE_INTEGER,100,false,task.id).at(-1)?.content)).toEqual(['甲的最终结果','乙的最终结果'])
+})
+
+it('enforces three turns per topic and ten globally while preserving queued work', async () => {
+  const agents=Array.from({length:12},(_,i)=>agent(`并发成员${i}`))
   const group=store.createGroup(owner,{name:'并发限制',memberIds:agents.slice(0,4).map(a=>a.id),administratorId:agents[0]!.id,mode:'free',autoReplyIds:agents.slice(0,4).map(a=>a.id),maxReplyRounds:1})
   const pending=new Map<string,{socket:WebSocket;p:Record<string,any>}>()
   reply=(socket,p)=>pending.set(speaker(p)!,{socket,p})
   const one=runtime.send(owner,group.id,{requestId:randomUUID(),content:'并发测试'})
-  const two=runtime.send(owner,direct(agents[4]!.id).id,{requestId:randomUUID(),content:'另一群'})
-  await vi.waitFor(()=>expect(pending.size).toBe(4))
+  await vi.waitFor(()=>expect(pending.size).toBe(3))
+  const others=agents.slice(4).map(a=>runtime.send(owner,direct(a.id).id,{requestId:randomUUID(),content:'另一群'}))
+  await vi.waitFor(()=>expect(pending.size).toBe(10))
   expect(Object.keys(store.require<WorkspaceConversation>(owner,'conversation',group.id).activeAgentStates!)).toHaveLength(3)
-  expect(store.list<any>(owner,'turn').filter(t=>t.status==='running')).toHaveLength(4)
-  const released=[...pending.values()].find(v=>speaker(v.p)!==agents[4]!.name)!
-  completeReply(released.socket,released.p,'完成')
-  await vi.waitFor(()=>expect(pending.size).toBe(5))
-  expect(store.list<any>(owner,'turn').filter(t=>t.status==='running').length).toBeLessThanOrEqual(4)
-  for(const v of pending.values()) if(v!==released) completeReply(v.socket,v.p,'完成')
-  await finished(one.id);await finished(two.id)
+  expect(store.list<any>(owner,'turn').filter(t=>t.status==='running')).toHaveLength(10)
+  expect(store.list<any>(owner,'turn').filter(t=>t.status==='queued')).toHaveLength(2)
+  expect(requests.filter(r=>r.method==='session.interrupt')).toHaveLength(0)
+  const released=[...pending.values()]
+  for(const v of released) completeReply(v.socket,v.p,'完成')
+  await vi.waitFor(()=>expect(pending.size).toBe(12))
+  expect(store.list<any>(owner,'turn').filter(t=>t.status==='running').length).toBeLessThanOrEqual(10)
+  for(const v of pending.values()) if(!released.includes(v)) completeReply(v.socket,v.p,'完成')
+  await finished(one.id);await Promise.all(others.map(r=>finished(r.id)))
 })
 
 it('supports unlimited rounds beyond the finite limit and still permits stopping', async () => {

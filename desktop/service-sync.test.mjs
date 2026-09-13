@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { _electron as electron } from '@playwright/test'
 import { LaunchAgentService, localRequest, synchronizeDesktop } from '../bin/lib/service-update.mjs'
-import { sealRuntime, verifyRuntimePackage } from '../bin/lib/runtime-release.mjs'
+import { sealRuntime, syncDecision, verifyRuntimePackage } from '../bin/lib/runtime-release.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const payloadRoot = process.env.DESKTOP_TEST_EXECUTABLE
@@ -60,15 +60,32 @@ test('App first launch installs an independent Web; Web remains up after quit an
   })
   try {
     await until(() => localRequest(`http://127.0.0.1:${upstreamPort}/api/status`), value => value.status === 200)
+    const original = verifyRuntimePackage(payloadRoot)
+    const previousRuntime = process.env.DESKTOP_TEST_PREVIOUS_RUNTIME
+    if (previousRuntime) {
+      // Install an actual historical release into this fixture's isolated home.
+      // This catches same-version packages whose published Git history differs.
+      const previous = verifyRuntimePackage(previousRuntime)
+      assert.equal(syncDecision(original, previous), 'upgrade', 'the packaged App must unambiguously upgrade the historical release')
+      await synchronizeDesktop({ home, runtimeRoot: previousRuntime, releaseRoot, driver })
+      const saved = driver.snapshot().plist
+      saved.EnvironmentVariables.YAOYAO_TEST_PRESERVE = 'historical-release-settings'
+      driver.writePlist(saved)
+      console.log(`Historical upgrade fixture: ${previous.version} ${previous.commit} -> ${original.version} ${original.commit}`)
+    }
     app = await launch()
     const page = await app.firstWindow()
     await page.waitForURL(`http://127.0.0.1:${port}/**`, { timeout: 90000 })
     const record = JSON.parse(await readFile(join(home, 'service-instance.json'), 'utf8'))
     assert.equal(record.desktopOwned, false)
     const identity = await localRequest(`http://127.0.0.1:${port}/desktop/service`, record.token)
-    const original = verifyRuntimePackage(payloadRoot)
     assert.equal(identity.body.build.artifactDigest, original.artifactDigest)
     assert.equal(identity.body.quiesced, false)
+    if (previousRuntime) {
+      const marker = JSON.parse(await readFile(join(home, 'updates', 'desktop-sync.json'), 'utf8'))
+      assert.equal(marker.action, 'upgrade')
+      assert.equal(driver.snapshot().plist.EnvironmentVariables.YAOYAO_TEST_PRESERVE, 'historical-release-settings')
+    }
     const support = await page.evaluate(async () => {
       const bootstrap = await (await fetch('/api/app/bootstrap')).json()
       const setup = await fetch('/api/app/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': bootstrap.csrfToken },
@@ -86,7 +103,7 @@ test('App first launch installs an independent Web; Web remains up after quit an
 
     // Install a later release through the same transaction engine used by Web's updater.
     const newer = join(home, 'updates', 'newer-package')
-    const [major, minor, patch] = original.version.split('.').map(Number)
+    const [major, minor, patch] = original.version.split('-')[0].split('.').map(Number)
     const newerVersion = `${major}.${minor}.${patch + 1}`
     await cp(payloadRoot, newer, { recursive: true })
     await writeFile(join(newer, 'release.json'), JSON.stringify({ schemaVersion: 1, releaseVersion: newerVersion, webVersion: newerVersion, gitTag: `v${newerVersion}` }))
