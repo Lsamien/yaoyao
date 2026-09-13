@@ -15,13 +15,13 @@ import {ComposeComputerProvider} from '../computers/compose.js'
 import {COMPOSE_DESKTOP_IMAGE,type DesktopRelay} from '../../shared/composeDesktops.js'
 import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
-import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerTool,type WorkerFrame} from './process.js'
+import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerContextConfiguration,type WorkerTool,type WorkerFrame} from './process.js'
 import {HOST_TOOLS,hostTool,hostPath,readHostFile,writeHostFile} from './hostTools.js'
 import {homedir,platform} from 'node:os'
 
 export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean}
 export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain'}
-interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;proxyEnv?:WorkerProxyEnvironment;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
+interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
 const text={type:'string'}
 const TOOLS:WorkerTool[]=[
@@ -152,7 +152,7 @@ export class ComputerGateway {
       await this.authorized()
       const controller=new AbortController(),lease=await this.runtime.pool.acquire(this.spec(session),this.workId,()=>{this.guard();if(controller.signal.aborted)throw new Error('cancelled')},controller.signal)
       if(this.closed){controller.abort();await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
-      this.live={session,lease,controller,model:resolved.model as WorkerModel,proxyEnv:resolved.proxyEnv,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
+      this.live={session,lease,controller,model:resolved.model as WorkerModel,contextConfig:resolved.contextConfig,proxyEnv:resolved.proxyEnv,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
       this.runtime.save(session);this.runtime.gateways.set(this.meta.environmentId,this)
       if(this.runtime.config.network==='public-proxy'){
         const live=this.live
@@ -199,14 +199,16 @@ export class ComputerGateway {
       live.received=false;live.running=true;live.session.outcome='uncertain';live.session.history.push({role:'user',content:prompt});this.runtime.save(live.session)
       const directory=join(this.runtime.home,'workers',live.session.id,this.workId,String(live.segment=(live.segment??0)+1))
       await mkdir(directory,{recursive:true,mode:0o700})
-      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.meta.hostAccess?HOST_TOOLS:[]),...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
+      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.meta.hostAccess?HOST_TOOLS:[]),...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
       live.worker=worker
       this.runtime.workers.set(this.workId,{environmentId:this.meta.environmentId,ownerKey:this.meta.ownerKey,process:worker});void worker.exited.then(()=>{if(this.runtime.workers.get(this.workId)?.process===worker)this.runtime.workers.delete(this.workId)})
       worker.onTool=(name,args,id,callId)=>{
+        if(live.worker!==worker||live.received)throw new HttpError(410,'本轮 Worker 已结束','computer_worker_finished')
         const task=this.tool(live,name,args,id).then(result=>{if(callId)live.journal.set(callId,{name,result});return result},error=>{if(callId)live.journal.set(callId,{name,result:{error:'操作未完成或已中断'}});throw error})
         live.toolCalls.add(task);void task.finally(()=>live.toolCalls.delete(task)).catch(()=>{});return task
       }
       worker.onEvent=frame=>{
+        if(this.closed||live.worker!==worker||live.received||live.controller.signal.aborted)return
         if(frame.type==='checkpoint'&&Array.isArray(frame.messages)){live.session.history=frame.messages;this.runtime.save(live.session);return}
         if(live.paused)return
         if(frame.type==='delta')this.event('message.delta',{text:frame.text})
@@ -295,15 +297,34 @@ export class ComputerGateway {
     if(this.closed||live.paused||live.controller.signal.aborted)return
     await this.authorized()
     this.runtime.pool.renew(live.lease)
+    const contextErrors:Record<string,string>={
+      context_compaction_disabled:'模型上下文已超限，基础 Profile 关闭了自动压缩。请开启压缩、缩短输入或新建对话后继续。',
+      context_compaction_failed:'模型上下文压缩未能完成，本轮已结束。请缩短输入、检查模型配置或新建对话后继续。',
+    }
+    const contextError=frame.completed===false&&!frame.interrupted&&Object.hasOwn(contextErrors,String(frame.failureCode))
+      ?contextErrors[String(frame.failureCode)]:undefined
     const success=frame.completed!==false&&!frame.interrupted
-    if(success&&Array.isArray(frame.messages)){live.session.history=frame.messages;live.session.outcome='complete'}else live.session.outcome='failed'
+    // Failed model turns can carry a newly compacted, authoritative history too.
+    // A missing history leaves the last durable checkpoint intact.
+    if(Array.isArray(frame.messages))live.session.history=frame.messages
+    live.session.outcome=success?'complete':'failed'
     this.runtime.save(live.session)
-    await this.release(live,success&&this.runtime.retainDesktops)
+    const keepRunning=this.runtime.retainDesktops&&(success||!!contextError)&&!live.toolCalls.size
+    await live.worker?.close()
+    await this.release(live,keepRunning)
     live.running=false
     if(this.closed||live.controller.signal.aborted)return
-    this.event('message.complete',{text:String(frame.text??''),status:success?'complete':'failed',...(!success?{error:'隔离 Worker 未完成本轮'}:{})})
+    const error=contextError?contextError+(keepRunning?' 虚拟机已进入空闲，后续按空闲停止设置处理。':''):'隔离 Worker 未完成本轮'
+    this.event('message.complete',{text:contextError?error:String(frame.text??''),status:success?'complete':'failed',...(!success?{error,...(contextError?{code:frame.failureCode}:{})}:{})})
   }
-  private release(live:Live,keepRunning=false){clearInterval(this.timer);live.releasing??=(async()=>{await live.proxy?.close();await this.runtime.pool.release(live.lease,keepRunning)})();return live.releasing}
+  private release(live:Live,keepRunning=false){
+    clearInterval(this.timer)
+    live.releasing??=(async()=>{
+      try{await live.proxy?.close();await this.runtime.pool.release(live.lease,keepRunning)}
+      catch(error){await this.runtime.pool.release(live.lease).catch(()=>{});throw error}
+    })()
+    return live.releasing
+  }
   private async lost(live:Live){
     if(!live.running||live.paused||this.closed||live.controller.signal.aborted)return
     live.running=false;await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()

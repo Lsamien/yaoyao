@@ -6,7 +6,9 @@ Only private stdin/stdout carry protocol frames. Ordinary logging uses stderr.
 """
 from __future__ import annotations
 import contextlib
+import copy
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -20,6 +22,41 @@ BOOT = json.loads(sys.stdin.readline())
 NONCE = BOOT["nonce"]
 PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
                   "http_proxy", "https_proxy", "all_proxy", "no_proxy")
+
+# Only context-management settings cross the Profile boundary. Plugins, tools,
+# arbitrary environment variables and unrelated credentials remain excluded.
+COMPRESSION_KEYS = {
+    "enabled", "threshold", "threshold_tokens", "target_ratio",
+    "protect_first_n", "protect_last_n", "min_tail_user_messages", "tail_mode",
+    "max_attempts", "abort_on_summary_failure", "in_place", "checkpoint_required",
+    "codex_gpt55_autoraise", "codex_gpt55_autoraise_notice",
+    "codex_responses_native", "codex_responses_compact_threshold",
+    "proactive_prune_tokens", "proactive_prune_min_result_chars",
+    "proactive_prune_min_reclaim_tokens", "micro_compact",
+    "micro_compact_every_n_turns", "micro_compact_defrag_threshold_tokens",
+    "idle_compact_after_seconds", "context_timeout_seconds", "context_total_ceiling_seconds",
+}
+
+def context_configuration(config):
+    raw = config.get("compression", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    compression = {key: value for key, value in raw.items()
+                   if key in COMPRESSION_KEYS
+                   and isinstance(value, (str, bool, int, float))
+                   and (not isinstance(value, float) or math.isfinite(value))}
+    thresholds = raw.get("model_thresholds")
+    if isinstance(thresholds, dict):
+        compression["model_thresholds"] = {
+            key: value for key, value in thresholds.items()
+            if isinstance(key, str) and isinstance(value, (int, float))
+            and not isinstance(value, bool) and math.isfinite(value) and 0 < value <= 1
+        }
+    model = config.get("model", {})
+    limits = {key: model[key] for key in ("context_length", "max_tokens")
+              if isinstance(model, dict) and isinstance(model.get(key), int)
+              and not isinstance(model[key], bool) and model[key] > 0}
+    return {"compression": compression, "model": limits}
 
 def emit(kind, **values):
     with WRITE_LOCK:
@@ -95,6 +132,7 @@ def resolve_model():
     if runtime.get("api_mode") not in ("chat_completions", "anthropic_messages", "codex_responses"):
         raise ConfigurationError("computer_model_unsupported")
     emit("resolved", model={key: runtime[key] for key in ("provider", "api_mode", "base_url", "api_key") if key in runtime} | {"model": model["default"]}, **workspace,
+         contextConfig=context_configuration(config),
          **({"proxyEnv": proxy_env} if proxy_env else {}))
 
 
@@ -106,19 +144,45 @@ def run_model():
     os.environ["HERMES_HOME"] = str(home)
     os.environ["HERMES_CWD"] = str(home)
     sys.path.insert(0, str(Path(BOOT["hermesSource"]).resolve()))
-    (home / "config.yaml").write_text("plugins:\n  enabled: []\ncompression:\n  enabled: false\n", encoding="utf-8")
+    context_config = context_configuration(BOOT.get("contextConfig", {}))
+    # JSON is a YAML subset. An absent compression setting uses Hermes' own
+    # defaults, while an explicit Profile false remains false.
+    (home / "config.yaml").write_text(json.dumps({
+        "plugins": {"enabled": []}, **context_config,
+        "model": {**context_config["model"], "default": BOOT["model"]["model"],
+                  **{key: BOOT["model"][key] for key in ("provider", "base_url") if key in BOOT["model"]}},
+    }), encoding="utf-8")
     (home / ".env").touch(mode=0o600)
     # Prevent the installed project's dotenv fallback from importing host secrets.
     import hermes_cli.env_loader as env_loader
     env_loader.load_hermes_dotenv = lambda *args, **kwargs: []
     import run_agent
-    # The registry remains empty even if Hermes refreshes its tool snapshot.
-    run_agent.get_tool_definitions = lambda *args, **kwargs: []
+    import model_tools
+    supplied_tools = [{"type": "function", "function": {"name": item["name"], "description": item["description"], "parameters": item["inputSchema"]}} for item in BOOT["tools"]]
+    # Hermes refreshes tools at compaction boundaries, including through
+    # model_tools directly. Keep the parent-owned catalog on every rebuild;
+    # neither drop the VM tools nor discover native handlers from the host.
+    def closed_tool_definitions(*args, **kwargs):
+        return copy.deepcopy(supplied_tools)
+    run_agent.get_tool_definitions = closed_tool_definitions
+    model_tools.get_tool_definitions = closed_tool_definitions
     pending = {}
     stopped = threading.Event()
     allowed = {item["name"] for item in BOOT["tools"]}
 
     class ClosedAgent(run_agent.AIAgent):
+        def _compress_context(self, *args, **kwargs):
+            result = super()._compress_context(*args, **kwargs)
+            if not stopped.is_set() and isinstance(result, tuple) and result and isinstance(result[0], list):
+                emit("checkpoint", messages=result[0])
+            return result
+
+        def _persist_session(self, messages, conversation_history=None):
+            result = super()._persist_session(messages, conversation_history)
+            if not stopped.is_set():
+                emit("checkpoint", messages=messages)
+            return result
+
         def _execute_tool_calls(self, assistant_message, messages, effective_task_id, api_call_count=0):
             # Intercept before Hermes' sequential, parallel and inline branches.
             # In particular message_agent/delegate_task must never reach native code.
@@ -172,7 +236,7 @@ def run_model():
         max_iterations=32, run_budget_seconds=900,
         stream_delta_callback=lambda text, **kwargs: emit("delta", text=str(text)) if text is not None else None,
         reasoning_callback=lambda text, **kwargs: emit("reasoning", text=str(text)) if text is not None else None)
-    agent.tools = [{"type": "function", "function": {"name": item["name"], "description": item["description"], "parameters": item["inputSchema"]}} for item in BOOT["tools"]]
+    agent.tools = closed_tool_definitions()
     agent.valid_tool_names = set(allowed)
 
     def receive():
@@ -201,7 +265,15 @@ def run_model():
         environment += "Host files and commands are not available through computer tools. Never attempt to execute a host command through them. "
     result = agent.run_conversation(BOOT["prompt"], conversation_history=BOOT.get("history", []), task_id=BOOT["taskId"],
         system_message="You are a controlled Hermes worker. " + environment + "Other supplied application and team tools follow their descriptions. Use only supplied tools and follow the user's task and permission scope.")
-    emit("complete", text=str(result.get("final_response") or ""), messages=result.get("messages", []), interrupted=stopped.is_set(), completed=result.get("completed", True))
+    # These are engine result flags, never inferred from model-generated text.
+    failure_code = ("context_compaction_disabled" if result.get("compaction_disabled") is True
+                    else "context_compaction_failed" if result.get("compression_exhausted") is True
+                    else None)
+    interrupted = stopped.is_set() or result.get("interrupted") is True
+    completed = result.get("completed", True) is not False and not result.get("failed") and failure_code is None and not interrupted
+    emit("complete", text=str(result.get("final_response") or ""), messages=result.get("messages"),
+         interrupted=interrupted, completed=completed,
+         **({"failureCode": failure_code} if failure_code and not interrupted and not pending else {}))
 
 try:
     with contextlib.redirect_stdout(sys.stderr):

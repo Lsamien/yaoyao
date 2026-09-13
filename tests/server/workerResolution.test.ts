@@ -98,3 +98,14 @@ it('starts Python with only explicit proxy keys and never inherits Runner secret
   expect(frame.boot).not.toHaveProperty('proxyEnv')
  }
 })
+it('inherits only compression controls and model limits, preserving explicit disable and Hermes defaults',async()=>{
+ await writeFile(join(source,'hermes_cli','runtime_provider.py'),'def resolve_runtime_provider(**kwargs): return {"provider":"custom","api_mode":"chat_completions","api_key":"private-model-key"}\n')
+ const model={default:'fixture',provider:'custom',context_length:32768,max_tokens:4096,api_key:'private-config-key'}
+ await writeFile(join(home,'config.yaml'),JSON.stringify({model,compression:{enabled:true,threshold:0.65,target_ratio:0.25,protect_last_n:8,in_place:false,context_timeout_seconds:60,model_thresholds:{fixture:0.75},api_key:'private-other-key'},plugins:{enabled:['unsafe']},terminal:{cwd:'.'}}))
+ expect((await read('resolve')).contextConfig).toEqual({compression:{enabled:true,threshold:0.65,target_ratio:0.25,protect_last_n:8,in_place:false,context_timeout_seconds:60,model_thresholds:{fixture:0.75}},model:{context_length:32768,max_tokens:4096}})
+ await writeFile(join(home,'config.yaml'),JSON.stringify({model,compression:{enabled:false,threshold:0.5}}))
+ expect((await read('resolve')).contextConfig.compression).toEqual({enabled:false,threshold:0.5})
+ await writeFile(join(home,'config.yaml'),JSON.stringify({model:{default:'fixture'}}))
+ expect((await read('resolve')).contextConfig).toEqual({compression:{},model:{}})
+ expect(await read('resolve-workspace')).not.toHaveProperty('contextConfig')
+})

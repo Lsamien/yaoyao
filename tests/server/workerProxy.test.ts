@@ -23,6 +23,7 @@ for line in sys.stdin:
  const first={HTTPS_PROXY:'http://user:first-private-proxy@127.0.0.1:7890',NO_PROXY:'localhost'}
  const second={https_proxy:'http://user:second-private-proxy@127.0.0.1:8890',no_proxy:'internal.test'}
  let current:WorkerProxyEnvironment|undefined=first
+ let contextConfig={compression:{enabled:true,threshold:0.5}}
  const createGateway=()=>{
   const gateway=new ComputerGateway(runtime,meta,randomUUID(),async()=>{},async()=>({}))
   gateway.onEvent=frame=>events.push(frame);gateways.push(gateway);return gateway
@@ -30,7 +31,7 @@ for line in sys.stdin:
  const probe=(gateway:ComputerGateway)=>runtime.workers.get(gateway.workId)!.process.wait('probe',5000)
  try{
   await runtime.ready
-  const resolver=vi.spyOn(runtime,'resolve').mockImplementation(async()=>({type:'resolved',cwd:'/home/cua/workspace',configuredCwd:'.',model:{provider:'custom',api_mode:'chat_completions',model:'fixture'},...(current?{proxyEnv:{...current}}:{})}))
+  const resolver=vi.spyOn(runtime,'resolve').mockImplementation(async()=>({type:'resolved',cwd:'/home/cua/workspace',configuredCwd:'.',model:{provider:'custom',api_mode:'chat_completions',model:'fixture'},contextConfig:structuredClone(contextConfig),...(current?{proxyEnv:{...current}}:{})}))
   const state={id,containerId:'fixture',running:true,workspace:home,isolation:'container' as const}
   const ensure=vi.spyOn(runtime.provider,'ensure').mockResolvedValue(state)
   vi.spyOn(runtime.provider,'inspect').mockResolvedValue(state)
@@ -39,11 +40,16 @@ for line in sys.stdin:
   const created=await gateway.rpc('session.create',{profile:'default'})
   await gateway.rpc('prompt.submit',{session_id:created.session_id,text:'first turn'})
   expect((await probe(gateway)).env).toEqual(first)
+  const oldWorker=runtime.workers.get(gateway.workId)!.process
   current=second
+  contextConfig={compression:{enabled:false,threshold:0.7}}
   await gateway.takeControl(randomUUID(),()=>{})
   await gateway.giveBack('continue')
   const continued=await probe(gateway)
   expect(continued.env).toEqual(first)
+  expect(continued.boot.contextConfig).toEqual({compression:{enabled:true,threshold:0.5}})
+  oldWorker.onEvent({type:'checkpoint',messages:[{role:'user',content:'stale worker history'}]})
+  expect(JSON.stringify(runtime.session(created.session_id,meta,'default').history)).not.toContain('stale worker history')
   expect(continued.boot.history).toContainEqual({role:'user',content:'first turn'})
   expect(resolver).toHaveBeenCalledTimes(1)
   await gateway.close()
@@ -51,7 +57,9 @@ for line in sys.stdin:
   const resumed=createGateway();await resumed.connect()
   expect((await resumed.rpc('session.resume',{profile:'default',session_id:created.session_id})).session_id).toBe(created.session_id)
   await resumed.rpc('prompt.submit',{session_id:created.session_id,text:'next turn'})
-  expect((await probe(resumed)).env).toEqual(second)
+  const resumedProbe=await probe(resumed)
+  expect(resumedProbe.env).toEqual(second)
+  expect(resumedProbe.boot.contextConfig).toEqual(contextConfig)
   expect(resolver).toHaveBeenCalledTimes(2)
   await resumed.close()
 

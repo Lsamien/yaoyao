@@ -5,6 +5,7 @@ import {HttpError} from '../../server/errors.js'
 
 export interface WorkerTool {id?:string;name:string;description:string;inputSchema:Record<string,unknown>}
 export interface WorkerModel {provider:string;api_mode:string;base_url?:string;api_key?:string;model:string}
+export interface WorkerContextConfiguration {compression?:Record<string,unknown>;model?:{context_length?:number;max_tokens?:number}}
 const proxyEnvKeys=['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy'] as const
 export type WorkerProxyEnvironment=Partial<Record<typeof proxyEnvKeys[number],string>>
 export interface WorkerFrame {type:string;[key:string]:any}

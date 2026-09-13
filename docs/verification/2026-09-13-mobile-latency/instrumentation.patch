@@ -1,0 +1,199 @@
+--- yaoyao-mobile@3f500e9/YaoYaoAI/App/YaoYaoAIApp.swift
++++ temporary-benchmark/YaoYaoAI/App/YaoYaoAIApp.swift
+@@ -689 +689,3 @@
+-            if let scenario = UITestScenario.current {
++            if ProcessInfo.processInfo.environment["LATENCY_URL"] != nil {
++                LatencyFixtureView()
++            } else if let scenario = UITestScenario.current {
+@@ -707,0 +710,37 @@
++
++@MainActor enum LatencyProbe {
++    static func mark(_ name: String, _ detail: String = "") {
++        guard let run = ProcessInfo.processInfo.environment["LATENCY_RUN"] else { return }
++        let row: [String: Any] = ["time": Date().timeIntervalSince1970, "name": name, "detail": detail]
++        guard var data = try? JSONSerialization.data(withJSONObject: row) else { return }; data.append(10)
++        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("latency-\(run).jsonl")
++        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
++        if let handle = try? FileHandle(forWritingTo: url) { try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close() }
++    }
++}
++
++#if DEBUG
++@MainActor private struct LatencyFixtureView: View {
++    @State private var client: HermesRESTClient?
++    @State private var error = "连接隔离测试服务"
++    var body: some View {
++        Group {
++            if let client { WorkspaceChatView(client: client, accountID: nil, accountName: "隔离测试", onOpenDrawer: {}) }
++            else { Text(error) }
++        }.task {
++            do {
++                let configuration = try ServerConfiguration(urlString: ProcessInfo.processInfo.environment["LATENCY_URL"]!)
++                let network = HermesNetworkSession.isolated()
++                var request = URLRequest(url: configuration.baseURL.appendingPathComponent("auth/password-login"))
++                request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
++                request.httpBody = Data(#"{"username":"fixture","password":"fixture-pass","provider":"basic"}"#.utf8)
++                let (_, response) = try await network.session.data(for: request)
++                guard (response as? HTTPURLResponse)?.statusCode == 200 else { error = "夹具登录失败"; return }
++                let rest = HermesRESTClient(session: network.session, cookieStorage: network.cookieStorage)
++                await rest.configure(server: configuration, authenticationTransport: .cookie)
++                client = rest
++            } catch { self.error = error.localizedDescription }
++        }
++    }
++}
++#endif
+--- yaoyao-mobile@3f500e9/YaoYaoAI/Features/WorkspaceChat/WorkspaceChatModel.swift
++++ temporary-benchmark/YaoYaoAI/Features/WorkspaceChat/WorkspaceChatModel.swift
+@@ -315,0 +316 @@
++            LatencyProbe.mark("message_state", "\(message.role)|\(message.status)|\(message.content.count)")
+@@ -1059,0 +1061 @@
++        LatencyProbe.mark("send_start")
+@@ -1061 +1063 @@
+-        defer { busy = false }
++        defer { busy = false; LatencyProbe.mark("send_ready") }
+@@ -1087,0 +1090 @@
++            LatencyProbe.mark("post_ack")
+--- yaoyao-mobile@3f500e9/YaoYaoAI/Features/WorkspaceChat/WorkspaceTranscriptView.swift
++++ temporary-benchmark/YaoYaoAI/Features/WorkspaceChat/WorkspaceTranscriptView.swift
+@@ -108,0 +109 @@
++                    LatencyProbe.mark("view_text", "\(messages.last?.role ?? "")|\(messages.last?.status ?? "")|\(messages.last?.content.count ?? 0)")
+--- yaoyao-mobile@3f500e9/YaoYaoAIUITests/LaunchSmokeTests.swift
++++ temporary-benchmark/YaoYaoAIUITests/LaunchSmokeTests.swift
+@@ -9,0 +10,45 @@
++
++extension LaunchSmokeTests {
++    func testLatencyCompare() throws {
++        continueAfterFailure = false
++        let configData = try Data(contentsOf: URL(string: "http://127.0.0.1:18959/config")!)
++        let config = try JSONSerialization.jsonObject(with: configData) as! [String: [String: String]]
++        let cases = [("yaoyao", 0, "short", 6), ("openmausbot", 0, "short", 6),
++                     ("openmausbot", 160, "short", 6), ("yaoyao", 160, "short", 6),
++                     ("yaoyao", 160, "long", 1), ("openmausbot", 160, "long", 1)]
++        for (product, delay, kind, count) in cases {
++            let group = "series-\(product)-\(delay)-\(kind)"
++            _ = try Data(contentsOf: URL(string: "http://127.0.0.1:18959/scenario?delay=\(delay)&run=\(group)-setup")!)
++            let isYY = product == "yaoyao"
++            let settings = config[isYY ? "yy" : "omb"]!
++            let app = isYY ? XCUIApplication() : XCUIApplication(bundleIdentifier: "cn.samien.hermes.bot")
++            app.launchEnvironment["LATENCY_URL"] = settings["url"]
++            app.launchEnvironment["LATENCY_TOKEN"] = settings["token"]
++            app.launchEnvironment["LATENCY_RUN"] = group
++            app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
++            app.launch()
++            let chat = isYY ? app.descendants(matching: .any)["workspace.conversation.\(settings["conversationId"]!)"] : app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "LatencyBot")).firstMatch
++            XCTAssertTrue(chat.waitForExistence(timeout: 20), app.debugDescription)
++            chat.tap()
++            let input = app.descendants(matching: .any)[isYY ? "workspace.message-input" : "message-input"].firstMatch
++            XCTAssertTrue(input.waitForExistence(timeout: 10), app.debugDescription)
++            for number in 1...count {
++                let run = "\(group)-\(number)"
++                _ = try Data(contentsOf: URL(string: "http://127.0.0.1:18959/scenario?delay=\(delay)&run=\(run)")!)
++                input.tap()
++                input.typeText("[latency:\(kind)-\(run)]")
++                let send = app.buttons[isYY ? "workspace.send" : "latency.send"]
++                XCTAssertTrue(send.waitForExistence(timeout: 5), app.debugDescription)
++                send.tap()
++                let expected = "END-\(kind)-\(run)"
++                let reply = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", expected)).firstMatch
++                XCTAssertTrue(reply.waitForExistence(timeout: 30), app.debugDescription)
++                if number == count {
++                    let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = run; attachment.lifetime = .keepAlways; add(attachment)
++                }
++                Thread.sleep(forTimeInterval: 0.7)
++            }
++            app.terminate()
++        }
++    }
++}
+--- OpenMausBot@a49d2f7d/ios/App/Session.swift
++++ temporary-benchmark/ios/App/Session.swift
+@@ -165,0 +166,8 @@
++        if let address = ProcessInfo.processInfo.environment["LATENCY_URL"], let url = URL(string: address) {
++            let connection = Connection(id: "latency-fixture", name: "隔离测试", host: url.host!, port: url.port!)
++            self.connection = connection; self.connections = [connection]
++            self.client = CompanionClient(connection: connection, token: ProcessInfo.processInfo.environment["LATENCY_TOKEN"] ?? "")
++            UserDefaults.standard.set(true, forKey: "companion.onboarding.welcomeSeen")
++            UserDefaults.standard.set(true, forKey: "companion.onboarding.notificationsSeen")
++            return
++        }
+@@ -747,0 +756 @@
++                    LatencyProbe.mark("frame_applied", "\(state.streaming.values.map(\.count).max() ?? 0)")
+@@ -1018,0 +1028 @@
++            LatencyProbe.mark("post_ack")
+@@ -2198,0 +2209,11 @@
++
++@MainActor enum LatencyProbe {
++    static func mark(_ name: String, _ detail: String = "") {
++        guard let run = ProcessInfo.processInfo.environment["LATENCY_RUN"] else { return }
++        let row: [String: Any] = ["time": Date().timeIntervalSince1970, "name": name, "detail": detail]
++        guard var data = try? JSONSerialization.data(withJSONObject: row) else { return }; data.append(10)
++        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("latency-\(run).jsonl")
++        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
++        if let handle = try? FileHandle(forWritingTo: url) { try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close() }
++    }
++}
+--- OpenMausBot@a49d2f7d/ios/App/ChatView.swift
++++ temporary-benchmark/ios/App/ChatView.swift
+@@ -307,0 +308 @@
++                    LatencyProbe.mark("view_message")
+@@ -315,0 +317 @@
++                    LatencyProbe.mark("view_text", "assistant|streaming|\(length)")
+@@ -785,0 +788 @@
++        LatencyProbe.mark("send_start")
+@@ -796,0 +800 @@
++            LatencyProbe.mark("send_ready")
+@@ -1277,0 +1282 @@
++                        .accessibilityIdentifier("latency.send")
+--- OpenMausBot@a49d2f7d/server/testing/fake-claude-cli.ts
++++ temporary-benchmark/server/testing/fake-claude-cli.ts
+@@ -315,0 +316,23 @@
++  if (mode === "latency") {
++    const marker = /\[latency:([^\]]+)\]/.exec(promptText(prompt))?.[1] ?? 'short';
++    const isLong = marker.includes('long');
++    const chunks = isLong ? Array.from({length: 200}, (_, i) => `第${String(i+1).padStart(3,'0')}段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n`)
++      : Array.from({length: 40}, (_, i) => `${String(i+1).padStart(2,'0')}测试文字 `);
++    let text='';
++    setTimeout(() => {
++      let index=0;
++      const tick=()=>{
++        if(index===chunks.length) {
++          text+=` END-${marker}`;
++          out({type:'stream_event',event:{type:'content_block_delta',delta:{type:'text_delta',text:` END-${marker}`}}});
++          out({type:'assistant',message:{content:[{type:'text',text}],usage:{input_tokens:10,output_tokens:100}}});
++          out({type:'result',is_error:false,stop_reason:'end_turn',total_cost_usd:0,usage:{input_tokens:10,output_tokens:100}});
++          turnRunning=false;finishIfDone();return;
++        }
++        const part=chunks[index++];text+=part;
++        out({type:'stream_event',event:{type:'content_block_delta',delta:{type:'text_delta',text:part}}});
++        setTimeout(tick,20);
++      }; tick();
++    },250);
++    return;
++  }
+--- yaoyao@d4c98d4/tests/fixtures/workspace-server.ts
++++ temporary-benchmark/tests/fixtures/workspace-server.ts
+@@ -264,0 +265,23 @@
++      if (String(f.params.text).includes('[latency:')) {
++        const marker = /\[latency:([^\]]+)\]/.exec(String(f.params.text))?.[1] ?? 'short';
++        const isLong = marker.includes('long');
++        const chunks = isLong ? Array.from({length: 200}, (_, i) => `第${String(i+1).padStart(3,'0')}段。用于比较两个移动端的连续文本显示表现，全部内容来自隔离测试服务。\n\n`)
++          : Array.from({length: 40}, (_, i) => `${String(i+1).padStart(2,'0')}测试文字 `);
++        let text = '';
++        setTimeout(() => {
++          let index = 0;
++          const tick = () => {
++            if (index === chunks.length) {
++              text += ` END-${marker}`;
++              event('message.delta', {text:` END-${marker}`}, f.params.session_id);
++              stored!.running = false;
++              stored!.messages.push({id:randomUUID(), role:'assistant', content:text, timestamp:Date.now()/1000});
++              event('message.complete', {text, status:'complete'}, f.params.session_id);
++              return;
++            }
++            const part=chunks[index++]; text+=part; event('message.delta',{text:part},f.params.session_id);
++            setTimeout(tick,20);
++          }; tick();
++        },250);
++        return;
++      }

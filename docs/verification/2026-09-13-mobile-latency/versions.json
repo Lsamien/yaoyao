@@ -1,0 +1,29 @@
+{
+  "yaoyao-ios": {
+    "commit": "3f500e9b7fc39ff0bf1c647d45148f3c0d4ba367",
+    "version": "1.3",
+    "build": "200",
+    "bundle": "cn.samien.yaoyao.hermes"
+  },
+  "openmausbot-ios": {
+    "commit": "a49d2f7d47f3e347054a99424fcf1222670ae66a",
+    "version": "1.0.0",
+    "build": "9",
+    "bundle": "cn.samien.hermes.bot"
+  },
+  "server": {
+    "yaoyaoCommit": "d4c98d4",
+    "openmausbotCommit": "a49d2f7d",
+    "yaoyaoVersion": "0.4.15",
+    "openmausbotVersion": "0.1.75"
+  },
+  "conditions": {
+    "simulator": "iPhone 17 Pro / iOS 26.5",
+    "simulatorId": "9D59B7BF-7FDD-46FD-ADA9-7DB3C39C47E3",
+    "xcode": "26.6 (17F113)",
+    "configuration": "Debug with -O, test-only login hooks and timestamps",
+    "model": "deterministic synthetic upstream; first chunk after 250ms, 20ms between chunks",
+    "network": "loopback HTTP; controlled added RTT 0ms / 160ms; each stream chunk receives 80ms delay in 160ms case",
+    "scope": "latest committed source pinned when the run started (2026-09-13 09:27 local); excludes concurrent changes; no production model/network or phone claim"
+  }
+}

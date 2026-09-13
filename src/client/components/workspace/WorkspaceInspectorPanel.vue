@@ -11,29 +11,30 @@ const follow=ref(true)
 const visible=computed(()=>entries.value.filter(e=>lens.value==='events'?e.direction==='event':e.direction!=='event'))
 const rows=computed(()=>{
  const result:Array<{id:string;at:number;tag:string;summary:string;tone:string;count:number;data:WorkspaceInspectorEntry[];duration?:number}>=[]
- for(const entry of visible.value){
+ for(const entry of [...visible.value].sort((a,b)=>a.at-b.at)){
   const data=entry.data as Record<string,unknown>|null,text=String(data?.text??data?.delta??data?.content??data?.error??data?.message??'').replace(/\s+/g,' ').slice(0,120)
   const tag=lens.value==='raw'?(entry.direction==='request'?'→ out':entry.direction==='error'?'! error':'← in'):entry.method
   const tone=entry.direction==='error'||/error|failed/.test(entry.method)?'error':/start|complete|finish/.test(entry.method)?'boundary':'plain'
   const last=result.at(-1)
-  if(lens.value==='events'&&/delta$/.test(entry.method)&&last?.tag===tag&&last.data[0]?.runId===entry.runId&&last.data[0]?.agentId===entry.agentId){last.count++;last.data.push(entry);last.summary=(last.summary+text).slice(0,120);continue}
+  if(lens.value==='events'&&/delta$/.test(entry.method)&&last?.tag===tag&&last.data[0]?.runId===entry.runId&&last.data[0]?.agentId===entry.agentId){last.count++;last.at=entry.at;last.data.push(entry);last.summary=(last.summary+text).slice(0,120);continue}
   result.push({id:entry.id,at:entry.at,tag,summary:lens.value==='raw'?entry.method+(entry.requestId?' #'+entry.requestId.slice(0,8):''):(text||entry.method),tone,count:1,data:[entry],duration:entry.durationMs})
  }
- return result
+ return result.reverse()
 })
 const time=(at:number)=>new Date(at).toLocaleTimeString('zh-CN',{hour12:false})+'.'+String(at%1000).padStart(3,'0')
 async function load(){const current=generation;loading.value=true
  try{const value=await apiRequest<{entries:WorkspaceInspectorEntry[]}>(`/api/app/conversations/${props.conversationId}/inspector${props.taskId?'?taskId='+encodeURIComponent(props.taskId):''}`);if(current===generation&&!closed){entries.value=value.entries;error.value=''}}catch(e){if(current===generation&&!closed)error.value=e instanceof Error?e.message:'无法读取请求记录'}finally{if(current===generation)loading.value=false}}
 async function cycle(){const version=generation;if(!document.hidden)await load();if(!closed&&version===generation)timer=setTimeout(cycle,3000)}
 watch(()=>[props.conversationId,props.taskId],()=>{generation++;entries.value=[];follow.value=true;clearTimeout(timer);void cycle()},{immediate:true})
-watch(()=>[rows.value.length,lens.value],async()=>{await nextTick();if(follow.value&&list.value)list.value.scrollTop=list.value.scrollHeight})
+watch(lens,async()=>{follow.value=true;await nextTick();if(list.value)list.value.scrollTop=0})
+watch(rows,async()=>{const following=follow.value;await nextTick();if(following&&list.value)list.value.scrollTop=0})
 onBeforeUnmount(()=>{closed=true;generation++;clearTimeout(timer)})
 </script>
 <template>
  <section class="inspector" aria-label="Inspector 请求查看器">
   <header><AppIcon name="bug" :size="16"/><strong>Inspector</strong><button v-if="showClose" class="close" aria-label="关闭 Inspector" title="关闭 Inspector" @click="emit('close')"><AppIcon name="close" :size="16"/></button></header>
   <div class="inspector-toolbar"><div class="lenses" role="group" aria-label="Inspector 视图"><button :aria-pressed="lens==='events'" @click="lens='events'">Events</button><button :aria-pressed="lens==='raw'" @click="lens='raw'">Raw</button></div><span>{{loading&&!entries.length?'读取中…':visible.length+' 条记录'}}</span><button class="reload" aria-label="刷新请求记录" title="重新读取记录" :disabled="loading" @click="load"><AppIcon name="refresh" :size="14"/></button></div>
-  <div ref="list" class="inspector-list" @scroll="follow=!!list&&list.scrollHeight-list.scrollTop-list.clientHeight<40">
+  <div ref="list" class="inspector-list" @scroll="follow=!!list&&list.scrollTop<40">
    <p v-if="error" role="alert" class="error">{{error}}</p>
    <p v-else-if="!rows.length&&!loading" class="empty">{{lens==='raw'?'此聊天尚未记录网关请求与响应。':'此聊天尚未产生运行事件。'}}</p>
    <details v-for="row in rows" :key="row.id" :class="['inspector-row',row.tone]">

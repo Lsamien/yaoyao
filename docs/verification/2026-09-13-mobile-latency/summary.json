@@ -1,0 +1,130 @@
+[
+  {
+    "product": "yaoyao",
+    "addedRoundTripMs": 0,
+    "samples": 5,
+    "statisticsMs": {
+      "postAckMs": {
+        "median": 20.38,
+        "min": 19.05,
+        "max": 20.73
+      },
+      "sendReadyMs": {
+        "median": 52.48,
+        "min": 48.91,
+        "max": 57.17
+      },
+      "firstViewMs": {
+        "median": 274.24,
+        "min": 272.76,
+        "max": 280.66
+      },
+      "firstDeliveryToViewMs": {
+        "median": 9.15,
+        "min": 8.22,
+        "max": 10.5
+      },
+      "medianViewGapMs": {
+        "median": 101.6,
+        "min": 101.1,
+        "max": 101.84
+      }
+    }
+  },
+  {
+    "product": "yaoyao",
+    "addedRoundTripMs": 160,
+    "samples": 5,
+    "statisticsMs": {
+      "postAckMs": {
+        "median": 173.65,
+        "min": 172.16,
+        "max": 175.06
+      },
+      "sendReadyMs": {
+        "median": 675.32,
+        "min": 671.25,
+        "max": 679.58
+      },
+      "firstViewMs": {
+        "median": 436.57,
+        "min": 435.22,
+        "max": 438.34
+      },
+      "firstDeliveryToViewMs": {
+        "median": 88.95,
+        "min": 88.92,
+        "max": 90.02
+      },
+      "medianViewGapMs": {
+        "median": 101.57,
+        "min": 101.01,
+        "max": 101.95
+      }
+    }
+  },
+  {
+    "product": "openmausbot",
+    "addedRoundTripMs": 0,
+    "samples": 5,
+    "statisticsMs": {
+      "postAckMs": {
+        "median": 55.23,
+        "min": 51.79,
+        "max": 55.69
+      },
+      "sendReadyMs": {
+        "median": 55.52,
+        "min": 52.08,
+        "max": 56.01
+      },
+      "firstViewMs": {
+        "median": 373.38,
+        "min": 367.21,
+        "max": 377.61
+      },
+      "firstDeliveryToViewMs": {
+        "median": 11.95,
+        "min": 11.19,
+        "max": 13.21
+      },
+      "medianViewGapMs": {
+        "median": 21.45,
+        "min": 20.76,
+        "max": 22.29
+      }
+    }
+  },
+  {
+    "product": "openmausbot",
+    "addedRoundTripMs": 160,
+    "samples": 5,
+    "statisticsMs": {
+      "postAckMs": {
+        "median": 209.38,
+        "min": 203.93,
+        "max": 211.08
+      },
+      "sendReadyMs": {
+        "median": 209.68,
+        "min": 204.28,
+        "max": 211.3
+      },
+      "firstViewMs": {
+        "median": 541.22,
+        "min": 535.74,
+        "max": 544.96
+      },
+      "firstDeliveryToViewMs": {
+        "median": 93.22,
+        "min": 91.94,
+        "max": 103.14
+      },
+      "medianViewGapMs": {
+        "median": 22.24,
+        "min": 18.35,
+        "max": 25.1
+      }
+    }
+  }
+]

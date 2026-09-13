@@ -8,6 +8,41 @@ async function create(page:Page,name:string){
  await editor.getByRole('button',{name:'保存',exact:true}).click()
  await expect(page.getByRole('heading',{name,exact:true})).toBeVisible()
 }
+test('inspector latest records stay at the top on desktop and phone',async({page},testInfo)=>{
+ await page.goto('/conversations')
+ await page.getByRole('textbox',{name:'账号',exact:true}).fill('fixture')
+ await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass')
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.desktop-sidebar .sidebar-create-trigger')).toBeVisible()
+ await create(page,'排序验收')
+ let revision=0
+ await page.route('**/api/app/conversations/*/inspector',route=>{
+  const entries=Array.from({length:90},(_,index)=>['event','response'].map(direction=>({id:`${direction}-${index+revision}`,at:1726200000000+(index+revision)*1000,direction,method:direction==='event'?'message.complete':'session.usage',agentId:'agent',runId:'run',data:{text:`记录 ${index+revision}`}}))).flat()
+  // A later request batch can arrive before older execution records.
+  return route.fulfill({json:{entries:[...entries.slice(120),...entries.slice(0,120)]}})
+ })
+ await page.getByRole('button',{name:'Inspector',exact:true}).click()
+ const panel=page.locator('.inspector'),list=panel.locator('.inspector-list')
+ await expect(panel.locator('summary').first()).toContainText('记录 89')
+ expect(await list.evaluate(el=>el.scrollTop)).toBe(0)
+ const times=await panel.locator('pre').allTextContents()
+ expect(times.map(text=>JSON.parse(text).at)).toEqual(times.map(text=>JSON.parse(text).at).sort((a,b)=>b-a))
+ await list.evaluate(el=>{el.scrollTop=500;el.dispatchEvent(new Event('scroll'))})
+ await panel.getByRole('button',{name:'Raw',exact:true}).click()
+ await expect.poll(()=>list.evaluate(el=>el.scrollTop)).toBe(0)
+ expect(JSON.parse(await panel.locator('pre').first().textContent()||'{}').id).toBe('response-89')
+ revision=1
+ await panel.getByRole('button',{name:'刷新请求记录',exact:true}).click()
+ await expect.poll(async()=>JSON.parse(await panel.locator('pre').first().textContent()||'{}').id).toBe('response-90')
+ expect(await list.evaluate(el=>el.scrollTop)).toBe(0)
+ await page.screenshot({path:testInfo.outputPath('inspector-desktop.png')})
+ await page.setViewportSize({width:375,height:812});await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'})
+ await panel.getByRole('button',{name:'Events',exact:true}).click()
+ await expect(panel.locator('summary').first()).toBeInViewport()
+ await expect(panel.locator('summary').first()).toContainText('记录 90')
+ expect(await list.evaluate(el=>el.scrollTop)).toBe(0)
+ await page.screenshot({path:testInfo.outputPath('inspector-phone.png')})
+})
 test('robot sidebar, source changes, requests, routines and group boundaries work on desktop and phone',async({page})=>{
  mkdirSync(evidence,{recursive:true})
  await page.goto('/conversations')
