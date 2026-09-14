@@ -168,7 +168,7 @@ test('an idle Web viewer follows an iOS-origin run and restores thinking after r
   await login(page)
   const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
   const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
-  const opened = await page.request.post('/api/realtime/channels', { headers, data: { channel: 'chat' } })
+  const opened = await page.request.post('/api/realtime/channels', { headers, data: { channel: 'chat', chatProtocol: 'ordinary-chat-transcript-v2' } })
   expect(opened.ok(), await opened.text()).toBe(true)
   const channel = (await opened.json()).id
   let sequence = 0

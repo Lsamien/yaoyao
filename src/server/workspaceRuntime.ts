@@ -29,6 +29,7 @@ type Run = WorkspaceRun
 export interface WorkspaceBinding {
   runnerId?: string
   execution?:string
+  vmExecution?:Agent["vmExecution"]
   computerEnvironmentId?:string
   remoteAgentId?: string
   id: string
@@ -212,11 +213,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     },authorize:()=>{
       this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
       const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id),conversation=this.store.require<Conversation>(owner,'conversation',c.id)
-      if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId||(latest.allowHostEnvironment===true)!==(agent.allowHostEnvironment===true)||(latest.execution??'profile')!==(agent.execution??'profile')||latest.teamAuthorizationVersion!==agent.teamAuthorizationVersion)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
+      if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId||(latest.vmExecution??'worker')!==(agent.vmExecution??'worker')||(latest.allowHostEnvironment===true)!==(agent.allowHostEnvironment===true)||(latest.execution??'profile')!==(agent.execution??'profile')||latest.teamAuthorizationVersion!==agent.teamAuthorizationVersion)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
     }})
     gateway.onTrace=entry=>this.inspector?.record(owner,c.id,{...entry,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
-    const movedRunner=!!this.store.get(owner,'binding-reset',key)||!!binding&&(binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile'))
+    const movedRunner=!!this.store.get(owner,'binding-reset',key)||!!binding&&((binding.vmExecution??'worker')!==(agent.vmExecution??'worker')||binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile'))
     if(movedRunner) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
       binding=undefined
@@ -500,6 +501,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       binding = {
         runnerId: target.runner?.id,
         execution:agent.execution,
+        vmExecution:agent.vmExecution,
         computerEnvironmentId:agent.computerEnvironmentId,
         id: key,
         nodeId: agent.nodeId,

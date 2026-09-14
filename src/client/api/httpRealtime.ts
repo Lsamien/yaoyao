@@ -2,6 +2,7 @@ import type { JsonValue } from '@shared/types'
 import { SSEParser } from '@shared/sse'
 import { apiRequest, ApiError, setApiCsrfToken } from './client'
 import { createId } from '@/utils/id'
+import { CHAT_TRANSCRIPT_FEATURE } from '@shared/chatTranscript'
 
 export class HTTPRPCError extends Error {
   constructor(message: string, readonly code?: string | number, readonly data?: JsonValue) { super(message) }
@@ -26,7 +27,7 @@ export class HTTPRealtimeChannel {
     return value.features ?? []
   }
   async open(channel: 'chat' | 'groups', anchor?: { epoch: string; cursor: number }): Promise<void> {
-    const created = await apiRequest<{ id: string }>('/api/realtime/channels', { method: 'POST', body: { channel, ...anchor } })
+    const created = await apiRequest<{ id: string }>('/api/realtime/channels', { method: 'POST', body: { channel, ...(channel==='chat'?{chatProtocol:CHAT_TRANSCRIPT_FEATURE}:{}), ...anchor } })
     this.id = created.id
     if (this.stopped) { this.close(); return }
     await new Promise<void>((resolve, reject) => {

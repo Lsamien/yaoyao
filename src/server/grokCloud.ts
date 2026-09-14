@@ -187,13 +187,15 @@ export class GrokCloud {
       if(!token)throw new HttpError(400,'请先通过浏览器完成 Grok Bot 授权。','grok_login_missing');ctx.body=await this.configure(owner,token,body.version,refreshToken)
     })
     router.put('/api/app/agents/:id/computer-selection',async ctx=>{
-      const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),body=parse(z.object({computer:z.enum(['auto','cloud','vm','local','browser','off']),allowHostEnvironment:z.boolean().optional()}).strict(),(ctx.request as any).body)
+      const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),body=parse(z.object({computer:z.enum(['auto','cloud','vm','local','browser','off']),allowHostEnvironment:z.boolean().optional(),vmExecution:z.enum(['worker','profile']).optional()}).strict(),(ctx.request as any).body)
       this.beforeSelection?.(owner,agent.id);this.shared.assertLocalVmIdle(owner,[agent.id]);if(this.current(owner))throw new HttpError(409,'请先交还云端电脑','computer_busy')
-      const allowHostEnvironment=['vm','cloud'].includes(body.computer)&&(body.allowHostEnvironment??agent.allowHostEnvironment??false)
-      if(body.computer==='vm'&&allowHostEnvironment)this.nodes.targetForAgent(owner,{...agent,execution:'computer',computer:'vm',allowHostEnvironment:true})
+      if(body.vmExecution==='profile'&&body.allowHostEnvironment===false)throw new HttpError(400,'本机协作模式需要本机环境，请选择虚拟机模式','computer_profile_host_required')
+      const vmExecution=body.computer==='vm'?(body.vmExecution??(body.allowHostEnvironment===false?'worker':agent.vmExecution)??'worker'):'worker'
+      const allowHostEnvironment=(body.computer==='vm'&&vmExecution==='profile')||(['vm','cloud'].includes(body.computer)&&(body.allowHostEnvironment??(body.vmExecution==='worker'?false:agent.allowHostEnvironment)??false))
+      if(body.computer==='vm'&&allowHostEnvironment)this.nodes.targetForAgent(owner,{...agent,execution:'computer',computer:'vm',allowHostEnvironment:true,vmExecution})
       const enteringCloud=body.computer==='cloud'&&agent.computer!=='cloud'
       if(enteringCloud)await this.requireAvailable(owner,agent,this.nodes.target(owner,agent.nodeId))
-      this.store.atomic(()=>{const execution=body.computer==='vm'?'computer':body.computer==='auto'?(agent.execution??'profile'):'profile';if(execution!=='computer'&&agent.computerEnvironmentId)this.shared.detachLocalVm(owner,agent);this.store.updateAgent(owner,agent.id,{computer:body.computer,execution,allowHostEnvironment});const current=this.store.require<WorkspaceAgent>(owner,'agent',agent.id);this.store.prepareAgent?.(owner,current);this.store.put(owner,'agent',agent.id,current)})
+      this.store.atomic(()=>{const execution=body.computer==='vm'?'computer':body.computer==='auto'?(agent.execution??'profile'):'profile';if(execution!=='computer'&&agent.computerEnvironmentId)this.shared.detachLocalVm(owner,agent);this.store.updateAgent(owner,agent.id,{computer:body.computer,execution,allowHostEnvironment,vmExecution});const current=this.store.require<WorkspaceAgent>(owner,'agent',agent.id);this.store.prepareAgent?.(owner,current);this.store.put(owner,'agent',agent.id,current)})
       if(enteringCloud)await this.connect(owner)
       ctx.body={agent:this.store.agentSummary(this.store.require<WorkspaceAgent>(owner,'agent',agent.id))}
     })

@@ -706,7 +706,7 @@ test.skip('selects existing group topics and creates a new protocol v4 topic on 
 
 test('renders persisted user file markers as attachment cards', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
-  const userMessage = page.locator('[data-message-id="message-user-file"]')
+  const userMessage = page.locator('.message--user').filter({ hasText: '查看附件' })
   await expect(userMessage).toContainText('查看附件')
   await expect(userMessage.getByRole('button', { name: /测试报告\.docx/ })).toBeVisible()
   await expect(userMessage).not.toContainText('@file:')
@@ -715,7 +715,7 @@ test('renders persisted user file markers as attachment cards', async ({ page })
 
 test('renders persisted user image markers as direct images instead of file cards', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
-  const userMessage = page.locator('[data-message-id="message-user-image"]')
+  const userMessage = page.locator('.message--user').filter({ has: page.locator('img[alt="测试图片.png"]') })
   const imageAttachment = userMessage.locator('.message__attachment--image')
   await expect(imageAttachment).toBeVisible()
   await expect(imageAttachment.locator('img[alt="测试图片.png"]')).toBeVisible()
@@ -782,7 +782,7 @@ test('renders subtask completion as a collapsed timeline event', async ({ page }
 
 test('renders background process exits as collapsed system events', async ({ page }) => {
   await page.goto('/chat/session-demo')
-  const event = page.locator('[data-message-id="message-background-process"] .background-process-event')
+  const event = page.locator('.background-process-event')
   const detail = event.locator('.markdown')
   await expect(event).toContainText('后台子任务已终止 · SIGTERM')
   await expect(event).not.toHaveAttribute('open', '')
@@ -790,19 +790,19 @@ test('renders background process exits as collapsed system events', async ({ pag
   await event.locator('summary').click()
   await expect(detail).toBeVisible()
   await expect(detail).toContainText('Command: ./run_mac.sh')
-  await expect(page.locator('[data-message-id="message-background-process"]')).toHaveClass(/message--system/)
+  await expect(page.locator('.message').filter({ has: page.locator('.background-process-event') })).toHaveClass(/message--system/)
 })
 
 test('renders context compaction as a collapsed timeline event', async ({ page }) => {
   await page.goto('/chat/session-demo')
-  const compaction = page.locator('[data-message-id="message-compaction"] .compaction-event')
+  const compaction = page.locator('.compaction-event')
   await expect(compaction).toContainText('上下文已压缩')
   await expect(compaction).toContainText('压缩摘要已归档 · 点击查看')
   await expect(compaction).not.toHaveAttribute('open', '')
   await expect(compaction.getByText('Historical Task Snapshot', { exact: true })).toBeHidden()
   await compaction.locator('summary').click()
   await expect(compaction.getByText('Historical Task Snapshot', { exact: true })).toBeVisible()
-  await expect(page.locator('[data-message-id="message-compaction"]')).toHaveClass(/message--system/)
+  await expect(page.locator('.message').filter({ has: page.locator('.compaction-event') })).toHaveClass(/message--system/)
 })
 
 test('renders model changes as a collapsed system event', async ({ page }) => {
@@ -928,7 +928,7 @@ test('keeps the canonical logo and yaoyao-webui composer geometry', async ({ pag
   await expect(outline.getByText('请检查今天生成的产物。MEDIA:/brand/AppIcon-1024.png', { exact: true })).toBeVisible()
   await expect(outline.getByText('验收摘要', { exact: true })).toBeVisible()
   await outline.getByRole('button', { name: '跳转到 验收摘要' }).click()
-  await expect(page.locator('[data-message-id="message-assistant"]')).toHaveClass(/message--revealed/)
+  await expect(page.locator('.message--assistant').filter({ hasText: '验收摘要' })).toHaveClass(/message--revealed/)
   await page.getByRole('button', { name: '关闭会话大纲' }).click()
   await expect(outline).toBeHidden()
   await page.getByRole('button', { name: '会话操作' }).click()
@@ -1070,15 +1070,15 @@ test('renders the Kanban snapshot and mobile status control without page overflo
   expect(geometry.board).toBeGreaterThan(geometry.viewport)
 })
 
-test('serves cached chat history locally and refreshes upstream only on explicit action', async ({ page }, testInfo) => {
-  const messagesURL = (url: string) => url.includes('/api/app/sessions/session-demo/messages')
+test('serves canonical chat snapshots and supports explicit history verification', async ({ page }, testInfo) => {
+  const messagesURL = (url: string) => url.includes('/api/app/chat/sessions/session-demo/snapshot')
   const initial = page.waitForResponse(response => messagesURL(response.url()))
   await page.goto('/chat/session-demo?profile=yaoyao')
   expect((await initial).ok()).toBe(true)
   await expect(page.getByRole('button', { name: '会话操作', exact: true })).toBeVisible()
-  const restored = page.waitForResponse(response => messagesURL(response.url()))
+  const restored = page.waitForResponse(response => response.url().includes('/api/app/chat/sessions/session-demo/events?'))
   await page.reload()
-  expect((await restored).headers()['x-yaoyao-data-source']).toBe('local')
+  expect((await restored).headers()['content-type']).toContain('text/event-stream')
   await page.getByRole('button', { name: '会话操作', exact: true }).click()
   await expect(page.getByRole('menuitem', { name: '强制刷新历史' })).toBeVisible()
   await expect(page.getByRole('menu', { name: '会话操作' })).toHaveCSS('opacity', '1')

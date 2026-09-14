@@ -5,15 +5,14 @@ import { normalizeChatMessage } from '@/utils/normalize'
 import { reconcileChatHistory } from '@/utils/chatHistory'
 import { chatMessagesToUi } from '@/components/workspace/viewModels'
 import { buildMessageTimelineRows } from '@/utils/turnTrace'
-import { projectChatEvent } from '../../src/server/chatEventProjection'
 
 function state(): ChatRouteState { return { route: { sessionId: 's', profile: 'p' }, messages: [], isStreaming: false, isQueued: false,
   historySynced: true, hasMoreBefore: false, loadedMessageCount: 0, messageTotal: 0, isLoadingHistory: false, generation: 1 } }
 const user = (id: string): ChatMessage => ({ id, sessionId: 's', role: 'user', content: 'pwd', timestamp: 1, stage: 'settled' })
 
 describe('ordinary tool lifecycle and authoritative history', () => {
-  it('counts one invocation across generating/start/complete in both realtime and durable projection', () => {
-    let current = state(), durable: Record<string, any> | undefined
+  it('counts one invocation across generating/start/complete in legacy history presentation', () => {
+    let current = state()
     for (const [type, payload] of [
       ['message.start', {}], ['tool.generating', { name: 'terminal' }],
       ['tool.start', { tool_id: 'call-1', name: 'terminal', args: { command: 'pwd' } }],
@@ -21,11 +20,8 @@ describe('ordinary tool lifecycle and authoritative history', () => {
       ['message.complete', { text: '/work', status: 'complete' }],
     ] as Array<[string, any]>) {
       current = applyChatEvent(current, { type, payload })
-      durable = projectChatEvent(type, payload, durable, 'event:1', 1000) ?? durable
     }
     expect(current.messages.flatMap(message => message.toolCalls ?? [])).toHaveLength(1)
-    expect(durable!.tool_calls).toHaveLength(1)
-    expect(durable!.tool_calls[0].status).toBe('completed')
     expect(buildMessageTimelineRows(chatMessagesToUi(current.messages)).filter(row => row.kind === 'trace').map(row => row.status)).toEqual(['success'])
   })
 

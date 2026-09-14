@@ -41,7 +41,7 @@ else {
   const trustedBoot = event => event.sender === window?.webContents && event.senderFrame?.url === bootURL
   ipcMain.handle('desktop:status', event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面访问桌面服务')
-    return { phase: manager?.state.phase || 'starting', message: manager?.state.message || '正在启动…' }
+    return { phase: manager?.state.phase || 'starting', message: manager?.state.message || '正在启动…', canForceSync: manager?.state.canForceSync === true }
   })
   ipcMain.handle('desktop:retry', async event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面启动桌面服务')
@@ -51,6 +51,12 @@ else {
   ipcMain.handle('desktop:logs', event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面读取日志')
     shell.showItemInFolder(logFile)
+  })
+  ipcMain.handle('desktop:force-sync', async event => {
+    if (!trustedBoot(event) || event.senderFrame !== window.webContents.mainFrame || closing || quitting || !manager?.canForceSynchronization)
+      throw new Error('不允许此页面覆盖本机 Web')
+    try { await manager.retrySynchronization({ force: true }); return true }
+    catch (error) { log(error.message); return false }
   })
   const trustedUpdate = event => event.sender === updateWindow?.webContents
     && event.senderFrame === updateWindow.webContents.mainFrame && event.senderFrame.url === updateURL
@@ -153,6 +159,8 @@ else {
     if (notice) notice.visible = Boolean(state.updateNotice)
     const retrySync = Menu.getApplicationMenu()?.getMenuItemById('desktop-sync-retry')
     if (retrySync) retrySync.enabled = state.phase === 'ready' && Boolean(manager?.options.synchronize)
+    const forceSync = Menu.getApplicationMenu()?.getMenuItemById('desktop-sync-force')
+    if (forceSync) forceSync.enabled = !closing && !quitting && manager?.canForceSynchronization === true
     tray?.setToolTip(`夭夭 · ${state.message}`)
     if (!window || window.isDestroyed()) return
     if (state.phase === 'ready') {
@@ -214,7 +222,7 @@ else {
       stopBackground: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
         ? onProgress => stopLocalService({home,port,root,fixture:Boolean(fixtureHome),onProgress}) : undefined,
       synchronize: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
-        ? onProgress => synchronizeLocalService({ home, port, root, fixture: Boolean(fixtureHome), onProgress,
+        ? (onProgress, { force = false } = {}) => synchronizeLocalService({ home, port, root, fixture: Boolean(fixtureHome), onProgress, force,
           environment: { HERMES_YAOYAO_UPSTREAM: process.env.HERMES_YAOYAO_UPSTREAM || 'http://127.0.0.1:9119', HERMES_YAOYAO_SUPERVISE_DASHBOARD: fixtureHome ? '0' : '1' } })
         : undefined,
       fork: ({ home, port }) => {
@@ -252,6 +260,8 @@ else {
         { id:'desktop-sync-notice', label:'Web 同步待完成：服务忙碌', enabled:false, visible:false },
         { id:'desktop-sync-retry', label:'重试同步本机 Web…', enabled:false,
           click:async()=>{try{await manager.retrySynchronization()}catch(error){log(error.message)}} },
+        { id:'desktop-sync-force', label:'使用当前 App 覆盖同版本 Web', enabled:false,
+          click:async()=>{if(closing||quitting||!manager.canForceSynchronization)return;try{await manager.retrySynchronization({force:true})}catch(error){log(error.message)}} },
         { id:'desktop-login', label:'登录 macOS 时启动', type:'checkbox', enabled:app.isPackaged, checked:app.getLoginItemSettings().openAtLogin,
           click:async item=>{try{app.setLoginItemSettings({openAtLogin:item.checked});item.checked=app.getLoginItemSettings().openAtLogin}catch(error){item.checked=app.getLoginItemSettings().openAtLogin;await dialog.showMessageBox(window,{type:'error',message:'无法修改登录启动设置',detail:error.message})}} },
         { id:'desktop-background', label:'登录启动时仅驻留菜单栏', type:'checkbox', checked:preferences.value.backgroundAtLogin,

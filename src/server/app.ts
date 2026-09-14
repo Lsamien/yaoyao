@@ -265,14 +265,10 @@ export function createApplication(options: ApplicationOptions = {}): Application
   realtime.transcriptsAvailable = chatCache.store.transcripts.enabled
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
-    if(/^(message\.(start|delta|interim|complete)|reasoning\.|tool\.|run\.(completed|failed))/.test(frame.type)){
-      const id=chatCache?.store.projectedMessageID(owner,profile,storedId)
-      if(id)frame.payload={...frame.payload,message_id:id}
-    }
     if (owner.startsWith('device:')) return
     if (!['message.complete', 'attachment.staged'].includes(frame.type)) return
     const data = frame.payload ?? {}, text = frame.type === 'attachment.staged' ? JSON.stringify(data) : nativeMessageFileText(data)
-    const messageId = String(data.row_id ?? data.message_id ?? data.id ?? createHash('sha256').update(text).digest('hex'))
+    const messageId = String(chatCache.store.projectedMessageID(owner,profile,storedId) ?? data.row_id ?? data.message_id ?? data.id ?? createHash('sha256').update(text).digest('hex'))
     void workspaceAssets.archiveText(owner, text, 'local', profile, storedId, messageId, frame.type === 'attachment.staged' ? 'user' : 'agent').catch(() => {})
   }
   workspace.nativeMessageForFile = (owner, file) => {
@@ -292,8 +288,10 @@ export function createApplication(options: ApplicationOptions = {}): Application
   realtime.broker.onNativeCommand = (owner, profile, storedId, method, params) => {
     chatCache?.command(owner, profile, storedId, method, params)
   }
-  realtime.broker.onNativeRoute = (owner, profile, storedId, runtimeId, running) => {
-    chatCache?.route(owner, profile, storedId, runtimeId, running)
+  realtime.broker.nativeSourceCursor = (owner,profile,id,runtime,epoch)=>chatCache.store.transcripts.sourceCursor(owner,profile,id,runtime,epoch)
+  realtime.broker.onNativeRoute = (owner, profile, storedId, runtimeId, running, snapshot) => {
+    chatCache?.route(owner, profile, storedId, runtimeId, snapshot?undefined:running)
+    if(snapshot)chatCache.store.recordEvent(owner,profile,storedId,{type:'route.resumed',payload:snapshot})
   }
   chatPushJobs.setTransportFactory(realtime.recoveryTransport, job => realtime.ownsPushJob(job.id))
   try {

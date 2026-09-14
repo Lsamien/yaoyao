@@ -1,0 +1,135 @@
+{
+  "protocol": "ordinary-chat-transcript-v2",
+  "snapshot": {
+    "protocol": "ordinary-chat-transcript-v2",
+    "epoch": "fixture-epoch",
+    "cursor": 1,
+    "profile": "p",
+    "sessionId": "s",
+    "messages": [
+      {
+        "id": "answer",
+        "source_message_id": "upstream-a",
+        "turn_id": "turn-1",
+        "segment_kind": "answer",
+        "seq": 2,
+        "revision": 1,
+        "role": "assistant",
+        "content": "前半段",
+        "reasoning": "思考",
+        "status": "streaming"
+      }
+    ],
+    "session": {},
+    "hasOlder": true,
+    "total": 2,
+    "state": "current",
+    "running": true,
+    "queued": false
+  },
+  "events": [
+    {
+      "cursor": 2,
+      "previousCursor": 1,
+      "epoch": "fixture-epoch",
+      "profile": "p",
+      "sessionId": "s",
+      "type": "message.patch",
+      "total": 2,
+      "data": {
+        "id": "answer",
+        "seq": 2,
+        "baseRevision": 1,
+        "revision": 2,
+        "contentAppend": "后半段",
+        "reasoningAppend": "继续"
+      }
+    },
+    {
+      "cursor": 2,
+      "previousCursor": 1,
+      "epoch": "fixture-epoch",
+      "profile": "p",
+      "sessionId": "s",
+      "type": "message.patch",
+      "total": 2,
+      "data": {
+        "id": "answer",
+        "seq": 2,
+        "baseRevision": 1,
+        "revision": 2,
+        "contentAppend": "后半段",
+        "reasoningAppend": "继续"
+      }
+    },
+    {
+      "cursor": 3,
+      "previousCursor": 2,
+      "epoch": "fixture-epoch",
+      "profile": "p",
+      "sessionId": "s",
+      "type": "message.upsert",
+      "total": 2,
+      "data": {
+        "id": "answer",
+        "source_message_id": "persisted-42",
+        "turn_id": "turn-1",
+        "segment_kind": "answer",
+        "seq": 2,
+        "revision": 3,
+        "role": "assistant",
+        "content": "前半段后半段",
+        "reasoning": "思考继续",
+        "status": "complete",
+        "final_result": true
+      }
+    },
+    {
+      "cursor": 4,
+      "previousCursor": 3,
+      "epoch": "fixture-epoch",
+      "profile": "p",
+      "sessionId": "s",
+      "type": "message.deleted",
+      "total": 1,
+      "data": { "id": "old-preview", "seq": 1, "revision": 2 }
+    }
+  ],
+  "stalePage": {
+    "protocol": "ordinary-chat-transcript-v2",
+    "epoch": "fixture-epoch",
+    "cursor": 1,
+    "profile": "p",
+    "sessionId": "s",
+    "messages": [
+      {
+        "id": "old-preview",
+        "seq": 1,
+        "revision": 1,
+        "role": "assistant",
+        "content": "前半段",
+        "status": "complete"
+      }
+    ],
+    "deletedIds": [],
+    "session": {},
+    "hasOlder": false,
+    "total": 2,
+    "state": "current"
+  },
+  "expectedMessages": [
+    {
+      "id": "answer",
+      "source_message_id": "persisted-42",
+      "turn_id": "turn-1",
+      "segment_kind": "answer",
+      "seq": 2,
+      "revision": 3,
+      "role": "assistant",
+      "content": "前半段后半段",
+      "reasoning": "思考继续",
+      "status": "complete",
+      "final_result": true
+    }
+  ]
+}

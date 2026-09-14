@@ -1,4 +1,3 @@
-import { projectChatEvent } from './chatEventProjection.js'
 import { ChatTranscriptStore } from './chatTranscriptStore.js'
 import { isFinalChatResult } from './chatUnread.js'
 import { HttpError } from './errors.js'
@@ -138,6 +137,7 @@ function referencedPaths(value: unknown, output = new Set<string>()): Set<string
 }
 
 export class ChatCacheStore {
+  private synchronizingHistory = false
   readonly db: DatabaseSync
   readonly assetsRoot: string
   readonly transcripts: ChatTranscriptStore
@@ -382,12 +382,10 @@ export class ChatCacheStore {
       CASE WHEN COALESCE(l.read_initialized,0)=1 THEN l.read_count ELSE COALESCE(s.message_total,0) END read_message_count FROM chat_sessions s LEFT JOIN chat_local_state l USING(owner,profile,session_id)
       WHERE s.owner=? AND s.owned_at IS NOT NULL AND (?='' OR s.profile=?)`).all(owner,profile,profile) as any[])
       .map(({final_read_count,...r})=>{
-        const messages = this.db.prepare(`SELECT data FROM chat_messages
-          WHERE owner=? AND profile=? AND session_id=? AND position>=?
-          AND json_extract(data,'$.role')='assistant'`)
-          .all(owner,r.profile,r.session_id,final_read_count) as {data:string}[]
+        this.transcripts.seed(owner,r.profile,r.session_id)
+        r.message_count=this.transcripts.total(owner,r.profile,r.session_id)
         return {...r,updated_at:Date.now(),unread_count:Math.max(0,r.message_count-r.read_message_count),
-          final_unread_count:messages.filter(row=>isFinalChatResult(JSON.parse(row.data))).length}
+          final_unread_count:this.transcripts.unread(owner,r.profile,r.session_id)}
       })
     return {profile,supported:true,total_unread:sessions.reduce((n,r)=>n+r.unread_count,0),sessions}
   }
@@ -395,8 +393,8 @@ export class ChatCacheStore {
   markRead(owner: string, profile: string, id: string, count?: number) {
     id=this.canonicalSessionID(owner,profile,id)
     this.requireOwned(owner,profile,id)
-    const total = Number((this.db.prepare('SELECT message_total FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
-      .get(owner,profile,id) as any).message_total ?? 0)
+    this.transcripts.seed(owner,profile,id)
+    const total = this.transcripts.total(owner,profile,id)
     const read = Math.max(0,Math.min(total, count ?? total))
     // Reading a streaming placeholder must not consume its future final answer.
     // Keep the original cursor untouched for existing consumers.
@@ -409,6 +407,8 @@ export class ChatCacheStore {
     this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,read_count,final_read_count,read_initialized) VALUES(?,?,?,?,?,1)
       ON CONFLICT(owner,profile,session_id) DO UPDATE SET read_count=MAX(read_count,excluded.read_count),
       final_read_count=MAX(COALESCE(final_read_count,read_count),excluded.final_read_count),read_initialized=1`).run(owner,profile,id,read,finalRead)
+    this.transcripts.seed(owner,profile,id)
+    this.transcripts.markRead(owner,profile,id,count??Infinity)
     return this.unread(owner,profile).sessions.find(r=>r.session_id===id)!
   }
 
@@ -425,7 +425,7 @@ export class ChatCacheStore {
         ON CONFLICT(owner,profile,session_id) DO UPDATE SET pinned=excluded.pinned`).run(owner,profile,id,patch.pinned?1:0)
       const row = this.localDetail(owner,profile,id)!
       const data = {...JSON.parse(row.response.body.toString()),...patch}
-      this.db.prepare('UPDATE chat_sessions SET data=? WHERE owner=? AND profile=? AND session_id=?').run(JSON.stringify(data),owner,profile,id)
+      this.db.prepare("UPDATE chat_sessions SET data=?,sync_state=CASE WHEN sync_state='gap' THEN sync_state WHEN complete=1 THEN 'current' ELSE sync_state END WHERE owner=? AND profile=? AND session_id=?").run(JSON.stringify(data),owner,profile,id)
       for(const key of ['title','archived'] as const)if(patch[key]!==undefined){
         const value=key==='archived'?(patch[key]?1:0):String(patch[key])
         this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,${key}) VALUES(?,?,?,?) ON CONFLICT(owner,profile,session_id) DO UPDATE SET ${key}=excluded.${key}`).run(owner,profile,id,value)
@@ -437,61 +437,23 @@ export class ChatCacheStore {
     } catch(e) {this.db.exec('ROLLBACK TO local_chat_patch; RELEASE local_chat_patch');throw e}
   }
 
-  private writeLiveMessage(owner:string,profile:string,id:string,message:Record<string,any>): void {
-    const prior = this.db.prepare('SELECT position FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?').get(owner,profile,id,message.id) as {position:number}|undefined
-    const row = this.db.prepare('SELECT message_total,complete,data FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?').get(owner,profile,id) as any
-    const extent = Number((this.db.prepare('SELECT COALESCE(MAX(position)+1,0) n FROM chat_messages WHERE owner=? AND profile=? AND session_id=?').get(owner,profile,id) as any).n)
-    const position = prior?.position ?? Math.max(extent,Number(row.message_total??0))
-    const data=JSON.stringify(message)
-    this.db.prepare(`INSERT INTO chat_messages(owner,profile,session_id,message_id,position,data,content_hash) VALUES(?,?,?,?,?,?,?)
-      ON CONFLICT(owner,profile,session_id,message_id) DO UPDATE SET data=excluded.data,content_hash=excluded.content_hash`).run(owner,profile,id,message.id,position,data,createHash('sha256').update(data).digest('hex'))
-    const total=Math.max(Number(row.message_total??0),position+1), summary=JSON.parse(row.data)
-    const now=Date.now()
-    summary.message_count=total; summary.last_active=now/1000
-    if (typeof message.content==='string' && message.content.trim()) summary.preview=message.content.slice(0,160)
-    this.db.prepare('UPDATE chat_sessions SET data=?,message_total=?,last_synced_at=? WHERE owner=? AND profile=? AND session_id=?').run(JSON.stringify(summary),total,now,owner,profile,id)
-    for(const path of referencedPaths(message)) this.db.prepare(`INSERT OR IGNORE INTO chat_attachments(owner,profile,session_id,source_path,state,updated_at) VALUES(?,?,?,?,'pending',?)`).run(owner,profile,id,path,now)
-    this.transcripts.upsert(owner,profile,id,message,position)
-  }
-
   projectedMessageID(owner:string,profile:string,id:string):string|undefined {
-    return (this.db.prepare(`SELECT message_id FROM chat_messages WHERE owner=? AND profile=? AND session_id=?
-      AND json_extract(data,'$.role')='assistant' ORDER BY position DESC LIMIT 1`).get(owner,profile,id) as {message_id:string}|undefined)?.message_id
+    return this.transcripts.head(owner,profile,id).current
   }
 
-  private projectEvent(owner:string,profile:string,id:string,type:string,p:Record<string,any>,eventID:string): void {
-    if(!this.ownsSession(owner,profile,id))return
-    if(type==='command.confirmed'||type==='command.rejected'){
-      const userID=`user:${p.delivery_id}`
-      const row=this.db.prepare('SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?').get(owner,profile,id,userID) as any
-      if(row)this.writeLiveMessage(owner,profile,id,{...JSON.parse(row.data),status:type==='command.confirmed'?'complete':'failed',...(p.error?{error:p.error}:{})})
-      this.db.prepare("UPDATE chat_sessions SET sync_state=CASE WHEN sync_state='gap' THEN 'gap' WHEN complete=1 THEN 'current' ELSE 'stale' END WHERE owner=? AND profile=? AND session_id=?").run(owner,profile,id)
-      return
-    }
-    if (type==='message.user' || type==='peer_user_message') {
-      this.writeLiveMessage(owner,profile,id,{...p,id:String(p.message_id??p.id??eventID),role:'user',content:p.text??p.content??'',timestamp:Date.now()/1000});return
-    }
-    const state=this.db.prepare('SELECT assistant_id FROM chat_local_state WHERE owner=? AND profile=? AND session_id=?').get(owner,profile,id) as any
-    const last=state?.assistant_id?this.db.prepare('SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?').get(owner,profile,id,state.assistant_id) as any:undefined
-    const previous=last?JSON.parse(last.data):undefined
-    // A new run must never append to the assistant row from the preceding turn.
-    if(['message.complete','run.completed'].includes(type) && !previous && !p.text && !p.content && !p.message){
-      this.db.prepare("UPDATE chat_sessions SET sync_state='gap' WHERE owner=? AND profile=? AND session_id=?").run(owner,profile,id);return
-    }
-    const startsNew=type==='message.start' && previous?.status!=='streaming'
-    const message=projectChatEvent(type,p,startsNew?undefined:previous,`event:${eventID}`,Date.now())
-    if(message){
-      if(previous && previous.id !== message.id && !startsNew){
-        const exists=this.db.prepare('SELECT 1 FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?').get(owner,profile,id,message.id)
-        if(!exists){this.transcripts.promote(owner,profile,id,String(previous.id),String(message.id));this.db.prepare('UPDATE chat_messages SET message_id=? WHERE owner=? AND profile=? AND session_id=? AND message_id=?').run(message.id,owner,profile,id,previous.id)}
-        else {this.db.prepare("UPDATE chat_sessions SET sync_state='gap' WHERE owner=? AND profile=? AND session_id=?").run(owner,profile,id);return}
-      }
-      this.writeLiveMessage(owner,profile,id,message)
-      this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,assistant_id) VALUES(?,?,?,?)
-        ON CONFLICT(owner,profile,session_id) DO UPDATE SET assistant_id=excluded.assistant_id`).run(owner,profile,id,type==='message.interim'?null:message.id)
-      this.db.prepare(`UPDATE chat_sessions SET sync_state=CASE WHEN sync_state='gap' THEN 'gap' WHEN complete=1 THEN 'current' ELSE 'stale' END
-        WHERE owner=? AND profile=? AND session_id=?`).run(owner,profile,id)
-    }
+  private updateTranscriptSummary(owner:string,profile:string,id:string):void {
+    const total=this.transcripts.total(owner,profile,id)
+    const lastRow=this.db.prepare('SELECT data FROM chat_transcript_messages WHERE owner=? AND profile=? AND session_id=? AND deleted=0 ORDER BY seq DESC LIMIT 1').get(owner,profile,id)
+    const last=lastRow?JSON.parse(String(lastRow.data)):undefined
+    const row=this.db.prepare('SELECT data FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?').get(owner,profile,id)
+    if(!row)return
+    const data=JSON.parse(String(row.data))
+    data.message_count=total
+    if(last){data.last_active=last.timestamp;if(typeof last.content==='string'&&last.content.trim())data.preview=last.content.slice(0,160)}
+    this.db.prepare("UPDATE chat_sessions SET data=?,sync_state=CASE WHEN sync_state='gap' THEN sync_state WHEN complete=1 THEN 'current' ELSE sync_state END WHERE owner=? AND profile=? AND session_id=?").run(JSON.stringify(data),owner,profile,id)
+    const currentID=this.transcripts.head(owner,profile,id).current
+    const current=currentID?this.transcripts.message(owner,profile,id,currentID):undefined
+    for(const message of [last,current].filter(Boolean))for(const path of referencedPaths(message!))this.db.prepare(`INSERT OR IGNORE INTO chat_attachments(owner,profile,session_id,source_path,state,updated_at) VALUES(?,?,?,?,'pending',?)`).run(owner,profile,id,path,Date.now())
   }
 
   needsListMetadata(owner: string, profile: string): boolean {
@@ -536,6 +498,7 @@ export class ChatCacheStore {
       // Hydrate all registered sessions from the unsliced upstream list, while
       // persisting only the owner-filtered page as the public response snapshot.
       this.ingestPayload(owner, profile, sessionID, parseResponse(metadataResponse) ?? payload, now, kind, requestStartedAt)
+      if(kind==='messages'&&sessionID&&!this.synchronizingHistory&&!this.transcripts.head(owner,profile,sessionID).running){this.transcripts.reconcile(owner,profile,sessionID);this.updateTranscriptSummary(owner,profile,sessionID)}
       this.db.prepare(`INSERT INTO chat_snapshots(owner,cache_key,kind,profile,session_id,status,headers,body,sync_state,saved_at)
         VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(owner,cache_key) DO UPDATE SET status=excluded.status,headers=excluded.headers,
         body=excluded.body,sync_state='current',saved_at=excluded.saved_at`)
@@ -551,9 +514,11 @@ export class ChatCacheStore {
 
   applySync(owner: string, profile: string, sessionID: string, revision: number,
     pages: Array<{ key: string; kind: string; response: UpstreamResponse; startedAt: number }>, force: boolean): boolean {
-    if (this.revision(owner, profile, sessionID) !== revision) return false
+    if (this.revision(owner, profile, sessionID) !== revision || this.transcripts.head(owner,profile,sessionID).running) return false
     this.db.exec('SAVEPOINT history_sync')
+    this.synchronizingHistory=true
     try {
+      this.transcripts.archive([owner,profile,sessionID])
       if (force) this.db.prepare('DELETE FROM chat_messages WHERE owner=? AND profile=? AND session_id=?').run(owner, profile, sessionID)
       // Recovery promotes locally generated stream identities to upstream row IDs.
       // Remove only replaced rows inside the verified window; keep older coverage.
@@ -584,7 +549,7 @@ export class ChatCacheStore {
       for (const page of pages) this.putSnapshot(owner, page.key, page.kind, profile, sessionID, page.response, false, page.startedAt)
       // Resolve legacy identities only after all pages are stored. Resolving
       // pages individually could consume a send before seeing an ambiguous row.
-      const coverage = this.db.prepare('SELECT complete FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
+      const coverage = this.db.prepare('SELECT complete,message_total FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?')
         .get(owner, profile, sessionID) as {complete: number} | undefined
       if (coverage?.complete) this.userMessageIdentities(owner, profile, sessionID, pages.flatMap(page => {
         const messages = page.kind === 'messages' ? parseResponse(page.response)?.messages : undefined
@@ -593,10 +558,13 @@ export class ChatCacheStore {
       const latest=this.db.prepare("SELECT message_id FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND json_extract(data,'$.role')='assistant' ORDER BY position DESC LIMIT 1").get(owner,profile,sessionID) as {message_id:string}|undefined
       if(latest)this.db.prepare('UPDATE chat_local_state SET assistant_id=? WHERE owner=? AND profile=? AND session_id=?').run(latest.message_id,owner,profile,sessionID)
       this.transcripts.reconcile(owner,profile,sessionID)
+      this.updateTranscriptSummary(owner,profile,sessionID)
       this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:'history.synced'})
+      this.synchronizingHistory=false
       this.db.exec('RELEASE history_sync')
       return true
     } catch (error) {
+      this.synchronizingHistory=false
       this.db.exec('ROLLBACK TO history_sync; RELEASE history_sync')
       throw error
     }
@@ -679,6 +647,21 @@ export class ChatCacheStore {
   }
 
   messagePage(owner: string, profile: string, sessionID: string, offset: number, limit: number): MessagePage | undefined {
+    if(!this.ownsSession(owner,profile,sessionID))return this.sourceMessagePage(owner,profile,sessionID,offset,limit)
+    this.transcripts.seed(owner,profile,sessionID)
+    const known=this.db.prepare('SELECT complete,message_total FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?').get(owner,profile,sessionID)
+    if(!known?.complete&&!this.transcripts.total(owner,profile,sessionID))return undefined
+    const all=this.transcripts.all(owner,profile,sessionID),end=Math.max(0,all.length-offset),start=Math.max(0,end-limit)
+    const total=known?.complete?all.length:Math.max(all.length,Number(known?.message_total??0))
+    if(!known?.complete&&offset>=all.length&&offset<total)return undefined
+    const detail=this.localDetail(owner,profile,sessionID)!
+    return {state:detail.state,response:{status:200,headers:new Headers({'content-type':'application/json'}),body:Buffer.from(JSON.stringify({
+      session_id:sessionID,session:JSON.parse(detail.response.body.toString()),messages:all.slice(start,end),
+      pagination:{total,returned:end-start,offset,limit,has_more:start>0||total>all.length}
+    }))}}
+  }
+
+  sourceMessagePage(owner: string, profile: string, sessionID: string, offset: number, limit: number): MessagePage | undefined {
     const session = this.db.prepare(`SELECT data,sync_state,complete,message_total FROM chat_sessions
       WHERE owner=? AND profile=? AND session_id=?`).get(owner, profile, sessionID) as Record<string, unknown> | undefined
     if (!session) return undefined
@@ -755,8 +738,11 @@ export class ChatCacheStore {
       VALUES(?,?,?,?,?) ON CONFLICT(owner,profile) DO UPDATE SET event_cursor=MAX(event_cursor,excluded.event_cursor),
       sync_state=excluded.sync_state,last_synced_at=excluded.last_synced_at`)
       .run(owner, profile, rawSeq > 0 ? rawSeq : lastSeen, state, now)
-    this.projectEvent(owner,profile,sessionID,type,object(frame.payload)??{},eventID)
-    if (!['message.delta','reasoning.delta','thinking.delta'].includes(type)&&!type.startsWith('tool.')) this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:type,payload:object(frame.payload)??{}})
+    if(this.ownsSession(owner,profile,sessionID)){
+      this.transcripts.recordSource([owner,profile,sessionID],frame)
+      this.transcripts.reduce(owner,profile,sessionID,type,object(frame.payload)??{})
+      this.updateTranscriptSummary(owner,profile,sessionID)
+    }
     this.db.exec('RELEASE live_event')
     return true
     }catch(e){this.db.exec('ROLLBACK TO live_event; RELEASE live_event');throw e}
@@ -823,13 +809,10 @@ export class ChatCacheStore {
         establishesOwnership ? now : null, establishesOwnership ? `command:${method}` : null)
     if(method==='session.create') this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,read_initialized) VALUES(?,?,?,1) ON CONFLICT(owner,profile,session_id) DO UPDATE SET read_initialized=1`).run(owner,profile,sessionID)
     if(method==='session.create') this.db.prepare(`UPDATE chat_sessions SET complete=1,metadata_complete=1,message_total=0,sync_state='current' WHERE owner=? AND profile=? AND session_id=? AND message_total IS NULL`).run(owner,profile,sessionID)
+    this.transcripts.seed(owner,profile,sessionID)
     if((method==='prompt.submit'||method==='session.steer') && params._delivery_id){
-      const userID=`user:${params._delivery_id}`
-      this.writeLiveMessage(owner,profile,sessionID,{id:userID,role:'user',content:params.text??params.input??'',timestamp:now/1000,status:'pending',client_message_id:String(params._delivery_id).replace(/^(web|ios):prompt:/,'')})
-      const streaming=this.db.prepare(`SELECT 1 FROM chat_local_state l JOIN chat_messages m ON m.owner=l.owner AND m.profile=l.profile AND m.session_id=l.session_id AND m.message_id=l.assistant_id
-        WHERE l.owner=? AND l.profile=? AND l.session_id=? AND json_extract(m.data,'$.status')='streaming'`).get(owner,profile,sessionID)
-      if(!streaming)this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,assistant_id) VALUES(?,?,?,NULL) ON CONFLICT(owner,profile,session_id) DO UPDATE SET assistant_id=NULL`).run(owner,profile,sessionID)
-      this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:'command.submitted',payload:{delivery_id:params._delivery_id}})
+      this.transcripts.reduce(owner,profile,sessionID,'command.submitted',{...params,method,delivery_id:params._delivery_id})
+      this.updateTranscriptSummary(owner,profile,sessionID)
     }
     const payload = JSON.stringify(params)
     const seq = Number.parseInt(createHash('sha256').update(`${method}:${payload}`).digest('hex').slice(0, 12), 16)
@@ -842,6 +825,8 @@ export class ChatCacheStore {
   }
 
   fileSourceMessage(owner: string, profile: string, sessionID: string, messageID: string): Record<string, unknown> | undefined {
+    const canonical=this.transcripts.resolveMessage(owner,profile,sessionID,messageID)
+    if(canonical)return canonical
     const row = this.db.prepare('SELECT data FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?')
       .get(owner, profile, sessionID, messageID)
     return row ? JSON.parse(String(row.data)) : undefined
@@ -1246,7 +1231,6 @@ export class ChatCacheStore {
         WHERE chat_messages.content_hash<>excluded.content_hash OR chat_messages.position<>excluded.position`)
         .run(owner, profile, sessionID, messageID(message, String(start + index)), start + index, data,
           createHash('sha256').update(data).digest('hex'))
-      this.transcripts.upsert(owner,profile,sessionID,{...message,id:messageID(message,String(start+index))},start+index)
       for (const sourcePath of referencedPaths(message)) {
         this.db.prepare(`INSERT INTO chat_attachments(owner,profile,session_id,source_path,state,updated_at)
           VALUES(?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id,source_path) DO UPDATE SET updated_at=excluded.updated_at`)
@@ -1302,6 +1286,8 @@ export class ChatCacheCoordinator {
         this.retryTimers.delete(timer)
         if(this.store.isClosed||this.stopped)return
         void this.restoreReadPositions()
+        for(const row of this.store.db.prepare("SELECT owner,profile,session_id FROM chat_sessions WHERE owned_at IS NOT NULL").all() as any[]){this.store.transcripts.seed(row.owner,row.profile,row.session_id)}
+        for(const row of this.store.db.prepare("SELECT * FROM chat_transcript_repairs WHERE status='pending'").all() as any[])this.schedule(row.owner,row.profile,row.session_id,true)
         for(const row of this.store.db.prepare('SELECT * FROM chat_recovery_jobs').all() as any[])this.schedule(row.owner,row.profile,row.session_id,!!row.force)
       },0);timer.unref();this.retryTimers.add(timer)
     }
@@ -1476,15 +1462,18 @@ export class ChatCacheCoordinator {
     const key = JSON.stringify([owner, profile, sessionID])
     const pending = this.reconciling.get(key)
     if (pending) {
-      await pending.catch(() => {})
-      if (force || this.store.localDetail(owner, profile, sessionID)?.state !== 'current') {
+      const failed=await pending.then(()=>false,()=>true)
+      if (failed || force || this.store.localDetail(owner, profile, sessionID)?.state !== 'current') {
         return this.reconcile(owner, profile, sessionID, force)
       }
       return
     }
     const task = (async () => {
+      if(this.store.transcripts.head(owner,profile,sessionID).running)throw new Error('Conversation is running; defer history repair')
+      const repair=this.store.db.prepare("SELECT 1 FROM chat_transcript_repairs WHERE owner=? AND profile=? AND session_id=? AND status='pending'").get(owner,profile,sessionID)
+      force ||= !!repair
       const revision = this.store.revision(owner, profile, sessionID)
-      const previous = this.store.messagePage(owner, profile, sessionID, 0, 1)
+      const previous = this.store.sourceMessagePage(owner, profile, sessionID, 0, 1)
       const previousTotal = previous ? Number(object(parseResponse(previous.response)?.pagination)?.total ?? 0) : 0
       const detailPath = `/api/sessions/${encodeURIComponent(sessionID)}`
       const detailStartedAt = Date.now()
@@ -1560,6 +1549,8 @@ export class ChatCacheCoordinator {
         // Its completion joins this flight and schedules the next tail read.
         throw new Error('Conversation changed during refresh; retry after the reply completes')
       } else {
+        if(this.store.db.prepare("SELECT 1 FROM chat_transcript_repairs WHERE owner=? AND profile=? AND session_id=? AND status='pending'").get(owner,profile,sessionID))
+          throw new Error('History identity is not yet confirmed; preserve the existing conversation')
         this.onSynchronized(owner, profile, sessionID)
       }
     })().finally(() => { if (this.reconciling.get(key) === task) this.reconciling.delete(key) })

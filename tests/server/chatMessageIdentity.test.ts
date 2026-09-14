@@ -35,12 +35,14 @@ function submit(store: ChatCacheStore, client = 'local', at = now, options: Row 
 }
 function row(id = '1155', at = now + 39): Row { return { id, role: 'user', content: text, timestamp: at / 1000 } }
 function sync(store: ChatCacheStore, messages: Row[], force = false) {
+  // History repair is admitted only after the execution route is idle.
+  store.recordEvent(...scope,{type:'route.resumed',payload:{running:false}})
   return store.applySync(...scope, store.revision(...scope), [{
     key: 'messages', kind: 'messages', response: response(messages), startedAt: now + 2000,
   }], force)
 }
 function read(store: ChatCacheStore, offset = 0, limit = 100): Row[] {
-  return JSON.parse(store.messagePage(...scope, offset, limit)!.response.body.toString()).messages
+  return JSON.parse(store.sourceMessagePage(...scope, offset, limit)!.response.body.toString()).messages
 }
 afterEach(() => {
   vi.restoreAllMocks()
@@ -110,9 +112,9 @@ describe('ordinary chat submission identities', () => {
   it('keeps an unconfirmed send when an older identical user message occupies its position', () => {
     const { store } = fixture()
     submit(store, 'pending', now, {}, 'pending')
-    expect(() => sync(store, [row('old', now - 60_000)]))
-      .toThrow('Unconfirmed submission must be reconciled')
-    expect(read(store)[0]).toMatchObject({ id: 'user:web:prompt:pending', status: 'pending' })
+    expect(sync(store, [row('old', now - 60_000)])).toBe(true)
+    expect(store.transcripts.all(...scope)).toContainEqual(expect.objectContaining({client_message_id:'pending',status:'pending'}))
+    expect(read(store)[0]).toMatchObject({id:'old'})
   })
 
   it('uses an explicit upstream identity for queued messages without timestamp heuristics', () => {
@@ -133,6 +135,7 @@ describe('ordinary chat submission identities', () => {
   it('does not bind the first page of an ambiguous multi-page refresh', () => {
     const { store } = fixture()
     submit(store)
+    store.recordEvent(...scope,{type:'route.resumed',payload:{running:false}})
     store.applySync(...scope, store.revision(...scope), [
       { key: 'tail', kind: 'messages', response: response([row('2', now + 40)], 0, 2), startedAt: now + 2000 },
       { key: 'older', kind: 'messages', response: response([row('1')], 1, 2), startedAt: now + 2000 },

@@ -7,6 +7,25 @@ vi.mock('../../src/client/api/client',()=>({apiRequest:vi.fn()}))
 const images=[{key:'standard',name:'标准桌面',description:'XFCE',ready:true,imageId:'sha256:a'},{key:'cursor',name:'Cursor Universal',description:'Debian',ready:true,imageId:'sha256:b'}]
 const agent={id:'image-fixture',name:'镜像测试',computer:'vm',execution:'computer',nodeId:'local',profile:'default'} as any
 const vm={configured:true,runtime:'docker',daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false,images}
+it('selects Profile collaboration without changing the VM and locks the mode while it is in use',async()=>{
+ vi.spyOn(document,'hidden','get').mockReturnValue(false)
+ let inUse=false
+ vi.mocked(apiRequest).mockImplementation(async path=>{
+  if(path.endsWith('/desktop-environment'))return {selected:null,local:{supported:false},browser:{available:false}} as any
+  if(path.endsWith('/cloud-computer'))return {configured:false} as any
+  return {...vm,enabled:true,container:'missing',ready:false,inUse} as any
+ })
+ const wrapper=mount(Panel,{props:{agents:[agent],isAdmin:true,active:true},global:{stubs:{AppIcon:true,GrokAuthPanel:true}}})
+ try{
+  await flushPromises();await wrapper.get('[aria-label="本地虚拟机执行方式"]').setValue('profile');await flushPromises()
+  expect(apiRequest).toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',{method:'PUT',body:{computer:'vm',vmExecution:'profile',allowHostEnvironment:true}})
+  await wrapper.setProps({agents:[{...agent,vmExecution:'profile',allowHostEnvironment:true}]});await flushPromises()
+  expect(wrapper.text()).toContain('使用基础机器人的完整本机环境')
+  expect(wrapper.find('.host-environment-option').exists()).toBe(false)
+  inUse=true;await wrapper.setProps({active:false});await wrapper.setProps({active:true});await flushPromises()
+  expect((wrapper.get('[aria-label="本地虚拟机执行方式"]').element as HTMLSelectElement).disabled).toBe(true)
+ }finally{wrapper.unmount()}
+})
 afterEach(()=>{vi.clearAllMocks();vi.restoreAllMocks()})
 it('saves never-stop and restores the selected value after refresh',async()=>{
  let idleStopMinutes=5

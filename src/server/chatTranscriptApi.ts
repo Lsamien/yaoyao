@@ -21,10 +21,8 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     const {owner,profile,id}=scope(ctx)
     const before=ctx.query.before===undefined?Number.MAX_SAFE_INTEGER:Number(ctx.query.before),limit=ctx.query.limit===undefined?150:Number(ctx.query.limit)
     if(!Number.isSafeInteger(before)||before<1||!Number.isSafeInteger(limit)||limit<1||limit>500)throw new HttpError(400,'历史分页参数无效','invalid_page')
-    const total=Number(JSON.parse(store.localDetail(owner,profile,id)!.response.body.toString()).message_count??0)
-    const offset=before===Number.MAX_SAFE_INTEGER?0:Math.max(0,total-(before-1))
-    if(!store.messagePage(owner,profile,id,offset,before===Number.MAX_SAFE_INTEGER?limit:Math.min(limit,before-1))){cache.schedule(owner,profile,id,true);throw new HttpError(409,'历史正在后台补齐','CHAT_HISTORY_SYNC_PENDING')}
-    cache.readLocal(owner,'messages',profile,id,{limit:1})
+    const coverage=store.db.prepare('SELECT complete FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?').get(owner,profile,id)
+    if(!coverage?.complete||store.needsListMetadata(owner,profile)||store.localDetail(owner,profile,id)?.state==='gap')cache.schedule(owner,profile,id)
     store.db.exec('SAVEPOINT transcript_snapshot')
     try{
       transcripts.seed(owner,profile,id)
@@ -37,7 +35,9 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     const {owner,profile,id}=scope(ctx),version=auth.pushAuthorizationVersion(owner)
     const raw=ctx.get('last-event-id')||String(ctx.query.after??''),parts=raw.split(':')
     let cursor=Number(parts.at(-1)),closed=false,lastFlush=0
-    if(parts.length!==2||parts[0]!==transcripts.epoch||!Number.isSafeInteger(cursor)||cursor<0||cursor>transcripts.cursor(owner,profile,id))throw new HttpError(409,'聊天事件需要重新同步','transcript_reset')
+    transcripts.seed(owner,profile,id)
+    const epoch=transcripts.epochFor(owner,profile,id)
+    if(parts.length!==2||parts[0]!==epoch||!Number.isSafeInteger(cursor)||cursor<0||cursor>transcripts.cursor(owner,profile,id))throw new HttpError(409,'聊天事件需要重新同步','transcript_reset')
     const res=ctx.res
     let timer:ReturnType<typeof setTimeout>|undefined,heartbeat:ReturnType<typeof setInterval>|undefined,off=()=>{}
     const valid=()=>!store.isClosed&&auth.isUserActive(owner)&&auth.pushAuthorizationVersion(owner)===version&&auth.current(ctx)?.id===owner&&store.ownsSession(owner,profile,id)&&auth.canUseSource(owner,'local',profile)
@@ -50,8 +50,9 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     const flush=()=>{
       clearTimeout(timer);timer=undefined
       if(!valid()){close();return}
+      if(transcripts.epochFor(owner,profile,id)!==epoch){write('event: reset\ndata: {}\n\n');close();return}
       const events=transcripts.events(owner,profile,id,cursor)
-      for(const event of events){if(!write(`id: ${transcripts.epoch}:${event.cursor}\nevent: transcript\ndata: ${JSON.stringify(event)}\n\n`))return;cursor=event.cursor}
+      for(const event of events){if(event.epoch!==epoch){write('event: reset\ndata: {}\n\n');close();return}if(!write(`id: ${epoch}:${event.cursor}\nevent: transcript\ndata: ${JSON.stringify(event)}\n\n`))return;cursor=event.cursor}
       if(events.length)lastFlush=Date.now()
       if(events.length===250)timer=setTimeout(flush,0)
     }
@@ -66,7 +67,7 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','X-Accel-Buffering':'no'})
     res.flushHeaders();res.once('close',close);res.once('error',close)
     off=transcripts.subscribe(changed)
-    flush();write(`event: ready\ndata: ${JSON.stringify({epoch:transcripts.epoch,cursor})}\n\n`)
+    flush();write(`event: ready\ndata: ${JSON.stringify({epoch,cursor})}\n\n`)
     heartbeat=setInterval(()=>{if(valid())write(': heartbeat\n\n');else close()},15_000);heartbeat.unref()
   })
   return router

@@ -55,7 +55,7 @@ export class RunnerAgent {
     if(url.hostname==='localhost')url.hostname='127.0.0.1'
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
       method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'host-computer-tools-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'profile-computer-v1,host-computer-tools-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
@@ -146,7 +146,7 @@ export class RunnerAgent {
     }
     if(command.kind==='http') {
       const path=String(p.path),search=new URLSearchParams(String(p.search??''))
-      if(path==='/api/computer/capabilities'||(p.computer&&path==='/api/plugins/yaoyao-bot-bridge/capabilities')){
+      if(path==='/api/computer/capabilities'||(p.computer&&!(p.computer as ComputerTarget).profileSession&&path==='/api/plugins/yaoyao-bot-bridge/capabilities')){
         this.requireProfile(search.get('profile')??'default')
         if(p.method!=='GET'||!this.computers)throw new HttpError(409,'执行节点未配置隔离电脑','computer_unavailable')
         await Promise.all([access(this.computers.config.python),access(this.computers.config.hermesSource),access(this.computers.script)])
@@ -156,6 +156,11 @@ export class RunnerAgent {
       if(p.computer&&/^\/api\/sessions\/[^/]+\/messages$/.test(path)){
         if(p.method!=='GET'||!this.computers)throw new HttpError(403,'电脑历史不可用','computer_unavailable')
         const profile=this.requireProfile(search.get('profile')??'default'),session=this.computers.session(decodeURIComponent(path.split('/')[3]!),p.computer as ComputerTarget,profile)
+        if(session.vmExecution==='profile'){
+          if(!session.profileSessionId)throw new HttpError(409,'本机 Profile 会话尚未建立','computer_profile_session_invalid')
+          const response=await this.target.session.request(`/api/sessions/${encodeURIComponent(session.profileSessionId)}/messages`,{search,maxResponseBytes:8*1024*1024})
+          return {status:response.status,headers:Object.fromEntries(response.headers.entries()),body:response.body.toString('base64')}
+        }
         const offset=Math.max(0,Number(search.get('offset')??0)),history=session.history
         return {status:200,headers:{},body:Buffer.from(JSON.stringify({messages:history.slice(Math.max(0,history.length-offset-500),history.length-offset)})).toString('base64')}
       }
@@ -176,7 +181,7 @@ export class RunnerAgent {
       if(p.computer){
         const meta=p.computer as ComputerTarget
         if(!this.computers||![meta.environmentId,meta.agentId,String(p.workId)].every(value=>/^[0-9a-f-]{36}$/.test(value))||!/^[a-f0-9]{64}$/.test(meta.ownerKey))throw new HttpError(409,'电脑任务配置或授权无效','computer_unavailable')
-        gateway=new ComputerGateway(this.computers,meta,String(p.workId),async()=>{if(!this.active||!this.connected||(await this.api('check',{connectionId})).allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')},body=>this.api('artifact',{connectionId,...body}))
+        gateway=new ComputerGateway(this.computers,meta,String(p.workId),async()=>{if(!this.active||!this.connected||(await this.api('check',{connectionId})).allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')},body=>this.api('artifact',{connectionId,...body}),meta.profileSession?this.target:undefined)
       }else gateway=new WorkspaceGateway(this.target)
       const connection:Connection={cleanupOnly:p.cleanupOnly===true,gateway,sessions:new Map(),running:new Set(),events:Promise.resolve()}
       this.connections.set(connectionId,connection)

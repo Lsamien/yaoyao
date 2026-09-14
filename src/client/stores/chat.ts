@@ -118,6 +118,7 @@ export const useChatStore = defineStore('chat', () => {
   let persistedRecoveryPromise: Promise<void> | undefined
   const runtimePromises = new Map<string, Promise<ChatRouteState>>()
   const transcriptSupported = ref(false)
+  const outboxCache = new ScopedCache<ChatMessage[]>('ordinary-outbox-v2')
   let transcript: ChatTranscriptClient | undefined
   let transcriptGeneration = 0
 
@@ -125,17 +126,20 @@ export const useChatStore = defineStore('chat', () => {
     const generation=++transcriptGeneration
     transcript?.close();transcript=undefined
     const profile=activeProfileName.value,id=activeSessionId.value,owner=accountId()
-    if(!transcriptSupported.value||!profile||!id||id.startsWith('draft-')||sessionView==='history')return
+    if(!transcriptSupported.value||!profile||!id||id.startsWith('draft-')||sessionView==='history'||!sessions.value.some(s=>s.id===id&&s.owned===true))return
     const key=routeKey(profile,id),state=ensureRoute(profile,id),scope=cacheScope(profile)
     const current=()=>generation===transcriptGeneration&&owner===accountId()?routes[key]:undefined
     void (async()=>{
-      const cached=await historyCache.get(scope,id)
+      const [cached,outbox]=await Promise.all([historyCache.get(scope,id),outboxCache.get(scope,id)])
       if(!current())return
       if(!state.messages.length&&cached?.messages.length)state.messages=cached.messages
+      if(outbox?.length)state.messages=mergeChatMessages(state.messages,outbox)
       const client=new ChatTranscriptClient(profile,id,async value=>{
         const initial=current();if(!initial)return
         const canonical=value.messages.map(message=>{
           const mapped=normalizeChatMessage(message,id,profile)
+          const local=initial.messages.find(m=>m.role==='user'&&mapped.clientMessageId&&m.clientMessageId===mapped.clientMessageId)
+          if(!mapped.attachments?.length&&local?.attachments?.length)mapped.attachments=local.attachments
           if(message.status==='pending')mapped.stage='pending'
           return mapped
         })
@@ -143,15 +147,24 @@ export const useChatStore = defineStore('chat', () => {
         const pending=initial.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
         const messages=[...canonical,...pending]
         const {messages:_,...checkpoint}=value
-        await historyCache.set(scope,id,{messages,total:value.total,savedAt:Date.now(),transcript:checkpoint})
+        await historyCache.set(scope,id,{messages,total:value.total,savedAt:Date.now(),transcript:checkpoint},true)
         const latest=current();if(!latest)return
-        latest.messages=messages;latest.messageTotal=value.total;latest.loadedMessageCount=canonical.length
-        latest.hasMoreBefore=value.hasOlder;latest.historySynced=true;latest.isLoadingHistory=false;latest.error=undefined
+        const newerPending=latest.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
+        latest.messages=[...canonical,...newerPending];latest.messageTotal=value.total;latest.loadedMessageCount=canonical.length
+        await outboxCache.set(scope,id,newerPending,true)
+        if(current()!==latest)return
+        const approval=value.pendingApproval,clarification=value.pendingClarification
+        latest.pendingApproval=approval?{id:string(approval.request_id??approval.id),sessionId:id,message:string(approval.message??approval.prompt),toolName:string(approval.tool_name),choices:values(approval.choices).map(String),payload:approval as Record<string,JsonValue>}:undefined
+        latest.pendingClarification=clarification?{id:string(clarification.request_id??clarification.id),sessionId:id,question:string(clarification.question??clarification.prompt),payload:clarification as Record<string,JsonValue>}:undefined
+        latest.liveStatus=value.liveStatus??undefined
+        latest.hasMoreBefore=value.hasOlder;latest.historySynced=true;latest.isLoadingHistory=false;latest.error=value.error??undefined
+        const wasStreaming=latest.isStreaming
         latest.isStreaming=value.running??canonical.some(m=>m.isStreaming);latest.isQueued=value.queued??false
+        if(wasStreaming&&!latest.isStreaming)void refreshContextUsage(latest).catch(()=>{})
         if(!latest.isStreaming)latest.liveStatus=undefined
         updateInflightMarker(latest)
       },error=>{const latest=current();if(latest){latest.error=error.message;latest.historySynced=false}},Math.max(150,state.messages.length))
-      if(cached?.transcript){
+      if(cached?.transcript?.protocol==='ordinary-chat-transcript-v2'){
         const canonical=cached.messages.map(m=>m.raw as unknown as TranscriptMessage).filter(m=>m?.id&&Number.isSafeInteger(m.revision)&&Number.isSafeInteger(m.seq))
         client.restore({...cached.transcript,messages:canonical})
       }
@@ -377,17 +390,12 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (!key) return
     let state = routes[key]
-    if(transcriptSupported.value&&sessionView==='chat'&&(
+    if(sessionView==='chat'&&(
       /^(message\.|tool\.|reasoning\.|thinking\.)/.test(event.type)
       || ['run.started','run.completed','run.failed','run.peer_user_message','peer.user.message'].includes(event.type))){
-      // Message bodies come exclusively from the persisted transcript stream.
-      // Legacy control events may only wake/settle the execution indicator.
-      if(['message.start','run.started'].includes(event.type))state.isStreaming=true
-      if(['message.complete','run.completed','run.failed'].includes(event.type)){
-        state.isQueued=number(payload.queue_remaining)>0;state.isStreaming=state.isQueued||number(payload.background_pending)>0
-        if(!state.isStreaming){state.liveStatus=undefined;state.pendingApproval=undefined;state.pendingClarification=undefined}
-      }
-      updateInflightMarker(state);return
+      // All ordinary message bodies and execution state come from the durable
+      // transcript. Raw upstream frames cannot create a second representation.
+      return
     }
     if (event.type === 'session.info') {
       const storedId = string(payload.stored_session_id ?? payload.storedSessionId ?? payload.session_key)
@@ -407,6 +415,7 @@ export const useChatStore = defineStore('chat', () => {
       if (!state.fastModeDirty) state.fastMode = liveFastMode
       persistFastMode(state)
     }
+    if(sessionView==='chat'&&!['session.usage','usage.update','context.update'].includes(event.type))return
     const attributedPayload = { ...payload, session_id: state.route.sessionId } as JsonValue
     const updated = applyChatEvent(state, {
       ...event, session_id: state.route.sessionId, profile: state.route.profile, payload: attributedPayload,
@@ -548,7 +557,14 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadHistory(state: ChatRouteState, forceRefresh = false): Promise<void> {
-    if(transcriptSupported.value&&sessionView==='chat'){if(state===activeRouteState.value)startTranscript();return}
+    if(sessionView==='chat'&&sessions.value.some(s=>s.id===state.route.sessionId&&s.owned===true)){
+      const cached=await historyCache.get(cacheScope(state.route.profile),state.route.sessionId)
+      if(!state.messages.length&&cached?.messages.length)state.messages=cached.messages
+      await connect()
+      if(!transcriptSupported.value)throw new Error('普通聊天需要升级服务端后继续')
+      if(state===activeRouteState.value)startTranscript()
+      return
+    }
     const key = routeKey(state.route.profile, state.route.sessionId)
     const generation = ++historyLoadGeneration
     state.generation = generation
@@ -631,7 +647,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadOlder(): Promise<void> {
-    if(transcriptSupported.value&&transcript){await transcript.loadOlder();return}
+    if(sessionView==='chat'&&activeSession.value?.owned===true){await transcript?.loadOlder();return}
     const state = activeRouteState.value
     if (!state || state.isLoadingHistory || !state.hasMoreBefore) return
     const key = routeKey(state.route.profile, state.route.sessionId)
@@ -717,82 +733,8 @@ export const useChatStore = defineStore('chat', () => {
     migrated.serverFastMode = liveFastMode
     if (!migrated.fastModeDirty && liveFastMode !== undefined) migrated.fastMode = liveFastMode
     persistFastMode(migrated)
-    const resumedMessages = values(result.messages)
-      .map(value => normalizeChatMessage(value, storedId, migrated.route.profile))
-    if (!transcriptSupported.value&&resumedMessages.length) migrated.messages = mergeChatMessages(migrated.messages, resumedMessages, 'snapshot')
-    const inflight = record(result.inflight ?? result.active_run)
-    const assistant = string(inflight.assistant)
-    const inflightError = string(inflight.error)
-    migrated.isStreaming = bool(result.running) || bool(info.running) || bool(inflight.streaming)
-    const queued = record(result.queued)
-    const queuedUser = string(queued.user)
-    migrated.isQueued = Boolean(queuedUser)
-    // A turn can be thinking or calling tools before producing any text.
-    // Create its live row now so subsequent tool events have a visible target.
-    const existing = [...migrated.messages].reverse().find(message => message.role === 'assistant' && message.isStreaming)
-    if (!transcriptSupported.value&&(migrated.isStreaming || inflightError || (existing && assistant))) {
-      migrated.messages = mergeChatMessages(migrated.messages, [{
-        ...existing,
-        id: existing?.id ?? `resume:${runtimeId}`,
-        sessionId: storedId,
-        profile: migrated.route.profile,
-        role: 'assistant',
-        content: assistant,
-        timestamp: number(result.turn_started_at, Date.now() / 1000),
-        stage: inflightError ? 'failed' : migrated.isStreaming ? 'streaming' : 'settled',
-        isStreaming: migrated.isStreaming,
-        error: inflightError || undefined,
-      }])
-    }
-    if (!migrated.isStreaming) {
-      migrated.liveStatus = undefined
-      if(!transcriptSupported.value)migrated.messages = settleChatMessages(migrated.messages)
-    }
-    migrated.pendingApproval = undefined
-    migrated.pendingClarification = undefined
-    values(transcriptSupported.value?[]:inflight.corrections).forEach((correction, index) => {
-      const content = string(correction)
-      if (!content) return
-      migrated.messages = mergeChatMessages(migrated.messages, [{
-        id: `resume-correction:${runtimeId}:${index}`,
-        sessionId: storedId,
-        profile: migrated.route.profile,
-        role: 'user',
-        content,
-        timestamp: number(result.turn_started_at, Date.now() / 1000) + (index + 1) / 1000,
-        stage: 'accepted',
-      }])
-    })
-    if (!transcriptSupported.value&&queuedUser) {
-      migrated.messages = mergeChatMessages(migrated.messages, [{
-        id: `resume-queued:${runtimeId}`,
-        sessionId: storedId,
-        profile: migrated.route.profile,
-        role: 'user',
-        content: queuedUser,
-        timestamp: Date.now() / 1000,
-        stage: 'accepted',
-      }])
-    }
-    const approval = record(result.pending_approval)
-    const approvalID = string(approval.request_id ?? approval.requestId ?? approval.id)
-    if (approvalID) migrated.pendingApproval = {
-      id: approvalID,
-      sessionId: storedId,
-      message: string(approval.message ?? approval.prompt) || undefined,
-      toolName: string(approval.tool_name ?? approval.tool) || undefined,
-      choices: Array.isArray(approval.choices) ? approval.choices.map(String) : undefined,
-      payload: approval as Record<string, JsonValue>,
-    }
-    const clarification = record(result.pending_clarify)
-    const clarificationID = string(clarification.request_id ?? clarification.requestId ?? clarification.id)
-    if (clarificationID) migrated.pendingClarification = {
-      id: clarificationID,
-      sessionId: storedId,
-      question: string(clarification.question ?? clarification.message ?? clarification.prompt, '需要补充信息'),
-      choices: Array.isArray(clarification.choices) ? clarification.choices.map(String) : undefined,
-      payload: clarification as Record<string, JsonValue>,
-    }
+    // session.resume restores the execution route only. The server ingests its
+    // snapshot into the canonical turn before clients receive transcript events.
     if (storedId !== initialState.route.sessionId) clearInflightMarker(initialState.route.profile, initialState.route.sessionId)
     updateInflightMarker(migrated)
     return migrated
@@ -881,6 +823,7 @@ export const useChatStore = defineStore('chat', () => {
       }
       updateDelivery(state, clientMessageId, { stage: files.length ? 'attached' : 'pending', sessionId: state.route.sessionId })
       updateDelivery(state, clientMessageId, { stage: 'pending' })
+      await outboxCache.set(cacheScope(state.route.profile),state.route.sessionId,state.messages.filter(m=>m.role==='user'&&m.stage!=='settled'),true)
       submitted = true
       const effectiveMode = mode === 'steer' && files.length ? 'queue' : mode
       const method = effectiveMode === 'steer' ? 'session.steer' : 'prompt.submit'
@@ -894,19 +837,8 @@ export const useChatStore = defineStore('chat', () => {
         throw new RpcError(string(result.error ?? result.message, 'Hermes 拒绝了 Steer 请求'), status)
       }
       updateDelivery(state, clientMessageId, { stage: 'accepted' })
-      const running = ['running', 'started', 'streaming'].includes(status)
-      if (effectiveMode === 'steer') {
-        // A steer receipt acknowledges injection into the current run. It is
-        // not evidence of a new run, including Hermes's `status: queued`.
-        state.isQueued = false
-        if (running) state.isStreaming = true
-      } else {
-        state.isQueued = status === 'queued'
-        if (running || status === 'accepted') {
-          state.isQueued = false
-          state.isStreaming = true
-        }
-      }
+      // A delayed HTTP receipt confirms the input, not a newer execution state.
+      // The transcript may already contain the completed reply at this point.
       updateInflightMarker(state)
       // The optimistic row remains local, but the sidebar is refreshed only
       // after a 9119 receipt and keeps the order returned by the server.

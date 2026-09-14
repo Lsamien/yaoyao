@@ -280,7 +280,8 @@ export async function transitionService({ home, releaseRoot, driver, finalRoot, 
   }
 }
 
-export async function synchronizeDesktop({ home, runtimeRoot, releaseRoot, driver, onProgress = () => {} }) {
+export async function synchronizeDesktop({ home, runtimeRoot, releaseRoot, driver, onProgress = () => {}, force = false }) {
+  if (typeof force !== 'boolean') throw new Error('强制覆盖参数无效')
   mkdirSync(home, { recursive: true, mode: 0o700 })
   const unlock = updateMutex(home), id = randomUUID()
   let release
@@ -291,13 +292,16 @@ export async function synchronizeDesktop({ home, runtimeRoot, releaseRoot, drive
     const target = verifyRuntimePackage(runtimeRoot)
     const marker = join(home, 'updates', 'desktop-sync.json')
     const previous = driver.snapshot(), current = previous ? readRuntime(previous.root) : undefined
-    if (existsSync(marker) && readJSON(marker).artifactDigest === target.artifactDigest && previous) {
+    if (force && current && current.version !== target.version)
+      throw Object.assign(new Error('强制覆盖仅支持相同版本；跨版本更新或回退请使用对应入口'), { code: 'service_force_version_mismatch' })
+    if (!force && existsSync(marker) && readJSON(marker).artifactDigest === target.artifactDigest && previous) {
       if (!previous.wasRunning) { driver.writePlist(previous.plist); await driver.boot() }
       await driver.verify(undefined)
       return { action: 'already-synced', current }
     }
-    const decision = syncDecision(target, current)
-    if (decision === 'unknown') throw new Error('App 与 Web 的构建先后关系无法确定，已保留当前服务；请使用明确的新发布版本')
+    const comparison = syncDecision(target, current)
+    const decision = force && current && comparison !== 'same' ? 'overwrite' : comparison
+    if (decision === 'unknown') throw Object.assign(new Error('App 与 Web 版本相同，但构建先后关系无法确定。可使用当前 App 覆盖 Web；聊天、设置和文件会保留，并先备份。'), { code: 'service_build_unknown' })
     if (decision === 'same' || decision === 'newer') {
       if (!previous.wasRunning) { driver.writePlist(previous.plist); await driver.boot() }
       await driver.verify(undefined)

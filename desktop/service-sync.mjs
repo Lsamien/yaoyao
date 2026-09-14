@@ -6,7 +6,7 @@ import { join } from 'node:path'
 export const synchronizeLocalService = options => serviceCommand({...options,action:'sync'})
 export const stopLocalService = options => serviceCommand({...options,action:'stop'})
 export const migrateLocalData = options => serviceCommand({...options,action:'migrate'})
-function serviceCommand({ home, port, root, fixture, environment, onProgress = () => {}, action }) {
+function serviceCommand({ home, port, root, fixture, environment, onProgress = () => {}, action, force = false }) {
   return new Promise((done, reject) => {
     const runtimeRoot = join(root, 'web-service')
     const helper = spawn(join(runtimeRoot, 'node'), [join(runtimeRoot, 'bin', 'desktop-service-sync.mjs')], {
@@ -27,6 +27,6 @@ function serviceCommand({ home, port, root, fixture, environment, onProgress = (
     helper.once('error', reject)
     helper.once('exit', code => code === 0 && result ? done(result) : reject(Object.assign(new Error(failure || (action==='stop'?'后台服务停止未完成':'本机 Web 同步未完成，请重试')), { code: failureCode })))
     helper.stdin.on('error', () => {})
-    helper.stdin.end(JSON.stringify({ home, port, runtimeRoot, fixture, environment, action }))
+    helper.stdin.end(JSON.stringify({ home, port, runtimeRoot, fixture, environment, action, force }))
   })
 }

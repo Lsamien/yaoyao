@@ -92,7 +92,8 @@ describe('ordinary chat migration and bounded recovery',()=>{
  it('promotes an assistant identity without creating a second history row',()=>{
    const {store,coordinator}=setup();store.recordCommand('o','p','s','session.create',{})
    coordinator.observe('o','p','s',{type:'message.delta',payload:{text:'hello'},delivery_id:'delta'})
+   const stableID=store.transcripts.all('o','p','s')[0]!.id
    coordinator.observe('o','p','s',{type:'message.complete',payload:{message_id:'canonical',text:'hello'},delivery_id:'done'})
-   const page=json(coordinator.readLocal('o','messages','p','s',{}));expect(page.messages).toHaveLength(1);expect(page.messages[0].id).toBe('canonical')
+   const page=json(coordinator.readLocal('o','messages','p','s',{}));expect(page.messages).toHaveLength(1);expect(page.messages[0]).toMatchObject({id:stableID,source_message_id:'canonical'})
  })
 })

@@ -76,6 +76,22 @@ it('requires an upgraded Runner before granting mixed host and VM tools',()=>{
  const id=randomUUID()
  expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true})).toThrow('不支持同时使用本机和虚拟机')
 })
+it('rejects Profile collaboration on a Runner that does not advertise the execution backend',()=>{
+ const id=randomUUID()
+ expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true,profileSession:true})).toThrow('不支持本机协作模式')
+})
+it.each([false,true])('admits Profile collaboration after an actual computer Runner handshake (Compose: %s)',async compose=>{
+ controller.abort();await running
+ config.computers={runtime:'docker',imageId:'sha256:'+'0'.repeat(64),python:'/fixture/python',hermesSource:home,hermesHome:home,...(compose?{managedBy:'compose' as const}:{})}
+ runner=new RunnerAgent(config,home);controller=new AbortController();running=runner.run(controller.signal);void running.catch(()=>{})
+ await vi.waitFor(()=>expect((runner as any).serverEpoch).toBeTruthy())
+ const features=hub.summary(hub.records()[0]!).features
+ expect(features).toContain('profile-computer-v1')
+ expect(features).toEqual(expect.arrayContaining(['host-computer-tools-v1','computer-worker-v1','computer-control-v1']))
+ if(compose)expect(features).toContain('compose-desktops-v1')
+ const agent=store.createAgent('owner',{name:'协作握手',profile:'default',computer:'vm',execution:'computer',vmExecution:'profile'})
+ expect(()=>hub.target('owner','local',{agentId:agent.id,environmentId:agent.id,ownerKey:'owner',hostAccess:true,profileSession:true})).not.toThrow()
+})
 async function machine(path:string,body?:unknown,overrides:Record<string,string>={}){
   return fetch(`${config.serverURL}/api/runner/v1/${config.runnerId}/${path}`,{
     method:body===undefined?'GET':'POST',headers:{Authorization:`Bearer ${config.token}`,'x-runner-instance':runner.instance,'x-runner-protocol':'1','x-runner-epoch':(runner as any).serverEpoch,'Content-Type':'application/json',...overrides},...(body===undefined?{}:{body:JSON.stringify(body)})

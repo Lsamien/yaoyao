@@ -354,12 +354,12 @@ describe('durable source=web chat cache', () => {
       pagination: { total: 2, returned: 2, offset: 0, limit: 100, hasMore: false },
     }))
 
-    const page = f.store.messagePage(owner, profile, sessionID, 0, 100)
+    const page = f.store.sourceMessagePage(owner, profile, sessionID, 0, 100)
     const payload = JSON.parse(page!.response.body.toString())
     expect(payload.session_id).toBe(sessionID)
     expect(payload.pagination).toMatchObject({ total: 2, returned: 2, offset: 0, limit: 100, has_more: false })
     expect(payload.messages.map((item: { id: string }) => item.id)).toEqual(['m1', 'm2'])
-    expect(f.store.messagePage('another-owner', profile, sessionID, 0, 100)).toBeUndefined()
+    expect(f.store.sourceMessagePage('another-owner', profile, sessionID, 0, 100)).toBeUndefined()
     f.store.close()
   })
 
@@ -465,7 +465,7 @@ describe('durable source=web chat cache', () => {
       pagination: { total: 1, returned: 1, offset: 0, limit: 100, hasMore: false },
     }))).toBe(true)
 
-    const page = f.store.messagePage(owner, profile, ownedSessionID, 0, 100)
+    const page = f.store.sourceMessagePage(owner, profile, ownedSessionID, 0, 100)
     expect(JSON.parse(page!.response.body.toString())).toMatchObject({
       session_id: ownedSessionID,
       session: { source: 'ios', title: 'iOS 权威标题' },
@@ -648,10 +648,10 @@ describe('local history and bounded tail synchronization', () => {
     coordinator.observe(owner, profile, sessionID, { type: 'message.complete', seq: 1 })
     await coordinator.reconcile(owner, profile, sessionID)
     const page = await coordinator.messages(owner, 'last', profile, sessionID, 0, 10, async () => { throw new Error('unexpected read') })
-    expect(JSON.parse(page.response.body.toString()).messages.at(-1).id).toBe('new-answer')
+    expect(JSON.parse(page.response.body.toString()).messages.at(-1).source_message_id).toBe('new-answer')
     expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(1)
     expect(f.store.db.prepare('SELECT * FROM changed_rows').all()).toEqual([])
-    expect(f.store.messagePage(owner, profile, sessionID, 902, 100)).toBeDefined()
+    expect(f.store.sourceMessagePage(owner, profile, sessionID, 902, 100)).toBeDefined()
     coordinator.observe(owner, profile, sessionID, { type: 'message.complete', seq: 1 })
     expect(request).toHaveBeenCalledTimes(2)
     f.store.close()
@@ -663,7 +663,7 @@ describe('local history and bounded tail synchronization', () => {
     const { coordinator, request } = upstreamFor(f, rows)
     await coordinator.reconcile(owner, profile, sessionID)
     expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(2)
-    expect(JSON.parse(f.store.messagePage(owner, profile, sessionID, 0, 10)!.response.body.toString()).pagination.total).toBe(1130)
+    expect(JSON.parse(f.store.sourceMessagePage(owner, profile, sessionID, 0, 10)!.response.body.toString()).pagination.total).toBe(1130)
     f.store.close()
   })
 
@@ -672,11 +672,11 @@ describe('local history and bounded tail synchronization', () => {
     const rows = f.rows.slice(1).map(row => row.id === 'row-2' ? { ...row, content: 'edited old message' } : row)
     const { coordinator, request } = upstreamFor(f, rows)
     await expect(coordinator.reconcile(owner, profile, sessionID)).rejects.toThrow('explicit refresh')
-    expect(JSON.parse(f.store.messagePage(owner, profile, sessionID, 900, 100)!.response.body.toString()).messages[0].id).toBe('row-0')
+    expect(JSON.parse(f.store.sourceMessagePage(owner, profile, sessionID, 900, 100)!.response.body.toString()).messages[0].id).toBe('row-0')
     request.mockClear()
     await coordinator.reconcile(owner, profile, sessionID, true)
     expect(request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(10)
-    const page = JSON.parse(f.store.messagePage(owner, profile, sessionID, 899, 100)!.response.body.toString())
+    const page = JSON.parse(f.store.sourceMessagePage(owner, profile, sessionID, 899, 100)!.response.body.toString())
     expect(page.messages[0].id).toBe('row-1')
     expect(page.messages[1].content).toBe('edited old message')
     expect(page.pagination.total).toBe(999)
@@ -687,8 +687,8 @@ describe('local history and bounded tail synchronization', () => {
     const f = fixture()
     f.store.recordRoute(owner, profile, sessionID, 'runtime')
     f.store.putSnapshot(owner, 'tail', 'messages', profile, sessionID, response({ messages: [{ id: 'last', role: 'assistant', content: 'tail' }], pagination: { total: 400, offset: 0, has_more: true } }))
-    expect(f.store.messagePage(owner, profile, sessionID, 0, 1)).toBeDefined()
-    expect(f.store.messagePage(owner, profile, sessionID, 1, 100)).toBeUndefined()
+    expect(f.store.sourceMessagePage(owner, profile, sessionID, 0, 1)).toBeDefined()
+    expect(f.store.sourceMessagePage(owner, profile, sessionID, 1, 100)).toBeUndefined()
     f.store.close()
   })
 
@@ -701,7 +701,7 @@ describe('local history and bounded tail synchronization', () => {
       return response({ messages: f.rows.slice(-100), pagination: { total: 1000, offset: 0, has_more: true } })
     } } as unknown as UpstreamServiceSession)
     await expect(coordinator.reconcile(owner, profile, sessionID, true)).rejects.toThrow('offline')
-    expect(f.store.messagePage(owner, profile, sessionID, 900, 100)).toBeDefined()
+    expect(f.store.sourceMessagePage(owner, profile, sessionID, 900, 100)).toBeDefined()
     f.store.close()
   })
 
@@ -732,7 +732,7 @@ describe('local history and bounded tail synchronization', () => {
       return original(path, options)
     })
     const published = vi.fn(() => {
-      const stored = JSON.parse(f.store.messagePage(owner, profile, sessionID, 0, 1)!.response.body.toString())
+      const stored = JSON.parse(f.store.sourceMessagePage(owner, profile, sessionID, 0, 1)!.response.body.toString())
       expect(stored.messages[0].id).toBe('newest')
     })
     coordinator.onSynchronized = published

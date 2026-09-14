@@ -43,6 +43,7 @@ export const agentInput = z
     execution:z.enum(['profile','computer']).default('profile'),
     computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
     allowHostEnvironment:z.boolean().default(false),
+    vmExecution:z.enum(['worker','profile']).optional(),
     browserProfile:z.enum(['persistent','temporary']).optional(),
     canManageTeam: z.boolean().default(false),
     nodeId: z.string().default('local'),
@@ -57,6 +58,7 @@ export const agentPatch = z
     execution:z.enum(['profile','computer']).optional(),
     computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
     allowHostEnvironment:z.boolean().optional(),
+    vmExecution:z.enum(['worker','profile']).optional(),
     browserProfile:z.enum(['persistent','temporary']).optional(),
     nodeId:z.string().min(1).max(256).optional(),
     profile:z.string().min(1).max(256).optional(),
@@ -373,6 +375,8 @@ export class WorkspaceStore {
   createAgent(owner: string, input: unknown, origin?: { createdByAgentId: string; createdFromRunId: string;temporaryGoalId?:string;helperActivation?:number;helperRunnerId?:string }): Agent {
     const body = parse(agentInput, input)
     if(!supportsHostEnvironment(body)||origin)body.allowHostEnvironment=false
+    if(body.computer!=='vm'||origin)body.vmExecution='worker'
+    if(body.vmExecution==='profile')body.allowHostEnvironment=true
     if (origin) this.require<Agent>(owner, 'agent', origin.createdByAgentId)
     return this.atomic(() => {
       if (
@@ -429,10 +433,17 @@ export class WorkspaceStore {
     if (patch.avatar !== undefined) patch.avatar = normalizeAvatar(patch.avatar)
     return this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
+      if(patch.vmExecution==='profile'&&patch.allowHostEnvironment===false)throw new HttpError(400,'本机协作模式需要本机环境，请选择虚拟机模式','computer_profile_host_required')
+      if(agent.vmExecution==='profile'){
+        if(patch.allowHostEnvironment===false&&patch.vmExecution===undefined)patch.vmExecution='worker'
+        if(patch.vmExecution==='worker'&&patch.allowHostEnvironment===undefined)patch.allowHostEnvironment=false
+      }
+      if((patch.computer??agent.computer)!=='vm'&&(patch.vmExecution!==undefined||agent.vmExecution==='profile'))patch.vmExecution='worker'
+      if((patch.vmExecution??agent.vmExecution)==='profile'&&(patch.computer??agent.computer)==='vm')patch.allowHostEnvironment=true
       if(!supportsHostEnvironment({...agent,...patch})&&(agent.allowHostEnvironment===true||patch.allowHostEnvironment!==undefined))patch.allowHostEnvironment=false
       const sourceChanged=(patch.nodeId!==undefined&&patch.nodeId!==agent.nodeId)||(patch.profile!==undefined&&patch.profile!==agent.profile)
       const hostPermissionChanged=patch.allowHostEnvironment!==undefined&&patch.allowHostEnvironment!==(agent.allowHostEnvironment===true)
-      const destinationChanged=hostPermissionChanged||(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
+      const destinationChanged=hostPermissionChanged||(patch.vmExecution!==undefined&&patch.vmExecution!==(agent.vmExecution??'worker'))||(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
       if(sourceChanged||destinationChanged){
         if(this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['queued','running','waiting','uncertain','cancelling'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再修改机器人来源或电脑','agent_execution_busy')
         if(this.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(grant.agentId===id||grant.environmentId===(agent.computerEnvironmentId??id))))throw new HttpError(409,'请先交还电脑控制权','agent_execution_busy')

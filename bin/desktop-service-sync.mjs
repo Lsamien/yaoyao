@@ -12,6 +12,7 @@ let input = ''
 for await (const bytes of process.stdin) { input += bytes; if (input.length > 32768) throw new Error('同步参数过大') }
 try {
   const options = JSON.parse(input)
+  if (options.force !== undefined && typeof options.force !== 'boolean') throw new Error('强制覆盖参数无效')
   const home = resolve(options.home), port = Number(options.port)
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('本机服务端口无效')
   if (options.action === 'migrate') {
@@ -32,7 +33,7 @@ try {
   const onProgress = message => process.stdout.write(JSON.stringify({ message }) + '\n')
   const result = options.action==='stop'
     ? await stopDesktopService({home,driver,onProgress})
-    : await synchronizeDesktop({ home, runtimeRoot: resolve(options.runtimeRoot), releaseRoot, driver, onProgress })
+    : await synchronizeDesktop({ home, runtimeRoot: resolve(options.runtimeRoot), releaseRoot, driver, onProgress, force: options.force === true })
   const current = result.current
   process.stdout.write(JSON.stringify({ result: { action: result.action, current: current && {
     version: current.version, commit: current.commit, buildNumber: current.buildNumber, artifactDigest: current.artifactDigest,

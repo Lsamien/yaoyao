@@ -183,7 +183,7 @@ describe('source=web chat cache routes', () => {
     expect(ownedMessages.body).toMatchObject({
       owned: true,
       session: { id: 'owned-session', source: 'ios', owned: true },
-      messages: [{ id: 'owned-message' }],
+      messages: [{ source_message_id: 'owned-message' }],
     })
 
     const searched = await agent.get('/api/app/sessions/search?q=Hermes&profile=default')

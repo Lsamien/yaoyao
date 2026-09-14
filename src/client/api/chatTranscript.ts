@@ -1,98 +1,253 @@
 import { apiRequest } from './client'
 import { SSEParser } from '@shared/sse'
-import { applyTranscriptEvent, CHAT_TRANSCRIPT_FEATURE, TranscriptGap,
-  type TranscriptEvent, type TranscriptMessage, type TranscriptSnapshot } from '@shared/chatTranscript'
+import {
+  applyTranscriptEvent,
+  CHAT_TRANSCRIPT_FEATURE,
+  TranscriptGap,
+  type TranscriptEvent,
+  type TranscriptMessage,
+  type TranscriptSnapshot,
+} from '@shared/chatTranscript'
 
+/** Serial, durable replica: no state/cursor becomes visible before changed commits it. */
 export class ChatTranscriptClient {
   private abort = new AbortController()
-  private messages: TranscriptMessage[] = []
-  private cursor = 0
-  private epoch = ''
   private snapshot?: TranscriptSnapshot
   private fetchingOlder = false
-  constructor(readonly profile:string,readonly sessionId:string,
-    readonly changed:(snapshot:TranscriptSnapshot)=>Promise<void>,readonly failed:(error:Error)=>void,
-    readonly initialCount=150){}
-  static async supported():Promise<boolean>{
-    try{return (await apiRequest<{features:string[]}>('/api/app/chat/capabilities')).features.includes(CHAT_TRANSCRIPT_FEATURE)}catch{return false}
+  private operations: Promise<unknown> = Promise.resolve()
+  private request?: AbortController
+  private readonly foreground = () => {
+    if (document.visibilityState === 'visible') this.request?.abort()
   }
-  close(){this.abort.abort()}
-  restore(value:TranscriptSnapshot){if(value.profile===this.profile&&value.sessionId===this.sessionId){this.snapshot=value;this.messages=value.messages;this.cursor=value.cursor;this.epoch=value.epoch}}
-  private path(suffix:string,query:Record<string,string>={}) {return `/api/app/chat/sessions/${encodeURIComponent(this.sessionId)}/${suffix}?${new URLSearchParams({profile:this.profile,...query})}`}
-  private async page(before?:number):Promise<TranscriptSnapshot>{
-    const value=await apiRequest<TranscriptSnapshot>(this.path('snapshot',{limit:'150',...(before===undefined?{}:{before:String(before)})}),{signal:this.abort.signal})
-    if(value.protocol!==CHAT_TRANSCRIPT_FEATURE||value.profile!==this.profile||value.sessionId!==this.sessionId)throw new TranscriptGap()
+  constructor(
+    readonly profile: string,
+    readonly sessionId: string,
+    readonly changed: (snapshot: TranscriptSnapshot) => Promise<void>,
+    readonly failed: (error: Error) => void,
+    readonly initialCount = 150,
+  ) {
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.foreground)
+  }
+  static async supported(): Promise<boolean> {
+    return (await apiRequest<{ features: string[] }>('/api/app/chat/capabilities')).features.includes(
+      CHAT_TRANSCRIPT_FEATURE,
+    )
+  }
+  close() {
+    this.abort.abort()
+    this.request?.abort()
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.foreground)
+  }
+  restore(value: TranscriptSnapshot) {
+    if (
+      value.protocol === CHAT_TRANSCRIPT_FEATURE &&
+      value.profile === this.profile &&
+      value.sessionId === this.sessionId
+    )
+      this.snapshot = value
+  }
+  private serial<T>(operation: () => Promise<T>): Promise<T> {
+    const task = this.operations.then(operation, operation)
+    this.operations = task.catch(() => {})
+    return task
+  }
+  private path(suffix: string, query: Record<string, string> = {}) {
+    return `/api/app/chat/sessions/${encodeURIComponent(this.sessionId)}/${suffix}?${new URLSearchParams({ profile: this.profile, ...query })}`
+  }
+  private async page(before?: number): Promise<TranscriptSnapshot> {
+    const value = await apiRequest<TranscriptSnapshot>(
+      this.path('snapshot', { limit: '150', ...(before === undefined ? {} : { before: String(before) }) }),
+      { signal: this.abort.signal },
+    )
+    if (
+      value.protocol !== CHAT_TRANSCRIPT_FEATURE ||
+      value.profile !== this.profile ||
+      value.sessionId !== this.sessionId
+    )
+      throw new TranscriptGap()
     return value
   }
-  private async publish(){if(this.snapshot&&!this.abort.signal.aborted)await this.changed({...this.snapshot,messages:this.messages,cursor:this.cursor,epoch:this.epoch})}
-  private async hydrate(){
-    const page=await this.page()
-    if(this.abort.signal.aborted)return
-    const first=page.messages[0]?.seq??Infinity,deleted=new Set(page.deletedIds??[])
-    const old=this.epoch===page.epoch?this.messages.filter(m=>m.seq<first&&!deleted.has(m.id)):[]
-    this.messages=[...old,...page.messages];this.epoch=page.epoch;this.cursor=page.cursor;this.snapshot=page
-    // Upgrade already loaded legacy pages before replacing the visible cache.
-    while(this.messages.length<this.initialCount&&this.snapshot.hasOlder&&this.messages.length){
-      const older=await this.page(this.messages[0]!.seq)
-      if(older.epoch!==this.epoch)throw new TranscriptGap()
-      const ids=new Set(this.messages.map(m=>m.id))
-      const added=older.messages.filter(m=>!ids.has(m.id))
-      this.messages=[...added,...this.messages];this.snapshot.hasOlder=older.hasOlder
-      if(!added.length)break
+  private async commit(value: TranscriptSnapshot) {
+    if (this.abort.signal.aborted) return
+    await this.changed(value)
+    if (!this.abort.signal.aborted) this.snapshot = value
+  }
+  private merge(current: TranscriptSnapshot, page: TranscriptSnapshot): TranscriptMessage[] {
+    const deleted = new Set([...(current.deletedIds ?? []), ...(page.deletedIds ?? [])])
+    const messages = new Map(current.messages.filter((m) => !deleted.has(m.id)).map((m) => [m.id, m]))
+    for (const message of page.messages)
+      if (!deleted.has(message.id) && (messages.get(message.id)?.revision ?? 0) < message.revision)
+        messages.set(message.id, message)
+    return [...messages.values()].sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))
+  }
+  private async hydrate() {
+    let value = await this.page()
+    if (this.abort.signal.aborted) return
+    while (value.messages.length < this.initialCount && value.hasOlder && value.messages.length) {
+      const older = await this.page(value.messages[0]!.seq)
+      if (older.epoch !== value.epoch) throw new TranscriptGap()
+      const messages = this.merge(value, older),
+        added = messages.length - value.messages.length
+      value = {
+        ...value,
+        messages,
+        hasOlder: older.hasOlder,
+        deletedIds: [...new Set([...(value.deletedIds ?? []), ...(older.deletedIds ?? [])])],
+      }
+      if (!added) break
     }
-    await this.publish()
+    await this.serial(async () => {
+      const old = this.snapshot
+      if (old?.epoch === value.epoch && old.cursor > value.cursor) return
+      // An authoritative generation replaces the covered window. Older loaded
+      // pages can be retained only inside the same epoch and outside that window.
+      if (old?.epoch === value.epoch && value.messages.length) {
+        const first = value.messages[0]!.seq
+        value = {
+          ...value,
+          messages: this.merge({ ...old, messages: old.messages.filter((m) => m.seq < first) }, value),
+        }
+      }
+      await this.commit(value)
+    })
   }
-  async loadOlder(){
-    if(this.fetchingOlder||!this.snapshot?.hasOlder||!this.messages.length)return
-    this.fetchingOlder=true
-    try{
-      const page=await this.page(this.messages[0]!.seq)
-      if(page.epoch!==this.epoch)throw new TranscriptGap()
-      const current=new Map(this.messages.map(m=>[m.id,m]))
-      for(const message of page.messages)if((current.get(message.id)?.revision??0)<message.revision)current.set(message.id,message)
-      this.messages=[...current.values()].sort((a,b)=>a.seq-b.seq||a.id.localeCompare(b.id));this.snapshot.hasOlder=page.hasOlder
-      // A history page is not an event acknowledgement; never move cursor here.
-      await this.publish()
-    }finally{this.fetchingOlder=false}
+  async loadOlder() {
+    const starting = this.snapshot
+    if (this.fetchingOlder || !starting?.hasOlder || !starting.messages.length) return
+    this.fetchingOlder = true
+    try {
+      const page = await this.page(starting.messages[0]!.seq)
+      await this.serial(async () => {
+        const current = this.snapshot
+        if (!current || page.epoch !== current.epoch) return
+        await this.commit({
+          ...current,
+          messages: this.merge(current, page),
+          hasOlder: page.hasOlder,
+          deletedIds: [...new Set([...(current.deletedIds ?? []), ...(page.deletedIds ?? [])])],
+        })
+      })
+    } finally {
+      this.fetchingOlder = false
+    }
   }
-  async run(){
-    let needsSnapshot=!this.snapshot
-    while(!this.abort.signal.aborted){
-      let reader:ReadableStreamDefaultReader<Uint8Array>|undefined
-      try{
-        if(needsSnapshot){await this.hydrate();needsSnapshot=false}
-        const response=await fetch(this.path('events'),{headers:{Accept:'text/event-stream','Last-Event-ID':`${this.epoch}:${this.cursor}`},credentials:'include',cache:'no-store',signal:this.abort.signal})
-        if(response.status===409){needsSnapshot=true;throw new TranscriptGap()}
-        if(!response.ok||!response.body)throw new Error(`聊天消息流 HTTP ${response.status}`)
-        const parser=new SSEParser(),decoder=new TextDecoder();reader=response.body.getReader()
-        while(!this.abort.signal.aborted){
-          const {value,done}=await reader.read();if(done)break
-          for(const frame of parser.feed(decoder.decode(value,{stream:true}))){
-            if(frame.event==='reset')throw new TranscriptGap()
-            if(frame.event!=='transcript')continue
-            const event=JSON.parse(frame.data) as TranscriptEvent
-            if(event.profile!==this.profile||event.sessionId!==this.sessionId||!Number.isSafeInteger(event.cursor))throw new TranscriptGap()
-            if(event.cursor<=this.cursor)continue
-            if(event.type==='session.deleted'||event.type==='session.migrated')throw new TranscriptGap()
-            const data=event.data as {seq?:number}
-            // Older, unloaded pages are read from their current snapshot later.
-            if(!(event.type==='message.patch'&&data.seq!==undefined&&this.messages[0]&&data.seq<this.messages[0].seq))
-              this.messages=applyTranscriptEvent(this.messages,event)
-            if(this.snapshot&&event.type==='session.changed'){
-              const detail=event.data as {eventType?:string;payload?:Record<string,unknown>;running?:boolean;queued?:boolean}
-              this.snapshot.running=detail.running;this.snapshot.queued=detail.queued
-              if(detail.eventType==='session.info'&&detail.payload)this.snapshot.session={...this.snapshot.session,...detail.payload}
-            }
-            const previous=this.cursor;this.cursor=event.cursor
-            try{await this.publish()}catch(error){this.cursor=previous;throw error}
+  private async receive(event: TranscriptEvent) {
+    await this.serial(async () => {
+      const current = this.snapshot
+      if (!current) throw new TranscriptGap()
+      if (
+        event.profile !== this.profile ||
+        event.sessionId !== this.sessionId ||
+        event.epoch !== current.epoch ||
+        !Number.isSafeInteger(event.cursor)
+      )
+        throw new TranscriptGap()
+      if (event.cursor <= current.cursor) return
+      if (
+        event.previousCursor !== current.cursor ||
+        event.type === 'session.deleted' ||
+        event.type === 'session.migrated'
+      )
+        throw new TranscriptGap()
+      const data = event.data as Record<string, any>,
+        deleted = new Set(current.deletedIds ?? [])
+      if (event.type === 'message.deleted') deleted.add(String(data.id))
+      const before = current.messages[0]?.seq
+      const unloaded =
+        ['message.patch', 'message.upsert'].includes(event.type) &&
+        typeof data.seq === 'number' &&
+        before !== undefined &&
+        data.seq < before
+      const messages =
+        unloaded || (event.type !== 'message.deleted' && deleted.has(String(data.id)))
+          ? current.messages
+          : applyTranscriptEvent(current.messages, event)
+      const next: TranscriptSnapshot = {
+        ...current,
+        messages,
+        cursor: event.cursor,
+        deletedIds: [...deleted],
+        total: event.total ?? current.total,
+      }
+      if (event.type === 'session.changed') {
+        for (const key of [
+          'running',
+          'queued',
+          'pendingApproval',
+          'pendingClarification',
+          'liveStatus',
+          'error',
+        ] as const)
+          if (data[key] !== undefined) (next as any)[key] = data[key]
+        if (data.eventType === 'session.info' && data.payload)
+          next.session = { ...next.session, ...data.payload }
+      }
+      await this.commit(next)
+    })
+  }
+  async run() {
+    let needsSnapshot = !this.snapshot
+    let restorePending = Boolean(this.snapshot)
+    while (!this.abort.signal.aborted) {
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+      let watchdog: ReturnType<typeof setTimeout> | undefined
+      try {
+        if (restorePending) {
+          const saved = this.snapshot!
+          await this.serial(() => this.commit(saved))
+          restorePending = false
+        }
+        if (needsSnapshot) {
+          await this.hydrate()
+          needsSnapshot = false
+        }
+        if (this.abort.signal.aborted) return
+        const current = this.snapshot
+        if (!current) return
+        const attempt = new AbortController()
+        this.request = attempt
+        watchdog = setTimeout(() => attempt.abort(), 45_000)
+        const response = await fetch(this.path('events'), {
+          headers: { Accept: 'text/event-stream', 'Last-Event-ID': `${current.epoch}:${current.cursor}` },
+          credentials: 'include',
+          cache: 'no-store',
+          signal: attempt.signal,
+        })
+        if (response.status === 409) throw new TranscriptGap()
+        if (!response.ok || !response.body) throw new Error(`聊天消息流 HTTP ${response.status}`)
+        const parser = new SSEParser(),
+          decoder = new TextDecoder()
+        reader = response.body.getReader()
+        while (!this.abort.signal.aborted) {
+          clearTimeout(watchdog)
+          watchdog = setTimeout(() => attempt.abort(), 45_000)
+          const { value, done } = await reader.read()
+          if (done) break
+          for (const frame of parser.feed(decoder.decode(value, { stream: true }))) {
+            if (frame.event === 'reset') throw new TranscriptGap()
+            if (frame.event === 'transcript') await this.receive(JSON.parse(frame.data))
           }
         }
-      }catch(error){
-        if(this.abort.signal.aborted)return
-        if(error instanceof TranscriptGap)needsSnapshot=true
-        this.failed(error instanceof Error?error:new Error('聊天消息需要同步'))
-      }finally{await reader?.cancel().catch(()=>{});reader?.releaseLock()}
-      await new Promise<void>(resolve=>{const finish=()=>{clearTimeout(timer);this.abort.signal.removeEventListener('abort',finish);resolve()};const timer=setTimeout(finish,1000);this.abort.signal.addEventListener('abort',finish,{once:true});if(this.abort.signal.aborted)finish()})
+      } catch (error) {
+        if (this.abort.signal.aborted) return
+        if (error instanceof TranscriptGap) needsSnapshot = true
+        this.failed(error instanceof Error ? error : new Error('聊天消息需要同步'))
+      } finally {
+        clearTimeout(watchdog)
+        this.request = undefined
+        await reader?.cancel().catch(() => {})
+        reader?.releaseLock()
+      }
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer)
+          this.abort.signal.removeEventListener('abort', finish)
+          resolve()
+        }
+        const timer = setTimeout(finish, 1000)
+        this.abort.signal.addEventListener('abort', finish, { once: true })
+        if (this.abort.signal.aborted) finish()
+      })
     }
   }
 }

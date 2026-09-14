@@ -3,6 +3,7 @@ import type { GroupSocketEnvelope, JsonValue, RealtimeConnectionState, RpcEventF
 import { ApiError } from './client'
 import { number, record, string } from '@/utils/normalize'
 import { HTTPRealtimeChannel, HTTPRPCError } from './httpRealtime'
+import { CHAT_TRANSCRIPT_FEATURE } from '@shared/chatTranscript'
 
 export class RpcError extends Error {
   constructor(message: string, readonly code?: number | string, readonly data?: JsonValue) {
@@ -30,7 +31,8 @@ export class ChatRpcSocket {
     this.close()
     const generation = ++this.generation
     this.publishState('connecting')
-    this.transcriptSupported = (await HTTPRealtimeChannel.requireSupport()).includes('ordinary-chat-transcript-v1')
+    this.transcriptSupported = (await HTTPRealtimeChannel.requireSupport()).includes(CHAT_TRANSCRIPT_FEATURE)
+    if(!this.transcriptSupported)throw new ApiError('普通聊天需要新版服务端，请先升级服务端',426,'ordinary_chat_upgrade_required')
     if (generation !== this.generation) return
     this.http = new HTTPRealtimeChannel(frame => this.handleMessage(frame, generation), error => {
       if (generation === this.generation) this.publishState('failed', error.message)

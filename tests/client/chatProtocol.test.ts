@@ -11,7 +11,7 @@ function httpFixture() {
   const send = (frame: object) => stream!.enqueue(new TextEncoder().encode('event: frame\ndata: ' + JSON.stringify(frame) + '\n\n'))
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path.endsWith('/capabilities')) return Response.json({ protocolVersion: 1, csrfToken: 'csrf-test' })
+    if (path.endsWith('/capabilities')) return Response.json({ protocolVersion: 1, csrfToken: 'csrf-test', features:['ordinary-chat-transcript-v2'] })
     if (init?.method === 'DELETE') return new Response(null, { status: 204 })
     if (path.endsWith('/channels')) {
       const body = JSON.parse(String(init?.body)); kind = body.channel; epoch = body.epoch; cursor = body.cursor

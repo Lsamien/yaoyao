@@ -17,6 +17,7 @@ const computerTabs=ref<HTMLElement>(),cloud=ref<{configured:boolean;running:bool
 const cloudSelected=computed(()=>agent.value?.computer==='cloud'||(agent.value?.computer==='auto'&&!nativeSelected.value&&agent.value.execution!=='computer'&&cloud.value?.configured))
 const computerChoice=computed(()=>state.value?.fixedCapacity&&agent.value?.execution==='computer'?(state.value.desktopId??'off'):agent.value?.computer??(state.value?.enabled?'vm':'off'))
 const canAllowHost=computed(()=>!!agent.value&&supportsHostEnvironment(agent.value))
+const localVmSelected=computed(()=>canAllowHost.value&&!cloudSelected.value)
 const computerChoices=computed(()=>[
  {value:'auto',label:'自动',description:'按可用环境自动选择',icon:'bolt' as const,disabled:false},
  {value:'cloud',label:'云端 · Grok Bot',description:'共享云端电脑，持续保存工作',icon:'globe' as const,disabled:false},
@@ -76,6 +77,10 @@ function allowHostEnvironment(enabled:boolean){
  const computer=agent.value?.computer==='cloud'?'cloud':'vm'
  void run(()=>apiRequest(`/api/app/agents/${selected.value}/computer-selection`,{method:'PUT',body:{computer,allowHostEnvironment:enabled}}))
 }
+function chooseVmExecution(value:string){
+ if(computerChoiceDisabled.value||!localVmSelected.value)return
+ void run(()=>apiRequest(`/api/app/agents/${selected.value}/computer-selection`,{method:'PUT',body:{computer:'vm',vmExecution:value,allowHostEnvironment:value==='profile'}}))
+}
 async function openDesktop(){if(!agent.value)return;if(cloudSelected.value){await run(()=>apiRequest(`/api/app/agents/${selected.value}/cloud-computer/open`,{method:'POST',body:{}}));if(error.value)return}emit('desktop',agent.value)}
 function action(value:LocalVmAction){
  if(value==='recreate'&&!confirm('重建这台虚拟机？当前桌面程序将关闭，工作文件和浏览器资料会保留。'))return
@@ -110,7 +115,13 @@ onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
     </div>
     <div :id="`computer-options-${selected}`" class="computer-options" role="tabpanel" :aria-labelledby="`computer-tab-${selected}-${computerChoice}`">
     <p v-if="computerChoice==='auto'" class="hint">按已有可用环境自动选择。查看此面板不会创建或唤醒云端电脑。</p>
-    <label v-if="canAllowHost" class="host-environment-option"><input type="checkbox" :checked="agent.allowHostEnvironment===true" :disabled="computerChoiceDisabled" @change="allowHostEnvironment(($event.target as HTMLInputElement).checked)"> 允许本机环境</label>
+    <label v-if="localVmSelected" class="vm-execution-option">执行方式
+     <select aria-label="本地虚拟机执行方式" :value="agent.vmExecution??'worker'" :disabled="computerChoiceDisabled" @change="chooseVmExecution(($event.target as HTMLSelectElement).value)">
+      <option value="worker">虚拟机模式</option><option value="profile">本机协作模式</option>
+     </select>
+     <span class="hint">{{agent.vmExecution==='profile'?'使用基础机器人的完整本机环境，同时操作这台虚拟机。文件和程序仍属于各自的电脑。':'使用独立的虚拟机执行环境，可按需允许本机文件和命令。'}}</span>
+    </label>
+    <label v-if="canAllowHost&&(!localVmSelected||agent.vmExecution!=='profile')" class="host-environment-option"><input type="checkbox" :checked="agent.allowHostEnvironment===true" :disabled="computerChoiceDisabled" @change="allowHostEnvironment(($event.target as HTMLInputElement).checked)"> 允许本机环境</label>
     <template v-if="canAllowHost&&agent.allowHostEnvironment">
      <p class="hint">允许 Bot 同时使用 Hermes 所在电脑的文件和命令。{{cloudSelected?'云端虚拟机仍使用独立的云端工具和文件。':'虚拟机工具仍在隔离 Linux 桌面内执行。'}}上方显示虚拟机画面。</p>
      <p v-if="native?.local.ready" class="hint">已连接 {{native.host?.name}}，Bot 也可操作本机桌面。</p>
@@ -157,7 +168,7 @@ onBeforeUnmount(()=>{closed=true;revision++;clearTimeout(timer)})
   </div>
  </aside>
 </template>
-<style scoped>.host-environment-option{display:flex;align-items:center;gap:8px;min-height:44px;font-size:13px;cursor:pointer}.host-environment-option input{width:16px;height:16px;accent-color:var(--accent)}</style>
+<style scoped>.host-environment-option{display:flex;align-items:center;gap:8px;min-height:44px;font-size:13px;cursor:pointer}.host-environment-option input{width:16px;height:16px;accent-color:var(--accent)}.vm-execution-option select{min-height:44px;min-width:0;width:100%}.vm-execution-option .hint{line-height:1.6}</style>
 <style scoped>
 .local-vm-chat-panel{width:400px;min-width:320px;max-width:46%;height:100%;border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;color:var(--text-primary)}header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}header button{border:0;min-height:32px;padding:5px}.panel-body{overflow:auto;display:flex;flex-direction:column;gap:14px;padding:18px 20px}.screen-caption{display:flex;align-items:center;justify-content:space-between;font-size:13px;color:var(--text-secondary)}.preview{flex:none;position:relative;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;border:0;border-radius:12px;overflow:hidden;padding:0;background:#14181e;color:#dce1e7;width:100%}.preview:disabled{opacity:1;cursor:default}.preview img{width:100%;height:100%;object-fit:contain}.empty{display:grid;justify-items:center;gap:12px;font-size:13px}.open-badge{position:absolute;right:8px;top:8px;display:flex;align-items:center;gap:4px;padding:5px 7px;background:#000b;color:white;border-radius:6px;font-size:11px}p{margin:0;font-size:13px;line-height:1.65;color:var(--text-secondary)}label{display:grid;gap:7px;font-size:13px}button,select{font:inherit;background:var(--surface-raised);color:inherit;border:1px solid var(--line);border-radius:8px;min-height:40px;padding:8px 12px}button{cursor:pointer;display:inline-flex;gap:7px;align-items:center;justify-content:center}button:disabled,select:disabled{opacity:.45;cursor:default}.primary{background:var(--accent);color:var(--text-on-solid)}.vm-actions{display:flex;gap:8px}.vm-actions button{flex:1;font-size:12px}.hint{font-size:12px;color:var(--text-muted)}.problem{color:var(--danger)}.settings-link{border:0;background:transparent;align-self:flex-start;padding-left:0;font-size:12px}.control-state{padding:10px;border-radius:8px;background:var(--surface-soft)}button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}@media(max-width:900px){.local-vm-chat-panel{position:fixed;inset:0 0 0 auto;width:min(400px,100vw);max-width:100%;z-index:35;box-shadow:-20px 0 60px #0002}}
 .computer-select{display:grid;gap:7px;font-size:13px;min-width:0}

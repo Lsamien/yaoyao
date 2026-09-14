@@ -50,7 +50,8 @@ export class RealtimeBroker {
   onNativeEvent: (owner: string, profile: string, storedId: string, frame: Frame) => void = () => {}
   onNativeGlobalEvent: (owner: string, type: string, upstreamInvalidation?: boolean) => void = () => {}
   onNativeCommand: (owner: string, profile: string, storedId: string, method: string, params: Frame) => void = () => {}
-  onNativeRoute: (owner: string, profile: string, storedId: string, runtimeId: string, running?: boolean) => void = () => {}
+  onNativeRoute: (owner: string, profile: string, storedId: string, runtimeId: string, running?: boolean, snapshot?: Frame) => void = () => {}
+  nativeSourceCursor: (owner:string,profile:string,storedId:string,runtimeId:string,epoch:string)=>number = () => 0
   readonly epoch = randomUUID()
   readonly channels = new Map<string, RealtimeChannel>()
   private upstreams = new Map<string, Upstream>()
@@ -283,7 +284,10 @@ export class RealtimeBroker {
         r.cwd = typeof info.cwd === 'string' ? info.cwd : undefined
         u.routes.set(key, r); u.byRuntime.set(runtime, r); c.routes.add(key)
         r.observers.set(c.principal.key, c.principal)
-        if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime, r.active)
+        if (nativeOwner) {
+          r.seq=Math.max(r.seq,this.nativeSourceCursor(nativeOwner,profile,stored,runtime,u.epoch??''))
+          this.onNativeRoute(nativeOwner, profile, stored, runtime, r.active, result)
+        }
         if (nativeOwner && (method === 'session.create' || method === 'session.branch')) {
           this.onNativeCommand(nativeOwner, profile, stored, method, {...p,_delivery_id:deliveryID})
         }
@@ -433,13 +437,13 @@ export class RealtimeBroker {
       if (p.payload?.request_id) this.interactions.set(`${u.principal.upstreamKey}:${p.payload.request_id}`, sid)
       while (this.interactions.size > 10_000) this.interactions.delete(this.interactions.keys().next().value!)
     }
-    const deliveryID = Number.isSafeInteger(p.seq) ? `${this.epoch}:${sid}:${p.seq}` : randomUUID()
+    const deliveryID = Number.isSafeInteger(p.seq) ? `${u.epoch??this.epoch}:${sid}:${p.seq}` : randomUUID()
     const persistedOwners = new Set<string>()
     if (r) for (const principal of r.observers.values()) {
       if (principal.valid()) {
         principal.observeEvent?.(JSON.stringify(f))
         const owner = this.nativeOwner(principal)
-        if (owner && !persistedOwners.has(owner)) { persistedOwners.add(owner); const projected={...p,delivery_id:deliveryID,epoch:this.epoch}; this.onNativeEvent(owner, r.profile, r.stored, projected); p.payload=projected.payload }
+        if (owner && !persistedOwners.has(owner)) { persistedOwners.add(owner); this.onNativeEvent(owner, r.profile, r.stored, {...p,delivery_id:deliveryID,epoch:u.epoch??this.epoch}) }
       }
     }
     if (!r && p.type === 'sessions.changed') {
@@ -493,13 +497,20 @@ export class RealtimeBroker {
         r.workingDirectory = undefined
         r.cwd = typeof resumed.result?.info?.cwd === 'string' ? resumed.result.info.cwd : undefined
         if (typeof resumed.result?.running === 'boolean') r.active = resumed.result.running
+        const restore=(snapshot:boolean)=>{
+          for(const principal of r.observers.values()){
+            const owner=this.nativeOwner(principal)
+            if(owner&&principal.valid()&&resumed.result)this.onNativeRoute(owner,r.profile,r.stored,String(resumed.result.session_id??r.runtime),r.active,
+              snapshot?resumed.result:{...resumed.result,inflight:undefined})
+          }
+        }
         if (!resumed.result || resumed.result.session_id !== r.runtime || changed) {
           if (resumed.result?.session_id) { u.byRuntime.delete(r.runtime); r.runtime = resumed.result.session_id; u.byRuntime.set(r.runtime, r) }
-          r.seq = 0; this.reset(u, 'upstream_reset'); continue
+          r.seq = 0; this.reset(u, 'upstream_reset'); restore(true); continue
         }
         const replay = await this.rpc(u, 'session.events.since', { session_id: r.runtime, last_seen: lastSeen })
-        if (replay.error || replay.result?.truncated || replay.result?.epoch !== u.epoch) this.reset(u, 'upstream_replay_unavailable')
-        else for (const p of replay.result?.events ?? []) this.event(u, { jsonrpc: '2.0', method: 'event', params: p }, true)
+        if (replay.error || replay.result?.truncated || replay.result?.epoch !== u.epoch) {this.reset(u, 'upstream_replay_unavailable');restore(true)}
+        else {for (const p of replay.result?.events ?? []) this.event(u, { jsonrpc: '2.0', method: 'event', params: p }, true);restore(false)}
       }
     } catch { this.reset(u, 'upstream_recovery_failed') }
     finally {

@@ -69,3 +69,20 @@ test('a late activate health check cannot reconnect after quit has begun',async(
  await manager.stop();finish();await reconnect
  assert.equal(starts,0);assert.equal(manager.state.phase,'disconnected')
 })
+test('unknown same-version builds offer an explicit one-shot overwrite without changing ordinary retries',async()=>{
+ const home=await realpath(await mkdtemp(join(tmpdir(),'yaoyao-force-sync-'))),attempts=[]
+ const manager=new DesktopServiceManager({home,version:'0.4.18',synchronize:async(_progress,options)=>{
+  attempts.push(options.force)
+  if(attempts.length===1)throw Object.assign(new Error('同版本构建需要选择'),{code:'service_build_unknown'})
+ }})
+ manager.readRecord=async()=>({url:'http://127.0.0.1:1'})
+ manager.verify=async()=>({url:'http://127.0.0.1:1',version:'0.4.18',pid:process.pid})
+ try{
+  await assert.rejects(manager.start(),/需要选择/)
+  assert.equal(manager.state.canForceSync,true);assert.equal(manager.canForceSynchronization,true)
+  await manager.retrySynchronization({force:true});assert.equal(manager.state.phase,'ready')
+  await manager.retrySynchronization();assert.deepEqual(attempts,[false,true,false])
+  manager.state={phase:'error',message:'签名校验失败'}
+  await assert.rejects(manager.retrySynchronization({force:true}),/当前状态不能覆盖/)
+ }finally{await rm(home,{recursive:true,force:true})}
+})

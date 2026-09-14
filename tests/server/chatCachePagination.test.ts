@@ -32,7 +32,7 @@ describe('Hermes pagination without total and has_more', () => {
   it.each([250, 300])('force refresh preserves all %i messages and correct page positions', async count => {
     const f = fixture(count)
     await f.coordinator.reconcile('owner', 'default', 'chat', true)
-    const page = f.store.messagePage('owner', 'default', 'chat', count - 100, 100)!
+    const page = f.store.sourceMessagePage('owner', 'default', 'chat', count - 100, 100)!
     const payload = JSON.parse(page.response.body.toString())
     expect(payload.pagination.total).toBe(count)
     expect(payload.messages[0].id).toBe('0')
@@ -45,9 +45,9 @@ describe('Hermes pagination without total and has_more', () => {
     const f = fixture(250)
     f.store.putSnapshot('owner', 'detail', 'detail', 'default', 'chat', response({ id: 'chat', message_count: 250, title: 'History' }))
     f.store.putSnapshot('owner', 'tail', 'messages', 'default', 'chat', response({ session_id: 'chat', messages: f.rows.slice(-100), pagination: { offset: 0, limit: 100, returned: 100 } }))
-    const payload = JSON.parse(f.store.messagePage('owner', 'default', 'chat', 0, 100)!.response.body.toString())
+    const payload = JSON.parse(f.store.sourceMessagePage('owner', 'default', 'chat', 0, 100)!.response.body.toString())
     expect(payload.pagination).toMatchObject({ total: 250, has_more: true })
-    expect(f.store.messagePage('owner', 'default', 'chat', 100, 100)).toBeUndefined()
+    expect(f.store.sourceMessagePage('owner', 'default', 'chat', 100, 100)).toBeUndefined()
     f.store.close()
   })
 
@@ -56,7 +56,7 @@ describe('Hermes pagination without total and has_more', () => {
     f.store.putSnapshot('owner', 'seed', 'messages', 'default', 'chat', response({ session: { id: 'chat', message_count: 250 }, messages: f.rows.slice(0, 250), pagination: { total: 250, offset: 0, has_more: false } }))
     await f.coordinator.reconcile('owner', 'default', 'chat')
     expect(f.request.mock.calls.filter(([path]) => path.endsWith('/messages'))).toHaveLength(1)
-    const page = JSON.parse(f.store.messagePage('owner', 'default', 'chat', 0, 100)!.response.body.toString())
+    const page = JSON.parse(f.store.sourceMessagePage('owner', 'default', 'chat', 0, 100)!.response.body.toString())
     expect(page.pagination.total).toBe(252)
     expect(page.messages.at(-1).id).toBe('251')
     f.store.close()

@@ -13,6 +13,7 @@ import { HttpError } from './errors.js'
 import { configuredWorkingDirectory } from './sessionWorkingDirectory.js'
 import { canonicalEpoch, groupCursor } from './realtimeProtocol.js'
 import { CHAT_MAX_PAYLOAD } from './realtimeProtocol.js'
+import { CHAT_TRANSCRIPT_FEATURE } from '../shared/chatTranscript.js'
 import { ChatPushRelayObserver, type ChatNotificationResolver, type PushEventCoordinator, type ChatPushTransportFactory } from './pushEvents.js'
 
 export class RealtimeAPI {
@@ -170,7 +171,7 @@ export class RealtimeAPI {
       const path = match![2]!
       if (ctx.method === 'GET' && path === '/capabilities') {
         ctx.body = { protocolVersion: 1, channels: ['chat'], brokerEpoch: this.broker.epoch,
-          features: this.transcriptsAvailable && !device && !ctx.state.hermesBotNative && !ctx.state.workspaceAgentExport ? ['ordinary-chat-transcript-v1'] : [],
+          features: this.transcriptsAvailable && !device && !ctx.state.hermesBotNative && !ctx.state.workspaceAgentExport ? [CHAT_TRANSCRIPT_FEATURE] : [],
           ...(device ? {} : { csrfToken: this.csrf.issue(ctx) }) }
         return
       }
@@ -179,6 +180,8 @@ export class RealtimeAPI {
         const body = await this.body(ctx)
         if (ctx.state.workspaceAgentExport && body.channel !== 'chat') throw new HttpError(403,'机器人仅支持聊天通道','invalid_channel')
         if (body.channel !== 'chat' && body.channel !== 'groups') throw new HttpError(400, 'Invalid channel', 'invalid_channel')
+        if(this.transcriptsAvailable&&body.channel==='chat'&&!device&&!principal.nativeBot&&!ctx.state.workspaceAgentExport&&body.chatProtocol!==CHAT_TRANSCRIPT_FEATURE)
+          throw new HttpError(426,'普通聊天协议已升级，请更新客户端后继续','ordinary_chat_upgrade_required')
         const c = await this.broker.create(principal, body.channel, body.channel === 'groups'
           ? { epoch: canonicalEpoch(body.epoch), cursor: groupCursor(body.cursor) } : undefined)
         ctx.status = 201; ctx.body = { id: c.id, brokerEpoch: this.broker.epoch }; return

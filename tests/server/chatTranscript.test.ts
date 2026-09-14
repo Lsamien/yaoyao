@@ -55,7 +55,7 @@ describe('ordinary server-owned transcript',()=>{
     expect(events).toHaveLength(1);expect(events[0]!.type).toBe('message.patch')
     const replay=events.reduce(applyTranscriptEvent,base.messages)
     expect(replay).toEqual(snapshot(store).messages)
-    expect(replay[0]).toMatchObject({id,content:'中文🙂',revision:2})
+    expect(replay[0]).toMatchObject({id,content:'中文🙂',revision:base.messages[0]!.revision+1})
     expect(applyTranscriptEvent(replay,events[0]!)).toEqual(replay)
   })
   it('retains stable message identity when an upstream row ID becomes known',()=>{
@@ -84,7 +84,7 @@ describe('ordinary server-owned transcript',()=>{
     cache.observe('owner','p','s',{type:'message.complete',payload:{text:'结束'},delivery_id:'two'})
     const after=snapshot(store);cache.close();store.close()
     const reopened=new ChatCacheStore(home)
-    try{expect(reopened.transcripts.epoch).toBe(before.epoch);expect(reopened.transcripts.events('owner','p','s',before.cursor).reduce(applyTranscriptEvent,before.messages)).toEqual(after.messages)}finally{reopened.close()}
+    try{expect(reopened.transcripts.epochFor('owner','p','s')).toBe(before.epoch);expect(reopened.transcripts.events('owner','p','s',before.cursor).reduce(applyTranscriptEvent,before.messages)).toEqual(after.messages)}finally{reopened.close()}
   })
   it('keeps owner/session scopes and history pagination independent',()=>{
     const {store,cache}=fixture()

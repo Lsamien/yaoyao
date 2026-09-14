@@ -52,10 +52,14 @@ export class DesktopServiceManager {
     if (value.phase === 'ready' && this.updateNotice) value = { ...value, updateNotice: this.updateNotice, message: `${value.message}，Web 同步待完成` }
     this.state = value; this.options.onState?.(value)
   }
-  async retrySynchronization() {
+  get canForceSynchronization() {
+    return Boolean(this.options.synchronize) && (this.state.canForceSync === true || this.state.phase === 'ready' && this.state.version === this.options.version)
+  }
+  async retrySynchronization({ force = false } = {}) {
     if (this.starting) return this.starting
+    if (force && !this.canForceSynchronization) throw new Error('当前状态不能覆盖同版本 Web')
     this.state = { phase: 'stopped', message: '正在准备同步 Web…' }
-    return this.start()
+    return this.start({ force })
   }
   async reconnect() {
     const generation=this.generation
@@ -102,14 +106,14 @@ export class DesktopServiceManager {
     if (status.server_kind !== 'yaoyao-web') throw new Error('已有端口不是夭夭服务。')
     return { url, pid: Number([...holders][0]), external: true, legacy: true, version: '已有服务' }
   }
-  async start() {
+  async start({ force = false } = {}) {
     if (this.starting) return this.starting
     if (this.state.phase === 'ready' && !this.stopping) return this.state
     this.stopping = false
-    this.starting = this.boot().finally(() => { this.starting = null })
+    this.starting = this.boot({ force }).finally(() => { this.starting = null })
     return this.starting
   }
-  async boot() {
+  async boot({ force = false } = {}) {
     const generation = ++this.generation
     this.publish({ phase: 'starting', message: '正在启动本地服务…' })
     try {
@@ -118,7 +122,7 @@ export class DesktopServiceManager {
       this.root = await realpath(this.options.home)
       this.updateNotice = undefined
       if (this.options.synchronize) {
-        try { await this.options.synchronize(message => this.publish({ phase: 'starting', message })) }
+        try { await this.options.synchronize(message => this.publish({ phase: 'starting', message }), { force }) }
         catch (error) {
           // Busy is reported before stopping or switching. Other failures still
           // fail closed; the existing service must pass the usual identity checks.
@@ -174,7 +178,7 @@ export class DesktopServiceManager {
     } catch (error) {
       if (generation !== this.generation || this.stopping) return
       await this.stopChild()
-      this.publish({ phase: 'error', message: error.message })
+      this.publish({ phase: 'error', message: error.message, canForceSync: error.code === 'service_build_unknown' })
       throw error
     }
   }

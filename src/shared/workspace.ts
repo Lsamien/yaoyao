@@ -8,6 +8,8 @@ export interface WorkspaceAgent {
   execution?: 'profile' | 'computer'
   computer?: 'auto' | 'cloud' | 'vm' | 'local' | 'browser' | 'off'
   allowHostEnvironment?: boolean
+  /** Local VM execution backend; older records retain the isolated Worker. */
+  vmExecution?: 'worker' | 'profile'
   browserProfile?: 'persistent' | 'temporary'
   computerEnvironmentId?:string
   computerEnvironmentName?:string

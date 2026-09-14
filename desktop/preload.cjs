@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('yaoyaoDesktop', Object.freeze({
   status: () => ipcRenderer.invoke('desktop:status'),
   retry: () => ipcRenderer.invoke('desktop:retry'),
+  forceSync: () => ipcRenderer.invoke('desktop:force-sync'),
   logs: () => ipcRenderer.invoke('desktop:logs'),
   openUpdates: () => ipcRenderer.invoke('desktop:updates'),
   openComputer: id => ipcRenderer.invoke('desktop-computer:open', id),
