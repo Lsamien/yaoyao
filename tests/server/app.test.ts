@@ -5,7 +5,7 @@ import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApplication as createUnauthenticatedApplication, type ApplicationRuntime } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
-import { createAuthenticatedApplication as createApplication } from './authenticatedApplication.js'
+import { createAuthenticatedApplication as createApplication, createUserAuthenticatedApplication } from './authenticatedApplication.js'
 import { saveFileAccess } from '../../src/server/fileAccess.js'
 
 interface RecordedRequest {
@@ -106,6 +106,27 @@ function cookieHeader(response: request.Response): string {
 }
 
 describe('15300 BFF', () => {
+  it.each([
+    { create: createUnauthenticatedApplication, userId: null },
+    { create: createApplication, userId: 'test-admin' },
+    { create: createUserAuthenticatedApplication, userId: 'test-user' },
+  ])('renews CSRF for $userId without requesting upstream profiles or status', async ({ create, userId }) => {
+    const records: RecordedRequest[] = []
+    const runtime = create({ config: makeConfig(), fetchImpl: fakeGateway(records) })
+    runtimes.push(runtime)
+    const result = await request(runtime.app.callback()).get('/api/app/bootstrap?csrfOnly=1')
+      .set('Host', '127.0.0.1:15300').expect(200)
+    expect(result.body).toEqual({ csrfToken: expect.any(String), userId })
+    expect(runtime.csrf.verify(cookieHeader(result), result.body.csrfToken)).toBe(true)
+    expect(result.headers['set-cookie'][0]).toContain('Max-Age=28800')
+    expect(result.headers['cache-control']).toContain('no-store')
+    expect(records).toEqual([])
+    const again = await request(runtime.app.callback()).get('/api/app/bootstrap?csrfOnly=1')
+      .set('Host', '127.0.0.1:15300').set('Cookie', cookieHeader(result)).expect(200)
+    expect(again.body.csrfToken).toBe(result.body.csrfToken)
+    expect(records).toEqual([])
+  })
+
   it('keeps existing CSRF tokens valid across an 15300 restart', async () => {
     const config = makeConfig()
     const first = createApplication({ config, fetchImpl: fakeGateway([]) })

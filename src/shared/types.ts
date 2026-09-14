@@ -201,6 +201,8 @@ export interface ChatRouteState {
   messages: ChatMessage[]
   runtimeSessionId?: string
   historySynced: boolean
+  /** Server history invalidations received since this route was opened. */
+  historySyncRevision?: number
   hasMoreBefore: boolean
   loadedMessageCount: number
   messageTotal: number

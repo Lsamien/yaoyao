@@ -22,6 +22,7 @@ export class ChatRpcSocket {
   private eventListeners = new Set<RpcEventListener>()
   private stateListeners = new Set<StateListener>()
   state: RealtimeConnectionState = 'idle'
+  transcriptSupported = false
 
   onEvent(listener: RpcEventListener): () => void { this.eventListeners.add(listener); return () => this.eventListeners.delete(listener) }
   onState(listener: StateListener): () => void { this.stateListeners.add(listener); return () => this.stateListeners.delete(listener) }
@@ -29,7 +30,7 @@ export class ChatRpcSocket {
     this.close()
     const generation = ++this.generation
     this.publishState('connecting')
-    await HTTPRealtimeChannel.requireSupport()
+    this.transcriptSupported = (await HTTPRealtimeChannel.requireSupport()).includes('ordinary-chat-transcript-v1')
     if (generation !== this.generation) return
     this.http = new HTTPRealtimeChannel(frame => this.handleMessage(frame, generation), error => {
       if (generation === this.generation) this.publishState('failed', error.message)

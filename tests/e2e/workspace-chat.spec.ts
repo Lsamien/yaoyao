@@ -222,8 +222,8 @@ test('created roles and editable teams share a durable chat list without plugin 
   await expect(rail.locator('.sidebar-footer')).toBeVisible()
   await expect(rail.locator('.sidebar-account-switcher__main')).toContainText('fixture')
   await expect(rail.locator('.sidebar-account-switcher__main .account-initial-avatar')).toHaveText('F')
-  await rail.getByRole('button', { name: '设置与模式', exact: true }).click()
-  await expect(page.getByRole('menu', { name: '账号菜单' }).getByRole('menuitem')).toHaveText(['设置', '关于', '帮助', '进入聊天模式'])
+  await rail.locator('.sidebar-account-switcher__main').click()
+  await expect(page.getByRole('menu', { name: '账号菜单' }).getByRole('menuitem')).toHaveText(['设置', '关于', '检测更新', '帮助', '进入聊天模式'])
   await page.getByRole('menuitem', { name: '关于', exact: true }).click()
   const about = page.getByRole('dialog', { name: '关于夭夭 AI', exact: true })
   await expect(about).toBeVisible()
@@ -249,7 +249,7 @@ test('created roles and editable teams share a durable chat list without plugin 
   await page.screenshot({ path: testInfo.outputPath('independent-automations.png') })
   await page.getByRole('button', { name: '返回聊天', exact: true }).click()
   await expect(page).toHaveURL(/\/conversations$/)
-  await rail.getByRole('button', { name: '设置与模式', exact: true }).click()
+  await rail.locator('.sidebar-account-switcher__main').click()
   await page.getByRole('menuitem', { name: '设置', exact: true }).click()
   const settings = page.getByRole('dialog', { name: '设置中心', exact: true })
   await expect(settings.locator('.settings-account-summary')).toContainText('fixture')
@@ -287,7 +287,7 @@ test('created roles and editable teams share a durable chat list without plugin 
   await expect(rail.getByRole('button', { name: '聊天', exact: true })).toHaveCount(0)
   await rail.getByRole('button', { name: '设置与模式', exact: true }).click()
   const settingsMenu = page.getByRole('menu', { name: '账号菜单', exact: true })
-  await expect(settingsMenu.getByRole('menuitem')).toHaveText(['设置', '关于', '帮助', '进入 Bot 模式'])
+  await expect(settingsMenu.getByRole('menuitem')).toHaveText(['设置', '关于', '检测更新', '帮助', '进入 Bot 模式'])
   await page.screenshot({ path: testInfo.outputPath('chat-settings-mode-menu.png') })
   await settingsMenu.getByRole('menuitem', { name: '设置', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '设置中心', exact: true })).toBeVisible()
@@ -542,7 +542,7 @@ test('created roles and editable teams share a durable chat list without plugin 
 
 test('subaccount allocation and Bot-only navigation work through the browser', async ({ page, browser }, testInfo) => {
   await login(page)
-  await page.locator('.desktop-sidebar').getByRole('button', { name: '设置与模式', exact: true }).click()
+  await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
   await page.getByRole('menuitem', { name: '设置', exact: true }).click()
   const settings = page.getByRole('dialog', { name: '设置中心', exact: true })
   await settings.getByRole('button', { name: '用户与权限', exact: true }).click()
@@ -566,7 +566,7 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   await child.getByRole('button', { name: '保存并进入夭夭', exact: true }).click()
   await expect(child).toHaveURL(/\/conversations$/)
   await expect(child.getByRole('heading', { name: '还没有聊天' })).toBeVisible()
-  await child.locator('.desktop-sidebar').getByRole('button', { name: '设置与模式', exact: true }).click()
+  await child.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
   await expect(child.getByRole('menu', { name: '账号菜单' }).getByRole('menuitem')).toHaveText(['设置', '关于', '帮助'])
   await child.keyboard.press('Escape')
   await openCreate(child, '新建 Bot')
@@ -701,5 +701,54 @@ test('Bot transcript switches from cache and preserves the viewport during histo
   } finally {
     await page.request.patch(`/api/app/agents/${seed.agentId}`, { headers, data: { archived: true } })
     await page.request.delete(`/api/app/agents/${seed.agentId}`, { headers })
+  }
+})
+
+test('account update checks show loading, available versions and retry on desktop and phone', async ({ page }, testInfo) => {
+  await login(page)
+  const current = { schemaVersion: 1, releaseVersion: '0.4.17', webVersion: '0.4.17', gitTag: 'v0.4.17' }
+  const status = { current, latest: { ...current, webVersion: '0.4.18', releaseVersion: '0.4.18', gitTag: 'v0.4.18' }, supported: true, installationMode: 'source', updateAvailable: true, canRollback: false, releasePageUrl: 'https://github.com/Lsamien/yaoyao/releases/tag/v0.4.18' }
+  await page.route('**/api/app/system/update/status', route => route.fulfill({ json: status }))
+  let failed = false
+  let releaseCheck: (() => void) | undefined
+  await page.route('**/api/app/system/update/check', async route => {
+    await new Promise<void>(resolve => { releaseCheck = resolve })
+    await route.fulfill(failed ? { status: 502, json: { error: '暂时无法连接更新服务' } } : { json: status })
+  })
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 866 })
+    await page.emulateMedia({ colorScheme: width === 390 ? 'dark' : 'light', reducedMotion: 'reduce' })
+    const account = page.locator('.desktop-sidebar .sidebar-account-switcher__main')
+    await expect(page.locator('.sidebar-settings-trigger')).toHaveCount(0)
+    await account.click()
+    // The menu's dismiss layer receives the second pointer click over the account.
+    const accountRect = (await account.boundingBox())!
+    await page.mouse.click(accountRect.x + accountRect.width / 2, accountRect.y + accountRect.height / 2)
+    await expect(page.getByRole('menu', { name: '账号菜单' })).toHaveCount(0)
+    await account.click()
+    await page.screenshot({ path: testInfo.outputPath(`update-menu-${width}.png`) })
+    await page.getByRole('menuitem', { name: '检测更新', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '检测更新', exact: true })
+    await expect(dialog.getByRole('status')).toHaveText('正在检测更新…')
+    await expect(dialog.getByRole('button', { name: '正在检测…', exact: true })).toBeDisabled()
+    await expect.poll(() => Boolean(releaseCheck)).toBe(true)
+    releaseCheck!(); releaseCheck = undefined
+    await expect(dialog.getByRole('status')).toHaveText('发现新版本 0.4.18')
+    await page.screenshot({ path: testInfo.outputPath(`update-available-${width}.png`) })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    failed = true
+    await dialog.getByRole('button', { name: '重新检测', exact: true }).click()
+    await expect.poll(() => Boolean(releaseCheck)).toBe(true)
+    releaseCheck!(); releaseCheck = undefined
+    await expect(dialog.getByRole('alert')).toContainText('暂时无法连接更新服务')
+    await expect(dialog.getByRole('button', { name: '前往更新', exact: true })).toHaveCount(0)
+    failed = false
+    await dialog.getByRole('button', { name: '重试', exact: true }).click()
+    await expect.poll(() => Boolean(releaseCheck)).toBe(true)
+    releaseCheck!(); releaseCheck = undefined
+    await expect(dialog.getByRole('button', { name: '前往更新', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+    await expect(account).toBeFocused()
   }
 })

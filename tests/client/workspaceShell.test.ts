@@ -50,6 +50,7 @@ async function mountShell(start = '/chat') {
       stubs: {
         SettingsCenterDialog: SettingsCenterDialogStub,
         BotPluginsDialog: defineComponent({emits:['close'],template:'<div data-testid="plugins-dialog"><button @click="$emit(\'close\')">关闭已连接应用</button></div>'}),
+        UpdateCheckDialog: defineComponent({emits:['close', 'manage'],template:'<div data-testid="update-dialog"><button @click="$emit(\'close\')">关闭检测更新</button><button @click="$emit(\'manage\')">前往更新</button></div>'}),
         AboutDialog: defineComponent({emits:['close'],template:'<div data-testid="about-dialog"><button @click="$emit(\'close\')">关闭关于</button></div>'}),
         AgentAvatar: true,
         AppIcon: true,
@@ -62,6 +63,7 @@ async function mountShell(start = '/chat') {
 
 beforeEach(() => {
   localStorage.clear()
+  delete window.yaoyaoDesktop
 })
 
 afterEach(() => {
@@ -117,7 +119,7 @@ describe('Workspace shell account controls', () => {
     expect(settingsTrigger.attributes('aria-label')).toBe('设置与模式')
     await settingsTrigger.trigger('click')
     const actions = document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')
-    expect([...actions].map(button => button.textContent?.trim())).toEqual(['设置', '关于', '帮助', '进入 Bot 模式'])
+    expect([...actions].map(button => button.textContent?.trim())).toEqual(['设置', '关于', '检测更新', '帮助', '进入 Bot 模式'])
     actions[0]!.click()
     await wrapper.vm.$nextTick()
     const settings = wrapper.get('[data-testid="settings-center"]')
@@ -142,7 +144,7 @@ describe('Workspace shell account controls', () => {
 
     expect(desktop.findAll('.sidebar-feature-nav button').map(button => button.text())).not.toContain('聊天')
     await settingsTrigger.trigger('click')
-    document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')[3]!.click()
+    document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')[4]!.click()
     await vi.waitFor(() => expect(wrapper.classes()).toContain('workspace-shell--conversations'))
     expect(document.querySelector('.workspace-settings-menu')).toBeNull()
     wrapper.unmount()
@@ -152,6 +154,7 @@ describe('Workspace shell account controls', () => {
 it('uses the reference Bot list header and keeps mode changes in settings', async () => {
   const wrapper = await mountShell('/conversations')
   const rail = wrapper.get('.desktop-sidebar')
+  expect(wrapper.find('.sidebar-settings-trigger').exists()).toBe(false)
   expect(rail.find('.sidebar-feature-nav').exists()).toBe(false)
   expect(rail.find('.sidebar-primary-action').exists()).toBe(false)
   expect(rail.find('.sidebar-footer').exists()).toBe(true)
@@ -164,7 +167,7 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   expect(rail.find('.sidebar-context__heading').exists()).toBe(false)
   await rail.get('.sidebar-account-switcher__main').trigger('click')
   const accountItems = [...document.querySelectorAll<HTMLElement>('.workspace-settings-menu [role="menuitem"]')]
-  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['设置', '关于', '帮助', '进入聊天模式'])
+  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['设置', '关于', '检测更新', '帮助', '进入聊天模式'])
   expect(document.querySelector<HTMLAnchorElement>('.workspace-settings-menu a')?.href).toBe('https://yaoyao.samien.cn/')
   accountItems[0]!.click(); await wrapper.vm.$nextTick()
   expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('account-security')
@@ -210,7 +213,7 @@ it('shows Bot tools only in Bot mode and restores keyboard focus after closing',
 
 it.each(['/chat', '/history', '/conversations', '/kanban', '/files'])('opens an independent About dialog from the menu in %s', async path => {
   const wrapper = await mountShell(path)
-  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-settings-trigger')
+  const trigger = wrapper.get<HTMLButtonElement>(path === '/conversations' ? '.desktop-sidebar .sidebar-account-switcher__main' : '.desktop-sidebar .sidebar-settings-trigger')
   await trigger.trigger('click')
   const item = [...document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu button')].find(b => b.textContent?.trim() === '关于')!
   item.click(); await flushPromises()
@@ -228,5 +231,46 @@ it('navigates to the independent automation route without opening settings', asy
   item.click(); await flushPromises()
   expect(wrapper.vm.$router.currentRoute.value.path).toBe('/conversations/automations')
   expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+
+
+it('checks Web updates from the Bot account menu and preserves focus through update settings', async () => {
+  const wrapper = await mountShell('/conversations')
+  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-account-switcher__main')
+  await trigger.trigger('click')
+  ;[...document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu button')].find(b => b.textContent?.trim() === '检测更新')!.click()
+  await flushPromises()
+  expect(wrapper.find('[data-testid="update-dialog"]').exists()).toBe(true)
+  await wrapper.get('[data-testid="update-dialog"] button:nth-child(2)').trigger('click')
+  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('system-update')
+  await wrapper.get('[data-testid="close-settings"]').trigger('click')
+  await flushPromises()
+  expect(document.activeElement).toBe(trigger.element)
+  wrapper.unmount()
+})
+
+it('opens the native updater, prevents duplicate clicks and lets a failed opening retry', async () => {
+  const openUpdates = vi.fn().mockRejectedValueOnce(new Error('窗口打开失败')).mockResolvedValueOnce(undefined)
+  window.yaoyaoDesktop = { openUpdates, openComputer: vi.fn(), computerClosed: vi.fn(), onComputerClose: vi.fn() }
+  const wrapper = await mountShell('/conversations')
+  await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
+  const item = [...document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu button')].find(b => b.textContent?.trim() === '检测更新')!
+  item.click(); item.click()
+  await flushPromises()
+  expect(openUpdates).toHaveBeenCalledTimes(1)
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('窗口打开失败')
+  item.click(); await flushPromises()
+  expect(openUpdates).toHaveBeenCalledTimes(2)
+  expect(document.querySelector('.workspace-settings-menu')).toBeNull()
+  expect(wrapper.find('[data-testid="update-dialog"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+
+it('does not expose server update controls to a non-admin browser account', async () => {
+  const wrapper = await mountShell('/conversations')
+  await wrapper.setProps({ isAdmin: false })
+  await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
+  expect(document.querySelector('.workspace-settings-menu')?.textContent).not.toContain('检测更新')
   wrapper.unmount()
 })

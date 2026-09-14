@@ -50,7 +50,7 @@ export class RealtimeBroker {
   onNativeEvent: (owner: string, profile: string, storedId: string, frame: Frame) => void = () => {}
   onNativeGlobalEvent: (owner: string, type: string, upstreamInvalidation?: boolean) => void = () => {}
   onNativeCommand: (owner: string, profile: string, storedId: string, method: string, params: Frame) => void = () => {}
-  onNativeRoute: (owner: string, profile: string, storedId: string, runtimeId: string) => void = () => {}
+  onNativeRoute: (owner: string, profile: string, storedId: string, runtimeId: string, running?: boolean) => void = () => {}
   readonly epoch = randomUUID()
   readonly channels = new Map<string, RealtimeChannel>()
   private upstreams = new Map<string, Upstream>()
@@ -283,7 +283,7 @@ export class RealtimeBroker {
         r.cwd = typeof info.cwd === 'string' ? info.cwd : undefined
         u.routes.set(key, r); u.byRuntime.set(runtime, r); c.routes.add(key)
         r.observers.set(c.principal.key, c.principal)
-        if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime)
+        if (nativeOwner) this.onNativeRoute(nativeOwner, profile, stored, runtime, r.active)
         if (nativeOwner && (method === 'session.create' || method === 'session.branch')) {
           this.onNativeCommand(nativeOwner, profile, stored, method, {...p,_delivery_id:deliveryID})
         }
@@ -419,7 +419,7 @@ export class RealtimeBroker {
             for(const channel of this.channels.values())if(channel.principal.upstreamKey===u.principal.upstreamKey&&channel.routes.delete(oldKey))channel.routes.add(newKey)
             for(const principal of r.observers.values()){
               const owner=this.nativeOwner(principal)
-              if(owner&&principal.valid())this.onNativeRoute(owner,r.profile,r.stored,r.runtime)
+              if(owner&&principal.valid())this.onNativeRoute(owner,r.profile,r.stored,r.runtime,r.active)
             }
           }
         }

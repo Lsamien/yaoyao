@@ -11,6 +11,7 @@ interface ImportMeta {
 
 interface Window {
   yaoyaoDesktop?: {
+    openUpdates?(): Promise<void>
     openComputer(id: string): Promise<boolean>
     computerClosed(): Promise<void>
     onComputerClose(callback: () => void): () => void

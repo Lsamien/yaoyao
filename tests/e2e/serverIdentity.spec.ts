@@ -1,6 +1,6 @@
 import {expect,test,type Page} from '@playwright/test'
-async function login(page:Page){await page.goto('/conversations');await page.getByRole('textbox',{name:'账号',exact:true}).fill('fixture');await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass');await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.getByRole('button',{name:'设置与模式'}).first()).toBeVisible()}
-async function settings(page:Page){await page.getByRole('button',{name:'设置与模式'}).first().click();await page.getByRole('menuitem',{name:'进入设置',exact:true}).click();await expect(page.locator('input[name=server-display-name]')).toBeVisible();await expect(page.locator('.settings-center-layer')).toHaveCSS('opacity','1')}
+async function login(page:Page){await page.goto('/conversations');await page.getByRole('textbox',{name:'账号',exact:true}).fill('fixture');await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass');await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.locator('.desktop-sidebar .sidebar-account-switcher__main')).toBeVisible()}
+async function settings(page:Page){await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click();await page.getByRole('menuitem',{name:'进入设置',exact:true}).click();await expect(page.locator('input[name=server-display-name]')).toBeVisible();await expect(page.locator('.settings-center-layer')).toHaveCSS('opacity','1')}
 test('shares a server name across two clients without reloading',async({page,browser},testInfo)=>{
   await login(page);await settings(page)
   const observerContext=await browser.newContext({baseURL:'http://127.0.0.1:18804',viewport:{width:1100,height:850}})

@@ -8,6 +8,8 @@ import {
 } from '@/api/sessions'
 import { getModels } from '@/api/profiles'
 import { ChatRpcSocket, RpcError } from '@/api/realtime'
+import { ChatTranscriptClient } from '@/api/chatTranscript'
+import type { TranscriptMessage, TranscriptSnapshot } from '@shared/chatTranscript'
 import { ApiError } from '@/api/client'
 import { encodeAttachment } from '@/utils/attachments'
 import { ScopedCache } from '@/utils/cache'
@@ -20,7 +22,7 @@ import { modelForSession, modelSelectionFromSessionInfo } from '@/utils/sessionM
 import { moveSessionFastMode, readSessionFastMode, writeSessionFastMode } from '@/utils/sessionPreferences'
 import { useAuthStore } from './auth'
 
-interface CachedHistory { messages: ChatMessage[]; total: number; savedAt: number }
+interface CachedHistory { messages: ChatMessage[]; total: number; savedAt: number; transcript?: Omit<TranscriptSnapshot,'messages'> }
 const historyCache = new ScopedCache<CachedHistory>('chat-history-v1')
 const INFLIGHT_SESSION_STORAGE_PREFIX = 'hermes-yaoyao:inflight-chat-sessions:'
 const SESSION_LIST_REFRESH_DEBOUNCE_MS = 200
@@ -111,9 +113,52 @@ export const useChatStore = defineStore('chat', () => {
   let nextSessionCursor: string | undefined
   let modelLoadGeneration = 0
   let unreadLoadGeneration = 0
+  let historyLoadGeneration = 0
   let reconnectResumePromise: Promise<unknown> | undefined
   let persistedRecoveryPromise: Promise<void> | undefined
   const runtimePromises = new Map<string, Promise<ChatRouteState>>()
+  const transcriptSupported = ref(false)
+  let transcript: ChatTranscriptClient | undefined
+  let transcriptGeneration = 0
+
+  function startTranscript(): void {
+    const generation=++transcriptGeneration
+    transcript?.close();transcript=undefined
+    const profile=activeProfileName.value,id=activeSessionId.value,owner=accountId()
+    if(!transcriptSupported.value||!profile||!id||id.startsWith('draft-')||sessionView==='history')return
+    const key=routeKey(profile,id),state=ensureRoute(profile,id),scope=cacheScope(profile)
+    const current=()=>generation===transcriptGeneration&&owner===accountId()?routes[key]:undefined
+    void (async()=>{
+      const cached=await historyCache.get(scope,id)
+      if(!current())return
+      if(!state.messages.length&&cached?.messages.length)state.messages=cached.messages
+      const client=new ChatTranscriptClient(profile,id,async value=>{
+        const initial=current();if(!initial)return
+        const canonical=value.messages.map(message=>{
+          const mapped=normalizeChatMessage(message,id,profile)
+          if(message.status==='pending')mapped.stage='pending'
+          return mapped
+        })
+        const ids=new Set(canonical.flatMap(m=>[m.id,m.clientMessageId].filter(Boolean)))
+        const pending=initial.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
+        const messages=[...canonical,...pending]
+        const {messages:_,...checkpoint}=value
+        await historyCache.set(scope,id,{messages,total:value.total,savedAt:Date.now(),transcript:checkpoint})
+        const latest=current();if(!latest)return
+        latest.messages=messages;latest.messageTotal=value.total;latest.loadedMessageCount=canonical.length
+        latest.hasMoreBefore=value.hasOlder;latest.historySynced=true;latest.isLoadingHistory=false;latest.error=undefined
+        latest.isStreaming=value.running??canonical.some(m=>m.isStreaming);latest.isQueued=value.queued??false
+        if(!latest.isStreaming)latest.liveStatus=undefined
+        updateInflightMarker(latest)
+      },error=>{const latest=current();if(latest){latest.error=error.message;latest.historySynced=false}},Math.max(150,state.messages.length))
+      if(cached?.transcript){
+        const canonical=cached.messages.map(m=>m.raw as unknown as TranscriptMessage).filter(m=>m?.id&&Number.isSafeInteger(m.revision)&&Number.isSafeInteger(m.seq))
+        client.restore({...cached.transcript,messages:canonical})
+      }
+      transcript=client;await client.run()
+    })().catch(error=>{const latest=current();if(latest)latest.error=errorMessage(error)})
+  }
+  watch(()=>[activeSessionId.value,activeProfileName.value,transcriptSupported.value,auth.user?.id],startTranscript)
 
   const activeRouteState = computed(() => {
     if (!activeSessionId.value || !activeProfileName.value) return undefined
@@ -304,9 +349,13 @@ export const useChatStore = defineStore('chat', () => {
     if (event.type === 'gateway.ready') return
     const payload = record(event.payload)
     if (event.type === 'sessions.changed') {
-      if(payload.reason==='cache.synced'){
-        const state=activeRouteState.value
-        if(state && state.route.profile===payload.profile && state.route.sessionId===payload.session_id && !state.isLoadingHistory)
+      if(!transcriptSupported.value && payload.reason==='cache.synced' && typeof payload.profile==='string' && typeof payload.session_id==='string'){
+        const state=routes[routeKey(payload.profile,payload.session_id)]
+        if(state){
+          state.historySyncRevision=(state.historySyncRevision??0)+1
+          state.historySynced=false
+        }
+        if(state && state===activeRouteState.value && !state.isLoadingHistory)
           void loadHistory(state).catch(()=>{})
       }
       scheduleSessionListRefresh()
@@ -328,6 +377,18 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (!key) return
     let state = routes[key]
+    if(transcriptSupported.value&&sessionView==='chat'&&(
+      /^(message\.|tool\.|reasoning\.|thinking\.)/.test(event.type)
+      || ['run.started','run.completed','run.failed','run.peer_user_message','peer.user.message'].includes(event.type))){
+      // Message bodies come exclusively from the persisted transcript stream.
+      // Legacy control events may only wake/settle the execution indicator.
+      if(['message.start','run.started'].includes(event.type))state.isStreaming=true
+      if(['message.complete','run.completed','run.failed'].includes(event.type)){
+        state.isQueued=number(payload.queue_remaining)>0;state.isStreaming=state.isQueued||number(payload.background_pending)>0
+        if(!state.isStreaming){state.liveStatus=undefined;state.pendingApproval=undefined;state.pendingClarification=undefined}
+      }
+      updateInflightMarker(state);return
+    }
     if (event.type === 'session.info') {
       const storedId = string(payload.stored_session_id ?? payload.storedSessionId ?? payload.session_key)
       if (storedId && storedId !== state.route.sessionId) {
@@ -364,7 +425,7 @@ export const useChatStore = defineStore('chat', () => {
       window.clearTimeout(reconnectTimer)
       reconnectTimer = undefined
     }
-    connectPromise = socket.connect().catch(cause => {
+    connectPromise = socket.connect().then(()=>{if(auth.isAuthenticated)transcriptSupported.value=socket.transcriptSupported===true}).catch(cause => {
       connectionState.value = 'failed'
       error.value = errorMessage(cause)
       throw cause
@@ -373,6 +434,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function disconnect(): void {
+    transcriptGeneration++;transcript?.close();transcript=undefined;transcriptSupported.value=false
     if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
     reconnectTimer = undefined
     socket.close()
@@ -486,40 +548,55 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadHistory(state: ChatRouteState, forceRefresh = false): Promise<void> {
-    const generation = ++state.generation
+    if(transcriptSupported.value&&sessionView==='chat'){if(state===activeRouteState.value)startTranscript();return}
+    const key = routeKey(state.route.profile, state.route.sessionId)
+    const generation = ++historyLoadGeneration
+    state.generation = generation
+    const syncRevision = state.historySyncRevision ?? 0
+    // SSE replaces a route state object. Resolve the current object after each
+    // await so history merges into its live tail instead of a detached copy.
+    const current = () => routes[key]?.generation === generation ? routes[key] : undefined
     state.isLoadingHistory = true
     state.error = undefined
     const scope = cacheScope(state.route.profile)
     const cached = await historyCache.get(scope, state.route.sessionId)
-    if (generation !== state.generation) return
+    let latest = current()
+    if (!latest) return
     if (cached?.messages.length) {
-      state.messages = mergeChatMessages(state.messages, cached.messages, 'snapshot')
-      state.messageTotal = cached.total
-      state.loadedMessageCount = cached.messages.length
+      latest.messages = mergeChatMessages(latest.messages, cached.messages, 'snapshot')
+      latest.messageTotal = cached.total
+      latest.loadedMessageCount = cached.messages.length
     }
     try {
       const page = await getMessages(state.route.sessionId, 0, 150, state.route.profile, false, sessionView)
-      if (generation !== state.generation) return
-      if (forceRefresh && routes[routeKey(state.route.profile, state.route.sessionId)]?.isStreaming) {
+      latest = current()
+      if (!latest || (latest.historySyncRevision ?? 0) !== syncRevision) return
+      if (forceRefresh && latest.isStreaming) {
         throw new Error('正在回复，请结束后再刷新历史')
       }
-      const retained = forceRefresh ? state.messages.filter(message => message.role === 'user' && message.stage !== 'settled') : state.messages
-      state.messages = reconcileChatHistory(retained, page.messages, state.isStreaming)
-      state.messageTotal = page.total
-      state.loadedMessageCount = page.returned
-      state.hasMoreBefore = page.hasMore
-      state.historySynced = true
+      const retained = forceRefresh ? latest.messages.filter(message => message.role === 'user' && message.stage !== 'settled') : latest.messages
+      latest.messages = reconcileChatHistory(retained, page.messages, latest.isStreaming)
+      latest.messageTotal = page.total
+      latest.loadedMessageCount = page.returned
+      latest.hasMoreBefore = page.hasMore
+      latest.historySynced = true
       if (page.session) {
         const index = sessions.value.findIndex(session => session.id === page.session!.id && session.profile === page.session!.profile)
         if (index >= 0) sessions.value.splice(index, 1, page.session)
       }
-      await historyCache.set(scope, state.route.sessionId, { messages: state.messages, total: page.total, savedAt: Date.now() })
+      await historyCache.set(scope, state.route.sessionId, { messages: latest.messages, total: page.total, savedAt: Date.now() })
     } catch (cause) {
-      if (generation === state.generation) state.error = errorMessage(cause)
+      latest = current()
+      if (latest) latest.error = errorMessage(cause)
       if(cause instanceof ApiError && cause.code==='CHAT_HISTORY_SYNC_PENDING')return
       throw cause
     } finally {
-      if (generation === state.generation) state.isLoadingHistory = false
+      latest = current()
+      if (latest) {
+        latest.isLoadingHistory = false
+        if ((latest.historySyncRevision ?? 0) !== syncRevision && latest === activeRouteState.value)
+          void loadHistory(latest).catch(() => {})
+      }
     }
   }
 
@@ -538,7 +615,7 @@ export const useChatStore = defineStore('chat', () => {
     syncSelectedModel(refreshed?.model, refreshed?.provider)
     if (refreshed?.owned === true && !sessionId.startsWith('draft-')
       && activeSessionId.value === sessionId && activeProfileName.value === selectedProfile) {
-      await ensureRuntime(state).catch(cause => {
+      await ensureRuntime(routes[routeKey(selectedProfile, sessionId)] ?? state).catch(cause => {
         const current = routes[routeKey(selectedProfile, sessionId)]
         if (current) current.error = errorMessage(cause)
       })
@@ -554,22 +631,34 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function loadOlder(): Promise<void> {
+    if(transcriptSupported.value&&transcript){await transcript.loadOlder();return}
     const state = activeRouteState.value
     if (!state || state.isLoadingHistory || !state.hasMoreBefore) return
+    const key = routeKey(state.route.profile, state.route.sessionId)
     const generation = state.generation
+    const syncRevision = state.historySyncRevision ?? 0
+    const current = () => routes[key]?.generation === generation ? routes[key] : undefined
     state.isLoadingHistory = true
     try {
       const page = await getMessages(state.route.sessionId, state.loadedMessageCount, 150, state.route.profile, false, sessionView)
-      if (generation !== state.generation) return
-      state.messages = mergeChatMessages(state.messages, page.messages, 'prepend')
-      state.loadedMessageCount += page.returned
-      state.messageTotal = Math.max(state.messageTotal, page.total)
-      state.hasMoreBefore = page.hasMore
+      const latest = current()
+      if (!latest) return
+      latest.messages = mergeChatMessages(latest.messages, page.messages, 'prepend')
+      latest.loadedMessageCount += page.returned
+      latest.messageTotal = Math.max(latest.messageTotal, page.total)
+      latest.hasMoreBefore = page.hasMore
       await historyCache.set(cacheScope(state.route.profile), state.route.sessionId, {
-        messages: state.messages, total: state.messageTotal, savedAt: Date.now(),
+        messages: latest.messages, total: latest.messageTotal, savedAt: Date.now(),
       })
-    } catch (cause) { state.error = errorMessage(cause) }
-    finally { if (generation === state.generation) state.isLoadingHistory = false }
+    } catch (cause) { const latest = current(); if (latest) latest.error = errorMessage(cause) }
+    finally {
+      const latest = current()
+      if (latest) {
+        latest.isLoadingHistory = false
+        if ((latest.historySyncRevision ?? 0) !== syncRevision && latest === activeRouteState.value)
+          void loadHistory(latest).catch(() => {})
+      }
+    }
   }
 
   function createSession(profile = auth.activeProfile?.name ?? 'default'): string {
@@ -630,7 +719,7 @@ export const useChatStore = defineStore('chat', () => {
     persistFastMode(migrated)
     const resumedMessages = values(result.messages)
       .map(value => normalizeChatMessage(value, storedId, migrated.route.profile))
-    if (resumedMessages.length) migrated.messages = mergeChatMessages(migrated.messages, resumedMessages, 'snapshot')
+    if (!transcriptSupported.value&&resumedMessages.length) migrated.messages = mergeChatMessages(migrated.messages, resumedMessages, 'snapshot')
     const inflight = record(result.inflight ?? result.active_run)
     const assistant = string(inflight.assistant)
     const inflightError = string(inflight.error)
@@ -641,7 +730,7 @@ export const useChatStore = defineStore('chat', () => {
     // A turn can be thinking or calling tools before producing any text.
     // Create its live row now so subsequent tool events have a visible target.
     const existing = [...migrated.messages].reverse().find(message => message.role === 'assistant' && message.isStreaming)
-    if (migrated.isStreaming || inflightError || (existing && assistant)) {
+    if (!transcriptSupported.value&&(migrated.isStreaming || inflightError || (existing && assistant))) {
       migrated.messages = mergeChatMessages(migrated.messages, [{
         ...existing,
         id: existing?.id ?? `resume:${runtimeId}`,
@@ -657,11 +746,11 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (!migrated.isStreaming) {
       migrated.liveStatus = undefined
-      migrated.messages = settleChatMessages(migrated.messages)
+      if(!transcriptSupported.value)migrated.messages = settleChatMessages(migrated.messages)
     }
     migrated.pendingApproval = undefined
     migrated.pendingClarification = undefined
-    values(inflight.corrections).forEach((correction, index) => {
+    values(transcriptSupported.value?[]:inflight.corrections).forEach((correction, index) => {
       const content = string(correction)
       if (!content) return
       migrated.messages = mergeChatMessages(migrated.messages, [{
@@ -674,7 +763,7 @@ export const useChatStore = defineStore('chat', () => {
         stage: 'accepted',
       }])
     })
-    if (queuedUser) {
+    if (!transcriptSupported.value&&queuedUser) {
       migrated.messages = mergeChatMessages(migrated.messages, [{
         id: `resume-queued:${runtimeId}`,
         sessionId: storedId,

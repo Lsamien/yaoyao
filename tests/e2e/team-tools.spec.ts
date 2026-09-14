@@ -147,7 +147,7 @@ test('registers an execution node, downloads its private config and disables it'
   await page.getByRole('textbox',{name:'账号',exact:true}).fill('fixture')
   await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass')
   await page.getByRole('button',{name:'登录',exact:true}).click()
-  await page.getByRole('button',{name:/^(打开设置中心|设置与模式)$/}).first().click()
+  await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
   await page.getByRole('menuitem',{name:'设置',exact:true}).click()
   const dialog=page.getByRole('dialog',{name:'设置中心'})
   await dialog.getByRole('button',{name:'Hermes 连接',exact:true}).click()
@@ -207,7 +207,7 @@ async function login(page:any,ready=false){
 }
 test('persists idle-stop settings and the host environment checkbox on desktop and mobile',async({page},testInfo)=>{
  await login(page,true)
- await page.getByRole('button',{name:'设置与模式',exact:true}).first().click();await page.getByRole('menuitem',{name:'设置',exact:true}).click()
+ await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click();await page.getByRole('menuitem',{name:'设置',exact:true}).click()
  const settings=page.getByRole('dialog',{name:'设置中心'});await settings.getByRole('button',{name:'本地虚拟机',exact:true}).click()
  const timeout=settings.getByRole('combobox',{name:'虚拟机空闲停止时间',exact:true})
  await timeout.selectOption('30');await expect(timeout).toHaveValue('30')
@@ -249,7 +249,7 @@ test('cloud VM keeps its own selection while the host option can be checked and 
 test('Local VM settings replace the image catalog and prepare the managed desktop',async({page},testInfo)=>{
  await login(page)
  await expect(page.getByRole('button',{name:'电脑与环境',exact:true})).toHaveCount(0)
- await page.getByRole('button',{name:'设置与模式',exact:true}).first().click()
+ await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
  await page.getByRole('menuitem',{name:'设置',exact:true}).click()
  const settings=page.getByRole('dialog',{name:'设置中心'})
  await settings.getByRole('button',{name:'本地虚拟机',exact:true}).click()

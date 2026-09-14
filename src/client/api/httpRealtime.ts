@@ -14,8 +14,8 @@ export class HTTPRealtimeChannel {
   private abort?: AbortController
   private ready = false
   constructor(readonly onFrame: (frame: string) => Promise<unknown>, readonly onFailure: (error: Error) => void) {}
-  static async requireSupport(): Promise<void> {
-    let value: { protocolVersion: number; csrfToken?: string }
+  static async requireSupport(): Promise<string[]> {
+    let value: { protocolVersion: number; csrfToken?: string; features?: string[] }
     try { value = await apiRequest('/api/realtime/capabilities') }
     catch (e) {
       if (e instanceof ApiError && [404, 405, 410].includes(e.status)) throw new ApiError('此服务端不支持 HTTP+SSE，请升级 15300 服务', 409, 'HTTP_SSE_REQUIRED')
@@ -23,6 +23,7 @@ export class HTTPRealtimeChannel {
     }
     if (value.protocolVersion !== 1) throw new ApiError('不支持的实时协议版本', 409, 'UNSUPPORTED_REALTIME_PROTOCOL')
     if (value.csrfToken) setApiCsrfToken(value.csrfToken)
+    return value.features ?? []
   }
   async open(channel: 'chat' | 'groups', anchor?: { epoch: string; cursor: number }): Promise<void> {
     const created = await apiRequest<{ id: string }>('/api/realtime/channels', { method: 'POST', body: { channel, ...anchor } })

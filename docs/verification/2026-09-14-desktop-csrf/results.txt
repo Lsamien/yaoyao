@@ -1,0 +1,10 @@
+Command: NODE_OPTIONS=--no-experimental-webstorage npm test -- tests/client tests/server/app.test.ts tests/server/security.test.ts tests/server/realtimeApi.test.ts
+
+Test Files  66 passed (66)
+      Tests  378 passed (378)
+   Start at  08:04:13
+   Duration  4.53s (transform 5.72s, setup 496ms, collect 20.41s, tests 5.13s, environment 20.59s, prepare 2.59s)
+
+> yaoyao@0.4.17 typecheck
+> vue-tsc -b && tsc --noEmit -p tsconfig.server.json
+Typecheck exit code: 0

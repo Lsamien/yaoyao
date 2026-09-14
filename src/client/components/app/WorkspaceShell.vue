@@ -11,6 +11,7 @@ import SettingsCenterDialog from '@/components/app/SettingsCenterDialog.vue'
 import { rememberInterfacePath } from '@/utils/interfaceMode'
 import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
 const AboutDialog = defineAsyncComponent(() => import('./AboutDialog.vue'))
+const UpdateCheckDialog = defineAsyncComponent(() => import('./UpdateCheckDialog.vue'))
 const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspace/BotPluginsDialog.vue'))
 
 type NavItem = {
@@ -102,7 +103,7 @@ const router = useRouter()
 const mobileDrawerOpen = ref(false)
 const profileMenuOpen = ref(false)
 const settingsOpen = ref(false)
-const standalone = ref<'plugins' | 'about' | null>(null)
+const standalone = ref<'plugins' | 'about' | 'update' | null>(null)
 const standaloneReturnFocus = ref<HTMLElement>()
 const settingsPage = ref<SettingsPage>('agent-identity')
 const settingsReturnFocus = ref<HTMLButtonElement>()
@@ -116,6 +117,9 @@ const createMenu = ref<HTMLElement | null>(null)
 let createTrigger: HTMLElement | null = null
 const createPosition = ref({ left: '8px', top: '58px' })
 const settingsMenuOpen = ref(false)
+const canCheckUpdates = computed(() => Boolean(window.yaoyaoDesktop?.openUpdates) || props.isAdmin)
+const openingUpdate = ref(false)
+const updateError = ref('')
 const settingsMenu = ref<HTMLElement | null>(null)
 let settingsTrigger: HTMLButtonElement | null = null
 const settingsMenuPosition = ref({ left: '8px', top: '8px' })
@@ -205,7 +209,7 @@ function chooseCreate(kind: 'agent' | 'group' | 'remote-agent') {
 function actionMenuKeydown(event: KeyboardEvent) {
   if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
   event.preventDefault()
-  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]')]
+  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')]
   const index = buttons.indexOf(document.activeElement as HTMLElement)
   buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length]?.focus()
 }
@@ -218,14 +222,39 @@ async function openSettingsMenu(event: MouseEvent) {
   if (settingsMenuOpen.value) { closeSettingsMenu(); return }
   settingsTrigger = event.currentTarget as HTMLButtonElement
   const rect = settingsTrigger.getBoundingClientRect()
-  const height = (props.isAdmin ? 4 : 3) * (window.innerWidth < 768 ? 44 : 36) + 18
+  const height = ((props.isAdmin ? 4 : 3) + Number(canCheckUpdates.value)) * (window.innerWidth < 768 ? 44 : 36) + 18
   settingsMenuPosition.value = { left: `${Math.max(8, Math.min(rect.right - 180, window.innerWidth - 188))}px`, top: `${Math.max(8, rect.top - height)}px` }
   profileMenuOpen.value = false
   createMenuOpen.value = false
   toolsMenuOpen.value = false
+  updateError.value = ''
   settingsMenuOpen.value = true
   await nextTick()
   settingsMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+}
+async function checkForUpdates() {
+  if (openingUpdate.value || !canCheckUpdates.value) return
+  updateError.value = ''
+  if (window.yaoyaoDesktop?.openUpdates) {
+    openingUpdate.value = true
+    try {
+      await window.yaoyaoDesktop.openUpdates()
+      closeSettingsMenu()
+    } catch (cause) {
+      updateError.value = cause instanceof Error ? cause.message : '无法打开更新窗口，请重试'
+    } finally { openingUpdate.value = false }
+    return
+  }
+  standaloneReturnFocus.value = settingsTrigger?.closest('.mobile-drawer')
+    ? mobileNavigationTrigger.value : settingsTrigger ?? undefined
+  settingsMenuOpen.value = false
+  mobileDrawerOpen.value = false
+  standalone.value = 'update'
+}
+function openUpdateSettings() {
+  settingsReturnFocus.value = standaloneReturnFocus.value as HTMLButtonElement | undefined
+  standalone.value = null
+  openSettings('system-update')
 }
 function chooseSettingsAction(action: 'settings' | 'bots' | 'about') {
   settingsMenuOpen.value = false
@@ -515,7 +544,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
             </span>
             <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
-          <button class="sidebar-settings-trigger" type="button" title="设置与模式" aria-label="设置与模式" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu">
+          <button v-if="!applicationWorkspace" class="sidebar-settings-trigger" type="button" title="设置与模式" aria-label="设置与模式" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu">
             <AppIcon name="settings" :size="17" />
           </button>
           <Transition name="menu-fade">
@@ -623,7 +652,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
             </span>
             <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
-          <button class="sidebar-settings-trigger" type="button" title="设置与模式" aria-label="设置与模式" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu">
+          <button v-if="!applicationWorkspace" class="sidebar-settings-trigger" type="button" title="设置与模式" aria-label="设置与模式" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu">
             <AppIcon name="settings" :size="17" />
           </button>
           <Transition name="menu-fade">
@@ -664,6 +693,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
     </Transition>
 
     <AboutDialog v-if="standalone === 'about'" @close="closeStandalone" />
+    <UpdateCheckDialog v-if="standalone === 'update' && isAdmin" @close="closeStandalone" @manage="openUpdateSettings" />
     <BotPluginsDialog v-if="standalone === 'plugins' && applicationWorkspace" @close="closeStandalone" />
     <SettingsCenterDialog
       :open="settingsOpen"
@@ -695,6 +725,8 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
         <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :style="settingsMenuPosition" role="menu" aria-label="账号菜单" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />设置</button>
           <button type="button" role="menuitem" @click="chooseSettingsAction('about')"><AppIcon name="info" :size="17" />关于</button>
+          <button v-if="canCheckUpdates" type="button" role="menuitem" :disabled="openingUpdate" :aria-busy="openingUpdate" @click="checkForUpdates"><AppIcon name="refresh" :size="17" />{{ openingUpdate ? '正在打开…' : '检测更新' }}</button>
+          <p v-if="updateError" class="update-menu-error" role="alert">{{ updateError }}</p>
           <a role="menuitem" href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer" @click="closeSettingsMenu"><AppIcon name="external" :size="17" />帮助</a>
           <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
@@ -712,6 +744,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
 </template>
 
 <style scoped>
+.update-menu-error{margin:4px 10px;color:var(--danger);font-size:12px;line-height:1.5;overflow-wrap:anywhere}.workspace-settings-menu button:disabled{opacity:.6;cursor:wait}
 .sidebar-tools-trigger{display:flex;width:100%;min-height:44px;align-items:center;gap:10px;padding:8px 12px;margin:0 0 8px;border:0;border-radius:9px;background:transparent;color:var(--text-primary);font:500 13px var(--font-ui);cursor:pointer}.sidebar-tools-trigger span{flex:1;text-align:left}.sidebar-tools-trigger:hover,.sidebar-tools-trigger[aria-expanded=true]{background:var(--surface-hover)}.sidebar-tools-trigger:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.workspace-settings-menu a{display:flex;align-items:center;gap:8px;min-height:36px;padding:8px 10px;box-sizing:border-box;border-radius:7px;color:var(--text-primary);text-decoration:none;font-size:13px}.workspace-settings-menu a:hover{background:var(--surface-hover)}.workspace-settings-menu a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .workspace-shell {
   display: grid;

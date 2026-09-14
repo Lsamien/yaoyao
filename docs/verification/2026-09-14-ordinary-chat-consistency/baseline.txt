@@ -1,0 +1,117 @@
+
+> yaoyao@0.4.17 test
+> vitest run tests/client/chatCrossClientSync.test.ts
+
+
+ RUN  v3.2.7 /Users/samien/git/ordinary-chat-consistency/yaoyao
+
+ ❯ tests/client/chatCrossClientSync.test.ts (16 tests | 4 failed) 4256ms
+   ✓ cross-client chat subscriptions > subscribes a viewer before another device starts, then shows thinking, tools, text and completion 6ms
+   ✓ cross-client chat subscriptions > restores a run opened before its first text, so tool events are not dropped 1ms
+   ✓ cross-client chat subscriptions > restores a partial answer and appends later deltas without an extra row 1ms
+   ✓ cross-client chat subscriptions > resubscribes an idle viewer after disconnection and discovers a remote run 1ms
+   ✓ cross-client chat subscriptions > does not repeatedly resume a subscribed session when revisiting it 0ms
+   × cross-client chat subscriptions > reconciles a background session after cache synchronization before reusing it 1012ms
+     → expected [ '第一个问题', '旧的中间结果' ] to deeply equal [ '第一个问题', '后台完成的完整结果' ]
+   × cross-client chat subscriptions > coalesces history invalidations that arrive while an older snapshot is loading 1056ms
+     → expected [ '已过时快照' ] to deeply equal [ '较新完整历史' ]
+   × cross-client chat subscriptions > merges synchronized history into the current route when SSE replaces its state during the read 1061ms
+     → expected '旧正文' to be '之前的完整正文' // Object.is equality
+   × cross-client chat subscriptions > keeps loaded older messages and follows up a synchronization received during pagination 1007ms
+     → expected [ '旧的最新页' ] to deeply equal [ '之前加载的老消息', '补齐后的最新页' ]
+   ✓ cross-client chat subscriptions > reconciles synchronized history before a delayed submit receipt without duplicating or demoting the user row 107ms
+   ✓ cross-client chat subscriptions > settles a run and clears an interaction completed while the viewer was offline 2ms
+   ✓ cross-client chat subscriptions > does not duplicate completed history from a retained inactive snapshot 0ms
+   ✓ cross-client chat subscriptions > keeps history-only sessions unattached with owned=false 0ms
+   ✓ cross-client chat subscriptions > keeps history-only sessions unattached with owned=undefined 0ms
+   ✓ cross-client chat subscriptions > never creates a runtime for an unsent draft on ready 0ms
+   ✓ cross-client chat subscriptions > retains readable history when subscribing fails and can retry on selection 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/client/chatCrossClientSync.test.ts > cross-client chat subscriptions > reconciles a background session after cache synchronization before reusing it
+AssertionError: expected [ '第一个问题', '旧的中间结果' ] to deeply equal [ '第一个问题', '后台完成的完整结果' ]
+
+- Expected
++ Received
+
+  [
+    "第一个问题",
+-   "后台完成的完整结果",
++   "旧的中间结果",
+  ]
+
+ ❯ tests/client/chatCrossClientSync.test.ts:136:82
+    134|     expect(chat.messages).toEqual([])
+    135|     await chat.selectSession(first, 'alpha')
+    136|     await vi.waitFor(() => expect(chat.messages.map(message => message…
+       |                                                                                  ^
+    137|     expect(realtime.request.mock.calls.filter(([method]) => method ===…
+    138|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  tests/client/chatCrossClientSync.test.ts > cross-client chat subscriptions > coalesces history invalidations that arrive while an older snapshot is loading
+AssertionError: expected [ '已过时快照' ] to deeply equal [ '较新完整历史' ]
+
+- Expected
++ Received
+
+  [
+-   "较新完整历史",
++   "已过时快照",
+  ]
+
+ ❯ tests/client/chatCrossClientSync.test.ts:156:82
+    154|     emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha…
+    155|     release(page('已过时快照'))
+    156|     await vi.waitFor(() => expect(chat.messages.map(message => message…
+       |                                                                                  ^
+    157|     expect(api.getMessages).toHaveBeenCalledTimes(3)
+    158|     expect(chat.activeRouteState?.isLoadingHistory).toBe(false)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  tests/client/chatCrossClientSync.test.ts > cross-client chat subscriptions > merges synchronized history into the current route when SSE replaces its state during the read
+AssertionError: expected '旧正文' to be '之前的完整正文' // Object.is equality
+
+Expected: "之前的完整正文"
+Received: "旧正文"
+
+ ❯ tests/client/chatCrossClientSync.test.ts:180:106
+    178|     emit('message.delta', { text: '新回复正在继续' })
+    179|     release(page('之前的完整正文'))
+    180|     await vi.waitFor(() => expect(chat.messages.find(message => messag…
+       |                                                                                                          ^
+    181|     expect(chat.messages.at(-1)?.content).toBe('新回复正在继续')
+    182|     expect(chat.isStreaming).toBe(true)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  tests/client/chatCrossClientSync.test.ts > cross-client chat subscriptions > keeps loaded older messages and follows up a synchronization received during pagination
+AssertionError: expected [ '旧的最新页' ] to deeply equal [ '之前加载的老消息', '补齐后的最新页' ]
+
+- Expected
++ Received
+
+  [
+-   "之前加载的老消息",
+-   "补齐后的最新页",
++   "旧的最新页",
+  ]
+
+ ❯ tests/client/chatCrossClientSync.test.ts:204:82
+    202|       role: 'user', content: '之前加载的老消息', timestamp: 1, stage: 'settled…
+    203|     await older
+    204|     await vi.waitFor(() => expect(chat.messages.map(message => message…
+       |                                                                                  ^
+    205|     expect(api.getMessages).toHaveBeenCalledTimes(3)
+    206|     expect(chat.activeRouteState?.isLoadingHistory).toBe(false)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 12 passed (16)
+   Start at  07:06:49
+   Duration  4.66s (transform 70ms, setup 10ms, collect 101ms, tests 4.26s, environment 148ms, prepare 28ms)

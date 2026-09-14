@@ -4,7 +4,7 @@ export type ChatRecord = Record<string, any>
 const text = (p: ChatRecord) => String(p.delta ?? p.text_delta ?? p.content_delta ?? p.text ?? '')
 export function projectChatEvent(type: string, payload: ChatRecord, previous: ChatRecord | undefined,
   fallbackID: string, now: number): ChatRecord | undefined {
-  const supported = /^(message\.(start|delta|interim|complete)|reasoning\.(delta|complete)|tool\.|run\.(completed|failed)|error$)/.test(type)
+  const supported = /^(message\.(start|delta|interim|complete)|(?:reasoning|thinking)\.(delta|complete)|tool\.|run\.(completed|failed)|error$)/.test(type)
   if (!supported) return undefined
   // Parameter-generation notifications have no invocation identity. They are
   // progress text, not an additional tool call which can later complete.
@@ -14,8 +14,16 @@ export function projectChatEvent(type: string, payload: ChatRecord, previous: Ch
   const message: ChatRecord = { role: 'assistant', content: '', reasoning: '', timestamp: now / 1000,
     ...previous, ...supplied, id }
   if (type === 'message.delta') message.content = String(message.content ?? '') + text(payload)
-  if (type === 'message.interim') message.status = 'complete'
-  if (type === 'reasoning.delta') message.reasoning = String(message.reasoning ?? '') + text(payload)
+  if (type === 'message.interim') {
+    if (typeof payload.text === 'string') message.content = payload.text
+    else if (typeof payload.content === 'string') message.content = payload.content
+    message.status = 'complete'
+  }
+  if (type === 'reasoning.delta' || type === 'thinking.delta') message.reasoning = String(message.reasoning ?? '') + text(payload)
+  if (type === 'reasoning.complete' || type === 'thinking.complete') {
+    const reasoning = payload.reasoning ?? payload.text ?? payload.content
+    if (typeof reasoning === 'string') message.reasoning = reasoning
+  }
   if (type.startsWith('tool.')) {
     const tools: ChatRecord[] = Array.isArray(message.tool_calls) ? [...message.tool_calls] : []
     const toolID = String(payload.tool_id ?? payload.tool_call_id ?? payload.id ?? '')
@@ -29,7 +37,8 @@ export function projectChatEvent(type: string, payload: ChatRecord, previous: Ch
     if (typeof payload.output === 'string') message.content = payload.output
     else if (typeof payload.content === 'string') message.content = payload.content
     else if (typeof payload.text === 'string') message.content = payload.text
-    message.status = payload.error || ['error','failed'].includes(payload.status) ? 'failed' : 'complete'
+    message.status = ['interrupted','cancelled','canceled'].includes(payload.status) ? 'interrupted'
+      : payload.error || ['error','failed'].includes(payload.status) ? 'failed' : 'complete'
     if(payload.error)message.error=payload.error
   } else if (type === 'error' || type === 'run.failed') {
     message.status = 'failed'; message.error = String(payload.error ?? payload.message ?? '运行失败')

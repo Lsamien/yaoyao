@@ -1,0 +1,32 @@
+
+> yaoyao@0.4.17 test
+> vitest run tests/client/chatCrossClientSync.test.ts tests/client/chatLifecycle.test.ts tests/client/chatStore.test.ts tests/client/chatModelSync.test.ts tests/client/chatProtocol.test.ts tests/client/sessionProtocol.test.ts tests/server/ordinaryChatLocal.test.ts tests/server/chatCache.test.ts tests/server/chatCachePagination.test.ts tests/server/realtimeBroker.test.ts
+
+
+ RUN  v3.2.7 /Users/samien/git/ordinary-chat-consistency/yaoyao
+
+ ✓ tests/server/chatCachePagination.test.ts (4 tests) 59ms
+ ✓ tests/client/sessionProtocol.test.ts (1 test) 5ms
+ ✓ tests/client/chatStore.test.ts (20 tests) 6ms
+ ✓ tests/client/chatProtocol.test.ts (6 tests) 10ms
+ ✓ tests/client/chatModelSync.test.ts (8 tests) 11ms
+ ✓ tests/client/chatLifecycle.test.ts (8 tests) 6ms
+ ✓ tests/server/ordinaryChatLocal.test.ts (9 tests) 310ms
+ ✓ tests/server/chatCache.test.ts (29 tests) 442ms
+ ✓ tests/client/chatCrossClientSync.test.ts (16 tests) 383ms
+ ✓ tests/server/realtimeBroker.test.ts (24 tests) 1682ms
+   ✓ realtime broker > recovers the upstream replay ring without losing offline deltas  569ms
+   ✓ realtime broker > reports reset when upstream history was truncated  522ms
+
+ Test Files  10 passed (10)
+      Tests  125 passed (125)
+   Start at  07:08:17
+   Duration  2.15s (transform 379ms, setup 71ms, collect 825ms, tests 2.92s, environment 1.50s, prepare 378ms)
+
+
+
+> yaoyao@0.4.17 typecheck
+> vue-tsc -b && tsc --noEmit -p tsconfig.server.json
+
+
+Typecheck exit code: 0

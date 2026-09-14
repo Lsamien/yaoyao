@@ -111,6 +111,101 @@ describe('cross-client chat subscriptions', () => {
     expect(api.getMessages).toHaveBeenCalledTimes(1)
   })
 
+  it('reconciles a background session after cache synchronization before reusing it', async () => {
+    const first = 'background-sync-first', second = 'background-sync-second'
+    chat.sessions = [session(first), session(second)]
+    realtime.request.mockImplementation((_method: string, params: Record<string, string>) => Promise.resolve({
+      session_id: `runtime-${params.session_id}`, stored_session_id: params.session_id, running: false,
+    }))
+    const user = { id: 'user-background', serverMessageId: 'user-background', sessionId: first,
+      role: 'user', content: '第一个问题', timestamp: 1, stage: 'settled' }
+    let synchronized = false
+    api.getMessages.mockImplementation((id: string) => Promise.resolve({
+      messages: id === first ? [user, { id: synchronized ? 'server-final' : 'event:interim',
+        serverMessageId: synchronized ? 'server-final' : undefined, sessionId: first,
+        role: 'assistant', content: synchronized ? '后台完成的完整结果' : '旧的中间结果', timestamp: 2, stage: 'settled' }] : [],
+      total: id === first ? 2 : 0, returned: id === first ? 2 : 0, hasMore: false,
+    }))
+    await chat.selectSession(first, 'alpha')
+    await chat.selectSession(second, 'alpha')
+    synchronized = true
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: first })
+    expect(chat.activeSessionId).toBe(second)
+    expect(chat.messages).toEqual([])
+    await chat.selectSession(first, 'alpha')
+    await vi.waitFor(() => expect(chat.messages.map(message => message.content)).toEqual(['第一个问题', '后台完成的完整结果']))
+    expect(realtime.request.mock.calls.filter(([method]) => method === 'prompt.submit')).toHaveLength(0)
+  })
+
+  it('coalesces history invalidations that arrive while an older snapshot is loading', async () => {
+    const id = 'sync-during-history-load'
+    chat.sessions = [session(id)]
+    realtime.request.mockResolvedValue({ session_id: 'runtime-1', stored_session_id: id, running: false })
+    const page = (text: string) => ({ messages: [{ id: 'answer-sync', serverMessageId: 'answer-sync',
+      sessionId: id, role: 'assistant', content: text, timestamp: 1, stage: 'settled' }], total: 1, returned: 1, hasMore: false })
+    api.getMessages.mockResolvedValue(page('原缓存'))
+    await chat.selectSession(id, 'alpha')
+    let release!: (value: unknown) => void
+    api.getMessages.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: id })
+    await vi.waitFor(() => expect(api.getMessages).toHaveBeenCalledTimes(2))
+    api.getMessages.mockResolvedValue(page('较新完整历史'))
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: id })
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: id })
+    release(page('已过时快照'))
+    await vi.waitFor(() => expect(chat.messages.map(message => message.content)).toEqual(['较新完整历史']))
+    expect(api.getMessages).toHaveBeenCalledTimes(3)
+    await vi.waitFor(() => expect(chat.activeRouteState?.isLoadingHistory).toBe(false))
+    expect(chat.historySynced).toBe(true)
+  })
+
+  it('merges synchronized history into the current route when SSE replaces its state during the read', async () => {
+    const id = 'stream-during-history-load'
+    chat.sessions = [session(id)]
+    realtime.request.mockResolvedValue({ session_id: 'runtime-1', stored_session_id: id, running: false })
+    const page = (text: string) => ({ messages: [
+      { id: 'prior-user', serverMessageId: 'prior-user', sessionId: id, role: 'user', content: '之前的问题', timestamp: 1, stage: 'settled' },
+      { id: 'prior-answer', serverMessageId: 'prior-answer', sessionId: id, role: 'assistant', content: text, timestamp: 2, stage: 'settled' },
+    ], total: 2, returned: 2, hasMore: false })
+    api.getMessages.mockResolvedValue(page('旧正文'))
+    await chat.selectSession(id, 'alpha')
+    let release!: (value: unknown) => void
+    api.getMessages.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: id })
+    await vi.waitFor(() => expect(api.getMessages).toHaveBeenCalledTimes(2))
+    emit('run.peer_user_message', { message_id: 'live-user', client_message_id: 'live-client', text: '新问题', timestamp: 3, status: 'accepted' })
+    emit('message.start')
+    emit('message.delta', { text: '新回复正在继续' })
+    release(page('之前的完整正文'))
+    await vi.waitFor(() => expect(chat.messages.find(message => message.id === 'prior-answer')?.content).toBe('之前的完整正文'))
+    expect(chat.messages.at(-1)?.content).toBe('新回复正在继续')
+    expect(chat.isStreaming).toBe(true)
+    await vi.waitFor(() => expect(chat.activeRouteState?.isLoadingHistory).toBe(false))
+  })
+
+  it('keeps loaded older messages and follows up a synchronization received during pagination', async () => {
+    const id = 'sync-during-older-page'
+    chat.sessions = [session(id)]
+    realtime.request.mockResolvedValue({ session_id: 'runtime-1', stored_session_id: id, running: false })
+    const recent = (text: string) => ({ messages: [{ id: 'recent-answer', serverMessageId: 'recent-answer',
+      sessionId: id, role: 'assistant', content: text, timestamp: 2, stage: 'settled' }], total: 2, returned: 1, hasMore: true })
+    api.getMessages.mockResolvedValue(recent('旧的最新页'))
+    await chat.selectSession(id, 'alpha')
+    let release!: (value: unknown) => void
+    api.getMessages.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const older = chat.loadOlder()
+    await vi.waitFor(() => expect(api.getMessages).toHaveBeenCalledTimes(2))
+    emit('session.info', { model: 'new-model' })
+    api.getMessages.mockResolvedValue(recent('补齐后的最新页'))
+    emit('sessions.changed', { reason: 'cache.synced', profile: 'alpha', session_id: id })
+    release({ messages: [{ id: 'older-user', serverMessageId: 'older-user', sessionId: id,
+      role: 'user', content: '之前加载的老消息', timestamp: 1, stage: 'settled' }], total: 2, returned: 1, hasMore: false })
+    await older
+    await vi.waitFor(() => expect(chat.messages.map(message => message.content)).toEqual(['之前加载的老消息', '补齐后的最新页']))
+    expect(api.getMessages).toHaveBeenCalledTimes(3)
+    await vi.waitFor(() => expect(chat.activeRouteState?.isLoadingHistory).toBe(false))
+  })
+
   it('reconciles synchronized history before a delayed submit receipt without duplicating or demoting the user row', async () => {
     chat.sessions = [session('identity-session')]
     realtime.request.mockResolvedValue({ session_id: 'runtime-1', stored_session_id: 'identity-session', running: false })

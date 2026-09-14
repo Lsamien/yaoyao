@@ -16,6 +16,7 @@ import { CHAT_MAX_PAYLOAD } from './realtimeProtocol.js'
 import { ChatPushRelayObserver, type ChatNotificationResolver, type PushEventCoordinator, type ChatPushTransportFactory } from './pushEvents.js'
 
 export class RealtimeAPI {
+  transcriptsAvailable = false
   readonly broker: RealtimeBroker
   private observers = new Map<string, ChatPushRelayObserver>()
   constructor(readonly config: ServerConfig, readonly auth: LocalAuthStore, readonly csrf: CsrfProtection,
@@ -169,6 +170,7 @@ export class RealtimeAPI {
       const path = match![2]!
       if (ctx.method === 'GET' && path === '/capabilities') {
         ctx.body = { protocolVersion: 1, channels: ['chat'], brokerEpoch: this.broker.epoch,
+          features: this.transcriptsAvailable && !device && !ctx.state.hermesBotNative && !ctx.state.workspaceAgentExport ? ['ordinary-chat-transcript-v1'] : [],
           ...(device ? {} : { csrfToken: this.csrf.issue(ctx) }) }
         return
       }

@@ -1677,6 +1677,14 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   })
 
   router.get('/api/app/bootstrap', async (ctx) => {
+    ctx.set('Cache-Control', 'no-store')
+    if (ctx.query.csrfOnly === '1') {
+      json(ctx, 200, {
+        csrfToken: dependencies.csrf.issue(ctx),
+        userId: dependencies.auth.current(ctx)?.id ?? null,
+      })
+      return
+    }
     await bootstrap(ctx, dependencies)
   })
   router.post('/api/app/setup', async (ctx) => {

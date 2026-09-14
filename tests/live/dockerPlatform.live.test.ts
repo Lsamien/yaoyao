@@ -69,7 +69,7 @@ it.skipIf(!process.env.YAOYAO_PLATFORM_IMAGE||!process.env.YAOYAO_COMPUTER_IMAGE
     await page.getByRole('textbox',{name:'账号',exact:true}).fill('docker-fixture')
     await page.getByRole('textbox',{name:'密码',exact:true}).fill('docker-fixture-password')
     await page.getByRole('button',{name:'登录',exact:true}).click()
-    await page.getByRole('button',{name:'设置与模式',exact:true}).first().click()
+    await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
     await page.getByRole('menuitem',{name:'进入设置',exact:true}).click()
     const settings=page.getByRole('dialog',{name:'设置中心'})
     await settings.getByRole('button',{name:'本地虚拟机',exact:true}).click()

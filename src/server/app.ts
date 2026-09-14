@@ -1,3 +1,4 @@
+import { chatTranscriptRouter } from './chatTranscriptApi.js'
 import {DesktopEnvironments} from './desktopEnvironments.js'
 import type {GrokAuth} from './grokAuth.js'
 import {GrokCloud} from './grokCloud.js'
@@ -261,6 +262,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   }, (owner, profile, sessionID) =>
     chatCache?.store.ownsSession(owner, profile, sessionID) ?? false)
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
+  realtime.transcriptsAvailable = chatCache.store.transcripts.enabled
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
     if(/^(message\.(start|delta|interim|complete)|reasoning\.|tool\.|run\.(completed|failed))/.test(frame.type)){
@@ -290,8 +292,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   realtime.broker.onNativeCommand = (owner, profile, storedId, method, params) => {
     chatCache?.command(owner, profile, storedId, method, params)
   }
-  realtime.broker.onNativeRoute = (owner, profile, storedId, runtimeId) => {
-    chatCache?.route(owner, profile, storedId, runtimeId)
+  realtime.broker.onNativeRoute = (owner, profile, storedId, runtimeId, running) => {
+    chatCache?.route(owner, profile, storedId, runtimeId, running)
   }
   chatPushJobs.setTransportFactory(realtime.recoveryTransport, job => realtime.ownsPushJob(job.id))
   try {
@@ -447,6 +449,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       } catch { /* Preserve non-JSON error responses. */ }
     }
   })
+  app.use(chatTranscriptRouter(chatCache, auth).routes())
   const router = createApiRouter({
     onChatListChanged: (owner,profile,id) => realtime.broker.publishOwnerSessionsChanged(owner,'local-state',profile,id),
     onServerIdentityChanged: identity => realtime.broker.publishServerIdentity(identity, config.upstream.href),

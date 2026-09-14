@@ -29,6 +29,7 @@ test('native update window works without a Web service, verifies a real DMG and 
     const boot = await app.firstWindow()
     await boot.locator('#status[role="alert"]').waitFor()
     assert.equal(await boot.evaluate(() => typeof window.yaoyaoUpdate), 'undefined')
+    assert.equal(await boot.evaluate(() => window.yaoyaoDesktop.openUpdates().then(() => false, () => true)), true)
     // Even another renderer carrying the real bridge cannot acquire update privileges.
     const denied = await app.evaluate(async ({ BrowserWindow }, preload) => {
       const outsider = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, preload } })

@@ -54,6 +54,15 @@ else {
   })
   const trustedUpdate = event => event.sender === updateWindow?.webContents
     && event.senderFrame === updateWindow.webContents.mainFrame && event.senderFrame.url === updateURL
+  ipcMain.handle('desktop:updates', async event => {
+    let trusted = false
+    try {
+      trusted = event.sender === window?.webContents && event.senderFrame === window.webContents.mainFrame
+        && manager?.state.phase === 'ready' && new URL(event.senderFrame.url).origin === manager.state.url
+    } catch { /* Only the main local application page may open the updater. */ }
+    if (!trusted || closing || quitting || !updater) throw new Error('不允许此页面打开 App 更新')
+    await showUpdates()
+  })
   for (const action of ['state', 'check', 'download', 'cancel', 'open', 'folder', 'release']) {
     ipcMain.handle(`desktop-update:${action}`, async event => {
       if (!trustedUpdate(event) || closing || quitting) throw new Error('不允许此页面操作 App 更新')
@@ -68,7 +77,7 @@ else {
       else { const error = await shell.openPath(path); if (error) throw new Error(error) }
     })
   }
-  function showUpdates() {
+  async function showUpdates() {
     if (closing || quitting) return
     if (updateWindow && !updateWindow.isDestroyed()) { updateWindow.show(); updateWindow.focus(); return }
     updateWindow = new BrowserWindow({ title: 'App 更新 · 夭夭', width: 640, height: 620, minWidth: 360, minHeight: 440, show: false,
@@ -80,7 +89,7 @@ else {
     updateWindow.webContents.on('will-attach-webview', event => event.preventDefault())
     updateWindow.on('closed', () => { updater.cancel(); updateWindow = undefined })
     updateWindow.once('ready-to-show', () => updateWindow?.show())
-    void updateWindow.loadURL(updateURL)
+    await updateWindow.loadURL(updateURL)
   }
 
   function show() {

@@ -1,4 +1,5 @@
 import { projectChatEvent } from './chatEventProjection.js'
+import { ChatTranscriptStore } from './chatTranscriptStore.js'
 import { isFinalChatResult } from './chatUnread.js'
 import { HttpError } from './errors.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -139,6 +140,7 @@ function referencedPaths(value: unknown, output = new Set<string>()): Set<string
 export class ChatCacheStore {
   readonly db: DatabaseSync
   readonly assetsRoot: string
+  readonly transcripts: ChatTranscriptStore
   private closed = false
   get isClosed(): boolean { return this.closed }
 
@@ -316,9 +318,10 @@ export class ChatCacheStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+    this.transcripts = new ChatTranscriptStore(this.db,(owner,profile,id,rows)=>this.userMessageIdentities(owner,profile,id,rows,false))
   }
 
-  close(): void { this.closed = true; this.db.close() }
+  close(): void { this.closed = true; this.transcripts.close(); this.db.close() }
 
   stats(): Record<string, number> {
     const count = (table: string) => Number((this.db.prepare(`SELECT COUNT(*) count FROM ${table}`).get() as { count: number }).count)
@@ -429,6 +432,7 @@ export class ChatCacheStore {
       }
       if(typeof patch.title==='string') this.recordAuthoritativeTitle(owner,profile,id,patch.title)
       this.db.prepare("UPDATE chat_sessions SET sync_state=CASE WHEN complete=1 THEN 'current' ELSE sync_state END WHERE owner=? AND profile=? AND session_id=?").run(owner,profile,id)
+      this.transcripts.sessionChanged(owner,profile,id,{eventType:'session.info',payload:data})
       this.db.exec('RELEASE local_chat_patch')
     } catch(e) {this.db.exec('ROLLBACK TO local_chat_patch; RELEASE local_chat_patch');throw e}
   }
@@ -447,6 +451,7 @@ export class ChatCacheStore {
     if (typeof message.content==='string' && message.content.trim()) summary.preview=message.content.slice(0,160)
     this.db.prepare('UPDATE chat_sessions SET data=?,message_total=?,last_synced_at=? WHERE owner=? AND profile=? AND session_id=?').run(JSON.stringify(summary),total,now,owner,profile,id)
     for(const path of referencedPaths(message)) this.db.prepare(`INSERT OR IGNORE INTO chat_attachments(owner,profile,session_id,source_path,state,updated_at) VALUES(?,?,?,?,'pending',?)`).run(owner,profile,id,path,now)
+    this.transcripts.upsert(owner,profile,id,message,position)
   }
 
   projectedMessageID(owner:string,profile:string,id:string):string|undefined {
@@ -478,7 +483,7 @@ export class ChatCacheStore {
     if(message){
       if(previous && previous.id !== message.id && !startsNew){
         const exists=this.db.prepare('SELECT 1 FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND message_id=?').get(owner,profile,id,message.id)
-        if(!exists)this.db.prepare('UPDATE chat_messages SET message_id=? WHERE owner=? AND profile=? AND session_id=? AND message_id=?').run(message.id,owner,profile,id,previous.id)
+        if(!exists){this.transcripts.promote(owner,profile,id,String(previous.id),String(message.id));this.db.prepare('UPDATE chat_messages SET message_id=? WHERE owner=? AND profile=? AND session_id=? AND message_id=?').run(message.id,owner,profile,id,previous.id)}
         else {this.db.prepare("UPDATE chat_sessions SET sync_state='gap' WHERE owner=? AND profile=? AND session_id=?").run(owner,profile,id);return}
       }
       this.writeLiveMessage(owner,profile,id,message)
@@ -560,10 +565,14 @@ export class ChatCacheStore {
           const identified = this.userMessageIdentities(owner, profile, sessionID, messages, false)
           const end=pagination.total-Number(pagination.offset??0),start=end-messages.length
           const ids=new Set(messages.map((m,index)=>messageID(m,String(start+index))))
-          const existing=this.db.prepare('SELECT message_id,data FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND position>=? AND position<?').all(owner,profile,sessionID,start,end) as {message_id:string;data:string}[]
+          const existing=this.db.prepare('SELECT message_id,data,position FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND position>=? AND position<?').all(owner,profile,sessionID,start,end) as {message_id:string;data:string;position:number}[]
           for(const row of existing){
             if(ids.has(row.message_id))continue
             const value=JSON.parse(row.data)
+            const incoming=messages[row.position-start]
+            if(incoming&&value.role==='assistant'&&incoming.role==='assistant'&&/^event:/.test(row.message_id)
+              &&typeof value.content==='string'&&value.content.length>0&&value.content===incoming.content)
+              this.transcripts.promote(owner,profile,sessionID,row.message_id,messageID(incoming,String(row.position)))
             if(value.role==='user'&&value.status==='pending'&&!identified.some(m=>m.role==='user'
               && value.client_message_id && m.client_message_id===value.client_message_id))
               throw new Error('Unconfirmed submission must be reconciled before history replacement')
@@ -583,6 +592,8 @@ export class ChatCacheStore {
       }))
       const latest=this.db.prepare("SELECT message_id FROM chat_messages WHERE owner=? AND profile=? AND session_id=? AND json_extract(data,'$.role')='assistant' ORDER BY position DESC LIMIT 1").get(owner,profile,sessionID) as {message_id:string}|undefined
       if(latest)this.db.prepare('UPDATE chat_local_state SET assistant_id=? WHERE owner=? AND profile=? AND session_id=?').run(latest.message_id,owner,profile,sessionID)
+      this.transcripts.reconcile(owner,profile,sessionID)
+      this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:'history.synced'})
       this.db.exec('RELEASE history_sync')
       return true
     } catch (error) {
@@ -745,6 +756,7 @@ export class ChatCacheStore {
       sync_state=excluded.sync_state,last_synced_at=excluded.last_synced_at`)
       .run(owner, profile, rawSeq > 0 ? rawSeq : lastSeen, state, now)
     this.projectEvent(owner,profile,sessionID,type,object(frame.payload)??{},eventID)
+    if (!['message.delta','reasoning.delta','thinking.delta'].includes(type)&&!type.startsWith('tool.')) this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:type,payload:object(frame.payload)??{}})
     this.db.exec('RELEASE live_event')
     return true
     }catch(e){this.db.exec('ROLLBACK TO live_event; RELEASE live_event');throw e}
@@ -771,11 +783,14 @@ export class ChatCacheStore {
       this.db.prepare('INSERT OR REPLACE INTO chat_session_aliases VALUES(?,?,?,?)').run(owner,profile,old.session_id,id)
       this.db.prepare('UPDATE chat_session_aliases SET session_id=? WHERE owner=? AND profile=? AND session_id=?').run(id,owner,profile,old.session_id)
       this.db.prepare("UPDATE chat_sessions SET data=json_set(data,'$.id',?) WHERE owner=? AND profile=? AND session_id=?").run(id,owner,profile,id)
+      this.transcripts.migrate(owner,profile,old.session_id,id)
       this.db.exec('RELEASE migrate_live_route')
     }catch(e){this.db.exec('ROLLBACK TO migrate_live_route; RELEASE migrate_live_route');throw e}
   }
 
-  recordRoute(owner: string, profile: string, sessionID: string, runtimeID: string): void {
+  recordRoute(owner: string, profile: string, sessionID: string, runtimeID: string, running?: boolean): void {
+    this.db.exec('SAVEPOINT chat_route')
+    try {
     this.migrateRuntimeSession(owner,profile,sessionID,runtimeID)
     const now = Date.now()
     const summary = { id: sessionID, profile, source: 'unknown', title: '新对话', started_at: now, last_active: now }
@@ -785,10 +800,15 @@ export class ChatCacheStore {
       ownership_evidence=COALESCE(chat_sessions.ownership_evidence,excluded.ownership_evidence)`)
       .run(owner, profile, sessionID, runtimeID, 'unknown', JSON.stringify(summary), 'stale', 0, now, now, 'route-confirmed')
     this.markListsStale(owner)
+    if (running !== undefined) this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:'route.resumed',payload:{running}})
+    this.db.exec('RELEASE chat_route')
+    } catch(error) { this.db.exec('ROLLBACK TO chat_route; RELEASE chat_route'); throw error }
   }
 
   recordCommand(owner: string, profile: string, sessionID: string, method: string,
     params: Record<string, unknown>): void {
+    this.db.exec('SAVEPOINT chat_command')
+    try {
     const now = Date.now()
     const source = sessionSource(params) || 'unknown'
     const establishesOwnership = method === 'session.create' || method === 'session.branch'
@@ -806,7 +826,10 @@ export class ChatCacheStore {
     if((method==='prompt.submit'||method==='session.steer') && params._delivery_id){
       const userID=`user:${params._delivery_id}`
       this.writeLiveMessage(owner,profile,sessionID,{id:userID,role:'user',content:params.text??params.input??'',timestamp:now/1000,status:'pending',client_message_id:String(params._delivery_id).replace(/^(web|ios):prompt:/,'')})
-      this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,assistant_id) VALUES(?,?,?,NULL) ON CONFLICT(owner,profile,session_id) DO UPDATE SET assistant_id=NULL`).run(owner,profile,sessionID)
+      const streaming=this.db.prepare(`SELECT 1 FROM chat_local_state l JOIN chat_messages m ON m.owner=l.owner AND m.profile=l.profile AND m.session_id=l.session_id AND m.message_id=l.assistant_id
+        WHERE l.owner=? AND l.profile=? AND l.session_id=? AND json_extract(m.data,'$.status')='streaming'`).get(owner,profile,sessionID)
+      if(!streaming)this.db.prepare(`INSERT INTO chat_local_state(owner,profile,session_id,assistant_id) VALUES(?,?,?,NULL) ON CONFLICT(owner,profile,session_id) DO UPDATE SET assistant_id=NULL`).run(owner,profile,sessionID)
+      this.transcripts.sessionChanged(owner,profile,sessionID,{eventType:'command.submitted',payload:{delivery_id:params._delivery_id}})
     }
     const payload = JSON.stringify(params)
     const seq = Number.parseInt(createHash('sha256').update(`${method}:${payload}`).digest('hex').slice(0, 12), 16)
@@ -814,6 +837,8 @@ export class ChatCacheStore {
       VALUES(?,?,?,?,?,?,?)`).run(owner, profile, sessionID, seq, `command:${method}`, payload, now)
     this.db.prepare("UPDATE chat_snapshots SET sync_state='stale' WHERE owner=? AND (session_id=? OR kind='list')")
       .run(owner, sessionID)
+    this.db.exec('RELEASE chat_command')
+    } catch(error) { this.db.exec('ROLLBACK TO chat_command; RELEASE chat_command'); throw error }
   }
 
   fileSourceMessage(owner: string, profile: string, sessionID: string, messageID: string): Record<string, unknown> | undefined {
@@ -869,6 +894,7 @@ export class ChatCacheStore {
       }
       this.db.prepare("DELETE FROM chat_snapshots WHERE owner=? AND ((profile=? AND session_id=?) OR kind='list')")
         .run(owner, profile, sessionID)
+      this.transcripts.remove(owner,profile,sessionID)
       this.db.exec('COMMIT')
       for (const asset of assets) {
         const referenced = this.db.prepare('SELECT 1 ok FROM chat_attachments WHERE local_path=? LIMIT 1').get(asset.local_path)
@@ -1220,6 +1246,7 @@ export class ChatCacheStore {
         WHERE chat_messages.content_hash<>excluded.content_hash OR chat_messages.position<>excluded.position`)
         .run(owner, profile, sessionID, messageID(message, String(start + index)), start + index, data,
           createHash('sha256').update(data).digest('hex'))
+      this.transcripts.upsert(owner,profile,sessionID,{...message,id:messageID(message,String(start+index))},start+index)
       for (const sourcePath of referencedPaths(message)) {
         this.db.prepare(`INSERT INTO chat_attachments(owner,profile,session_id,source_path,state,updated_at)
           VALUES(?,?,?,?,?,?) ON CONFLICT(owner,profile,session_id,source_path) DO UPDATE SET updated_at=excluded.updated_at`)
@@ -1438,8 +1465,8 @@ export class ChatCacheCoordinator {
     this.store.recordCommand(owner, profile, sessionID, method, params)
   }
 
-  route(owner: string, profile: string, sessionID: string, runtimeID: string): void {
-    this.store.recordRoute(owner, profile, sessionID, runtimeID)
+  route(owner: string, profile: string, sessionID: string, runtimeID: string, running?: boolean): void {
+    this.store.recordRoute(owner, profile, sessionID, runtimeID, running)
   }
 
   async reconcile(owner: string, profile: string, sessionID: string, force = false): Promise<void> {

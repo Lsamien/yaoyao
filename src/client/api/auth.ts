@@ -25,7 +25,7 @@ function normalizeBootstrap(payload: unknown): BootstrapResponse {
     serverIdentity: serverIdentityValue(root.serverIdentity),
   }
   if (rawUser) response.user = normalizeUser(rawUser)
-  setApiCsrfToken(csrfToken)
+  setApiCsrfToken(csrfToken, response.user?.id ?? (authRequired ? null : 'local'))
   return response
 }
 
