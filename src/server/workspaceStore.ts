@@ -46,6 +46,8 @@ export const agentInput = z
     vmExecution:z.enum(['worker','profile']).optional(),
     browserProfile:z.enum(['persistent','temporary']).optional(),
     canManageTeam: z.boolean().default(false),
+    canCollaborate: z.boolean().default(true),
+    memoryEnabled: z.boolean().default(true),
     nodeId: z.string().default('local'),
     profile: z.string().min(1).max(256),
   })
@@ -63,6 +65,8 @@ export const agentPatch = z
     nodeId:z.string().min(1).max(256).optional(),
     profile:z.string().min(1).max(256).optional(),
     canManageTeam: z.boolean().optional(),
+    canCollaborate: z.boolean().optional(),
+    memoryEnabled: z.boolean().optional(),
     archived: z.boolean().optional(),
   })
   .strict()
@@ -77,7 +81,8 @@ export const groupInput = z
     memberIds: z.array(z.string().uuid()).min(2).max(8),
     memberRoles: memberRoles.default({}),
     instructions: z.string().max(24_000).default(''),
-    administratorId: z.string().uuid(),
+    administratorId: z.string().uuid().optional(),
+    collaborationMode: z.enum(['discussion', 'host', 'free']).optional(),
     mode: z.enum(['host', 'free']).default('host'),
     autoReplyIds: z.array(z.string().uuid()).max(8).default([]),
     maxReplyRounds: z.union([z.literal(-1), z.number().int().min(1).max(100)]).default(3),
@@ -91,6 +96,7 @@ export const conversationPatch = z
     memberIds: z.array(z.string().uuid()).min(1).max(8).optional(),
     memberRoles: memberRoles.optional(),
     administratorId: z.string().uuid().optional(),
+    collaborationMode: z.enum(['discussion', 'host', 'free']).optional(),
     mode: z.enum(['host', 'free']).optional(),
     autoReplyIds: z.array(z.string().uuid()).max(8).optional(),
     maxReplyRounds: z.union([z.literal(-1), z.number().int().min(1).max(100)]).optional(),
@@ -157,7 +163,7 @@ export class WorkspaceStore {
   readonly db: DatabaseSync
   readonly changes = new EventEmitter()
   private transactionEvents: Array<{ owner: string; event: WorkspaceEvent }> | undefined
-  constructor(home: string, options: { messagePatches?: boolean } = {}) {
+  constructor(readonly home: string, options: { messagePatches?: boolean } = {}) {
     this.messagePatchesEnabled = options.messagePatches ?? process.env.HERMES_YAOYAO_WORKSPACE_MESSAGE_PATCHES !== '0'
     mkdirSync(home, { recursive: true, mode: 0o700 })
     const path = join(home, 'workspace.sqlite3')
@@ -580,7 +586,9 @@ export class WorkspaceStore {
     })
   }
   createGroup(owner: string, input: unknown): Conversation {
-    const body = parse(groupInput, input)
+    const parsed = parse(groupInput, input)
+    const body = { ...parsed, administratorId: parsed.administratorId ?? parsed.memberIds[0]! }
+    if (body.collaborationMode) body.mode = body.collaborationMode === 'host' ? 'host' : 'free'
     const ids = new Set(body.memberIds)
     if (
       ids.size !== body.memberIds.length ||
@@ -862,9 +870,15 @@ export class WorkspaceStore {
       c = this.require<Conversation>(owner, 'conversation', id)
     if (c.kind === 'direct' && Object.keys(patch).some((k) => k !== 'pinned'))
       throw new HttpError(400, '请编辑机器人资料', 'edit_agent_instead')
+    if (patch.collaborationMode !== undefined && patch.collaborationMode !== c.collaborationMode) {
+      this.requireConversationIdle(owner, id)
+      patch.mode = patch.collaborationMode === 'host' ? 'host' : 'free'
+    } else if (patch.mode !== undefined && patch.mode !== c.mode && c.collaborationMode) patch.collaborationMode = patch.mode
     const memberIds = patch.memberIds ?? c.memberIds
     const members = new Set(memberIds)
-    if (!members.has(c.administratorId))
+    const discussion = (patch.collaborationMode ?? c.collaborationMode) === 'discussion'
+    if (discussion && !members.has(patch.administratorId ?? c.administratorId)) patch.administratorId = memberIds[0]
+    if (!discussion && !members.has(c.administratorId))
       throw new HttpError(400, '当前管理员不能移除，请先更换管理员并保存', 'administrator_required')
     if (
       members.size !== memberIds.length ||

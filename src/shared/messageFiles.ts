@@ -52,7 +52,7 @@ export function isVisibleMessageFile(
 ): boolean {
   // Explicit user uploads also belong in the library before a draft is sent.
   if (file.sender === 'user') return true
-  if (message && (message.visible === false || message.role !== 'assistant')) return false
+  if (message && (message.visible === false || message.role !== 'assistant' && !message.peerMessageId)) return false
   if (file.messageFileSource === 'attachment') return true
   if (!message) return file.messageFileSource === 'reference'
   // Older explicitly published attachments have no sourcePath; the archive

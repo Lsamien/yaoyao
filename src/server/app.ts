@@ -35,6 +35,7 @@ import { UploadStore } from './uploads.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
 import { WorkspaceRuntime } from './workspaceRuntime.js'
+import { WorkspaceMemorySynthesis } from './workspaceMemorySynthesis.js'
 import { WorkspaceAssets } from './workspaceAssets.js'
 import { workspaceRouter } from './workspaceRoutes.js'
 import { SystemUpdateManager } from './updateManager.js'
@@ -234,6 +235,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0)
+  const workspaceMemory = new WorkspaceMemorySynthesis(workspaceRuntime)
+  workspaceMemory.start()
   const grokCloud=new GrokCloud(workspace,auth,workspaceNodes,sharedComputers,options.grokFetch)
   const desktopEnvironments=new DesktopEnvironments(workspace,auth,workspaceNodes)
   workspaceRuntime.desktopEnvironments=desktopEnvironments
@@ -512,6 +515,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     chatPushJobs,
     chatCache,
     close: () => {
+      workspaceMemory.close()
       runners.close()
       workspaceAssets.close()
       desktopEnvironments.close()

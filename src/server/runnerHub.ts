@@ -101,12 +101,13 @@ export class RunnerHub {
     if(!this.online.has(id))return Promise.reject(new HttpError(503,'执行节点未连接','runner_offline'))
     const queue=this.pending.get(id)??new Map<string,Pending>();this.pending.set(id,queue)
     if(queue.size>=64)return Promise.reject(new HttpError(429,'执行节点请求过多','runner_busy'))
-    const command:RunnerCommand={id:randomUUID(),kind,payload,expiresAt:Date.now()+30000}
+    const timeout = kind === 'http' && payload.path === '/api/plugins/yaoyao-bot-bridge/memory-extract' ? 120000 : 30000
+    const command:RunnerCommand={id:randomUUID(),kind,payload,expiresAt:Date.now()+timeout}
     const bytes=Buffer.byteLength(JSON.stringify(command))
     if(bytes>36*1024*1024)return Promise.reject(new HttpError(413,'执行命令超过传输限制','runner_payload_limit'))
     if([...queue.values()].reduce((size,p)=>size+Buffer.byteLength(JSON.stringify(p.command)),bytes)>64*1024*1024)return Promise.reject(new HttpError(429,'执行节点待传输数据过多','runner_busy'))
     return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{queue.delete(command.id);reject(new HttpError(504,'执行节点回应超时，请核对执行状态','runner_command_uncertain'))},30000)
+      const timer=setTimeout(()=>{queue.delete(command.id);reject(new HttpError(504,'执行节点回应超时，请核对执行状态','runner_command_uncertain'))},timeout)
       queue.set(command.id,{command,resolve,reject,timer,nextDelivery:0,valid});this.online.get(id)?.wake?.()
     })
   }

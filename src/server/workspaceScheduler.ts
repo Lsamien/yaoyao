@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from './workspaceStore.js'
 import { HttpError } from './errors.js'
+import { discussionOrder } from './workspaceDiscussion.js'
 import { botRelayIntent, relayFingerprint, relayMessageValue, REPEATED_RELAY_NOTICE } from './workspaceRelay.js'
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceMessage as Message, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 
@@ -9,6 +10,7 @@ export const WORKSPACE_CONCURRENCY_LIMIT = 10
 export const HOST_FALLBACK = '我还不能确定你希望我处理什么，请补充具体目标、范围，或明确需要我协调的机器人。'
 const terminal = (status: string) => ['complete', 'failed', 'interrupted'].includes(status)
 export interface Work {
+  discussionIndex?: number
   resourceWait?:boolean
   id: string
   runId: string
@@ -55,6 +57,7 @@ export abstract class WorkspaceScheduler {
   private interrupting = new Set<string>()
   onMessage: (owner: string, message: Message) => Promise<void> = async () => {}
   onNotify: (owner: string, c: Conversation, run: Run, message?: Message, interaction?: WorkspaceInteraction) => void = () => {}
+  onRunSettled: (owner: string, run: Run) => void = () => {}
   constructor(readonly store: WorkspaceStore, readonly userActive: (owner: string) => boolean = () => true) {
     for (const owner of store.owners()) {
       // Forward the already-admitted v0.3.x turn without replaying its prompt.
@@ -121,7 +124,17 @@ export abstract class WorkspaceScheduler {
   }
   protected admit(owner: string, root: Run, c: Conversation, trigger: Message): void {
     this.store.put(owner, 'run', root.id, root)
-    const targeted = (root.assignmentId || root.goalId) && root.targetAgentId
+    if (root.discussion) {
+      const first = discussionOrder(root.discussion)[0]
+      if (first) {
+        const work = this.enqueue(owner, root, first.agentId, 0, root.id, trigger.seq, 'mentioned', false)
+        work.discussionIndex = 0
+        this.store.put(owner, 'turn', work.id, work)
+      }
+      this.updateRoot(owner, root.id)
+      return
+    }
+    const targeted = root.targetAgentId
     const ids = targeted ? [root.targetAgentId!] : c.kind === 'direct' || c.mode === 'host' ? [c.administratorId]
       : root.mentionIds.length ? root.mentionIds : [...new Set([c.administratorId, ...c.autoReplyIds])]
     for (const id of ids) this.enqueue(owner, root, id, 0, root.id, trigger.seq,
@@ -149,12 +162,14 @@ export abstract class WorkspaceScheduler {
     if (done) {
       const interrupted = root.stopRequested || tasks.some(t => t.requiredReply && t.status === 'interrupted') || (tasks.length > 0 && tasks.every(t => t.status === 'interrupted'))
       const failed = tasks.some(t => t.status === 'failed' && (t.requiredReply || this.store.require<Conversation>(owner, 'conversation', root.conversationId).kind === 'direct'))
+        || !!root.discussion && tasks.length > 0 && tasks.every(t => ['failed', 'interrupted'].includes(t.status))
       root.status = interrupted ? 'interrupted' : failed ? 'failed' : 'complete'
     } else {
       root.status = active.some(t => t.status === 'uncertain') ? 'uncertain' : active.some(t => t.status === 'running') ? 'running' : active.some(t => t.status === 'waiting') ? 'waiting' : tasks.some(t => t.status !== 'queued') ? 'running' : 'queued'
     }
     root.error = tasks.find(t => t.status === 'uncertain' || t.status === 'failed')?.error
     this.store.saveRun(owner, root)
+    if (done && !wasTerminal) this.onRunSettled(owner, root)
     if (done && !wasTerminal && root.status !== 'interrupted') {
       const c = this.store.require<Conversation>(owner, 'conversation', root.conversationId)
       if (root.status === 'failed' && c.kind === 'direct') this.store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, conversationTaskId: root.conversationTaskId, seq: 0, role: 'system', content: `执行失败：${root.error ?? '运行失败'}`, reasoning: '', status: 'failed', runId: root.id, attachments: [], tools: [], createdAt: Date.now() })
@@ -168,7 +183,25 @@ export abstract class WorkspaceScheduler {
       const root = this.store.require<Run>(owner, 'run', work.runId), c = this.store.require<Conversation>(owner, 'conversation', work.conversationId)
       work.planned = true
       this.store.put(owner, 'turn', work.id, work)
-      if (root.stopRequested || c.archived || c.kind === 'direct' || root.assignmentId || root.goalId) { this.updateRoot(owner, root.id); return }
+      if (root.discussion && !root.stopRequested && !c.archived) {
+        const order = discussionOrder(root.discussion)
+        let index = (work.discussionIndex ?? 0) + 1
+        while (index < order.length) {
+          const next = order[index]!
+          const agent = this.store.get<Agent>(owner, 'agent', next.agentId)
+          if (agent && !agent.archived && c.memberIds.includes(next.agentId)) {
+            const through = Math.max(work.triggerSeq, ...this.works(owner, root.id).map(w => w.currentMessageId ? this.store.get<Message>(owner, 'message', w.currentMessageId)?.seq ?? 0 : 0))
+            const queued = this.enqueue(owner, root, next.agentId, next.round, root.id, through, 'mentioned', false)
+            queued.discussionIndex = index
+            this.store.put(owner, 'turn', queued.id, queued)
+            break
+          }
+          index++
+        }
+        this.updateRoot(owner, root.id)
+        return
+      }
+      if (root.stopRequested || c.archived || c.kind === 'direct' || root.assignmentId || root.goalId || root.peerMessageId) { this.updateRoot(owner, root.id); return }
       const config = work.turnConfiguration ?? { mode: c.mode, administratorId: c.administratorId, members: c.memberIds.map(id => this.store.require<Agent>(owner, 'agent', id)) }
       const message = work.currentMessageId ? this.store.get<Message>(owner, 'message', work.currentMessageId) : undefined
       if (config.mode === 'host' && work.agentId !== config.administratorId) {
@@ -273,6 +306,7 @@ export abstract class WorkspaceScheduler {
         const priority = (entry: typeof a) => {
           if (Date.now() - entry.work.createdAt > 60_000) return 0
           const run = this.store.get<Run>(entry.owner, 'run', entry.work.runId)
+          if (run?.triggerKind === 'peer' && run.priority) return 0.5
           return run?.triggerKind === 'assignment' ? 2 : run?.triggerKind ? 1 : 0
         }
         const difference = priority(a) - priority(b)
@@ -303,7 +337,7 @@ export abstract class WorkspaceScheduler {
         if (this.executing.size >= WORKSPACE_CONCURRENCY_LIMIT || !['queued', 'uncertain'].includes(work.status) || this.executing.has(work.id)) continue
         if (!this.userActive(owner)) { this.retrySoon(); continue }
         const c = this.store.require<Conversation>(owner, 'conversation', work.conversationId), root = this.store.require<Run>(owner, 'run', work.runId)
-        if (work.status === 'queued' && !root.assignmentId && c.mode === 'host' && work.depth === 0 && work.batchId === root.id && work.requiredReply && !work.currentMessageId) {
+        if (work.status === 'queued' && !root.targetAgentId && !root.discussion && c.mode === 'host' && work.depth === 0 && work.batchId === root.id && work.requiredReply && !work.currentMessageId) {
           work.agentId = c.administratorId
         }
         if (work.status === 'queued' && (c.archived || root.stopRequested || !this.store.taskMemberIds(owner,c,work.conversationTaskId).includes(work.agentId))) {
@@ -315,6 +349,7 @@ export abstract class WorkspaceScheduler {
         // continue to serialize access to their actual shared resources.
         if (occupied.some(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId && t.agentId === work.agentId)) continue
         const inTask = occupied.filter(t => t.conversationId === c.id && t.conversationTaskId === work.conversationTaskId)
+        if (root.discussion && inTask.length) continue
         if (work.status === 'queued' && (occupied.length >= WORKSPACE_CONCURRENCY_LIMIT || inTask.length >= 3)) continue
         if ((this.recoverAfter.get(work.id) ?? 0) > Date.now()) { this.retrySoon(); continue }
         if (c.mode === 'host' || c.kind === 'direct') {

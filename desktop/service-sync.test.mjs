@@ -124,7 +124,7 @@ test('App first launch installs an independent Web; Web remains up after quit an
     // unload launchd (not just kill its PID), and exit with one menu action.
     await reopened.evaluate(async()=>{
       const capabilities=await (await fetch('/api/realtime/capabilities')).json()
-      const created=await fetch('/api/realtime/channels',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':capabilities.csrfToken},body:JSON.stringify({channel:'chat'})})
+      const created=await fetch('/api/realtime/channels',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':capabilities.csrfToken},body:JSON.stringify({channel:'chat',chatProtocol:'ordinary-chat-transcript-v2'})})
       if(!created.ok)throw new Error('fixture realtime channel unavailable')
       const channel=await created.json()
       const response=await fetch(`/api/realtime/channels/${channel.id}/events`)

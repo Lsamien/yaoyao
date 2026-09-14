@@ -19,6 +19,7 @@ const createTeam = z.object({
   memberIds: z.array(uuid).min(1).max(8),
   instructions: z.string().max(24_000).default(''),
   maxReplyRounds: z.number().int().min(1).max(12).default(6),
+  collaborationMode: z.enum(['discussion', 'host', 'free']).default('discussion'),
 }).strict()
 const startTask = z.object({
   requestId: uuid,
@@ -181,7 +182,7 @@ export class WorkspaceTeamTools {
         if (teams.length >= 20) throw new HttpError(409, '自动组队最多管理 20 个有效团队，请先复用已有团队。', 'team_count_limit')
         if (teams.some(c => c.name.toLocaleLowerCase() === body.name.toLocaleLowerCase()))
           throw new HttpError(409, '已有同名团队，请先查询并复用', 'duplicate_team_name')
-        const team = this.store.createGroup(owner, { ...body, memberIds, administratorId: agent.id, mode: 'host', autoReplyIds: [] })
+        const team = this.store.createGroup(owner, { ...body, memberIds, administratorId: agent.id, mode: body.collaborationMode === 'host' ? 'host' : 'free', autoReplyIds: [] })
         this.runtime.onTeamCreated(owner, team)
         return { team, task: this.store.tasks(owner, team.id)[0] }
       })

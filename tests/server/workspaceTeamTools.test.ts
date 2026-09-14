@@ -108,7 +108,7 @@ describe('Agent-owned team tools', () => {
     const groupArgs = {requestId:randomUUID(),name:'项目团队',memberIds:[first.agent.id]}
     const created = await call('create_team',groupArgs)
     expect(await call('create_team',groupArgs)).toEqual(created)
-    expect(created.team).toMatchObject({memberIds:[manager.id,first.agent.id],administratorId:manager.id,mode:'host'})
+    expect(created.team).toMatchObject({memberIds:[manager.id,first.agent.id],administratorId:manager.id,mode:'free',collaborationMode:'discussion'})
     const taskArgs = {requestId:randomUUID(),teamId:created.team.id,title:'核对资料',content:'请研究员核对资料后汇总。'}
     const started = await call('start_team_task',taskArgs)
     expect(await call('start_team_task',taskArgs)).toEqual(started)

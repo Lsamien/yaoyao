@@ -49,6 +49,22 @@ function req(method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, 
     .set('X-CSRF-Token', csrf)
     .set('x-test-user', user)
 }
+it('serves file-backed project and memory CRUD with revisions and account isolation', async () => {
+  const a = runtime.workspace.createAgent('first', { name: '记忆甲', profile: 'default' })
+  const b = runtime.workspace.createAgent('first', { name: '记忆乙', profile: 'default' })
+  const group = runtime.workspace.createGroup('first', { name: '项目群', memberIds: [a.id, b.id], collaborationMode: 'discussion' })
+  const project = await req('post', '/api/app/workspace/projects').send({ requestId: randomUUID(), name: '项目', description: '多群共享', memberIds: [a.id, b.id], groupIds: [group.id] }).expect(200)
+  const id = project.body.project.id
+  const created = await req('post', '/api/app/workspace/memories').send({ requestId: randomUUID(), scope: 'project', projectId: id, agentId: a.id, content: '接口兼容旧版本', tier: 'profile' }).expect(200)
+  const memory = created.body.memory
+  expect((await req('get', `/api/app/workspace/memories?scope=project&projectId=${id}`).expect(200)).body.memories).toHaveLength(1)
+  await req('post', '/api/app/workspace/memories').send({ requestId: randomUUID(), scope: 'project', projectId: id, agentId: a.id, id: memory.id, expectedRevision: 0, content: '旧版本修改', tier: 'profile' }).expect(400)
+  expect((await req('get', `/api/app/workspace/memories/${memory.id}/revisions?scope=project&agentId=${a.id}&projectId=${id}`).expect(200)).body.revisions).toHaveLength(1)
+  expect((await req('get', '/api/app/workspace/projects', 'second').expect(200)).body.projects).toEqual([])
+  expect((await req('get', `/api/app/workspace/memory-export?scope=project&projectId=${id}`).expect(200)).text).toContain('接口兼容旧版本')
+  await req('post', '/api/app/workspace/memories/forget').send({ requestId: randomUUID(), scope: 'project', projectId: id, agentId: a.id, id: memory.id, expectedRevision: 1 }).expect(200)
+  expect((await req('get', `/api/app/workspace/memories?scope=project&projectId=${id}`).expect(200)).body.memories).toEqual([])
+})
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'yaoyao-workspace-routes-'))
   upstream = []

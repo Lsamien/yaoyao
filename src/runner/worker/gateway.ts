@@ -101,6 +101,24 @@ export class ComputerRuntime {
   async resolveWorkspace(profile:string,signal?:AbortSignal){
     return this.resolveProfile(profile,'resolve-workspace',signal)
   }
+  async extractMemory(profile: string, prompt: string, signal?: AbortSignal): Promise<string> {
+    const resolved = await this.resolve(profile, signal)
+    const directory = join(this.home, 'memory-extraction', randomUUID())
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const worker = new HermesWorkerProcess(this.config.python, this.script, {
+      mode: 'run', home: directory, hermesSource: this.config.hermesSource, model: resolved.model,
+      contextConfig: resolved.contextConfig, proxyEnv: resolved.proxyEnv, sessionId: randomUUID(), taskId: randomUUID(),
+      cwd: directory, network: 'none', tools: [], prompt, history: [],
+    })
+    const abort = () => { void worker.close() }
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
+    try {
+      const result = await worker.wait('complete', 90000)
+      if (result.completed !== true || result.interrupted) throw new HttpError(502, '记忆提炼未完成', 'memory_extraction_failed')
+      return String(result.text ?? '')
+    } finally { signal?.removeEventListener('abort', abort); await worker.close(); await rm(directory, { recursive: true, force: true }) }
+  }
   private async resolveProfile(profile:string,mode:'resolve'|'resolve-workspace',signal?:AbortSignal){
     const resolver=new HermesWorkerProcess(this.config.python,this.script,{mode,profile,defaultCwd:COMPUTER_WORKSPACE,hermesSource:this.config.hermesSource,hermesHome:this.config.hermesHome})
     const abort=()=>{void resolver.close()};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort()

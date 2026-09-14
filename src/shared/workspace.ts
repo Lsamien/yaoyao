@@ -1,5 +1,8 @@
 /** Application-owned identities. Hermes profile/session IDs never identify a chat. */
 export interface WorkspaceAgent {
+  canCollaborate?: boolean
+  memoryEnabled?: boolean
+  memoryStatus?: 'ready' | 'upgrade_required'
   id: string
   name: string
   avatar: string
@@ -41,6 +44,9 @@ export interface WorkspaceMemberRole {
   description: string
 }
 export interface WorkspaceConversation {
+  collaborationMode?: 'discussion' | 'host' | 'free'
+  projectId?: string
+  collaborationWaiting?: number
   id: string
   kind: 'direct' | 'group'
   name: string
@@ -118,6 +124,7 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  peerMessageId?: string
   revision?: number
   execution?:'profile'|'computer'
   id: string
@@ -150,6 +157,11 @@ export interface WorkspaceMessagePatch {
   reasoningAppend: string
 }
 export interface WorkspaceRun {
+  projectId?: string
+  peerMessageId?: string
+  collaborationChainId?: string
+  priority?: boolean
+  discussion?: { memberIds: string[]; rounds: number }
   id: string
   conversationId: string
   conversationTaskId?: string
@@ -164,7 +176,7 @@ export interface WorkspaceRun {
   /** Structured delivery run; ordinary chat does not carry a goal. */
   goalId?: string
   targetAgentId?: string
-  triggerKind?: 'assignment' | 'task_review' | 'task_result'
+  triggerKind?: 'assignment' | 'task_review' | 'task_result' | 'peer'
   internalInstruction?: string
   authorizationVersion?: number
   createdAt: number

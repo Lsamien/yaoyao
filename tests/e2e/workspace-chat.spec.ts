@@ -380,6 +380,8 @@ test('created roles and editable teams share a durable chat list without plugin 
   await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('产品开发团队')
   await dialog.getByRole('checkbox', { name: '产品经理', exact: true }).check()
   await dialog.getByRole('checkbox', { name: '开发工程师', exact: true }).check()
+  await dialog.getByText('高级协作设置', { exact: true }).click()
+  await dialog.getByRole('combobox', { name: '协作方式', exact: true }).selectOption('host')
   await dialog
     .getByRole('combobox', { name: '负责人', exact: true })
     .selectOption({ label: '产品经理' })
@@ -481,6 +483,8 @@ test('created roles and editable teams share a durable chat list without plugin 
   await page.screenshot({ path: testInfo.outputPath('restored-team-presets.png'), fullPage: true })
   await dialog.getByRole('button', { name: '产品设计团队', exact: true }).click()
   await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('产品设计团队')
+  await dialog.getByText('高级协作设置', { exact: true }).click()
+  await dialog.getByRole('combobox', { name: '协作方式', exact: true }).selectOption('host')
   await dialog.getByRole('combobox', { name: '产品负责人对应的机器人', exact: true }).selectOption({ label: '产品经理' })
   await dialog.getByRole('combobox', { name: '交互设计对应的机器人', exact: true }).selectOption({ label: '开发工程师' })
   const [submitted] = await Promise.all([
@@ -499,10 +503,16 @@ test('created roles and editable teams share a durable chat list without plugin 
   await page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行').fill('请汇总设计方案')
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
   await expect(page.locator('.message--assistant')).toContainText('我是产品经理')
+  const conversationPath = new URL(page.url()).pathname.replace('/conversations/', '/api/app/conversations/')
+  await expect.poll(async () => {
+    const c = (await (await page.request.get(conversationPath)).json()).conversation
+    return { active: Boolean(c.activeRunId), queued: c.queuedMessageCount }
+  }).toEqual({ active: false, queued: 0 })
   const composer = page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行')
   await composer.fill('[hold-workspace] 正在执行的任务')
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
   await expect(page.getByRole('button', { name: '停止生成', exact: true })).toBeVisible()
+  await expect.poll(async () => (await (await page.request.get(conversationPath)).json()).conversation.queuedMessageCount).toBe(0)
   await composer.fill('后续排队任务')
   await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeEnabled()
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
@@ -600,6 +610,8 @@ for (const mode of ['普通聊天', 'Bot 单聊', '群聊', '普通长回复'] a
         await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('流式验证群')
         await dialog.getByRole('checkbox', { name: `${mode}流式验证助手`, exact: true }).check()
         await dialog.getByRole('checkbox', { name: '群聊流式协作成员', exact: true }).check()
+        await dialog.getByText('高级协作设置', { exact: true }).click()
+        await dialog.getByRole('combobox', { name: '协作方式', exact: true }).selectOption('host')
         await dialog.getByRole('combobox', { name: '负责人', exact: true }).selectOption({ label: `${mode}流式验证助手` })
         await dialog.getByRole('button', { name: '保存', exact: true }).click()
         await expect(page.getByRole('heading', { name: '流式验证群', exact: true })).toBeVisible()

@@ -9,6 +9,8 @@ import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
 import RemoteAgentPicker from '@/components/workspace/RemoteAgentPicker.vue'
 import ConversationList from '@/components/workspace/ConversationList.vue'
 import WorkspaceBotPanel from '@/components/workspace/WorkspaceBotPanel.vue'
+import WorkspaceKnowledgePanel from '@/components/workspace/WorkspaceKnowledgePanel.vue'
+import type { WorkspaceProject } from '@shared/workspaceKnowledge'
 import LocalVmWorkspace from '@/components/workspace/LocalVmWorkspace.vue'
 import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import TaskPlan from '@/components/workspace/TaskPlan.vue'
@@ -66,12 +68,17 @@ const active = ref<Conversation>(),
   context = ref<Record<string, unknown> | null>(null)
 const activeTask = ref<WorkspaceTask | null>(null), tasks = ref<WorkspaceTask[]>([]), assignments = ref<AgentAssignment[]>([])
 const deliveryMode = ref(false)
+const knowledgePanel = ref<InstanceType<typeof WorkspaceKnowledgePanel>>()
+const knowledgeRevision = ref(0)
+const knowledgeEnabled = ref(false), projects = ref<WorkspaceProject[]>([]), directProjectId = ref(''), requestedRounds = ref<number | undefined>(), coordinatorId = ref('')
+const coordinators = computed(() => members.value.filter(a => a.canManageTeam && !a.archived && !a.remoteAgentId))
 const canRequestGoal = computed(() => active.value?.kind === 'group' && !active.value.archived && !activeTask.value?.goal
-  && members.value.some(a => a.id === active.value?.administratorId && a.canManageTeam && !a.archived && !a.remoteAgentId))
+  && (active.value.collaborationMode === 'discussion' ? coordinators.value.length > 0 : members.value.some(a => a.id === active.value?.administratorId && a.canManageTeam && !a.archived && !a.remoteAgentId)))
 const taskFiles = new Map<string,File[]>()
 const taskQuotes = new Map<string,UiMessage | null>()
 const composerKey = computed(() => `${auth.user?.id}:${active.value?.id}${activeTask.value ? `:${activeTask.value.id}` : ''}`)
-watch(composerKey, () => { deliveryMode.value = false })
+watch(composerKey, () => { deliveryMode.value = false; directProjectId.value = ''; requestedRounds.value = undefined; coordinatorId.value = '' })
+async function knowledgeChanged() { await refresh(); projects.value = (await apiRequest<{ projects: WorkspaceProject[] }>('/api/app/workspace/projects')).projects }
 const text = ref(''),
   error = ref(''),
   busy = ref(false),
@@ -177,11 +184,13 @@ const form = reactive({
   instructions: '',
   execution: 'profile' as 'profile'|'computer',
   canManageTeam: false,
+  canCollaborate: true,
+  memoryEnabled: true,
   source: '',
   memberIds: [] as string[],
   memberRoles: {} as Record<string, WorkspaceMemberRole>,
   administratorId: '',
-  mode: 'host' as 'host' | 'free',
+  mode: 'discussion' as 'discussion' | 'host' | 'free',
   autoReplyIds: [] as string[],
   maxReplyRounds: 3,
 })
@@ -198,7 +207,7 @@ function choosePreset(preset?: TeamPreset) {
   const available = agents.value.filter(a => !a.archived && !a.temporaryGoalId)
   if (preset && available.length < preset.roles.length) return
   selectedPresetId.value = preset?.id ?? 'custom'
-  Object.assign(form, { name: preset?.name ?? '', instructions: preset?.instructions ?? '', memberIds: preset ? available.slice(0, preset.roles.length).map(a => a.id) : [], memberRoles: {}, administratorId: '', mode: 'host', autoReplyIds: [], maxReplyRounds: 3 })
+  Object.assign(form, { name: preset?.name ?? '', instructions: preset?.instructions ?? '', memberIds: preset ? available.slice(0, preset.roles.length).map(a => a.id) : [], memberRoles: {}, administratorId: '', mode: knowledgeEnabled.value ? 'discussion' : 'host', autoReplyIds: [], maxReplyRounds: 3 })
   if (preset) applyPresetRoles(preset)
 }
 function assignPresetRole(index: number, id: string) {
@@ -455,7 +464,11 @@ function presentDetail(detail: WorkspaceDetail) {
 }
 function flushEvents() {
   eventFrame = undefined
-  try { for (const event of eventQueue) transcriptStore.apply(event) }
+  try { for (const event of eventQueue) {
+    transcriptStore.apply(event)
+    if (event.type === 'project.changed') { const project = event.data as WorkspaceProject; projects.value = [...projects.value.filter(p => p.id !== project.id), project] }
+    if (/^(memory|project|collaboration)\./.test(event.type)) knowledgeRevision.value++
+  } }
   catch { eventQueue = []; eventSource?.close(); void recoverEvents(); return }
   eventQueue = []
   cursor = transcriptStore.cursor
@@ -475,13 +488,15 @@ async function hydrateWorkspace() {
   const capabilities = await apiRequest<{ features: string[]; csrfToken?: string }>('/api/app/capabilities')
   if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
   patchEvents = capabilities.features.includes(WORKSPACE_PATCH_CAPABILITY)
+  knowledgeEnabled.value = capabilities.features.includes('bot-file-memory-v1')
   if (capabilities.csrfToken) setApiCsrfToken(capabilities.csrfToken)
   const readToken = transcriptStore.beginRead()
   try {
-  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity }>('/api/app/workspace/snapshot')
+  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity; projects?: WorkspaceProject[] }>('/api/app/workspace/snapshot')
   if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
   transcriptStore.hydrate(snapshot)
   agents.value = snapshot.agents; conversations.value = transcriptStore.conversations; cursor = snapshot.cursor
+  projects.value = snapshot.projects ?? []
   publishServerIdentity(snapshot.serverIdentity)
   } finally { transcriptStore.cancelRead(readToken) }
 }
@@ -556,11 +571,13 @@ async function openDialog(kind: NonNullable<typeof dialog.value>, conversation =
     instructions: '',
     execution: 'profile' as 'profile'|'computer',
   canManageTeam: false,
+    canCollaborate: true,
+    memoryEnabled: true,
     source: '',
     memberIds: [],
     memberRoles: {},
     administratorId: '',
-    mode: 'host',
+    mode: knowledgeEnabled.value ? 'discussion' : 'host',
     autoReplyIds: [],
     maxReplyRounds: 3,
   })
@@ -584,6 +601,7 @@ async function openDialog(kind: NonNullable<typeof dialog.value>, conversation =
     if (kind === 'editGroup' && conversation) {
       editingId.value = conversation.id
       Object.assign(form, conversation, {
+        mode: conversation.collaborationMode ?? conversation.mode,
         memberIds: [...conversation.memberIds],
         autoReplyIds: [...conversation.autoReplyIds],
         memberRoles: Object.fromEntries(Object.entries(conversation.memberRoles ?? {}).map(([id, role]) => [id, { ...role }])),
@@ -614,7 +632,7 @@ async function save() {
   busy.value = true
   error.value = ''
   try {
-    const fields = { name: form.name, ...(isAgentDialog.value ? { avatar: form.avatar, canManageTeam: form.canManageTeam, execution:form.execution } : {}), instructions: form.instructions }
+    const fields = { name: form.name, ...(isAgentDialog.value ? { avatar: form.avatar, canManageTeam: form.canManageTeam, execution:form.execution, ...(knowledgeEnabled.value ? { canCollaborate: form.canCollaborate, memoryEnabled: form.memoryEnabled } : {}) } : {}), instructions: form.instructions }
     if (dialog.value === 'agent') {
       const [nodeId, profile] = JSON.parse(form.source)
       const result = await apiRequest<{ agent: Agent }>('/api/app/agents', {
@@ -631,8 +649,9 @@ async function save() {
     else {
       const payload = {
         ...fields,
-        administratorId: form.administratorId,
-        mode: form.mode,
+        administratorId: form.administratorId || form.memberIds[0],
+        mode: form.mode === 'discussion' ? 'free' : form.mode,
+        ...(knowledgeEnabled.value ? { collaborationMode: form.mode } : {}),
         autoReplyIds: form.autoReplyIds,
         maxReplyRounds: form.maxReplyRounds,
         memberIds: form.memberIds,
@@ -694,8 +713,8 @@ async function send() {
   error.value = ''
   const owner = auth.user?.id, epoch = accountEpoch, revision = draftRevision, scope = composerKey.value, taskId = activeTask.value?.id
   const submittedText = text.value, submittedFiles = files.value, submittedMentions = [...mentions.value]
-  const mode = deliveryMode.value ? 'goal' : 'chat'
-  const fingerprint = JSON.stringify([c.id, activeTask.value?.id, text.value, mentions.value, files.value.map(f => f.id), mode])
+  const mode = deliveryMode.value && !activeTask.value?.goal ? 'goal' : 'chat'
+  const fingerprint = JSON.stringify([c.id, activeTask.value?.id, text.value, mentions.value, files.value.map(f => f.id), mode, directProjectId.value, requestedRounds.value, coordinatorId.value])
   if (!pendingRequestId || pendingFingerprint !== fingerprint) {
     pendingRequestId = createUuid()
     pendingFingerprint = fingerprint
@@ -706,6 +725,7 @@ async function send() {
       body: {
         requestId: pendingRequestId,
         mode,
+        ...(knowledgeEnabled.value ? { ...(c.kind === 'direct' && directProjectId.value ? { projectId: directProjectId.value } : {}), ...(requestedRounds.value && c.collaborationMode === 'discussion' ? { rounds: requestedRounds.value } : {}), ...(deliveryMode.value && c.collaborationMode === 'discussion' ? { coordinatorId: coordinatorId.value || coordinators.value[0]?.id } : {}) } : {}),
         ...(activeTask.value ? { taskId: activeTask.value.id } : {}),
         content: text.value,
         mentionIds: mentions.value,
@@ -855,6 +875,7 @@ watch([selected,selectedTask], () => {
 watch(selected,()=>{dockView.value=undefined})
 watch(() => auth.user?.id, (owner, previous) => {
   if (owner === previous) return
+  knowledgePanel.value?.close(); knowledgeEnabled.value = false; projects.value = []; knowledgeRevision.value++
   accountEpoch++; busy.value = false
   generation++
   eventSource?.close(); eventSource = undefined; eventQueue = []
@@ -913,10 +934,10 @@ onBeforeUnmount(() => {
     @create-remote-agent="remotePickerOpen = true"
   >
     <template #sidebar
-      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
+      ><div v-if="knowledgeEnabled" class="knowledge-shortcuts"><button @click="knowledgePanel?.open('projects')">项目</button><button @click="knowledgePanel?.open('user')">用户记忆</button></div><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <template #mobile-sidebar
-      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
+      ><div v-if="knowledgeEnabled" class="knowledge-shortcuts"><button @click="knowledgePanel?.open('projects')">项目</button><button @click="knowledgePanel?.open('user')">用户记忆</button></div><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">
@@ -936,6 +957,7 @@ onBeforeUnmount(() => {
         <template #header-leading><button v-if="active" class="workspace-list-back icon-button" aria-label="返回 Bot 列表" @click="router.push('/conversations')"><AppIcon name="chevron-left" /></button></template>
         <template #header-actions>
           <div v-if="active" class="header-actions">
+            <button v-if="knowledgeEnabled" type="button" class="icon-button" aria-label="记忆与协作" title="记忆与协作" @click="knowledgePanel?.open(active.kind === 'group' ? 'collaboration' : 'agent', active.memberIds[0], active.projectId)"><AppIcon name="users" /></button>
             <button v-if="active.kind==='direct'" type="button" class="icon-button" aria-label="电脑与定时任务" title="电脑与定时任务" :aria-pressed="dockView==='computer'" @click="toggleDock('computer')"><AppIcon name="monitor"/></button>
             <span v-if="active.kind === 'group' && tasks.length" class="task-picker-shell">
               <select class="task-picker" aria-label="当前话题" :aria-busy="creatingTask" :disabled="creatingTask" :value="activeTask?.id" @change="selectTask">
@@ -950,6 +972,7 @@ onBeforeUnmount(() => {
         </template>
       </MessageTimeline>
       <p v-if="run?.status === 'queued'" class="task-queue-status" role="status">正在等待可用机器人</p>
+      <p v-if="active?.collaborationWaiting" class="task-queue-status" role="status"><button @click="knowledgePanel?.open('collaboration', active.memberIds[0])">等待同伴回复 · 查看协作</button></p>
       <p v-if="error" class="error" role="alert">{{ error }}<button class="icon-button" @click="error = ''" aria-label="关闭错误"><AppIcon name="close" /></button></p>
       <ComposerShell v-if="active" :key="composerKey" ref="composer" mode="group" :draft-key="composerKey"
         :disabled="active.archived || loading || active.id !== selected" :sending="busy" stop-while-running :streaming="!!active.activeRunId"
@@ -957,6 +980,11 @@ onBeforeUnmount(() => {
         :mention-options="active.kind === 'group' ? members.map(a => ({id:a.id,label:a.name,insertText:`@${a.name} `})) : []"
         @send="sendFromComposer" @stop="control('stop')" @tool-trace-toggle="showThinking = !showThinking" @clear-reference="quoted = null" @error="error = $event">
         <template #before-input>
+          <div v-if="knowledgeEnabled" class="knowledge-shortcuts composer-knowledge">
+            <label v-if="active.kind === 'direct' && projects.some(p => p.memberIds.includes(active!.memberIds[0]!))">当前项目<select v-model="directProjectId"><option value="">不关联项目</option><option v-for="project in projects.filter(p => !p.archived && p.memberIds.includes(active!.memberIds[0]!))" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
+            <label v-if="active.collaborationMode === 'discussion' && !deliveryMode">讨论轮数<select v-model="requestedRounds"><option :value="undefined">按消息要求</option><option v-for="n in 12" :key="n" :value="n">{{ n }} 轮</option></select></label>
+            <label v-if="deliveryMode && active.collaborationMode === 'discussion'">交付负责人<select v-model="coordinatorId"><option value="">{{ coordinators[0]?.name ?? '请先授权负责人' }}</option><option v-for="agent in coordinators" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select></label>
+          </div>
           <TaskPlan :key="activeTask?.id" :goal="activeTask?.goal" :assignments="assignments" :agents="agents" :save-criteria="saveGoalCriteria" @stop="stopTask" @resume="resumeTask" />
           <div v-if="active.kind === 'group' && !activeTask?.goal" class="delivery-mode">
             <button type="button" :aria-pressed="deliveryMode" :disabled="!canRequestGoal || busy || loading || !!activeTask?.activeRunId" aria-describedby="delivery-mode-help" @click="deliveryMode = !deliveryMode">交付目标</button>
@@ -1035,6 +1063,11 @@ onBeforeUnmount(() => {
           <span><input v-model="form.canManageTeam" type="checkbox" aria-label="允许组建团队" aria-describedby="team-management-help" />允许组建团队</span>
           <small id="team-management-help">允许自主创建成员、组建团队并启动任务。仅使用当前账号获准的基础机器人，新成员默认不获得此权限。发起者需使用已启用工具桥的同机 Hermes，或支持团队工具的 Runner。隔离发起者新建的成员也使用隔离电脑。</small>
         </label>
+        <template v-if="knowledgeEnabled && isAgentDialog && !isRemoteAgent">
+          <label class="team-management-permission"><span><input v-model="form.canCollaborate" type="checkbox" />允许 Bot 协作</span></label>
+          <label class="team-management-permission"><span><input v-model="form.memoryEnabled" type="checkbox" />自动记录长期事实</span></label>
+          <button v-if="editingId" type="button" @click="knowledgePanel?.open('agent', editingId)">查看此 Bot 的记忆</button>
+        </template>
         <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" class="remote-picker" @click="remotePickerOpen = true">添加远程机器人</button>
         <fieldset v-if="selectedPreset" class="preset-role-mapping">
           <legend>角色分配</legend>
@@ -1058,7 +1091,7 @@ onBeforeUnmount(() => {
               v-model="form.memberIds"
               type="checkbox"
               :value="a.id"
-              :disabled="busy || (dialog === 'editGroup' && (a.id === editingConversation?.administratorId || a.id === form.administratorId)) || (!form.memberIds.includes(a.id) && form.memberIds.length >= 8)"
+              :disabled="busy || (form.mode !== 'discussion' && dialog === 'editGroup' && (a.id === editingConversation?.administratorId || a.id === form.administratorId)) || (!form.memberIds.includes(a.id) && form.memberIds.length >= 8)"
             />{{ a.name }}</label
           ><small v-if="dialog === 'group' && agents.filter((a) => !a.archived && !a.temporaryGoalId).length < 2"
             >至少需要两个机器人才能创建群聊。</small
@@ -1071,7 +1104,7 @@ onBeforeUnmount(() => {
           <p v-for="(role, id) in form.memberRoles" :key="id">{{ agents.find(a => a.id === id)?.name }} · {{ role.name }}<br /><small>{{ role.description }}</small></p>
         </fieldset>
         <template v-if="!isAgentDialog"
-          ><label
+          ><label v-if="form.mode !== 'discussion'"
             >负责人<select v-model="form.administratorId" required>
               <option
                 v-for="a in agents.filter((a) => form.memberIds.includes(a.id))"
@@ -1083,11 +1116,13 @@ onBeforeUnmount(() => {
             </select></label
           >
           <label>群规则（可选）<textarea v-model="form.instructions" rows="3" maxlength="24000" placeholder="例如：回答简洁，重要结论注明来源" /></label>
+          <button v-if="knowledgeEnabled" type="button" @click="knowledgePanel?.open('projects', form.memberIds[0], editingConversation?.projectId)">关联项目与共享记忆</button>
           <p v-if="dialog === 'group'" class="group-help">创建后即可聊天。需要交付具体结果时，再开启交付目标。</p>
           <details class="group-options">
             <summary>高级协作设置</summary>
           <label
             >协作方式<select v-model="form.mode">
+              <option v-if="knowledgeEnabled" value="discussion">平等讨论</option>
               <option value="host">管理员协调</option>
               <option value="free">自由协作</option>
             </select></label
@@ -1100,9 +1135,9 @@ onBeforeUnmount(() => {
               }}</label
             >
           </fieldset>
-          <label
+          <label v-if="form.mode !== 'discussion'"
             ><input type="checkbox" :checked="form.maxReplyRounds === -1" @change="form.maxReplyRounds = ($event.target as HTMLInputElement).checked ? -1 : 3" />不限制自动协作轮数</label>
-          <label v-if="form.maxReplyRounds !== -1">自动协作轮数<input
+          <label v-if="form.mode !== 'discussion' && form.maxReplyRounds !== -1">自动协作轮数<input
               v-model.number="form.maxReplyRounds"
               type="number"
               min="1"
@@ -1120,9 +1155,11 @@ onBeforeUnmount(() => {
         </footer>
       </form>
     </dialog></Teleport>
+    <WorkspaceKnowledgePanel v-if="knowledgeEnabled" ref="knowledgePanel" :agents="agents" :conversations="conversations" :conversation-id="active?.id" :revision="knowledgeRevision" @changed="knowledgeChanged" />
   </WorkspaceShell>
 </template>
 <style scoped>
+.knowledge-shortcuts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px}.knowledge-shortcuts button,.knowledge-shortcuts select{min-height:44px;padding:7px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text-primary);font:inherit;font-size:13px;cursor:pointer}.knowledge-shortcuts button:hover{background:var(--surface-hover)}.knowledge-shortcuts button:focus-visible,.knowledge-shortcuts select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.knowledge-shortcuts label{display:flex;align-items:center;gap:8px;font-size:13px}.composer-knowledge{max-width:760px;margin:auto}
 .conversation-with-computer{display:flex;height:100%;min-width:0;min-height:0}.conversation-with-computer>.workspace-chat{flex:1;min-width:0}
 .workspace-chat{display:flex;min-width:0;min-height:0;flex:1;flex-direction:column}.new-actions{display:grid;gap:2px}.new-actions button{display:flex;align-items:center;min-height:40px;padding:0 11px;border:0;border-radius:9px;background:transparent;color:var(--text-primary);text-align:left;font-size:12px;font-weight:610;cursor:pointer}.new-actions button:hover{background:var(--surface-hover)}.header-actions{display:flex;gap:4px;margin-left:auto}.error{display:flex;align-items:center;justify-content:space-between;margin:0 18px 9px;color:var(--danger);font-size:12px}.team-avatar-settings{display:grid;gap:12px}.team-avatar-options{display:flex;gap:10px}.team-avatar-options button{padding:5px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft);cursor:pointer}.team-avatar-options button[aria-pressed=true]{border-color:var(--accent)}.nodes-overlay{position:fixed;inset:0;z-index:1000;background:var(--scrim);display:grid;place-items:center}.nodes-overlay>div{padding:20px;max-height:85vh;overflow:auto;width:min(520px,90vw);background:var(--surface-raised);border:1px solid var(--line);border-radius:16px}
 .editor {

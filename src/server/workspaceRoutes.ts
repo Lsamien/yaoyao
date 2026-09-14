@@ -1,4 +1,6 @@
 import { WORKSPACE_PATCH_CAPABILITY } from '../shared/workspaceMessagePatch.js'
+import { KNOWLEDGE_FEATURES } from './workspaceKnowledge.js'
+import { workspaceKnowledgeRouter } from './workspaceKnowledgeRoutes.js'
 import { workspaceDetail, streamWorkspace } from './workspaceSync.js'
 import { readServerIdentity } from './serverIdentity.js'
 import { randomUUID } from 'node:crypto'
@@ -69,6 +71,7 @@ export function workspaceRouter(
       protocolVersion: 1,
       serverKind: 'yaoyao-web',
       features: [
+        ...KNOWLEDGE_FEATURES,
         'agents',
         'conversations',
         'conversationTasks',
@@ -327,7 +330,7 @@ export function workspaceRouter(
       .map(c => store.conversationSummary(user, c)).sort(compareWorkspaceConversations)
     const details = conversations.filter(c => !c.archived).map(c => workspaceDetail(store, runtime, user, c.id))
     ctx.set('Cache-Control', 'no-store')
-    ctx.body = { agents: store.list<WorkspaceAgent>(user, 'agent').map(a => store.agentSummary(a)),
+    ctx.body = { projects: runtime.knowledge.projects(user), agents: store.list<WorkspaceAgent>(user, 'agent').map(a => store.agentSummary(a)),
       conversations, details, cursor: store.cursor(user), serverIdentity: readServerIdentity(store) }
   })
   router.get('/api/app/events/stream', ctx => streamWorkspace(ctx, store, auth))
@@ -509,6 +512,8 @@ export function workspaceRouter(
     ctx.body = { snapshot }
   })
   registerVoice(router, store, nodes, owner, auth)
+  const knowledgeRouter = workspaceKnowledgeRouter(runtime, auth)
+  router.use(knowledgeRouter.routes(), knowledgeRouter.allowedMethods())
   return router
 }
 

@@ -146,11 +146,19 @@ export class RunnerAgent {
     }
     if(command.kind==='http') {
       const path=String(p.path),search=new URLSearchParams(String(p.search??''))
+      if (path === '/api/plugins/yaoyao-bot-bridge/memory-extract') {
+        if (p.method !== 'POST' || !this.computers) throw new HttpError(409, '执行节点尚不支持无工具记忆提炼', 'memory_extraction_unavailable')
+        const body = z.object({ profile: z.string().min(1).max(256), prompt: z.string().min(1).max(65000) }).strict().parse(p.body)
+        if (body.profile !== (search.get('profile') ?? 'default')) throw new HttpError(403, '提炼 Profile 与授权来源不一致', 'memory_profile_forbidden')
+        this.requireProfile(body.profile)
+        const text = await this.computers.extractMemory(body.profile, body.prompt, this.controlAbort.signal)
+        return { status: 200, headers: {}, body: Buffer.from(JSON.stringify({ text })).toString('base64') }
+      }
       if(path==='/api/computer/capabilities'||(p.computer&&!(p.computer as ComputerTarget).profileSession&&path==='/api/plugins/yaoyao-bot-bridge/capabilities')){
         this.requireProfile(search.get('profile')??'default')
         if(p.method!=='GET'||!this.computers)throw new HttpError(409,'执行节点未配置隔离电脑','computer_unavailable')
         await Promise.all([access(this.computers.config.python),access(this.computers.config.hermesSource),access(this.computers.script)])
-        return {status:200,headers:{},body:Buffer.from(JSON.stringify({version:1,ready:true,native_tools:true,in_process:true,network:this.config.computers?.network??'none'})).toString('base64')}
+        return {status:200,headers:{},body:Buffer.from(JSON.stringify({version:1,ready:true,native_tools:true,in_process:true,memory_isolation:true,memory_extraction:true,network:this.config.computers?.network??'none'})).toString('base64')}
       }
       if(p.computer&&path==='/api/files/download')throw new HttpError(409,'隔离电脑产物需通过产物导出接口读取','computer_artifact_required')
       if(p.computer&&/^\/api\/sessions\/[^/]+\/messages$/.test(path)){

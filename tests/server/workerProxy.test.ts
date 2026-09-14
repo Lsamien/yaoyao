@@ -80,3 +80,18 @@ for line in sys.stdin:
   vi.restoreAllMocks();await rm(home,{recursive:true,force:true})
  }
 })
+
+it('extracts memory with an empty tool catalog and without acquiring or starting a computer', async () => {
+ const home=await mkdtemp(join(tmpdir(),'yaoyao-memory-worker-')),db=new DatabaseSync(':memory:'),script=join(home,'memory.py')
+ await writeFile(script,`import json,sys\nboot=json.loads(sys.stdin.readline())\nprint(json.dumps({"nonce":boot["nonce"],"type":"complete","completed":True,"interrupted":False,"text":json.dumps({"tools":boot["tools"],"prompt":boot["prompt"],"history":boot["history"]})}),flush=True)\n`)
+ const runtime=new ComputerRuntime(db,{protocol:1,runnerId:randomUUID(),serverURL:'http://127.0.0.1',hermesURL:'http://127.0.0.1',token:'fixture',allowedProfiles:['default'],artifactRoots:[],computers:{runtime:'docker',imageId:'sha256:'+'a'.repeat(64),python:'python3',hermesSource:home,hermesHome:home,network:'none'}},home,script)
+ try {
+  await runtime.ready
+  vi.spyOn(runtime,'resolve').mockResolvedValue({type:'resolved',model:{provider:'custom',api_mode:'chat_completions',model:'fixture'}})
+  const ensure=vi.spyOn(runtime.provider,'ensure')
+  const result=JSON.parse(await runtime.extractMemory('default','只提炼已给定的事实'))
+  expect(result).toEqual({tools:[],prompt:'只提炼已给定的事实',history:[]})
+  expect(ensure).not.toHaveBeenCalled()
+  expect(runtime.workers.size).toBe(0)
+ } finally { await runtime.pool.close();db.close();await rm(home,{recursive:true,force:true}) }
+})
