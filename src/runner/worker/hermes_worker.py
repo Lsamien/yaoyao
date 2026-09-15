@@ -264,7 +264,7 @@ def run_model():
     else:
         environment += "Host files and commands are not available through computer tools. Never attempt to execute a host command through them. "
     result = agent.run_conversation(BOOT["prompt"], conversation_history=BOOT.get("history", []), task_id=BOOT["taskId"],
-        system_message="You are a controlled Hermes worker. " + environment + "Other supplied application and team tools follow their descriptions. Use only supplied tools and follow the user's task and permission scope.")
+        system_message="You are a controlled Hermes worker. " + environment + "Other supplied application and team tools follow their descriptions. Use only supplied tools and follow the user's task and permission scope.\n" + str(BOOT.get("skillInstructions", "")))
     # These are engine result flags, never inferred from model-generated text.
     failure_code = ("context_compaction_disabled" if result.get("compaction_disabled") is True
                     else "context_compaction_failed" if result.get("compression_exhausted") is True
@@ -277,7 +277,25 @@ def run_model():
 
 try:
     with contextlib.redirect_stdout(sys.stderr):
-        if BOOT.get("mode") == "resolve-workspace":
+        if BOOT.get("mode") == "skills":
+            config, _ = load_profile()
+            from profile_skills import ProfileSkills, SkillError
+            def authorize_skill_commit():
+                emit("tool", id="commit", name="skill_commit", arguments={})
+                frame = json.loads(sys.stdin.readline())
+                if frame.get("nonce") != NONCE or frame.get("type") != "result" or frame.get("id") != "commit" or frame.get("result") != {"authorized": True}:
+                    raise SkillError("skill_cancelled", "技能发布授权已失效")
+            try:
+                profile_home = Path(BOOT["hermesHome"]).resolve()
+                if BOOT["profile"] != "default":
+                    profile_home = profile_home / "profiles" / BOOT["profile"]
+                result = ProfileSkills(profile_home, config, BOOT["provenance"], authorize_skill_commit).call(BOOT["action"], BOOT.get("arguments", {}))
+                emit("skills", result=result)
+            except SkillError as error:
+                emit("skills", result={"error": str(error), "code": error.code})
+            except Exception:
+                emit("skills", result={"error": "无法读取或发布技能，请检查 Profile 技能目录", "code": "skill_storage_error"})
+        elif BOOT.get("mode") == "resolve-workspace":
             emit("resolved", **resolve_workspace(load_profile()[0]))
         elif BOOT.get("mode") == "resolve":
             resolve_model()

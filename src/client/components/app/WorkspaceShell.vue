@@ -13,6 +13,7 @@ import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
 const AboutDialog = defineAsyncComponent(() => import('./AboutDialog.vue'))
 const UpdateCheckDialog = defineAsyncComponent(() => import('./UpdateCheckDialog.vue'))
 const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspace/BotPluginsDialog.vue'))
+const BotSettingsDialog = defineAsyncComponent(() => import('@/components/workspace/BotSettingsDialog.vue'))
 
 type NavItem = {
   key: 'chat' | 'history' | 'groups' | 'kanban' | 'files'
@@ -24,6 +25,7 @@ type NavItem = {
 type SettingsPage =
   | 'agent-identity'
   | 'agent-models'
+  | 'account-profile'
   | 'account-security'
   | 'account-mobile'
   | 'appearance'
@@ -33,7 +35,6 @@ type SettingsPage =
   | 'system-push'
   | 'system-nodes'
   | 'system-voice'
-  | 'system-local-vm'
   | 'system-update'
 
 const SIDEBAR_COLLAPSED_KEY = 'hermes-yaoyao:sidebar-collapsed'
@@ -96,6 +97,7 @@ const emit = defineEmits<{
   createAgent: []
   createRemoteAgent: []
   createGroup: []
+  botSettingsChanged: []
 }>()
 
 const route = useRoute()
@@ -103,7 +105,8 @@ const router = useRouter()
 const mobileDrawerOpen = ref(false)
 const profileMenuOpen = ref(false)
 const settingsOpen = ref(false)
-const standalone = ref<'plugins' | 'about' | 'update' | null>(null)
+const standalone = ref<'plugins' | 'about' | 'update' | 'bot-settings' | null>(null)
+const botSettingsPage = ref<'projects' | 'vm'>('projects')
 const standaloneReturnFocus = ref<HTMLElement>()
 const settingsPage = ref<SettingsPage>('agent-identity')
 const settingsReturnFocus = ref<HTMLButtonElement>()
@@ -267,7 +270,7 @@ function chooseSettingsAction(action: 'settings' | 'bots' | 'about') {
     standalone.value = 'about'
     return
   }
-  openSettings(applicationWorkspace.value ? 'account-security' : 'agent-identity')
+  openSettings(applicationWorkspace.value ? 'account-profile' : 'agent-identity')
 }
 function closeStandalone() { standalone.value = null; void nextTick(() => standaloneReturnFocus.value?.isConnected && standaloneReturnFocus.value.focus()) }
 function closeToolsMenu() { toolsMenuOpen.value = false; void nextTick(() => toolsTrigger?.isConnected && toolsTrigger.focus()) }
@@ -276,16 +279,18 @@ async function openToolsMenu(event: MouseEvent) {
   if (toolsMenuOpen.value) { closeToolsMenu(); return }
   toolsTrigger = event.currentTarget as HTMLButtonElement
   const rect = toolsTrigger.getBoundingClientRect()
-  toolsPosition.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 208))}px`, top: `${Math.max(8, rect.top - (window.innerWidth < 768 ? 106 : 90))}px` }
+  const height = 3 * (window.innerWidth < 768 ? 44 : 36) + 18
+  toolsPosition.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 208))}px`, top: `${Math.max(8, rect.top - height)}px` }
   settingsMenuOpen.value = false; createMenuOpen.value = false; toolsMenuOpen.value = true
   await nextTick(); toolsMenu.value?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
 }
-function chooseTool(page: 'apps' | 'automations') {
+function chooseTool(page: 'apps' | 'automations' | 'bot-settings') {
   toolsMenuOpen.value = false
   if (page === 'automations') { void navigate('/conversations/automations?from=' + encodeURIComponent(route.fullPath)); return }
   standaloneReturnFocus.value = toolsTrigger?.closest('.mobile-drawer') ? mobileNavigationTrigger.value : toolsTrigger ?? undefined
   mobileDrawerOpen.value = false
-  standalone.value = 'plugins'
+  botSettingsPage.value = 'projects'
+  standalone.value = page === 'bot-settings' ? 'bot-settings' : 'plugins'
 }
 function switchInterfaceMode() {
   if (!props.isAdmin) return
@@ -418,7 +423,12 @@ watch(() => activeNav.value.key, () => {
   profileMenuOpen.value = false
 })
 
-function showLocalVmSettings(){if(props.isAdmin)openSettings('system-local-vm')}
+function showLocalVmSettings(){
+  if(!props.isAdmin)return
+  standaloneReturnFocus.value = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+  settingsOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false; mobileDrawerOpen.value = false
+  botSettingsPage.value = 'vm'; standalone.value = 'bot-settings'
+}
 onMounted(() => {
   window.addEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
   try { sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' } catch { /* optional persistence */ }
@@ -432,7 +442,7 @@ onBeforeUnmount(() => {
   document.removeEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.removeEventListener('keydown', workspaceKeydown)
 })
-defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}})
+defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
@@ -695,6 +705,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
     <AboutDialog v-if="standalone === 'about'" @close="closeStandalone" />
     <UpdateCheckDialog v-if="standalone === 'update' && isAdmin" @close="closeStandalone" @manage="openUpdateSettings" />
     <BotPluginsDialog v-if="standalone === 'plugins' && applicationWorkspace" @close="closeStandalone" />
+    <BotSettingsDialog v-if="standalone === 'bot-settings'" :is-admin="isAdmin" :initial-page="botSettingsPage" @close="closeStandalone" @changed="emit('botSettingsChanged')" />
     <SettingsCenterDialog
       :open="settingsOpen"
       :bot-mode="applicationWorkspace"
@@ -723,7 +734,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
     <Teleport to="body">
       <div v-if="settingsMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeSettingsMenu" @keydown.esc.prevent.stop="closeSettingsMenu">
         <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :style="settingsMenuPosition" role="menu" aria-label="账号菜单" @keydown="actionMenuKeydown">
-          <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />设置</button>
+          <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />我的设置</button>
           <button type="button" role="menuitem" @click="chooseSettingsAction('about')"><AppIcon name="info" :size="17" />关于</button>
           <button v-if="canCheckUpdates" type="button" role="menuitem" :disabled="openingUpdate" :aria-busy="openingUpdate" @click="checkForUpdates"><AppIcon name="refresh" :size="17" />{{ openingUpdate ? '正在打开…' : '检测更新' }}</button>
           <p v-if="updateError" class="update-menu-error" role="alert">{{ updateError }}</p>
@@ -731,7 +742,7 @@ defineExpose({openLocalVm:()=>{if(props.isAdmin)openSettings('system-local-vm')}
           <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
       </div>
-      <div v-if="toolsMenuOpen && applicationWorkspace" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('automations')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
+      <div v-if="toolsMenuOpen && applicationWorkspace" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('bot-settings')"><AppIcon name="settings" :size="17" />Bot 设置</button><button type="button" role="menuitem" @click="chooseTool('automations')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>

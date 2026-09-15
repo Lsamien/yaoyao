@@ -68,6 +68,7 @@ vi.mock('@/stores/auth', () => ({
   }),
 }))
 import { useChatStore } from '@/stores/chat'
+import { ScopedCache } from '@/utils/cache'
 function session(id = 's', owned = true) {
   return {
     id,
@@ -148,6 +149,37 @@ describe('ordinary v2 cross-client store', () => {
     expect(chat.messages.map((m) => m.content)).toEqual(['完整正文'])
     expect(chat.isStreaming).toBe(false)
     expect(api.messages).not.toHaveBeenCalled()
+  })
+  it('keeps checkpoint state when a usage update replaces the route during outbox persistence', async () => {
+    const client = await open()
+    const original = ScopedCache.prototype.set
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const spy = vi.spyOn(ScopedCache.prototype, 'set').mockImplementation(async function(this: ScopedCache<unknown>, scope, key, value, durable) {
+      if ((this as unknown as { namespace: string }).namespace === 'ordinary-outbox-v2') {
+        entered()
+        await gate
+      }
+      await original.call(this, scope, key, value, durable)
+    })
+    const saving = client.changed(snapshot([answer('正在处理', { status: 'streaming' })], 's', {
+      running: true, liveStatus: '正在思考', pendingApproval: { request_id: 'approval-1', message: '请确认' },
+    }))
+    try {
+      await started
+      wire.event?.({ type: 'session.usage', session_id: 's', profile: 'p', payload: { input_tokens: 7 } })
+      release()
+      await saving
+      expect(chat.messages.map(m => m.content)).toEqual(['正在处理'])
+      expect(chat.isStreaming).toBe(true)
+      expect(chat.pendingApproval?.id).toBe('approval-1')
+      expect(chat.contextUsage?.inputTokens).toBe(7)
+    } finally {
+      release()
+      await saving.catch(() => {})
+      spy.mockRestore()
+    }
   })
   it('does not materialize a resume snapshot beside the canonical reply', async () => {
     wire.request.mockResolvedValue({

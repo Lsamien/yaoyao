@@ -8,11 +8,12 @@ import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
 import {WebSocketServer,type WebSocket} from 'ws'
 import {ComputerGateway,ComputerRuntime} from '../../src/runner/worker/gateway'
+import {ProfileSkillSession} from '../../src/runner/worker/skills'
 import {UpstreamClient} from '../../src/server/upstream'
 import {UpstreamServiceSession} from '../../src/server/localAuth'
 import type {GatewayFrame} from '../../src/server/workspaceGateway'
 
-async function fixture(){
+async function fixture(hermesManaged=false,bridgeVersion=2){
   const home=await mkdtemp(join(tmpdir(),'yaoyao-profile-computer-')),db=new DatabaseSync(':memory:')
   const calls:Array<{method:string;params:any}>=[],bindings:any[]=[],frames:GatewayFrame[]=[],gateways:ComputerGateway[]=[]
   const sessions=new Map<string,{stored:string;running:boolean}>()
@@ -20,8 +21,9 @@ async function fixture(){
   const server=createServer(async(req,res)=>{
     let body='';for await(const chunk of req)body+=chunk
     if(req.url?.endsWith('/bind'))bindings.push(JSON.parse(body))
+    if(req.url?.endsWith('/computer-file')){res.setHeader('Content-Type','application/json');const data=JSON.parse(body);res.end(JSON.stringify(data.action==='read'?{ok:true,data:Buffer.from('hermes-authorized-file').toString('base64')}:{ok:true}));return}
     res.setHeader('Content-Type','application/json')
-    res.end(JSON.stringify(req.url==='/api/auth/ws-ticket'?{ticket:'test-ticket'}:req.url?.split('?')[0]?.endsWith('/capabilities')?{version:1,ready:true,in_process:true,native_tools:true}:{ok:true,native_tools:true}))
+    res.end(JSON.stringify(req.url==='/api/auth/ws-ticket'?{ticket:'test-ticket'}:req.url?.split('?')[0]?.endsWith('/capabilities')?{version:1,ready:true,in_process:true,native_tools:true,computer_runtime_version:bridgeVersion}:{ok:true,native_tools:true,computer_runtime_version:bridgeVersion,workspace_memory:body?JSON.parse(body).workspace_memory===true:false}))
   })
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
   const url=new URL(`http://127.0.0.1:${(server.address() as {port:number}).port}`)
@@ -38,6 +40,7 @@ async function fixture(){
         result={session_id:id,stored_session_id:stored,running:false,info:{profile_name:request.params.profile,cwd:home}}
       }else if(request.method==='session.active_list')result={sessions:[...sessions].map(([id,s])=>({id,status:s.running?'working':'idle'}))}
       else if(request.method==='session.usage')result={context_used:123,context_max:32000}
+      else if(request.method==='image.attach_bytes')result={ref_text:'[image](/hermes/attachments/image.png)'}
       else if(request.method==='file.attach')result={ref_text:`[host attachment](${home}/input.txt)`}
       else if(request.method==='prompt.submit')sessions.get(request.params.session_id)!.running=true
       else if(request.method==='session.interrupt'&&interruptStops){sessions.get(request.params.session_id)!.running=false;emit('message.complete',{status:'interrupted'},request.params.session_id)}
@@ -54,7 +57,7 @@ async function fixture(){
   vi.spyOn(runtime.provider,'stop').mockResolvedValue();vi.spyOn(runtime.provider,'remove').mockResolvedValue()
   vi.spyOn(runtime.provider,'capture').mockResolvedValue({data:'image',width:100,height:80,capturedAt:Date.now()})
   const execute=vi.spyOn(runtime.provider,'execute').mockResolvedValue({stdout:'vm result',stderr:''})
-  const id=randomUUID(),meta={environmentId:id,agentId:id,ownerKey:'owner',profileSession:true,hostAccess:true}
+  const id=randomUUID(),meta={environmentId:id,agentId:id,ownerKey:'owner',profileSession:!hermesManaged,hostAccess:!hermesManaged,...(hermesManaged?{hermesRuntime:true}:{})}
   const gateway=()=>{
     const instance=new ComputerGateway(runtime,meta,randomUUID(),async()=>{if(!allowed)throw new Error('revoked')},async()=>({}),target)
     instance.onEvent=frame=>frames.push(frame);gateways.push(instance);return instance
@@ -99,6 +102,12 @@ it('uses a native Profile session and bridge for VM tools, preserves rotated his
     const catalog=(await f.post('/tools/list',{})).body.tools.map((t:any)=>t.name)
     expect(catalog).toEqual(expect.arrayContaining(['computer_shell','computer_copy_file','team_test']))
     expect(catalog).not.toContain('host_shell')
+    const skills=vi.spyOn(ProfileSkillSession.prototype,'call').mockResolvedValue({skills:[{name:'profile-procedure'}]})
+    expect((await f.tool('computer_skills_list',{})).body.structuredContent).toEqual({skills:[{name:'profile-procedure'}]})
+    expect(skills).toHaveBeenCalledWith('computer_skills_list',{})
+    expect(skills.mock.instances[0]?.options.profile).toBe('default')
+    expect(skills.mock.instances[0]?.options.agentId).toBe(f.meta.agentId)
+    skills.mockRestore()
     expect((await f.tool('computer_shell',{command:'pwd'})).body.structuredContent).toMatchObject({stdout:'vm result'})
     expect(f.execute).toHaveBeenCalledWith(expect.objectContaining({cwd:'/home/cua/workspace'}),['/bin/bash','-lc','pwd'],expect.anything())
     expect((await f.tool('team_test',{})).body.structuredContent).toEqual({proof:'team-result'})
@@ -149,5 +158,52 @@ it('waits for native termination and VM calls before human takeover, then resume
     f.setInterruptStops(true);await g.rpc('session.interrupt',{session_id:session.session_id})
     expect((await f.runtime.controls.status(f.meta)).mode).toBe('off')
     await expect(f.post('/tools/list',{})).rejects.toThrow()
+  }finally{await f.close()}
+})
+
+
+it('uses Hermes for an isolated Bot without reading Profile config or running a Worker; native skills and authorized files stay in Hermes',async()=>{
+  const f=await fixture(true)
+  try{
+    const workspace=vi.mocked(f.runtime.resolveWorkspace);workspace.mockRejectedValue(new Error('must not read Profile config'))
+    const skills=vi.spyOn(ProfileSkillSession.prototype,'call').mockRejectedValue(new Error('must not launch a skills reader'))
+    const g=f.gateway();await g.connect();const session=await g.rpc('session.create',{profile:'default'})
+    await g.rpc('image.attach_bytes',{session_id:session.session_id,filename:'image.png',content_base64:'aW1hZ2U='})
+    await g.rpc('prompt.submit',{session_id:session.session_id,text:'Use the authorized Profile skill'})
+    expect(f.calls.find(c=>c.method==='image.attach_bytes')?.params.content_base64).toBe('aW1hZ2U=')
+    expect(f.bindings.at(-1)).toMatchObject({computer_policy:{mode:'isolated',hostAccess:false}})
+    expect(f.calls.find(c=>c.method==='prompt.submit')?.params.text).toContain('Hermes 原生 skills_list')
+    const catalog=(await f.post('/tools/list',{})).body.tools.map((t:any)=>t.name)
+    expect(catalog).toContain('computer_shell');expect(catalog).not.toContain('computer_skill_view');expect(catalog).not.toContain('host_shell')
+    await f.tool('computer_copy_file',{from:'host',source:'/only-hermes-can-read/input.txt',destination:'input.txt'})
+    expect(f.execute.mock.calls.at(-1)?.[2]?.input?.toString()).toBe('hermes-authorized-file')
+    expect(workspace).not.toHaveBeenCalled();expect(f.resolver).not.toHaveBeenCalled();expect(skills).not.toHaveBeenCalled();expect(f.runtime.workers.size).toBe(0)
+    expect(f.runtime.session(session.session_id,f.meta,'default')).toMatchObject({hermesRuntime:true,profileSessionId:expect.any(String)})
+    f.revoke()
+    await expect(g.rpc('prompt.submit',{session_id:session.session_id,text:'must not run'})).rejects.toThrow()
+  }finally{await f.close()}
+})
+
+
+it('rejects an old Hermes plugin before prompt submission and never falls back to the Worker',async()=>{
+  const f=await fixture(true,1)
+  try{
+    const g=f.gateway();await g.connect()
+    await expect(g.rpc('session.create',{profile:'default'})).rejects.toMatchObject({code:'computer_bridge_upgrade_required'})
+    expect(f.runtime.workers.size).toBe(0);expect(f.resolver).not.toHaveBeenCalled()
+    expect(f.calls.some(c=>c.method==='prompt.submit')).toBe(false)
+  }finally{await f.close()}
+})
+
+
+it('sends workspace memory policy through the private bridge instead of session.create',async()=>{
+  const f=await fixture(true)
+  try{
+    const g=f.gateway();await g.connect();const session=await g.rpc('session.create',{profile:'default',hidden:true,room_plumbing:true})
+    g.installTeamLease('memory',[],async()=>({}),true)
+    await g.rpc('prompt.submit',{session_id:session.session_id,text:'Use scoped memory'})
+    expect(f.calls.find(call=>call.method==='session.create')?.params).not.toHaveProperty('skip_memory')
+    expect(f.calls.find(call=>call.method==='session.create')?.params).not.toHaveProperty('workspace_memory')
+    expect(f.bindings.at(-1)).toMatchObject({workspace_memory:true})
   }finally{await f.close()}
 })

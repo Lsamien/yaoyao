@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { apiRequest } from '@/api/client'
 import { createUuid } from '@/utils/id'
+import AppIcon from '@/components/common/AppIcon.vue'
+import AgentAvatar from '@/components/common/AgentAvatar.vue'
+import { ChevronForwardOutline } from '@vicons/ionicons5'
 import type { WorkspaceAgent, WorkspaceConversation } from '@shared/workspace'
 import type { MemoryScope, WorkspaceMemory, WorkspaceMemoryJob, WorkspaceMemoryRevision, WorkspacePeerMessage, WorkspaceProject } from '@shared/workspaceKnowledge'
 
-const props = defineProps<{ agents: WorkspaceAgent[]; conversations: WorkspaceConversation[]; conversationId?: string; revision?: number }>()
+const props = defineProps<{ agents: WorkspaceAgent[]; conversations: WorkspaceConversation[]; conversationId?: string; revision?: number; embedded?: boolean; initialTab?: 'projects' | 'user' }>()
 const emit = defineEmits<{ changed: [] }>()
 const dialog = ref<HTMLDialogElement>(), opened = ref(false), busy = ref(false), error = ref(''), tab = ref('agent'), agentId = ref(''), projectId = ref(''), search = ref('')
 const projects = ref<WorkspaceProject[]>([]), memories = ref<WorkspaceMemory[]>([]), peers = ref<WorkspacePeerMessage[]>([]), jobs = ref<WorkspaceMemoryJob[]>([]), revisions = ref<WorkspaceMemoryRevision[]>([])
@@ -43,10 +46,10 @@ async function load(silent = false) {
 async function open(initial = 'agent', selectedAgent?: string, selectedProject?: string) {
   tab.value = initial; agentId.value = selectedAgent ?? available.value[0]?.id ?? ''; projectId.value = selectedProject ?? ''
   opened.value = true; draft.value = undefined; projectDraft.value = undefined; revisions.value = []; search.value = ''
-  await nextTick(); dialog.value?.showModal(); await load()
+  await nextTick(); if (!props.embedded) dialog.value?.showModal(); await load()
   clearInterval(timer); timer = setInterval(() => { if (!busy.value && !draft.value && !projectDraft.value) void load(true) }, 5000)
 }
-function close() { opened.value = false; generation++; clearInterval(timer); dialog.value?.close() }
+function close() { opened.value = false; generation++; clearInterval(timer); if (!props.embedded) dialog.value?.close() }
 function switchTab(value: string) { tab.value = value; draft.value = undefined; projectDraft.value = undefined; revisions.value = []; void load() }
 async function perform(action: () => Promise<void>) {
   if (busy.value) return
@@ -87,18 +90,22 @@ async function setAgent(field: 'canCollaborate' | 'memoryEnabled', enabled: bool
   await perform(async () => { await apiRequest(`/api/app/agents/${agentId.value}`, { method: 'PATCH', body: { [field]: enabled } }) })
 }
 onBeforeUnmount(() => { generation++; clearInterval(timer) })
+onMounted(() => { if (props.embedded) void open(props.initialTab ?? 'projects') })
+watch(() => props.initialTab, value => { if (props.embedded && value) switchTab(value) })
 watch(() => props.revision, () => { if (opened.value && !busy.value && !draft.value && !projectDraft.value) void load(true) })
 defineExpose({ open, close })
 </script>
 
 <template>
-  <dialog ref="dialog" class="knowledge-dialog" aria-labelledby="knowledge-title" @cancel.prevent="close" @close="opened = false">
-    <header><div><h2 id="knowledge-title">Bot 记忆与协作</h2><p>管理长期事实、项目和同伴请求</p></div><button type="button" @click="close" aria-label="关闭记忆与协作">关闭</button></header>
-    <nav aria-label="记忆与项目分类"><button v-for="item in [['agent','Bot 记忆'],['user','用户记忆'],['projects','项目'],['project','项目记忆'],['collaboration','协作']]" :key="item[0]" :aria-pressed="tab === item[0]" @click="switchTab(item[0]!)">{{ item[1] }}</button></nav>
+  <component :is="embedded ? 'section' : 'dialog'" ref="dialog" class="knowledge-dialog" :class="{ 'knowledge-dialog--embedded': embedded }" :aria-labelledby="embedded ? undefined : 'knowledge-title'" @cancel.prevent="close" @close="opened = false">
+    <header v-if="!embedded"><div><h2 id="knowledge-title">Bot 记忆与协作</h2><p>管理长期事实、项目和同伴请求</p></div><button type="button" @click="close" aria-label="关闭记忆与协作">关闭</button></header>
+    <nav v-if="!embedded" aria-label="记忆与项目分类"><button v-for="item in [['agent','Bot 记忆'],['user','用户记忆'],['projects','项目'],['project','项目记忆'],['collaboration','协作']]" :key="item[0]" :aria-pressed="tab === item[0]" @click="switchTab(item[0]!)">{{ item[1] }}</button></nav>
     <div class="knowledge-body" :aria-busy="busy">
+      <div v-if="embedded && tab === 'project'" class="actions"><button type="button" @click="switchTab('projects')">返回项目</button><h3>项目记忆</h3></div>
       <p v-if="error" role="alert" class="knowledge-error">{{ error }}</p>
       <template v-if="tab === 'projects'">
-        <button v-if="!projectDraft" @click="editProject()">新建项目</button>
+        <div v-if="embedded" class="project-heading"><div><h3>项目</h3><p>让同一项目的 Bot 共享决策与约定。</p></div><button v-if="!projectDraft" type="button" class="project-primary" @click="editProject()">新建项目</button></div>
+        <button v-else-if="!projectDraft" @click="editProject()">新建项目</button>
         <form v-if="projectDraft" class="knowledge-editor" @submit.prevent="saveProject">
           <h3>{{ projectDraft.id ? '编辑项目' : '新建项目' }}</h3>
           <label>名称<input v-model="projectDraft.name" required maxlength="100" /></label>
@@ -108,7 +115,17 @@ defineExpose({ open, close })
           <label v-if="projectDraft.id" class="check"><input v-model="projectDraft.archived" type="checkbox" />归档项目</label>
           <div class="actions"><button type="submit" :disabled="busy">保存项目</button><button type="button" @click="projectDraft = undefined">取消</button></div>
         </form>
-        <article v-for="project in projects" :key="project.id"><h3>{{ project.name }}{{ project.archived ? ' · 已归档' : '' }}</h3><p>{{ project.description || '暂无说明' }}</p><small>{{ project.memberIds.map(id => name(id)).join('、') || '尚无成员' }} · {{ project.groupIds.length }} 个群</small><div class="actions"><button @click="editProject(project)">编辑</button><button @click="projectId = project.id; switchTab('project')">查看记忆</button></div></article>
+        <template v-if="embedded && !projectDraft">
+          <div v-if="projects.length" class="project-list" aria-label="项目列表"><button v-for="project in projects" :key="project.id" type="button" :aria-pressed="projectId === project.id" @click="projectId = project.id"><AppIcon name="files" :size="21"/><span><strong>{{project.name}}{{project.archived ? ' · 已归档' : ''}}</strong><small>{{project.memberIds.length}} 位 Bot · {{project.groupIds.length}} 个群聊</small></span><ChevronForwardOutline class="project-chevron" aria-hidden="true"/></button></div>
+          <section v-if="currentProject" class="project-details" aria-label="当前项目详情">
+            <h3>{{currentProject.name}}</h3><p v-if="currentProject.description" class="project-description">{{currentProject.description}}</p>
+            <div class="project-detail-row"><span>项目成员</span><div class="project-members"><span v-for="id in currentProject.memberIds" :key="id"><AgentAvatar :name="name(id)" :avatar="agents.find(a => a.id === id)?.avatar || ''" :size="24"/>{{name(id)}}</span><small v-if="!currentProject.memberIds.length">尚无成员</small></div></div>
+            <div class="project-detail-row"><span>关联群聊</span><div>{{currentProject.groupIds.map(id => conversations.find(c => c.id === id)?.name ?? '原群聊').join('、') || '尚未关联群聊'}}</div></div>
+            <div class="project-detail-row"><span>项目记忆</span><div><button type="button" @click="switchTab('project')">查看记忆</button></div></div>
+            <div class="project-detail-actions"><button type="button" class="project-primary" @click="editProject(currentProject)">编辑项目</button></div>
+          </section>
+        </template>
+        <template v-else-if="!embedded"><article v-for="project in projects" :key="project.id"><h3>{{ project.name }}{{ project.archived ? ' · 已归档' : '' }}</h3><p>{{ project.description || '暂无说明' }}</p><small>{{ project.memberIds.map(id => name(id)).join('、') || '尚无成员' }} · {{ project.groupIds.length }} 个群</small><div class="actions"><button @click="editProject(project)">编辑</button><button @click="projectId = project.id; switchTab('project')">查看记忆</button></div></article></template>
         <p v-if="!projects.length && !projectDraft" class="empty">创建项目后，多个群可以共享该项目的决策和约定。</p>
       </template>
       <template v-else-if="tab === 'collaboration'">
@@ -133,11 +150,14 @@ defineExpose({ open, close })
         <details v-if="tab === 'agent' && jobs.length"><summary>后台提炼记录</summary><article v-for="job in jobs" :key="job.id"><small>{{ new Date(job.createdAt).toLocaleString() }} · {{ stateNames[job.status] }}</small><p v-if="job.error">{{ job.error }}</p><button v-if="job.status === 'failed'" :disabled="busy" @click="perform(async () => { await apiRequest(`/api/app/workspace/memory-jobs/${job.id}/retry`, { method: 'POST' }) })">重试</button></article></details>
       </template>
     </div>
-  </dialog>
+  </component>
 </template>
 
 <style scoped>
 .knowledge-dialog{width:min(820px,calc(100vw - 24px));max-height:calc(100dvh - 32px);padding:0;border:1px solid var(--line);border-radius:18px;background:var(--surface);color:var(--text-primary)}
 .knowledge-dialog::backdrop{background:rgb(0 0 0 / .5)}header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 24px;border-bottom:1px solid var(--line)}h2,h3,p{margin:0}header p,.scope-note,.empty,small{color:var(--text-secondary)}header p{margin-top:5px;font-size:13px}nav{display:flex;flex-wrap:wrap;gap:4px;padding:10px 20px;border-bottom:1px solid var(--line)}button,a{min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:9px;padding:8px 12px;background:var(--surface);color:var(--text-primary);font:inherit;font-size:14px;cursor:pointer;text-decoration:none}button:hover,a:hover{background:var(--surface-hover)}button[aria-pressed=true]{background:var(--surface-hover);border-color:var(--accent);color:var(--accent)}button:disabled{opacity:.5;cursor:default}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.knowledge-body{display:grid;gap:16px;padding:20px 24px;max-height:calc(100dvh - 210px);overflow:auto;overscroll-behavior:contain}label{display:grid;gap:6px;font-size:14px}input:not([type=checkbox]),textarea,select{min-height:44px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text-primary);font:inherit;box-sizing:border-box;width:100%}textarea{resize:vertical}.filters{display:flex;flex-wrap:wrap;align-items:end;gap:12px}.filters>label{min-width:160px}.filters form{display:flex;align-items:end;gap:8px;flex:1}.filters form label{flex:1}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}article{padding:16px;border:1px solid var(--line);border-radius:12px;display:grid;gap:9px}.knowledge-editor{display:grid;gap:12px;padding:16px;border:1px solid var(--accent);border-radius:12px}fieldset{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px;max-height:240px;overflow:auto}.check{display:flex;align-items:center;min-height:44px;gap:9px}.check input{width:18px;height:18px;accent-color:var(--accent)}small,.scope-note{font-size:13px;line-height:1.5}.pre-wrap{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.knowledge-error{color:var(--danger,#c0392b);white-space:pre-wrap}.empty{padding:24px 8px;text-align:center;line-height:1.6}summary{cursor:pointer;min-height:36px;line-height:1.6}details p{margin-top:8px}
 @media(max-width:520px){header{padding:16px}h2{font-size:19px}nav{padding:8px}nav button{flex:1;white-space:nowrap}.knowledge-body{padding:16px;max-height:calc(100dvh - 250px)}.filters{display:grid}.filters form{min-width:0}}
+.knowledge-dialog--embedded{width:100%;max-height:none;border:0;border-radius:0;background:transparent;min-width:0}.knowledge-dialog--embedded .knowledge-body{padding:0;max-height:none;overflow:visible}.knowledge-dialog--embedded .actions{align-items:center}
+.project-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:8px}.project-heading h3{font-size:18px;font-weight:650}.project-heading p{font-size:13px;color:var(--text-secondary);margin-top:6px;line-height:1.6}.knowledge-dialog--embedded .project-primary{flex-shrink:0;padding:8px 16px;background:var(--accent);color:var(--text-on-solid);border-color:var(--accent);font-size:13px}.project-list{border:1px solid var(--line);border-radius:11px;overflow:hidden}.project-list button{display:flex;gap:20px;width:100%;padding:18px 22px;border:0;border-radius:0;text-align:left;justify-content:flex-start;min-height:76px}.project-list button+button{border-top:1px solid var(--line)}.project-list button[aria-pressed=true]{background:var(--settings-selected);color:var(--text-primary)}.project-list button>span{flex:1;min-width:0;display:grid;gap:4px}.project-list strong{font-size:15px;font-weight:600;overflow-wrap:anywhere}.project-list small{font-size:12px}.project-list .app-icon{color:var(--text-muted)}.project-details{background:var(--settings-panel);padding:20px;border-radius:12px}.project-details h3{font-size:17px;font-weight:650;margin-bottom:12px}.project-description{font-size:13px;color:var(--text-secondary);line-height:1.6;padding-bottom:12px;white-space:pre-wrap;overflow-wrap:anywhere}.project-detail-row{display:grid;grid-template-columns:104px minmax(0,1fr);align-items:center;gap:16px;min-height:48px;border-top:1px solid var(--line);font-size:14px}.project-detail-row>span{color:var(--text-secondary)}.project-detail-row>div{overflow-wrap:anywhere}.project-detail-row button{min-height:36px;background:var(--settings-selected);border:0;font-size:12px}.project-members{display:flex;gap:10px;flex-wrap:wrap;padding-block:10px}.project-members>span{display:inline-flex;align-items:center;gap:7px}.project-detail-actions{display:flex;justify-content:flex-end;margin-top:8px}.project-detail-actions .project-primary{min-height:36px}.knowledge-dialog--embedded article{border:0;background:var(--settings-panel)}@media(max-width:520px){.project-heading{gap:10px}.project-heading p{max-width:210px}.project-list button{padding:16px;gap:12px}.project-details{padding:16px}.project-detail-row{grid-template-columns:76px minmax(0,1fr);gap:10px}}
 </style>
+<style scoped>.project-chevron{width:17px;height:17px;flex-shrink:0;color:var(--text-muted)}</style>

@@ -26,6 +26,13 @@
 !bin/**
 !src/
 !src/**
+!integrations/
+!integrations/hermes-bots-bridge/
+!integrations/hermes-bots-bridge/**
+
+integrations/hermes-bots-bridge/tests/**
+**/__pycache__/**
+**/*.py[cod]
 
 **/.DS_Store
 **/*.log

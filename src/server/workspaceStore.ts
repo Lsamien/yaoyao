@@ -931,6 +931,23 @@ export class WorkspaceStore {
       isVisibleMessageFile(file, messages.get(file.messageId ?? '') ?? this.nativeMessageForFile?.(owner, file)))
   }
   messageForDisplay(owner: string, message: Message): Message {
+    const peer = message.peerMessageId && message.role === 'system'
+      ? this.get<import('../shared/workspaceKnowledge.js').WorkspacePeerMessage>(owner, 'peer-message', message.peerMessageId) : undefined
+    const incoming = !!peer && !!message.runId && message.conversationId === peer.conversationId && message.conversationTaskId === peer.taskId
+    const outgoing = !!peer && !message.runId && message.conversationId === peer.originConversationId && message.conversationTaskId === peer.originTaskId
+    if (peer && (incoming || outgoing)) {
+      const peerId = incoming ? peer.fromAgentId : peer.toAgentId ?? peer.targetGroupId!
+      const peerKind = outgoing && peer.targetGroupId ? 'group' : 'agent'
+      const entity = peerKind === 'group' ? this.get<Conversation>(owner, 'conversation', peerId) : this.get<Agent>(owner, 'agent', peerId)
+      const peerName = entity?.name || (incoming ? peer.fromName ?? message.agentName : peer.targetName) || (peerKind === 'group' ? '群聊' : 'Bot')
+      const peerAvatar = entity?.avatar || (incoming ? peer.fromAvatar : peer.targetAvatar) || ''
+      const files = peer.fileIds.flatMap(id => {
+        const file = this.get<StoredWorkspaceFile>(owner, 'file', id) ?? message.attachments.find(file => file.id === id)
+        return file ? [{ id: file.id, name: file.name, mimeType: file.mimeType, size: file.size, sender: file.sender, createdAt: file.createdAt }] : []
+      })
+      return { ...message, reasoning: '', tools: [], attachments: message.visible === false ? [] : files,
+        communication: { direction: incoming ? 'incoming' : 'outgoing', peerId, peerName, peerAvatar, peerKind, content: peer.content } }
+    }
     const attachments = message.role === 'user' || message.role === 'assistant'
       ? message.attachments.filter(file => isVisibleMessageFile(
         this.get<StoredWorkspaceFile>(owner, 'file', file.id) ?? file, message))

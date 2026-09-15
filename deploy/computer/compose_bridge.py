@@ -10,6 +10,7 @@ import socketserver
 import subprocess
 import threading
 import time
+from skill_bundle import install as install_skill
 
 DESKTOP_ID = os.environ.get('YAOYAO_COMPOSE_DESKTOP_ID')
 if not DESKTOP_ID:
@@ -91,7 +92,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         ready = result['exitCode'] == 0
                     except Exception:
                         pass
-                result = {'id': DESKTOP_ID, 'protocol': 1, 'instance': INSTANCE, 'ready': ready}
+                result = {'id': DESKTOP_ID, 'protocol': 1, 'instance': INSTANCE, 'ready': ready, 'features': ['skills-v1']}
             elif op == '/acquire':
                 with LOCK:
                     if RESTARTING:
@@ -130,6 +131,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     result = {'data': base64.b64encode(data).decode(), 'width': int.from_bytes(data[16:20], 'big'), 'height': int.from_bytes(data[20:24], 'big'), 'capturedAt': int(time.time()*1000)}
                 finally:
                     Path(path).unlink(missing_ok=True)
+            elif op == '/skills-install':
+                with LOCK:
+                    current(body)
+                    result = install_skill(body.get('bundle', {}))
+                    current(body)
             elif op == '/execute':
                 argv = body.get('argv')
                 if not isinstance(argv, list) or not argv or len(argv) > 64 or any(not isinstance(x, str) or '\0' in x for x in argv) or sum(map(len, argv)) > 65536:

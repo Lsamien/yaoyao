@@ -13,7 +13,7 @@ type Catalog = Array<{ id: string; name: string; description: string; inputSchem
 
 async function bridgeRequest(target: GatewayTarget, path: string, body: unknown) {
   const response = await target.session.request(PREFIX + path, {
-    method: 'POST', body,
+    method: 'POST', body, maxResponseBytes: path === '/computer-file' ? 36 * 1024 * 1024 : 1024 * 1024,
   })
   let value: Record<string, unknown> = {}
   try { value = JSON.parse(response.body.toString()) } catch { /* report a bounded, credential-free error */ }
@@ -37,6 +37,7 @@ export async function requireTeamToolBridge(target: GatewayTarget, profile: stri
 export interface WorkspaceToolLease {
   bind(): Promise<void>
   dispose(): Promise<void>
+  profileRequest?(path: '/computer-file', body: Record<string, unknown>): Promise<Record<string, unknown>>
 }
 
 export interface LeaseInput {
@@ -49,6 +50,8 @@ export interface LeaseInput {
   catalog(): Catalog
   call(toolId: string, args: unknown, callId?:string): Promise<unknown>
   onFailure(error: Error): void
+  computerPolicy?: { mode: 'isolated' | 'profile'; hostAccess: boolean }
+  workspaceMemory?: boolean
 }
 
 /** A private loopback listener; no browser credentials or authority in prompts. */
@@ -165,7 +168,13 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
       const bindSession = async () => {
         const current = input.session()
         const result = await bridgeRequest(input.target, '/bind', { native_tools: true, session_id: current.runtimeId,
-          stored_session_id: current.storedId, profile: input.profile, generation, bridge_url: url, token, expires_at: expiresAt })
+          stored_session_id: current.storedId, profile: input.profile, generation, bridge_url: url, token, expires_at: expiresAt,
+          ...(input.computerPolicy ? {computer_policy: input.computerPolicy} : {}),
+          ...(input.workspaceMemory ? {workspace_memory: true} : {}) })
+        if(input.workspaceMemory&&result.workspace_memory!==true)
+          throw new HttpError(409,'请更新工具桥并重启 Hermes Dashboard 服务，以启用 Bot 会话的独立记忆。','workspace_memory_bridge_required')
+        if (input.computerPolicy && result.computer_runtime_version !== 2)
+          throw new HttpError(409, '请更新 Hermes 的夭夭工具桥，当前版本尚未接管隔离电脑会话。', 'computer_bridge_upgrade_required')
         if (!bound && result.native_tools !== true)
           throw new HttpError(409, 'Hermes 未挂载本轮原生团队工具，请升级或修复工具桥。', 'team_tools_unavailable')
         bound = true
@@ -197,7 +206,14 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
       void bind().catch(error => { void dispose(); input.onFailure(error as Error) })
     }, 5 * 60_000)
     timer.unref()
-    return { bind, dispose }
+    return { bind, dispose, async profileRequest(path, body) {
+      assertActive()
+      if (!bound || !input.computerPolicy || path !== '/computer-file')
+        throw new HttpError(403, '文件操作缺少 Hermes 会话授权', 'computer_file_forbidden')
+      const value = await bridgeRequest(input.target, path, {...body, session_id: input.session().runtimeId, generation})
+      assertActive()
+      return value
+    } }
   } catch (error) { await dispose(); throw error }
 }
 

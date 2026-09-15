@@ -384,8 +384,9 @@ export function artifactToUi(item: ConversationArtifact): UiLibraryItem {
 export function workspaceMessagesToUi(messages: import('@shared/workspace').WorkspaceMessage[]): UiMessage[] {
   return messages.filter(message => message.visible !== false).map(message => ({
     id: message.id, role: message.role, author: message.agentName,
+    communication: message.communication,
     profile: message.agentId, createdAt: message.createdAt,
-    content: (message.role === 'assistant' ? visibleMessageText(message.content) : message.content).replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
+    content: (message.communication?.content ?? (message.role === 'assistant' ? visibleMessageText(message.content) : message.content)).replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
       const file = message.attachments.find(file => file.sourcePath === path)
       return file ? `${label}(/api/app/files/${file.id}/${label.startsWith('!') ? 'preview' : 'download'})` : whole
     }),

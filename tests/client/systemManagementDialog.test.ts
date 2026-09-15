@@ -49,7 +49,7 @@ async function mountOpen(): Promise<VueWrapper> {
   const wrapper = mount(SystemManagementDialog, {
     attachTo: document.body,
     props: { open: false },
-    global: { stubs: { AppIcon: true } },
+    global: { stubs: { AppIcon: true, HermesBridgePanel: true } },
   })
   await wrapper.setProps({ open: true })
   await flushPromises()

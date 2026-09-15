@@ -1,0 +1,9 @@
+{
+  "name": "yaoyao-bot-bridge",
+  "label": "夭夭工具桥",
+  "description": "为夭夭 Bot 提供每轮会话工具绑定",
+  "version": "1.1.0",
+  "tab": { "hidden": true },
+  "entry": "bridge.js",
+  "api": "plugin_api.py"
+}

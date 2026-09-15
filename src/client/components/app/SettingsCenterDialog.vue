@@ -11,16 +11,16 @@ import WorkspaceVoiceProviders from '@/components/workspace/WorkspaceVoiceProvid
 import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
 import SystemOverviewPanel from '@/components/app/SystemOverviewPanel.vue'
 import FileAccessPanel from '@/components/app/FileAccessPanel.vue'
-import LocalVmSettingsPanel from '@/components/app/LocalVmSettingsPanel.vue'
 import SystemUpdatePanel from '@/components/app/SystemUpdatePanel.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
-import AccountInitialAvatar from '@/components/common/AccountInitialAvatar.vue'
 import type { ProfileIdentityInput } from '@/api/profiles'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { CheckmarkCircle, EllipseOutline } from '@vicons/ionicons5'
 
 type SettingsPage =
   | 'agent-identity'
   | 'agent-models'
+  | 'account-profile'
   | 'account-security'
   | 'account-mobile'
   | 'appearance'
@@ -31,7 +31,6 @@ type SettingsPage =
   | 'system-push'
   | 'system-nodes'
   | 'system-voice'
-  | 'system-local-vm'
   | 'system-update'
 
 type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'monitor' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh'
@@ -97,27 +96,32 @@ const mobileDetailOpen = ref(false)
 const updateLocked = ref(false)
 const accountCanSave = ref(false)
 const dirtyPages = reactive<Partial<Record<SettingsPage, boolean>>>({})
+const settingsQuery = ref('')
 
 const agentItems = computed<NavigationItem[]>(() => !props.isAdmin ? [] : [
   { key: 'agent-identity', label: '身份与头像', icon: 'users' },
   ...(props.isAdmin ? [{ key: 'agent-models', label: '模型与 Provider', icon: 'model' } satisfies NavigationItem] : []),
 ])
 const accountItems = computed<NavigationItem[]>(() => [
+  { key: 'account-profile', label: '账号资料', icon: 'users' },
   { key: 'account-security', label: '登录与安全', icon: 'settings' },
-  ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
+  ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
 ])
 const systemItems: NavigationItem[] = [
-  { key: 'system-local-vm', label: '本地虚拟机', icon: 'monitor' },
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
-  { key: 'system-file-access', label: '文件访问', icon: 'panel' },
-  { key: 'system-users', label: '用户与权限', icon: 'users' },
   { key: 'system-connection', label: 'Hermes 连接', icon: 'link' },
-  { key: 'system-push', label: '消息推送', icon: 'bell' },
+  { key: 'system-users', label: '用户与权限', icon: 'users' },
   { key: 'system-nodes', label: '节点与设备', icon: 'panel' },
+  { key: 'system-file-access', label: '文件访问', icon: 'panel' },
+  { key: 'system-push', label: '消息推送', icon: 'bell' },
   { key: 'system-voice', label: '双流语音', icon: 'audio' },
   { key: 'system-update', label: '更新与回滚', icon: 'refresh' },
 ]
+const matchesSearch = (item: NavigationItem) => item.label.toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
+const visibleAccounts = computed(() => accountItems.value.filter(matchesSearch))
+const visibleSystems = computed(() => systemItems.filter(matchesSearch))
+const visibleAgents = computed(() => agentItems.value.filter(matchesSearch))
 
 const allAllowedPages = computed(() => new Set<SettingsPage>([
   ...agentItems.value.map(item => item.key),
@@ -129,10 +133,10 @@ const showFixedFooter = computed(() => activePage.value === 'agent-identity' || 
 const activeTitle = computed(() => ({
   'agent-identity': '身份与头像',
   'agent-models': '模型与 Provider',
+  'account-profile': '账号资料',
   'account-security': '登录与安全',
   'account-mobile': '手机登录',
   appearance: '外观',
-  'system-local-vm': '本地虚拟机',
   'system-overview': '系统概览',
   'system-file-access': '文件访问',
   'system-users': '用户与权限',
@@ -146,8 +150,9 @@ const accountName = computed(() => props.pairingUserName || props.userName || '�
 const showAgentSelector = computed(() => activePage.value.startsWith('agent-'))
 const activeScope = computed(() => {
   if (activePage.value.startsWith('agent-')) return `正在设置：${profileTitle(props.activeProfile)} / ${props.activeProfile?.name || '未选择'}`
+  if (activePage.value === 'account-profile') return '管理你的账号头像与服务器名称。'
   if (activePage.value.startsWith('account-')) return `当前账号：${accountName.value}${props.isAdmin ? ' · 管理员' : ''}`
-  if (activePage.value === 'appearance') return '仅影响当前浏览器'
+  if (activePage.value === 'appearance') return '选择当前浏览器的显示方式。'
   return '全局设置 · 仅管理员'
 })
 
@@ -242,6 +247,13 @@ function handleEscape() {
   if (window.innerWidth < 768 && mobileDetailOpen.value) { backToMenu(); return }
   requestClose()
 }
+function trapFocus(event: KeyboardEvent) {
+  const items = [...(dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]') ?? [])].filter(el => el.tabIndex >= 0 && el.getClientRects().length)
+  const first = items[0], last = items.at(-1)
+  if (!first || !last) return
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
 
 watch(() => [props.open, props.initialPage] as const, ([open, initialPage]) => {
   if (!open) {
@@ -251,7 +263,8 @@ watch(() => [props.open, props.initialPage] as const, ([open, initialPage]) => {
   }
   activePage.value = allAllowedPages.value.has(initialPage)
     ? initialPage
-    : props.activeProfile ? 'agent-identity' : 'account-security'
+    : props.isAdmin && props.activeProfile ? 'agent-identity' : 'account-profile'
+  settingsQuery.value = ''
   for (const key of Object.keys(dirtyPages) as SettingsPage[]) dirtyPages[key] = false
   profileMenuOpen.value = false
   mobileDetailOpen.value = false
@@ -273,17 +286,20 @@ function requestModeSwitch() {
           :class="{ 'settings-center--mobile-detail': mobileDetailOpen }"
           role="dialog"
           aria-modal="true"
-          aria-label="设置中心"
+          aria-label="我的设置"
           tabindex="-1"
           @keydown.esc.capture.prevent.stop="handleEscape"
+          @keydown.tab="trapFocus"
         >
+          <header class="settings-center__topbar"><h2>我的设置</h2><button class="settings-center__close" type="button" aria-label="关闭我的设置" :disabled="updateLocked" @click="requestClose"><AppIcon name="close" :size="20"/></button></header>
           <div class="settings-center__body">
             <aside class="settings-sidebar" aria-label="设置分类">
               <header class="settings-sidebar__header">
-                <h2 id="settings-center-title">设置中心</h2>
-                <button class="settings-center__close" type="button" aria-label="关闭设置中心" :disabled="updateLocked" @click="requestClose"><AppIcon name="close" :size="18" /></button>
+                <h2 id="settings-center-title">我的设置</h2>
+                <button class="settings-center__close" type="button" aria-label="关闭我的设置" :disabled="updateLocked" @click="requestClose"><AppIcon name="close" :size="18" /></button>
               </header>
               <div class="settings-sidebar__scroll">
+                <label class="settings-search"><AppIcon name="search" :size="16"/><input v-model="settingsQuery" type="search" aria-label="搜索设置" placeholder="搜索设置" /></label>
                 <div v-if="showAgentSelector" class="settings-agent-selector">
                   <button ref="settingsAgentTrigger" type="button" aria-haspopup="listbox" :aria-expanded="profileMenuOpen" @click="toggleAgentMenu">
                     <AgentAvatar :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="34" />
@@ -298,25 +314,21 @@ function requestModeSwitch() {
                     </button>
                   </div>
                 </div>
-                <div v-else class="settings-account-summary" aria-label="当前账号">
-                  <AccountInitialAvatar :name="accountName" :image-url="userAvatar" :size="34" />
-                  <span><strong>{{ accountName }}</strong><small>当前账号</small></span>
-                </div>
-
                 <nav>
-                  <section v-if="isAdmin"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
-                  <section>
-                    <h3>当前机器人</h3>
-                    <button v-for="item in agentItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span></button>
+                  <section v-if="visibleAccounts.length">
+                    <h3>个人</h3>
+                    <button v-for="item in visibleAccounts" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
-                  <section>
-                    <h3>账号</h3>
-                    <button v-for="item in accountItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span></button>
+                  <section v-if="isAdmin && visibleSystems.length">
+                    <h3>管理</h3>
+                    <button v-for="item in visibleSystems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span><em v-if="item.key === 'system-voice'">全局</em></button>
                   </section>
-                  <section v-if="isAdmin">
-                    <h3>系统 · 仅管理员</h3>
-                    <button v-for="item in systemItems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="20" /><span>{{ item.label }}</span><em v-if="item.key === 'system-voice'">全局</em></button>
+                  <section v-if="visibleAgents.length">
+                    <h3>基础机器人</h3>
+                    <button v-for="item in visibleAgents" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
+                  <section v-if="isAdmin && !settingsQuery"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
+                  <p v-if="!visibleAccounts.length && (!isAdmin || !visibleSystems.length) && !visibleAgents.length" class="settings-search-empty">没有匹配的设置</p>
                 </nav>
               </div>
             </aside>
@@ -325,7 +337,7 @@ function requestModeSwitch() {
               <header class="settings-content__header">
                 <button v-if="mobileDetailOpen" class="mobile-back" type="button" aria-label="返回设置分类" :disabled="updateLocked" @click="backToMenu"><AppIcon name="chevron-left" :size="20" /></button>
                 <div class="settings-content__heading"><h3 ref="contentTitle" tabindex="-1">{{ activeTitle }}</h3><p>{{ activeScope }}</p></div>
-                <button class="settings-center__close" type="button" aria-label="关闭设置中心" :disabled="updateLocked" @click="requestClose"><AppIcon name="close" :size="18" /></button>
+                <button class="settings-center__close settings-detail-close" type="button" aria-label="关闭我的设置" :disabled="updateLocked" @click="requestClose"><AppIcon name="close" :size="18" /></button>
               </header>
               <div class="settings-content__scroll">
                 <AgentIdentityPanel
@@ -343,31 +355,33 @@ function requestModeSwitch() {
                 <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择机器人。</p>
                 <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
                 <AccountSecurityPanel
-                  v-else-if="activePage === 'account-security'"
+                  v-else-if="activePage === 'account-security' || activePage === 'account-profile'"
+                  :key="activePage"
+                  :section="activePage === 'account-profile' ? 'profile' : 'security'"
                   :active="true"
                   form-id="settings-account-security-form"
                   :show-actions="false"
-                  @dirty-change="setDirty('account-security', $event)"
+                  @dirty-change="setDirty(activePage, $event)"
                   @can-save-change="accountCanSave = $event"
-                  @saved="setDirty('account-security', false)"
+                  @saved="setDirty(activePage, false)"
                   @logout="emit('logout')"
                 />
                 <NodePairingPanel v-else-if="activePage === 'account-mobile'" mode="account" :active="true" :insecure-transport="insecureTransport" :user-name="accountName" />
                 <section v-else-if="activePage === 'appearance'" class="appearance-panel" aria-label="外观">
-                  <p>选择当前浏览器使用的界面主题。</p>
+                  <h4>界面主题</h4>
                   <div class="theme-options" role="radiogroup" aria-label="界面主题">
-                    <button v-for="option in ([['system', '跟随系统', '自动匹配设备外观'], ['light', '浅色', '始终使用浅色界面'], ['dark', '深色', '始终使用深色界面']] as const)" :key="option[0]" type="button" role="radio" :aria-checked="themePreference === option[0]" :class="{ active: themePreference === option[0] }" @click="emit('set-theme', option[0])">
-                      <AppIcon :name="option[0] === 'dark' ? 'moon' : 'sun'" :size="22" />
-                      <span><strong>{{ option[1] }}</strong><small>{{ option[2] }}</small></span>
-                      <AppIcon v-if="themePreference === option[0]" name="check" :size="18" />
+                    <button v-for="option in ([['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']] as const)" :key="option[0]" type="button" role="radio" :aria-checked="themePreference === option[0]" :class="{ active: themePreference === option[0] }" @click="emit('set-theme', option[0])">
+                      <img :src="`/setting-previews/${option[0]}.png`" alt="" width="480" height="300"/>
+                      <strong>{{ option[1] }}</strong>
+                      <component :is="themePreference === option[0] ? CheckmarkCircle : EllipseOutline" class="theme-choice-mark" aria-hidden="true"/>
                     </button>
                   </div>
+                  <p class="appearance-note"><AppIcon name="info" :size="16"/>更改仅影响当前浏览器。</p>
                 </section>
                 <SystemOverviewPanel v-else-if="activePage === 'system-overview' && isAdmin" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @navigate="selectPage" />
                 <FileAccessPanel v-else-if="activePage === 'system-file-access' && isAdmin" :profile="activeProfile?.name" @dirty-change="setDirty('system-file-access', $event)" />
-                <LocalVmSettingsPanel v-else-if="activePage === 'system-local-vm' && isAdmin" />
                 <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :profiles="profiles" :active="true" @dirty-change="setDirty('system-users', $event)" />
-                <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />
+                <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :profiles="profiles" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-push' && isAdmin" section="push" :active="true" @dirty-change="setDirty('system-push', $event)" />
                 <WorkspaceNodesPanel v-else-if="activePage === 'system-nodes' && isAdmin" />
                 <section v-else-if="activePage === 'system-voice' && isAdmin"><DuplexVoicePanel @dirty-change="setDirty('system-voice', $event)" /><WorkspaceVoiceProviders /></section>
@@ -399,87 +413,53 @@ function requestModeSwitch() {
 </template>
 
 <style scoped>
-.settings-center-layer { position: fixed; z-index: 300; inset: 0; display: grid; place-items: center; padding: 64px; background: color-mix(in srgb, #000 24%, transparent); backdrop-filter: blur(4px); }
-.settings-center { display: block; width: min(820px, calc(100vw - 128px)); height: min(600px, calc(100dvh - 128px)); overflow: hidden; border: 1px solid var(--line); border-radius: 16px; outline: 0; background: var(--surface-raised); box-shadow: 0 20px 60px rgba(0,0,0,.18); color: var(--text-primary); }
-.settings-center__close,.mobile-back { display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); cursor: pointer; }
-.settings-center__close:hover,.mobile-back:hover { background: var(--surface-soft); }
-.settings-center__close:disabled,.mobile-back:disabled { cursor: not-allowed; opacity: .45; }
-.mobile-back { display: none; }
-.settings-center__body { display: grid; height: 100%; min-height: 0; grid-template-columns: 220px minmax(0, 1fr); }
-.settings-sidebar { position: relative; min-height: 0; overflow-y: auto; padding: 12px 14px 14px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 42%, var(--surface-raised)); overscroll-behavior: contain; }
-.settings-sidebar__header { display: none; }.settings-sidebar__header h2 { margin: 0; font-size: 14px; letter-spacing: -.01em; }
-.settings-sidebar__scroll { min-height: 0; }
-.settings-agent-selector { position: sticky; z-index: 3; top: -12px; margin: -12px 0 8px; padding: 12px 0 8px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 42%, var(--surface-raised)); }
-.settings-account-summary { position: sticky; z-index: 3; top: -12px; display: grid; min-height: 42px; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 8px; margin: -12px 0 8px; padding: 12px 4px 8px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 42%, var(--surface-raised)); }
-.settings-account-summary span { display: grid; min-width: 0; gap: 2px; }.settings-account-summary strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }.settings-account-summary small { color: var(--text-muted); font-size: 11px; }
-.settings-agent-selector > button { display: grid; width: 100%; min-height: 42px; grid-template-columns: 34px minmax(0, 1fr) 16px; align-items: center; gap: 8px; padding: 2px 4px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; }
-.settings-agent-selector > button:hover { background: var(--surface-hover); }
-.settings-agent-selector span,.settings-agent-menu span { display: grid; min-width: 0; gap: 2px; }
-.settings-agent-selector strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.settings-agent-selector small,.settings-agent-menu small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.settings-agent-menu { position: absolute; z-index: 5; top: calc(100% - 8px); right: 0; left: 0; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow-float); }
-.settings-agent-menu button { display: grid; width: 100%; min-height: 38px; grid-template-columns: 24px minmax(0, 1fr) 16px; align-items: center; gap: 8px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; }
-.settings-agent-menu button:hover,.settings-agent-menu button[aria-selected="true"] { background: var(--surface-hover); }
-.settings-agent-menu strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.settings-sidebar nav { display: grid; gap: 6px; }
-.settings-sidebar nav section { display: grid; gap: 1px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
-.settings-sidebar nav section:last-child { padding-bottom: 0; border-bottom: 0; }
-.settings-sidebar h3 { margin: 0 6px 3px; color: var(--text-muted); font-size: 12px; font-weight: 560; }
-.settings-sidebar nav button { display: flex; width: 100%; min-height: 40px; align-items: center; gap: 14px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; font: 600 14px var(--font-ui); }
-.settings-sidebar nav button:hover { background: var(--surface-hover); }
-.settings-sidebar nav button.active { background: var(--surface-soft); }
-.settings-sidebar nav button:focus-visible { outline: 0; box-shadow: inset 0 0 0 2px color-mix(in srgb, #7c4dff 72%, var(--line-strong)); }
-.settings-sidebar nav button span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.settings-sidebar nav button em { padding: 2px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-muted); font: normal 10px var(--font-ui); }
-.settings-content { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); background: var(--surface-raised); }
-.settings-content--with-footer { grid-template-rows: auto minmax(0, 1fr) 68px; }
-.settings-content__header { display: grid; min-height: 52px; box-sizing: border-box; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 8px; padding: 7px 8px 7px 18px; border-bottom: 1px solid var(--line); }
-.settings-content__heading { min-width: 0; }
-.settings-content__header h3 { margin: 0; font-size: 14px; letter-spacing: -.01em; }
-.settings-content__header p { overflow: hidden; margin: 3px 0 0; color: var(--text-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.settings-content__scroll { min-height: 0; overflow-y: auto; padding: 16px 24px 18px; overscroll-behavior: contain; }
-.settings-content__footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--surface-raised); }
-.settings-content__footer button { display: inline-flex; min-width: 104px; min-height: 40px; align-items: center; justify-content: center; padding: 0 16px; border-radius: 9px; cursor: pointer; font: 650 13px var(--font-ui); }
-.settings-footer__cancel { border: 1px solid var(--line); background: var(--surface-raised); color: var(--text-primary); }
-.settings-footer__save { border: 0; background: var(--accent); color: var(--text-on-solid); }
-.settings-content__footer button:disabled { cursor: not-allowed; opacity: .45; }
-.settings-empty { margin: 0; padding: 24px; border-radius: 12px; background: var(--surface-soft); color: var(--text-muted); font-size: 14px; text-align: center; }
-.appearance-panel { display: grid; gap: 18px; }
-.appearance-panel > p { margin: 0; color: var(--text-secondary); font-size: 14px; }
-.theme-options { display: grid; border-top: 1px solid var(--line); }
-.theme-options button { display: grid; min-height: 72px; grid-template-columns: 28px minmax(0, 1fr) 20px; align-items: center; gap: 14px; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; }
-.theme-options button:hover,.theme-options button.active { background: var(--surface-soft); }
-.theme-options button:focus-visible { outline: 0; box-shadow: inset 0 0 0 2px color-mix(in srgb, #7c4dff 72%, var(--line-strong)); }
-.theme-options span { display: grid; gap: 5px; }
-.theme-options strong { font-size: 15px; }
-.theme-options small { color: var(--text-muted); font-size: 13px; }
-.settings-content__scroll :deep(.account-security-panel > .panel-heading) { display: none; }
-.settings-center-fade-enter-active,.settings-center-fade-leave-active { transition: opacity 150ms ease; }
-.settings-center-fade-enter-active .settings-center,.settings-center-fade-leave-active .settings-center { transition: transform 180ms var(--ease-out); }
-.settings-center-fade-enter-from,.settings-center-fade-leave-to { opacity: 0; }
-.settings-center-fade-enter-from .settings-center,.settings-center-fade-leave-to .settings-center { transform: translateY(8px) scale(.99); }
-@media (max-width: 1023px) {
-  .settings-center-layer { padding: 32px; }
-  .settings-center { width: min(820px, calc(100vw - 64px)); height: min(600px, calc(100dvh - 64px)); }
-  .settings-center__body { grid-template-columns: 220px minmax(0, 1fr); }
-  .settings-content__scroll { padding-inline: 24px; }
-}
-@media (max-width: 767px) {
-  .settings-center-layer { padding: 0; }
-  .settings-center { width: 100vw; height: 100dvh; border: 0; border-radius: 0; }
-  .settings-center__body { display: block; height: 100%; }
-  .settings-sidebar { display: grid; width: 100%; height: 100%; box-sizing: border-box; grid-template-rows: 56px minmax(0, 1fr); overflow: hidden; padding: 0; border-right: 0; }
-  .settings-sidebar__header { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }.settings-sidebar__header .settings-center__close { display: grid; }
-  .settings-sidebar__scroll { min-height: 0; overflow-y: auto; padding: 18px 20px max(24px, env(safe-area-inset-bottom)); overscroll-behavior: contain; }
-  .settings-center--mobile-detail .settings-sidebar { display: none; }
-  .settings-content { display: none; width: 100%; height: 100%; }
-  .settings-center--mobile-detail .settings-content { display: grid; }
-  .settings-content__header { min-height: 56px; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; padding: 6px 8px 6px 6px; }
-  .settings-center--mobile-detail .mobile-back { display: grid; }
-  .settings-content__scroll { padding: 22px 20px max(28px, env(safe-area-inset-bottom)); }
-  .settings-content--with-footer { grid-template-rows: auto minmax(0, 1fr) calc(68px + env(safe-area-inset-bottom)); }
-  .settings-content__footer { padding: 0 20px env(safe-area-inset-bottom); }
-  .settings-content__footer button { flex: 1; }
-  .settings-agent-selector,.settings-account-summary { top: -18px; margin-top: -18px; padding-top: 18px; }
-}
+.settings-center-layer{position:fixed;z-index:300;inset:0;display:grid;place-items:center;padding:24px;background:var(--scrim);backdrop-filter:blur(3px)}
+.settings-center{display:flex;flex-direction:column;width:min(900px,calc(100vw - 48px));height:min(650px,calc(100dvh - 64px));overflow:hidden;border:1px solid var(--line);border-radius:14px;outline:0;background:var(--surface);box-shadow:0 24px 72px #0003;color:var(--text-primary)}
+.settings-center__topbar{height:60px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;padding:8px 16px 8px 20px;border-bottom:1px solid var(--line)}
+.settings-center__topbar h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.02em}
+.settings-center__close,.mobile-back{display:grid;width:44px;height:44px;place-items:center;flex-shrink:0;padding:0;border:0;border-radius:9px;background:transparent;color:var(--text-secondary);cursor:pointer}
+.settings-center__close:hover,.mobile-back:hover{background:var(--surface-hover);color:var(--text-primary)}
+.settings-center__close:disabled,.mobile-back:disabled{cursor:not-allowed;opacity:.45}
+.settings-center button:focus-visible,.settings-center input:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.mobile-back,.settings-detail-close{display:none}
+.settings-center__body{display:grid;flex:1;min-height:0;grid-template-columns:208px minmax(0,1fr)}
+.settings-sidebar{position:relative;min-height:0;overflow-y:auto;padding:16px 12px;border-right:1px solid var(--line);background:var(--settings-sidebar);overscroll-behavior:contain;scrollbar-width:thin}
+.settings-sidebar__header{display:none}.settings-sidebar__header h2{margin:0;font-size:18px;font-weight:650}
+.settings-sidebar__scroll{min-height:0}
+.settings-search{display:flex;align-items:center;gap:8px;height:38px;padding:0 10px;margin-bottom:22px;border:1px solid var(--line);border-radius:8px;background:var(--settings-panel);color:var(--text-muted)}
+.settings-search input{min-width:0;width:100%;height:100%;padding:0;border:0;outline:none;background:transparent;color:var(--text-primary);font:13px var(--font-ui)}
+.settings-search:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.settings-agent-selector{position:relative;margin:0 0 20px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.settings-agent-selector>button{display:grid;width:100%;min-height:44px;grid-template-columns:34px minmax(0,1fr) 16px;align-items:center;gap:8px;padding:2px 4px;border:0;border-radius:9px;background:transparent;color:var(--text-primary);cursor:pointer;text-align:left}
+.settings-agent-selector>button:hover{background:var(--surface-hover)}
+.settings-agent-selector span,.settings-agent-menu span{display:grid;min-width:0;gap:2px}
+.settings-agent-selector strong{overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.settings-agent-selector small,.settings-agent-menu small{overflow:hidden;color:var(--text-muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.settings-agent-menu{position:absolute;z-index:5;top:calc(100% - 8px);right:0;left:0;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:var(--shadow-float)}
+.settings-agent-menu button{display:grid;width:100%;min-height:40px;grid-template-columns:24px minmax(0,1fr) 16px;align-items:center;gap:8px;padding:4px 6px;border:0;border-radius:8px;background:transparent;color:var(--text-primary);cursor:pointer;text-align:left}
+.settings-agent-menu button:hover,.settings-agent-menu button[aria-selected=true]{background:var(--surface-hover)}.settings-agent-menu strong{overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.settings-sidebar nav{display:grid;gap:22px}
+.settings-sidebar nav section{display:grid;gap:3px}.settings-sidebar nav section+section{padding-top:20px;border-top:1px solid var(--line)}
+.settings-sidebar h3{margin:0 10px 6px;color:var(--text-muted);font-size:12px;font-weight:500}
+.settings-sidebar nav button{display:flex;width:100%;min-height:44px;align-items:center;gap:12px;padding:8px 12px;border:0;border-radius:9px;background:transparent;color:var(--text-primary);cursor:pointer;text-align:left;font:500 14px var(--font-ui)}
+.settings-sidebar nav button:hover{background:var(--surface-hover)}.settings-sidebar nav button.active{background:var(--settings-selected);font-weight:600}
+.settings-sidebar nav button span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.settings-sidebar nav button em{color:var(--text-muted);font:normal 10px var(--font-ui)}
+.settings-search-empty{margin:0 10px;font-size:13px;line-height:1.6;color:var(--text-secondary)}
+.settings-content{display:grid;min-width:0;min-height:0;grid-template-rows:auto minmax(0,1fr);background:var(--surface)}
+.settings-content--with-footer{grid-template-rows:auto minmax(0,1fr) 64px}
+.settings-content__header{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:8px;padding:24px 24px 16px}
+.settings-content__heading{min-width:0}.settings-content__header h3{margin:0;font-size:18px;font-weight:650;letter-spacing:-.01em}.settings-content__header p{margin:6px 0 0;color:var(--text-secondary);font-size:13px;line-height:1.6}
+.settings-content__scroll{min-height:0;overflow-y:auto;padding:8px 24px 24px;overscroll-behavior:contain;scrollbar-width:thin}
+.settings-content__footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 24px;border-top:1px solid var(--line);background:var(--surface)}
+.settings-content__footer button{display:inline-flex;min-width:88px;min-height:40px;align-items:center;justify-content:center;padding:0 16px;border-radius:8px;cursor:pointer;font:550 13px var(--font-ui)}
+.settings-footer__cancel{border:1px solid var(--line);background:var(--settings-panel);color:var(--text-primary)}.settings-footer__save{border:0;background:var(--accent);color:var(--text-on-solid)}.settings-content__footer button:disabled{cursor:not-allowed;opacity:.45}
+.settings-empty{margin:0;padding:24px;border-radius:12px;background:var(--settings-panel);color:var(--text-muted);font-size:14px;text-align:center}
+.appearance-panel{display:grid;gap:16px;padding:20px;background:var(--settings-panel);border-radius:12px}.appearance-panel h4{margin:0;font-size:15px;font-weight:600}
+.theme-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.theme-options button{display:flex;flex-direction:column;align-items:center;gap:14px;min-width:0;padding:10px 10px 12px;border:2px solid transparent;border-radius:10px;background:var(--surface);color:var(--text-primary);cursor:pointer;font:inherit;box-shadow:0 0 0 1px var(--line)}
+.theme-options button:hover{border-color:var(--line-strong)}.theme-options button.active{border-color:var(--accent);box-shadow:none}.theme-options img{display:block;width:100%;height:auto;aspect-ratio:8/5;object-fit:cover;border-radius:7px}.theme-options strong{font-size:13px;font-weight:550}.theme-choice-mark{width:20px;height:20px;color:var(--text-primary)}
+.appearance-note{display:flex;align-items:flex-start;gap:8px;margin:2px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--text-secondary);font-size:13px;line-height:1.6}
+.settings-content__scroll :deep(.account-security-panel>.panel-heading){display:none}.settings-content__scroll :deep(.account-security-panel){gap:20px}.settings-content__scroll :deep(.account-avatar-card),.settings-content__scroll :deep(.security-form),.settings-content__scroll :deep(.server-identity){padding:20px;border:0;border-radius:12px;background:var(--settings-panel)}.settings-content__scroll :deep(.security-form){gap:16px}.settings-content__scroll :deep(.field input){background:var(--surface)}
+.settings-center-fade-enter-active,.settings-center-fade-leave-active{transition:opacity 150ms ease}.settings-center-fade-enter-active .settings-center,.settings-center-fade-leave-active .settings-center{transition:transform 180ms var(--ease-out)}.settings-center-fade-enter-from,.settings-center-fade-leave-to{opacity:0}.settings-center-fade-enter-from .settings-center,.settings-center-fade-leave-to .settings-center{transform:translateY(6px) scale(.99)}
+@media(max-width:767px){.settings-center-layer{padding:0}.settings-center{width:100vw;height:100dvh;border:0;border-radius:0}.settings-center__topbar{display:none}.settings-center__body{display:block;height:100%}.settings-sidebar{display:grid;width:100%;height:100%;box-sizing:border-box;grid-template-rows:60px minmax(0,1fr);overflow:hidden;padding:0;border-right:0}.settings-sidebar__header{display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 20px;border-bottom:1px solid var(--line)}.settings-sidebar__scroll{min-height:0;overflow-y:auto;padding:20px 16px max(24px,env(safe-area-inset-bottom))}.settings-center--mobile-detail .settings-sidebar{display:none}.settings-content{display:none;width:100%;height:100%}.settings-center--mobile-detail .settings-content{display:grid}.settings-content__header{min-height:60px;grid-template-columns:44px minmax(0,1fr) 44px;gap:4px;padding:8px 8px 8px 6px;border-bottom:1px solid var(--line)}.settings-content__header h3{font-size:17px}.settings-content__header p{display:none}.settings-center--mobile-detail .mobile-back,.settings-detail-close{display:grid}.settings-content__scroll{padding:20px 16px max(24px,env(safe-area-inset-bottom))}.settings-content--with-footer{grid-template-rows:auto minmax(0,1fr) calc(64px + env(safe-area-inset-bottom))}.settings-content__footer{padding:0 16px env(safe-area-inset-bottom)}.settings-content__footer button{flex:1}.appearance-panel{padding:14px;gap:14px}.theme-options{gap:8px}.theme-options button{padding:6px 6px 10px;gap:12px}.theme-options strong{font-size:12px}}
+@media(prefers-reduced-motion:reduce){.settings-center-fade-enter-active,.settings-center-fade-leave-active,.settings-center-fade-enter-active .settings-center,.settings-center-fade-leave-active .settings-center{transition:none}}
 </style>

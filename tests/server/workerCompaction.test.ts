@@ -41,6 +41,8 @@ it.each(['context_compaction_disabled','context_compaction_failed'])('keeps a de
  const f=await fixture(),checkpoint=[{role:'system',content:'compacted checkpoint'}],history=[...checkpoint,{role:'user',content:'pending task'}]
  try{
   const first=await f.turn({completed:false,failureCode,checkpoint,messages:history,text:'engine context failure'})
+  expect(first.boot.tools.map((tool:any)=>tool.name)).toContain('computer_skill_publish')
+  expect(first.boot.skillInstructions).toContain('expected_revision')
   expect(first.result).toMatchObject({status:'failed',code:failureCode,error:expect.stringContaining('虚拟机已进入空闲')})
   expect(f.runtime.pool.status('owner')[0]?.status).toBe('idle');expect(f.stop).not.toHaveBeenCalled();expect(f.remove).not.toHaveBeenCalled()
   expect(f.runtime.session(first.sessionId,f.meta,'default')).toMatchObject({history,outcome:'failed'})
@@ -48,6 +50,7 @@ it.each(['context_compaction_disabled','context_compaction_failed'])('keeps a de
   expect(f.runtime.session(first.sessionId,f.meta,'default').history).toEqual(history)
   await first.gateway.close();expect(f.stop).not.toHaveBeenCalled()
   const nextHistory=[...history,{role:'assistant',content:'continued'}],next=await f.turn({completed:true,messages:nextHistory,text:'continued'},first.sessionId)
+  expect(next.boot.skillInstructions).toBe(first.boot.skillInstructions)
   expect(next.boot.history).toEqual(history);expect(next.boot.contextConfig.compression.enabled).toBe(true)
   expect(f.runtime.session(first.sessionId,f.meta,'default')).toMatchObject({history:nextHistory,outcome:'complete'})
  }finally{await f.close()}

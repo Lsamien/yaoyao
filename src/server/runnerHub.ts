@@ -126,6 +126,7 @@ export class RunnerHub {
         if(!this.composeDesktops.desktops.some(d=>d.id===computer.environmentId)||claim?.owner!==owner||claim.runnerId!==record.id)throw new HttpError(409,'请先为机器人选择已有 Compose 共享桌面','compose_desktop_required')
       }
       if(computer&&!this.online.get(record.id)?.features.includes('computer-worker-v1'))throw new HttpError(409,'执行节点未提供隔离 Worker 能力，请检查配置或更新 Runner','computer_unavailable')
+      if(computer&&!this.online.get(record.id)?.features.includes('hermes-computer-v2'))throw new HttpError(409,'请更新配套 Runner，虚拟机 Bot 需要 Hermes 托管会话能力。','computer_runner_upgrade_required')
       if(computer&&computer.environmentId!==computer.agentId&&!this.online.get(record.id)?.features.includes('shared-computer-v1'))throw new HttpError(409,'执行节点不支持共享电脑，请更新 Runner','shared_computer_unavailable')
     }
     if(computer?.hostAccess)requireComputer()
@@ -145,7 +146,7 @@ export class RunnerHub {
       return {status:result.status,headers:new Headers(result.headers),body:Buffer.from(result.body,'base64')}
     }
     return {url:this.local.url,client:this.local.client,session:{request:requestHTTP,webSocketCredential:async()=>{throw new Error('Runner uses its own authenticated gateway')}},
-      runner:{id:record.id,computer:!!computer,helperRetirement:this.online.get(record.id)?.features.includes('helper-retirement-v1')===true,
+      runner:{id:record.id,computer:!!computer,hermesComputer:!!computer&&this.online.get(record.id)?.features.includes('hermes-computer-v2')===true,helperRetirement:this.online.get(record.id)?.features.includes('helper-retirement-v1')===true,
         open:async(onEvent,onDisconnect,scope)=>{
           requireComputer()
           if(computer&&!scope)throw new HttpError(403,'隔离执行缺少任务授权','computer_scope_required')
@@ -182,12 +183,13 @@ export class RunnerHub {
         },
         lease:async(options)=>{
           requireComputer();requireProfile(options.profile);options.assertActive()
+          if(options.workspaceMemory&&!this.online.get(record.id)?.features.includes('workspace-memory-bind-v1'))throw new HttpError(409,'请更新配套 Runner，以支持工具桥会话的独立记忆。','workspace_memory_runner_required')
           const id=randomUUID();this.leases.set(id,{runnerId:record.id,input:options,calls:new Map()})
           let disposed=false
           const dispose=async()=>{if(disposed)return;disposed=true;this.leases.delete(id);options.signal.removeEventListener('abort',abort);await this.request(record.id,'lease.close',{leaseId:id}).catch(()=>{})}
           const abort=()=>{void dispose()};options.signal.addEventListener('abort',abort,{once:true})
           try {
-            await this.request(record.id,'lease.create',{leaseId:id,profile:options.profile,workId:options.workId,session:options.session(),catalog:options.catalog()})
+            await this.request(record.id,'lease.create',{leaseId:id,profile:options.profile,workId:options.workId,session:options.session(),catalog:options.catalog(),workspaceMemory:options.workspaceMemory===true})
             options.assertActive()
             if(options.signal.aborted)throw new Error('执行已停止')
             return {bind:async()=>{options.assertActive();await this.request(record.id,'lease.bind',{leaseId:id,session:options.session()});options.assertActive()},dispose} satisfies WorkspaceToolLease
@@ -247,7 +249,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['profile-computer-v1','host-computer-tools-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')
@@ -270,7 +272,7 @@ export class RunnerHub {
       if(!body||typeof body!=='object'||Array.isArray(body))throw new HttpError(400,'请求必须是对象','invalid_json')
       if(match[2]==='desktop'){
         if(record.sourceNodeId!=='local'||record.sourceOwner!=='_system'||!state.features.includes('compose-desktops-v1'))throw new HttpError(403,'该节点不能访问 Compose 桌面','compose_desktop_forbidden')
-        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute']),ownerKey:z.string().optional()}).passthrough(),body)
+        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute','skills-install']),ownerKey:z.string().optional()}).passthrough(),body)
         if(operation==='list'){ctx.body=await this.composeDesktops.status();return}
         const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',id)
         if(!claim||claim.runnerId!==record.id||hash(claim.owner)!==ownerKey)throw new HttpError(403,'没有该共享桌面的使用权限','compose_desktop_forbidden')

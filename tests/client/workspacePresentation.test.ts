@@ -14,6 +14,13 @@ describe('workspace chat uses the established presentation', () => {
     expect(message?.tools?.[0]).toMatchObject({name:'read_file',status:'success',output:'ok'})
     expect(message?.attachments?.[0]?.url).toBe('/api/app/files/f/download')
   })
+  it('keeps peer direction outside the body without presenting it as a user message', () => {
+    const communication = { direction: 'incoming' as const, peerId: 'b', peerName: '研究员', peerAvatar: '', peerKind: 'agent' as const, content: '当前为 v2' }
+    const [message] = workspaceMessagesToUi([{ id: 'peer', conversationId: 'c', seq: 1, role: 'system', peerMessageId: 'p', communication, content: '来自 Bot「研究员」的回复：当前为 v2', reasoning: '', tools: [], attachments: [], status: 'complete', createdAt: 1 }])
+    expect(message?.communication).toEqual(communication)
+    expect(message?.content).toBe('当前为 v2')
+    expect(message?.role).toBe('system')
+  })
 })
 
 import { mount } from '@vue/test-utils'

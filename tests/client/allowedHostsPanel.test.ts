@@ -27,7 +27,7 @@ describe('allowed hosts settings panel', () => {
     setApiCsrfToken('csrf-panel')
     const wrapper = mount(SystemManagementPanel, {
       props: { section: 'connection', active: true },
-      global: { stubs: { AppIcon: true } },
+      global: { stubs: { AppIcon: true, HermesBridgePanel: true } },
     })
     await flushPromises()
 

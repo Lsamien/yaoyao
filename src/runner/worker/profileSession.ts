@@ -17,7 +17,8 @@ export class ProfileComputerSession {
   onStoredId:(id:string)=>void=()=>{}
   constructor(readonly target:GatewayTarget,readonly profile:string,readonly workId:string,
     readonly authorize:()=>void,readonly catalog:()=>WorkerTool[],
-    readonly call:(name:string,args:unknown,id:string)=>Promise<unknown>){
+    readonly call:(name:string,args:unknown,id:string)=>Promise<unknown>,
+    readonly computerPolicy?: {mode:'isolated'|'profile';hostAccess:boolean},readonly workspaceMemory:()=>boolean=()=>false){
     this.gateway=new WorkspaceGateway(target)
     this.gateway.onDisconnect=()=>{if(!this.closed)this.onDisconnect()}
     this.gateway.onEvent=frame=>{
@@ -30,6 +31,12 @@ export class ProfileComputerSession {
     }
   }
   async open(storedId:string|undefined,params:Record<string,unknown>){
+    if(this.computerPolicy){
+      const response=await this.target.session.request('/api/plugins/yaoyao-bot-bridge/capabilities',{search:new URLSearchParams({profile:this.profile}),cache:'reload'})
+      let capability:any;try{capability=JSON.parse(response.body.toString())}catch{}
+      if(response.status!==200||capability?.ready!==true||capability?.computer_runtime_version!==2)
+        throw new HttpError(409,'请更新夭夭工具桥并重启 Hermes Dashboard 服务，当前服务尚未加载托管虚拟机会话能力。','computer_bridge_upgrade_required')
+    }
     await this.gateway.connect()
     const {session_id:_virtual,recoverOnly:_recover,...options}=params
     const opened=await this.gateway.rpc(storedId?'session.resume':'session.create',{
@@ -46,7 +53,7 @@ export class ProfileComputerSession {
     if(!this.toolLease){
       await requireTeamToolBridge(this.target,this.profile)
       this.toolLease=await createWorkspaceToolLease({target:this.target,profile:this.profile,workId:this.workId,
-        session:()=>({runtimeId:this.runtimeId,storedId:this.storedId}),signal:this.controller.signal,
+        session:()=>({runtimeId:this.runtimeId,storedId:this.storedId}),signal:this.controller.signal,computerPolicy:this.computerPolicy,workspaceMemory:this.workspaceMemory(),
         assertActive:()=>{this.controller.signal.throwIfAborted();this.authorize()},
         catalog:()=>this.catalog().map(tool=>({...tool,id:tool.id??tool.name})),
         call:async(name,args,id)=>{
@@ -69,6 +76,11 @@ export class ProfileComputerSession {
   rpc(method:string,params:Record<string,unknown>={}){
     const {session_id:_virtual,workMarker:_marker,...options}=params
     return this.gateway.rpc(method,{...options,session_id:this.runtimeId})
+  }
+  async file(action:'read'|'write',path:string,data?:string){
+    this.authorize()
+    if(!this.toolLease?.profileRequest)throw new HttpError(403,'Hermes 文件授权尚未建立','computer_file_forbidden')
+    return this.toolLease.profileRequest('/computer-file',{action,path,...(data!==undefined?{data}:{})})
   }
   async stop(){
     if(!this.runtimeId||this.closed)return

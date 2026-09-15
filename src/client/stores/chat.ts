@@ -148,11 +148,14 @@ export const useChatStore = defineStore('chat', () => {
         const messages=[...canonical,...pending]
         const {messages:_,...checkpoint}=value
         await historyCache.set(scope,id,{messages,total:value.total,savedAt:Date.now(),transcript:checkpoint},true)
-        const latest=current();if(!latest)return
-        const newerPending=latest.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
-        latest.messages=[...canonical,...newerPending];latest.messageTotal=value.total;latest.loadedMessageCount=canonical.length
+        const beforeOutbox=current();if(!beforeOutbox)return
+        const newerPending=beforeOutbox.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
         await outboxCache.set(scope,id,newerPending,true)
-        if(current()!==latest)return
+        // Usage events replace the route while storage is pending. Commit to
+        // the current route after both writes, preserving any newer local send.
+        const latest=current();if(!latest)return
+        const latestPending=latest.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
+        latest.messages=[...canonical,...latestPending];latest.messageTotal=value.total;latest.loadedMessageCount=canonical.length
         const approval=value.pendingApproval,clarification=value.pendingClarification
         latest.pendingApproval=approval?{id:string(approval.request_id??approval.id),sessionId:id,message:string(approval.message??approval.prompt),toolName:string(approval.tool_name),choices:values(approval.choices).map(String),payload:approval as Record<string,JsonValue>}:undefined
         latest.pendingClarification=clarification?{id:string(clarification.request_id??clarification.id),sessionId:id,question:string(clarification.question??clarification.prompt),payload:clarification as Record<string,JsonValue>}:undefined

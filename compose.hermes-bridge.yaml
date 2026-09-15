@@ -1,0 +1,15 @@
+# Optional overlay: mount the SAME data directory used by HERMES_YAOYAO_UPSTREAM.
+# Combine with compose.yaml, compose.desktops.yaml or compose.desktops.cursor.yaml.
+services:
+  web:
+    environment:
+      HERMES_YAOYAO_BRIDGE_MOUNTED: "1"
+      HERMES_YAOYAO_BRIDGE_HOME: /hermes
+      HERMES_YAOYAO_BRIDGE_PYTHON: /usr/bin/python3
+    volumes:
+      - type: bind
+        source: "${HERMES_YAOYAO_HERMES_DIR:?Set HERMES_YAOYAO_HERMES_DIR to the existing Hermes data directory}"
+        target: /hermes
+        read_only: false
+        bind:
+          create_host_path: false

@@ -20,6 +20,10 @@ extraResources:
       - runner-config.mjs
       - runner-config.mjs.map
       - hermes_worker.py
+      - profile_skills.py
+      - skill_bundle.py
+      - hermes-bots-bridge/**/*
+      - install-hermes-bridge.py
       - guest_proxy.py
       - release.json
       - build-info.json

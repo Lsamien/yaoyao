@@ -35,6 +35,7 @@ export interface WorkspaceBinding {
   runnerId?: string
   execution?:string
   vmExecution?:Agent["vmExecution"]
+  hermesComputer?:boolean
   computerEnvironmentId?:string
   remoteAgentId?: string
   id: string
@@ -288,7 +289,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     }
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
     const memoryChanged = !recovering && !!binding?.memoryVersion && binding.memoryVersion !== memory.version
-    const movedRunner=memoryChanged||!!this.store.get(owner,'binding-reset',key)||!!binding&&((binding.vmExecution??'worker')!==(agent.vmExecution??'worker')||binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile'))
+    const movedRunner=memoryChanged||!!this.store.get(owner,'binding-reset',key)||!!binding&&((binding.vmExecution??'worker')!==(agent.vmExecution??'worker')||binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile')||!!binding.hermesComputer!==!!target.runner?.hermesComputer)
     if(movedRunner) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
       binding=undefined
@@ -450,6 +451,19 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         current.status = 'waiting'
         this.saveWork(owner, current)
         this.notify(owner, c, this.store.require<Run>(owner, 'run', run.runId), undefined, interaction)
+      } else if(type==='interaction.cancelled'){
+        const upstreamId=String(p.request_id??'')
+        for(const interaction of this.store.list<WorkspaceInteraction>(owner,'interaction')){
+          const binding=this.store.get<{taskId:string;upstreamId:string}>(owner,'interaction-binding',interaction.id)
+          if(!interaction.resolved&&binding?.taskId===run.id&&binding.upstreamId===upstreamId){
+            interaction.resolved=true;this.store.put(owner,'interaction',interaction.id,interaction)
+            this.store.event(owner,'interaction.changed',interaction,c.id)
+          }
+        }
+        const current=this.getWork(owner,run.id)
+        if(current.status==='waiting'&&!this.store.list<WorkspaceInteraction>(owner,'interaction').some(i=>i.runId===run.runId&&i.agentId===agent.id&&!i.resolved)){
+          current.status='running';this.saveWork(owner,current)
+        }
       } else if (['message.complete', 'run.completed'].includes(type)) {
         if (typeof p.text === 'string') resultMessage.content = p.text
         if (typeof p.reasoning === 'string') resultMessage.reasoning = p.reasoning
@@ -558,7 +572,6 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             ...(cwd ? { cwd } : {}),
             hidden: true,
             room_plumbing: true,
-            ...(botCapabilities.memory ? { skip_memory: true, workspace_memory: true } : {}),
             close_on_disconnect: false,
           })
       runtimeId = String(opened.session_id ?? '')
@@ -576,6 +589,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         runnerId: target.runner?.id,
         execution:agent.execution,
         vmExecution:agent.vmExecution,
+        hermesComputer:target.runner?.hermesComputer,
         computerEnvironmentId:agent.computerEnvironmentId,
         id: key,
         nodeId: agent.nodeId,
@@ -660,6 +674,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           if(plugins)pluginLease=await this.plugins!.open(owner,agent,target,toolController.signal,assertActive)
           toolLease=await createWorkspaceToolLease({
             target,profile:agent.profile,workId:run.id,signal:toolController.signal,
+            workspaceMemory:botCapabilities.memory,
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
             catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.filter(t=>desktop==='browser'||t.id!=='desktop_browser'):[]),...(pluginLease?.catalog()??[])],
             call:async(toolId,args)=>{assertActive();return knowledge&&this.knowledgeTools.handles(toolId)?this.knowledgeTools.call(owner,run.id,toolId,args,botCapabilities.memory):toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,desktop!,desktopEpoch):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):this.teamTools.call(owner,run.id,toolId,args)},

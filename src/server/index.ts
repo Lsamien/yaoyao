@@ -35,7 +35,7 @@ let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).
 // The capability is loopback-only and never shared with the Web renderer.
 runtime.app.middleware.unshift(instance.middleware(shutdown, () => runtime.realtime.broker.idleForUpdate
-  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate, ctx=>runtime.desktopEnvironments.bridge(ctx)))
+  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermesBridge.idleForUpdate, ctx=>runtime.desktopEnvironments.bridge(ctx)))
 
 if (runtime.config.production) {
   const dist = resolve(process.env.HERMES_YAOYAO_STATIC_DIR || resolve(process.cwd(), 'dist'))

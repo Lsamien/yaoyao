@@ -21,6 +21,7 @@ export type UiLocalFileLink = {
 }
 
 export type UiMessage = {
+  communication?: import('@shared/workspace').WorkspaceCommunication
   id: string
   role: 'user' | 'assistant' | 'system' | 'tool'
   author?: string

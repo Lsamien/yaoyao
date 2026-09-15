@@ -12,7 +12,7 @@ import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { WorkspaceRuntime, mentionedAgents } from '../../src/server/workspaceRuntime'
 import type { Work } from '../../src/server/workspaceScheduler'
 import { REPEATED_RELAY_NOTICE } from '../../src/server/workspaceRelay'
-import { WorkspaceNodes } from '../../src/server/workspaceGateway'
+import { WorkspaceNodes, WorkspaceGateway, type GatewayTarget } from '../../src/server/workspaceGateway'
 import { UploadStore } from '../../src/server/uploads'
 import type {
   WorkspaceConversation,
@@ -187,7 +187,9 @@ describe('Web-owned workspace', () => {
     configuredCwds.set('default', '/profile/changed')
     const before = requests.length
     await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: 'second' }).id)
-    const next = requests.slice(before)
+    // The prior turn's asynchronous usage refresh can arrive after completion.
+    // This assertion concerns the next turn's execution RPCs, not telemetry.
+    const next = requests.slice(before).filter(r => r.method !== 'session.usage')
     expect(next[0].method).toBe('session.resume')
     expect(next.find(r => r.method === 'session.cwd.set')?.params.cwd).toBe('/profile/changed')
     expect(next.findIndex(r => r.method === 'session.cwd.set')).toBeLessThan(next.findIndex(r => r.method === 'prompt.submit'))
@@ -1466,4 +1468,49 @@ it('forwards a generated artifact to a new task without changing its original pr
   expect(store.require<any>(owner,'file',file.id).messageId).toBe(message.id)
   expect(store.require<WorkspaceMessage>(owner,'message',sent.messageId).attachments.map(file=>file.id)).toEqual([file.id])
   assets.close()
+})
+
+
+it('migrates an old VM conversation into Hermes once, carries prior messages, and resumes the new session afterwards',async()=>{
+  const a=store.updateAgent(owner,agent('迁移测试').id,{execution:'computer',computer:'vm'}),c=direct(a.id)
+  const native=nodes.target(owner,'local')
+  const target:GatewayTarget={...native,runner:{id:'migration-runner',computer:true,hermesComputer:false,
+    open:async(onEvent,onDisconnect)=>{
+      const gateway=new WorkspaceGateway(native);gateway.onEvent=onEvent;gateway.onDisconnect=onDisconnect
+      await gateway.connect();return {rpc:(method,params)=>gateway.rpc(method,params),close:()=>gateway.close()}
+    },lease:async()=>{throw new Error('unexpected lease')},
+  }}
+  nodes.targetForAgent=()=>target
+  const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'已确认的原会话事实'})
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',first.id).status).toBe('complete'))
+  const key=`${c.id}:${a.id}`,old=store.get<any>(owner,'binding',key)!
+  target.runner!.hermesComputer=true
+  const second=runtime.send(owner,c.id,{requestId:randomUUID(),content:'继续这次任务'})
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',second.id).status).toBe('complete'))
+  const migrated=store.get<any>(owner,'binding',key)!
+  expect(migrated.hermesComputer).toBe(true);expect(migrated.storedId).not.toBe(old.storedId)
+  expect(requests.filter(r=>r.method==='session.create')).toHaveLength(2)
+  expect(requests.filter(r=>r.method==='session.resume')).toHaveLength(0)
+  expect(requests.filter(r=>r.method==='prompt.submit')[1].params.text).toContain('已确认的原会话事实')
+  const third=runtime.send(owner,c.id,{requestId:randomUUID(),content:'再次继续'})
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',third.id).status).toBe('complete'))
+  expect(requests.filter(r=>r.method==='session.resume')).toHaveLength(1)
+  expect(requests.filter(r=>r.method==='session.resume')[0].params.session_id).toBe(migrated.storedId)
+  expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(3)
+})
+
+
+it('keeps memory flags out of session.create and grants scoped memory through the bridge',async()=>{
+  const a=agent('独立记忆'),c=direct(a.id),target=nodes.target(owner,'local'),request=target.session.request.bind(target.session),bindings:any[]=[]
+  vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>{
+    if(path.endsWith('/capabilities'))return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ready:true,native_tools:true,in_process:true,memory_isolation:true}))}
+    if(path.endsWith('/bind')){bindings.push(options?.body);return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ok:true,native_tools:true,workspace_memory:true}))}}
+    if(path.endsWith('/unbind'))return {status:200,headers:new Headers(),body:Buffer.from('{"ok":true}')}
+    return request(path,options)
+  })
+  await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'验证完整创建链路'}).id)
+  const create=requests.find(r=>r.method==='session.create')!
+  expect(create.params).not.toHaveProperty('skip_memory')
+  expect(create.params).not.toHaveProperty('workspace_memory')
+  expect(bindings).toContainEqual(expect.objectContaining({workspace_memory:true}))
 })

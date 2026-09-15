@@ -1,6 +1,7 @@
 import {nativeEnvironmentFixture} from './native-environment.js'
 import {FixtureGrokAuthProvider} from './grok-auth-provider.js'
 import { FixtureBotPlugins } from './bot-plugins.js'
+import { defaultAgentIdentity, encodeAgentAvatar } from '../../src/shared/agentIdentity.js'
 /** Isolated, deterministic Hermes fixture. Team-tool transport is simulated, with no live model. */
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
@@ -380,6 +381,22 @@ const grokAuth=process.env.WORKSPACE_FIXTURE_GROK_AUTH==='1'?new FixtureGrokAuth
 const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch, pluginFetch: pluginsFixture?.fetch }),
   node = createNodeServer(runtime)
 const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?nativeEnvironmentFixture(runtime,home,port):undefined
+if (process.env.WORKSPACE_FIXTURE_COMMUNICATION === '1') {
+  const owner = JSON.parse(readFileSync(usersPath, 'utf8')).users[0].id as string
+  const store = runtime.workspace
+  const a = store.createAgent(owner, { name: '竹儿', profile: 'default', avatar: encodeAgentAvatar({ ...defaultAgentIdentity('lead', '竹儿'), color: '#ff9500' }) })
+  const b = store.createAgent(owner, { name: '研究员', profile: 'default', avatar: encodeAgentAvatar({ ...defaultAgentIdentity('researcher', '研究员'), color: '#191a21' }) })
+  const direct = (id: string) => store.list<import('../../src/shared/workspace.js').WorkspaceConversation>(owner, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === id)!
+  const c = direct(a.id), other = direct(b.id), now = Date.now()
+  const texts = ['请让研究员核对接口版本，再告诉我结论。', '我请研究员核对一下。', '请核对接口版本，确认旧客户端是否兼容。', '已核对：当前为 v2，旧客户端仍可使用。', '核对完成，当前接口兼容旧客户端。']
+  for (const [index, content] of texts.entries()) {
+    const peerMessageId = index === 2 || index === 3 ? randomUUID() : undefined
+    const runId = index === 3 ? randomUUID() : undefined
+    if (peerMessageId) store.put(owner, 'peer-message', peerMessageId, { id: peerMessageId, chainId: 'fixture', fromAgentId: index === 2 ? a.id : b.id, toAgentId: index === 2 ? b.id : a.id, originConversationId: index === 2 ? c.id : other.id, conversationId: index === 2 ? other.id : c.id, sourceRunId: randomUUID(), runId, content, fileIds: [], depth: 1, priority: false, status: 'complete', createdAt: now + index, updatedAt: now + index })
+    store.saveMessage(owner, { id: randomUUID(), conversationId: c.id, seq: 0, role: index === 0 ? 'user' : peerMessageId ? 'system' : 'assistant', agentId: index === 0 ? undefined : index === 3 ? b.id : a.id, agentName: index === 0 ? undefined : index === 3 ? b.name : a.name, content: index === 2 ? '已向 Bot「研究员」发送协作请求。结果将异步返回。' : index === 3 ? `来自 Bot「研究员」的回复：\n${content}` : content, reasoning: '', status: 'complete', attachments: [], tools: [], peerMessageId, runId, createdAt: now + index })
+  }
+  console.log(`Communication preview: http://127.0.0.1:${port}/conversations/${c.id}`)
+}
 runtime.app.use((ctx, next) => {
   if (ctx.path !== '/__test/workspace-transcript' || ctx.method !== 'POST') return next()
   const owner = auth.require(ctx).id
@@ -470,7 +487,7 @@ runtime.runners.localVm=async(owner,id,p)=>{
  return {...vmFixture}
 }
 runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/local-vm')return next();const owner=auth.requireAdmin(ctx).id;vmFixture.image=ctx.query.ready==='1';vmFixture.mode='per-bot';vmFixture.maxInstances=2;vmFixture.idleStopMinutes=5;vmFixture.job=undefined;(runtime.runners as any).online.delete(vmRunnerId);if(!vmRunnerId){for(const record of runtime.runners.records())if(record.sourceNodeId==='local'&&record.enabled)runtime.runners.remove(record.id);vmRunnerId=runtime.runners.enroll(owner,{name:'本机虚拟机',allowedProfiles:['default']}).runner.id;}ctx.body={runnerId:vmRunnerId}})
-runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/hybrid-runner')return next();auth.requireAdmin(ctx);(runtime.runners as any).online.set(vmRunnerId,{instance:randomUUID(),epoch:'fixture',seen:Date.now(),features:['computer-worker-v1','computer-control-v1','local-vm-v1','image-ready-v1','host-computer-tools-v1','idle-stop-policy-v1','profile-computer-v1']});ctx.body={ok:true}})
+runtime.app.use((ctx,next)=>{if(ctx.path!=='/__test/hybrid-runner')return next();auth.requireAdmin(ctx);(runtime.runners as any).online.set(vmRunnerId,{instance:randomUUID(),epoch:'fixture',seen:Date.now(),features:['computer-worker-v1','computer-control-v1','local-vm-v1','image-ready-v1','host-computer-tools-v1','idle-stop-policy-v1','profile-computer-v1','hermes-computer-v2','workspace-memory-bind-v1']});ctx.body={ok:true}})
 runtime.app.use((ctx,next)=>{
  if(ctx.path!=='/__test/cloud-host-option')return next();const owner=auth.requireAdmin(ctx).id,cloud=runtime.workspaceRuntime.cloud!
  cloud.state=async()=>({configured:true,running:false});cloud.status=async()=>({backend:'grok',mode:'off'});cloud.requireAvailable=async()=>{};cloud.connect=async()=>({} as any)

@@ -11,6 +11,7 @@ export const CUA_SOCKET = '/run/user/1000/openmausbot-cua.sock'
 const managedLabel='cn.samien.yaoyao.computer', runnerLabel='cn.samien.yaoyao.runner', specLabel='cn.samien.yaoyao.computer-spec', ownerLabel='cn.samien.yaoyao.computer-owner'
 const mib=1024*1024
 export interface CommandResult {stdout:string;stderr:string}
+export interface SkillInstallation {namespace:string;revision:string;files:Record<string,string>}
 export type ContainerCommand=(runtime:'docker'|'podman',args:string[],options?:{timeout?:number;signal?:AbortSignal;input?:Buffer})=>Promise<CommandResult>
 const command:ContainerCommand=(runtime,args,options={})=>new Promise((resolveResult,reject)=>{
   const child=spawn(runtime,args,{stdio:'pipe',signal:options.signal}),out:Buffer[]=[],err:Buffer[]=[]
@@ -223,6 +224,17 @@ export class ContainerComputerProvider implements ComputerProvider {
         if(options.signal?.aborted||(error as any).killed||typeof (error as any).code!=='number')await this.stopOwned(spec,state.containerId)
         throw error
       }
+    })
+  }
+  async installSkill(value:ComputerSpecification,bundle:SkillInstallation,script:string,options:{authorize():void;signal?:AbortSignal}):Promise<{path:string;revision:string}> {
+    const spec=this.validateSpecification(value)
+    return this.serial(spec,async()=>{
+      options.authorize();if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
+      const state=await this.inspect(spec)
+      if(!state?.running)throw new ComputerError('computer_not_running','电脑环境尚未运行')
+      options.authorize()
+      const result=await this.run(this.runtime,['exec','-i','--user','0:0','--',state.containerId,'python3','-c',script,'install'],{input:Buffer.from(JSON.stringify(bundle)),signal:options.signal,timeout:30000})
+      options.authorize();return JSON.parse(result.stdout)
     })
   }
   async capture(value:ComputerSpecification,authorize:()=>void):Promise<{data:string;width:number;height:number;capturedAt:number}> {

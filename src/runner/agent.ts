@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { realpath,access } from 'node:fs/promises'
+import { realpath } from 'node:fs/promises'
 import { resolve, sep, join } from 'node:path'
 import {LocalVmImages} from './computers/localVm.js'
 import {LOCAL_VM_IMAGE_KEYS,MAX_VM_IDLE_STOP_MINUTES} from '../shared/localVm.js'
@@ -47,7 +47,7 @@ export class RunnerAgent {
     this.target={url:hermes,client,session:new UpstreamServiceSession(client,()=>config.hermesCredentials)}
     this.db=new DatabaseSync(join(home,'runner-commands.sqlite3'))
     this.db.exec('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created INTEGER NOT NULL)')
-    if(config.computers){this.computers=new ComputerRuntime(this.db,config,home,undefined,(id,operation,body)=>this.api('desktop',{id,operation,...body}));this.localVm=new LocalVmImages(this.computers,this.db)}
+    if(config.computers){this.computers=new ComputerRuntime(this.db,config,home,undefined,(id,operation,body)=>this.api('desktop',{id,operation,...body}),this.target);this.localVm=new LocalVmImages(this.computers,this.db)}
     this.compactReceipts()
   }
   private async api(path:string,body?:unknown):Promise<any> {
@@ -55,7 +55,7 @@ export class RunnerAgent {
     if(url.hostname==='localhost')url.hostname='127.0.0.1'
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
       method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'profile-computer-v1,host-computer-tools-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'workspace-memory-bind-v1',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
@@ -154,17 +154,18 @@ export class RunnerAgent {
         const text = await this.computers.extractMemory(body.profile, body.prompt, this.controlAbort.signal)
         return { status: 200, headers: {}, body: Buffer.from(JSON.stringify({ text })).toString('base64') }
       }
-      if(path==='/api/computer/capabilities'||(p.computer&&!(p.computer as ComputerTarget).profileSession&&path==='/api/plugins/yaoyao-bot-bridge/capabilities')){
+      if(path==='/api/computer/capabilities'){
         this.requireProfile(search.get('profile')??'default')
         if(p.method!=='GET'||!this.computers)throw new HttpError(409,'执行节点未配置隔离电脑','computer_unavailable')
-        await Promise.all([access(this.computers.config.python),access(this.computers.config.hermesSource),access(this.computers.script)])
-        return {status:200,headers:{},body:Buffer.from(JSON.stringify({version:1,ready:true,native_tools:true,in_process:true,memory_isolation:true,memory_extraction:true,network:this.config.computers?.network??'none'})).toString('base64')}
+        const response=await this.target.session.request('/api/plugins/yaoyao-bot-bridge/capabilities',{search,cache:'reload'})
+        const value=JSON.parse(response.body.toString())
+        return {status:response.status,headers:{},body:Buffer.from(JSON.stringify({...value,ready:value.ready===true&&value.computer_runtime_version===2,network:this.config.computers?.network??'none'})).toString('base64')}
       }
       if(p.computer&&path==='/api/files/download')throw new HttpError(409,'隔离电脑产物需通过产物导出接口读取','computer_artifact_required')
       if(p.computer&&/^\/api\/sessions\/[^/]+\/messages$/.test(path)){
         if(p.method!=='GET'||!this.computers)throw new HttpError(403,'电脑历史不可用','computer_unavailable')
         const profile=this.requireProfile(search.get('profile')??'default'),session=this.computers.session(decodeURIComponent(path.split('/')[3]!),p.computer as ComputerTarget,profile)
-        if(session.vmExecution==='profile'){
+        if(session.profileSessionId){
           if(!session.profileSessionId)throw new HttpError(409,'本机 Profile 会话尚未建立','computer_profile_session_invalid')
           const response=await this.target.session.request(`/api/sessions/${encodeURIComponent(session.profileSessionId)}/messages`,{search,maxResponseBytes:8*1024*1024})
           return {status:response.status,headers:Object.fromEntries(response.headers.entries()),body:response.body.toString('base64')}
@@ -189,7 +190,7 @@ export class RunnerAgent {
       if(p.computer){
         const meta=p.computer as ComputerTarget
         if(!this.computers||![meta.environmentId,meta.agentId,String(p.workId)].every(value=>/^[0-9a-f-]{36}$/.test(value))||!/^[a-f0-9]{64}$/.test(meta.ownerKey))throw new HttpError(409,'电脑任务配置或授权无效','computer_unavailable')
-        gateway=new ComputerGateway(this.computers,meta,String(p.workId),async()=>{if(!this.active||!this.connected||(await this.api('check',{connectionId})).allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')},body=>this.api('artifact',{connectionId,...body}),meta.profileSession?this.target:undefined)
+        gateway=new ComputerGateway(this.computers,{...meta,hermesRuntime:true},String(p.workId),async()=>{if(!this.active||!this.connected||(await this.api('check',{connectionId})).allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')},body=>this.api('artifact',{connectionId,...body}),this.target)
       }else gateway=new WorkspaceGateway(this.target)
       const connection:Connection={cleanupOnly:p.cleanupOnly===true,gateway,sessions:new Map(),running:new Set(),events:Promise.resolve()}
       this.connections.set(connectionId,connection)
@@ -228,11 +229,12 @@ export class RunnerAgent {
       const controller=new AbortController()
       const virtual=source[1].gateway
       if(virtual instanceof ComputerGateway){
-        virtual.installTeamLease(leaseId,p.catalog as any[],async(toolId,args,callId)=>(await this.api('tool',{leaseId,toolId,arguments:args,callId})).result)
+        virtual.installTeamLease(leaseId,p.catalog as any[],async(toolId,args,callId)=>(await this.api('tool',{leaseId,toolId,arguments:args,callId})).result,p.workspaceMemory===true)
         const lease={bind:async()=>{},dispose:async()=>{virtual.removeTeamLease(leaseId)}}
         this.leases.set(leaseId,{lease,controller,session,connectionId:source[0],profile:String(p.profile)});return {ok:true}
       }
       const lease=await createWorkspaceToolLease({target:this.target,profile:String(p.profile),workId:String(p.workId),session:()=>session,signal:controller.signal,
+        workspaceMemory:p.workspaceMemory===true,
         assertActive:()=>{if(!this.connected||controller.signal.aborted)throw new Error('工具授权已失效')},
         catalog:()=>p.catalog as any[],call:async(toolId,args,callId)=>(await this.api('tool',{leaseId,toolId,arguments:args,callId:callId??randomUUID()})).result,
         onFailure:()=>{controller.abort()},

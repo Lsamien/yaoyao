@@ -30,6 +30,7 @@ export interface GatewayTarget {
   runner?: {
     id: string
     computer?:boolean
+    hermesComputer?:boolean
     helperRetirement?:boolean
     open(onEvent:(frame:GatewayFrame)=>void,onDisconnect:()=>void,scope?:GatewayExecutionScope):Promise<{rpc(method:string,params:Record<string,unknown>):Promise<any>;close():void}>
     lease(input:import('./workspaceToolLease.js').LeaseInput):Promise<import('./workspaceToolLease.js').WorkspaceToolLease>
@@ -284,6 +285,7 @@ export class WorkspaceNodes {
 
 /** One server-owned transport per execution binding, never tied to a browser. */
 export class WorkspaceGateway {
+  private serverRequests = new Map<string, {method:'approval'|'clarify';sessionId:string}>()
   private socket?: WebSocket
   private paired?: WorkspacePairedChannel
   private runner?: {rpc(method:string,params:Record<string,unknown>):Promise<any>;close():void}
@@ -335,13 +337,27 @@ export class WorkspaceGateway {
             waiter.reject(
               new HttpError(502, frame.error.message || 'Hermes 请求失败', 'gateway_rejected'),
             )
-          else waiter.resolve(frame.result)
+          else {
+            waiter.resolve(frame.result)
+            if(Array.isArray(frame.result?.open_requests))setTimeout(()=>{
+              if(this.socket===socket&&socket.readyState===WebSocket.OPEN)
+                for(const request of frame.result.open_requests)this.acceptServerRequest(request)
+            },0)
+          }
         } else if (frame.method === 'event' && frame.params) {
           if (frame.params.type === 'gateway.ready') {
             clearTimeout(handshakeTimer)
             ready()
           }
-          this.onEvent(frame.params)
+          if(frame.params.type==='request.cancel'){
+            const id=String(frame.params.payload?.id??''),request=this.serverRequests.get(id)
+            if(request&&request.sessionId===frame.params.session_id){
+              this.serverRequests.delete(id)
+              this.onEvent({type:'interaction.cancelled',session_id:request.sessionId,payload:{request_id:id,reason:frame.params.payload?.reason}})
+            }
+          }else this.onEvent(frame.params)
+        } else if (typeof frame.id==='string'&&typeof frame.method==='string') {
+          if(!this.acceptServerRequest(frame))socket.send(JSON.stringify({jsonrpc:'2.0',id:frame.id,error:{code:-32601,message:'Unsupported server request'}}))
         }
       } catch {
         /* Malformed frames cannot mutate an execution. */
@@ -357,11 +373,22 @@ export class WorkspaceGateway {
         waiter.reject(new Error('Hermes connection closed'))
       }
       this.pending.clear()
+      this.serverRequests.clear()
       this.onDisconnect()
       clearTimeout(handshakeTimer)
       failed(new Error('Hermes connection closed'))
     })
     await handshake
+  }
+  private acceptServerRequest(frame:any):boolean {
+    if(!['approval','clarify'].includes(frame?.method)||typeof frame.id!=='string'||typeof frame.params?.session_id!=='string')return false
+    if(this.serverRequests.has(frame.id))return true
+    this.serverRequests.set(frame.id,{method:frame.method,sessionId:frame.params.session_id})
+    const {session_id,...payload}=frame.params
+    this.onEvent({type:`${frame.method}.requested`,session_id,payload:{...payload,
+      message:payload.message??payload.description??payload.reason??payload.command,
+      request_id:frame.id}})
+    return true
   }
   onTrace:(entry:{direction:'request'|'response'|'error';method:string;requestId:string;durationMs?:number;data:unknown})=>void=()=>{}
   async rpc(method:string,params:Record<string,unknown>):Promise<any>{
@@ -375,6 +402,19 @@ export class WorkspaceGateway {
     if (this.paired) return this.paired.rpc(method, params)
     if (this.socket?.readyState !== WebSocket.OPEN)
       return Promise.reject(new Error('Hermes connection unavailable'))
+    if(method==='approval.respond'||method==='clarify.respond'){
+      const id=String(params.request_id??''),request=this.serverRequests.get(id)
+      if(request){
+        if(request.sessionId!==params.session_id||method!==`${request.method}.respond`)
+          return Promise.reject(new HttpError(403,'审批请求不属于当前会话','gateway_rejected'))
+        const result=request.method==='approval'?{choice:params.choice}:{answer:params.answer}
+        return new Promise((resolve,reject)=>this.socket!.send(JSON.stringify({jsonrpc:'2.0',id,result}),error=>{
+          if(error){reject(error);return}
+          this.serverRequests.delete(id);resolve({resolved:true})
+        }))
+      }
+      if(id.startsWith('srq-'))return Promise.reject(new HttpError(409,'请求已经结束或连接已变化','gateway_rejected'))
+    }
     const id = randomUUID()
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -393,6 +433,7 @@ export class WorkspaceGateway {
   }
   close(): void {
     this.onDisconnect = () => {}
+    this.serverRequests.clear()
     this.paired?.close()
     this.runner?.close()
     this.socket?.close()

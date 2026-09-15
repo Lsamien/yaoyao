@@ -62,8 +62,10 @@ import {LocalVmService} from './localVm.js'
 import {SharedComputers} from './sharedComputers.js'
 import {ComputerControlService} from './computerControls.js'
 import { RunnerHub } from './runnerHub.js'
+import { HermesBridgeManager } from './hermesBridge.js'
 
 export interface ApplicationOptions {
+  hermesBridge?: HermesBridgeManager
   config?: ServerConfig
   fetchImpl?: typeof fetch
   grokFetch?:typeof fetch
@@ -84,6 +86,7 @@ export interface ApplicationOptions {
 }
 
 export interface ApplicationRuntime {
+  hermesBridge: HermesBridgeManager
   runners: RunnerHub
   workspace: WorkspaceStore
   workspaceRuntime: WorkspaceRuntime
@@ -235,6 +238,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0)
+  const hermesBridge=options.hermesBridge??new HermesBridgeManager(config,upstreamSession,{isIdle:()=>workspaceRuntime.idleForUpdate&&runners.idleForUpdate&&realtime.broker.idleForUpdate})
   const workspaceMemory = new WorkspaceMemorySynthesis(workspaceRuntime)
   workspaceMemory.start()
   const grokCloud=new GrokCloud(workspace,auth,workspaceNodes,sharedComputers,options.grokFetch)
@@ -472,6 +476,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     apnsConfiguration,
     fcmConfiguration,
     allowedHostsConfiguration,
+    hermesBridge,
     chatCache,
   })
   app.use(router.routes())
@@ -488,6 +493,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
 
   return {
     runners,
+    hermesBridge,
     localVm,
     workspace,
     workspaceRuntime,

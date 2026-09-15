@@ -18,10 +18,11 @@ import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
 import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerContextConfiguration,type WorkerTool,type WorkerFrame} from './process.js'
 import {HOST_TOOLS,hostTool,hostPath,readHostFile,writeHostFile} from './hostTools.js'
+import {ProfileSkillSession,SKILL_TOOLS,SKILL_RULES} from './skills.js'
 import {homedir,platform} from 'node:os'
 
-export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean;profileSession?:boolean}
-export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain';vmExecution?:'profile';profileSessionId?:string}
+export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean;profileSession?:boolean;hermesRuntime?:boolean}
+export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain';vmExecution?:'profile';profileSessionId?:string;hermesRuntime?:boolean}
 interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
 const text={type:'string'}
@@ -35,6 +36,8 @@ const TOOLS:WorkerTool[]=[
 ]
 const pathField=z.string().min(1).max(4096).refine(value=>!value.includes('\0'))
 const PROFILE_COMPUTER_RULES='当前使用本机协作模式：沿用基础 Profile 的本机工具、配置和上下文，本地虚拟机是独立的 Linux 电脑。computer_shell/read_file/write_file/desktop_state/action/export 只操作虚拟机；本机文件、终端和程序使用 Profile 已授权的原生工具。computer_copy_file 在两个环境间显式复制文件。调用前明确目标环境，文件路径和浏览器登录互不通用；需要回传虚拟机文件时使用 computer_export。人工接管期间停止操作，交还后先检查当前状态。'
+const HERMES_COMPUTER_RULES='本轮由 Hermes 管理模型、配置、识图、技能和授权资源。使用 Hermes 原生 skills_list、skill_view 和 skill_manage 发现、读取和维护技能；遵循当前 Profile 的技能规则。技能依赖本机登录态、环境变量或授权文件时，使用 Hermes 原生工具完成相应步骤；适合 Linux 的脚本与输入文件可经 computer_copy_file 传入虚拟机，再用 computer_shell 执行。路径、软件和登录态在本机与虚拟机之间不通用。不要自行复制 Profile 配置或凭据到虚拟机。'
+const ISOLATED_COMPUTER_RULES='当前使用隔离虚拟机：命令、文件处理和浏览器操作默认通过 computer_* 工具在指定的 Linux 电脑执行。需要使用本机文件或运行本机技能时，遵循 Hermes 返回的授权请求；拒绝后停止该操作。人工接管期间停止操作，交还后先检查当前状态。'
 export class ComputerRuntime {
   retainDesktops=false
   readonly controls:ComputerControls
@@ -46,7 +49,7 @@ export class ComputerRuntime {
   readonly workers=new Map<string,{environmentId:string;ownerKey:string;process:HermesWorkerProcess}>()
   readonly script:string
   readonly proxyScript:string
-  constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,relay?:DesktopRelay){
+  constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,relay?:DesktopRelay,readonly hermesTarget?:GatewayTarget){
     if(!config.computers)throw new HttpError(409,'执行节点尚未配置隔离电脑','computer_unavailable')
     this.config=config.computers
     this.script=script??join(dirname(fileURLToPath(import.meta.url)),'hermes_worker.py')
@@ -96,12 +99,23 @@ export class ComputerRuntime {
     return session
   }
   async resolve(profile:string,signal?:AbortSignal){
+    if(this.hermesTarget)throw new HttpError(409,'模型配置由 Hermes 会话管理','computer_hermes_owned')
     return this.resolveProfile(profile,'resolve',signal)
   }
   async resolveWorkspace(profile:string,signal?:AbortSignal){
+    // VM paths belong to the VM. A Profile's host cwd is resolved by Hermes.
+    if(this.hermesTarget)return {type:'resolved',cwd:COMPUTER_WORKSPACE,configuredCwd:'.'}
     return this.resolveProfile(profile,'resolve-workspace',signal)
   }
   async extractMemory(profile: string, prompt: string, signal?: AbortSignal): Promise<string> {
+    if(this.hermesTarget){
+      signal?.throwIfAborted()
+      const response=await this.hermesTarget.session.request('/api/plugins/yaoyao-bot-bridge/memory-extract',{method:'POST',search:new URLSearchParams({profile}),body:{profile,prompt},maxResponseBytes:1024*1024})
+      signal?.throwIfAborted()
+      let value:any;try{value=JSON.parse(response.body.toString())}catch{}
+      if(response.status!==200||typeof value?.text!=='string')throw new HttpError(409,'Hermes 记忆提炼接口不可用，请更新对应 Profile 的夭夭工具桥。','memory_extraction_unavailable')
+      return value.text
+    }
     const resolved = await this.resolve(profile, signal)
     const directory = join(this.home, 'memory-extraction', randomUUID())
     await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -149,9 +163,12 @@ export class ComputerGateway {
   private checking=false
   private hostCwd=homedir()
   private profileSession?:ProfileComputerSession
-  private team?:{id:string;catalog:WorkerTool[];call(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>}
+  private skillSession?:ProfileSkillSession
+  private get hermesManaged(){return this.meta.hermesRuntime===true}
+  private get rules(){return this.hermesManaged?`${this.meta.profileSession?PROFILE_COMPUTER_RULES:ISOLATED_COMPUTER_RULES}\n${HERMES_COMPUTER_RULES}`:`${PROFILE_COMPUTER_RULES}\n${SKILL_RULES}`}
+  private team?:{id:string;catalog:WorkerTool[];call(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;workspaceMemory:boolean}
   constructor(readonly runtime:ComputerRuntime,readonly meta:ComputerTarget,readonly workId:string,readonly check:()=>Promise<void>,readonly publish:(body:Record<string,unknown>)=>Promise<any>,readonly profileTarget?:GatewayTarget){ }
-  async connect(){this.runtime.assertTarget(this.meta);await this.runtime.ready;await this.authorized()}
+  async connect(){this.runtime.assertTarget(this.meta);await this.runtime.ready;await this.authorized();if(this.hermesManaged&&!this.profileTarget)throw new HttpError(409,'缺少 Hermes 会话连接，不能回退到独立 Worker。','computer_profile_unavailable')}
   private async authorized(){try{await this.check();this.guard()}catch(error){const stopping=this.interrupt().catch(()=>{});if(!this.profileSession)await stopping;if(!this.closed)this.onDisconnect();throw error}}
   private guard(){if(this.closed||this.live?.controller.signal.aborted)throw new HttpError(410,'电脑任务授权已结束','computer_cancelled')}
   private event(type:string,payload:Record<string,unknown>){if(!this.closed&&this.live)this.onEvent({type,session_id:this.live.session.id,payload})}
@@ -163,19 +180,20 @@ export class ComputerGateway {
     if(method==='session.create'||method==='session.resume'){
       if(this.live)throw new HttpError(409,'电脑通道已有会话','computer_session_busy')
       await this.authorized()
-      if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;if(this.meta.profileSession){await this.openProfile(session,params);await this.profileSession!.stop()}const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderId===this.workId)await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
+      if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;if(session.profileSessionId){await this.openProfile(session,params);await this.profileSession!.stop()}const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderId===this.workId)await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
       if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
-      const profile=String(params.profile),resolved=await (this.meta.profileSession?this.runtime.resolveWorkspace(profile,this.controller.signal):this.runtime.resolve(profile,this.controller.signal))
+      const profile=String(params.profile),resolved=this.hermesManaged?{cwd:this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE,configuredCwd:'.'}:await (this.meta.profileSession?this.runtime.resolveWorkspace(profile,this.controller.signal):this.runtime.resolve(profile,this.controller.signal))
       if(this.meta.hostAccess){const configured=String(resolved.configuredCwd??'.');this.hostCwd=['.','auto','cwd'].includes(configured)?homedir():hostPath(homedir(),configured)}
       await this.authorized();this.guard()
       const session:WorkerSession=method==='session.resume'?this.runtime.session(String(params.session_id),this.meta,profile):{id:randomUUID(),agentId:this.meta.agentId,ownerKey:this.meta.ownerKey,environmentId:this.meta.environmentId,profile,cwd:resolved.cwd,configuredCwd:resolved.configuredCwd,history:[]}
       if(this.meta.profileSession)session.vmExecution='profile'
+      if(this.hermesManaged)session.hermesRuntime=true
       session.cwd=this.meta.environmentId!==this.meta.agentId?(this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd;session.configuredCwd=resolved.configuredCwd
       await this.runtime.pool.configure(this.spec(session),()=>this.guard())
       await this.authorized()
       const controller=new AbortController(),lease=await this.runtime.pool.acquire(this.spec(session),this.workId,()=>{this.guard();if(controller.signal.aborted)throw new Error('cancelled')},controller.signal)
       if(this.closed){controller.abort();await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
-      this.live={session,lease,controller,model:resolved.model as WorkerModel,contextConfig:resolved.contextConfig,proxyEnv:resolved.proxyEnv,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
+      this.live={session,lease,controller,model:('model' in resolved?resolved.model:undefined) as WorkerModel,contextConfig:'contextConfig' in resolved?resolved.contextConfig as WorkerContextConfiguration:undefined,proxyEnv:'proxyEnv' in resolved?resolved.proxyEnv as WorkerProxyEnvironment:undefined,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
       this.runtime.save(session);this.runtime.gateways.set(this.meta.environmentId,this)
       if(this.runtime.config.network==='public-proxy'){
         const live=this.live
@@ -183,7 +201,7 @@ export class ComputerGateway {
         catch(error){await this.interrupt();throw error}
       }
       this.timer=setInterval(()=>{if(this.checking)return;this.checking=true;void this.authorized().then(()=>this.runtime.pool.renew(this.live!.lease)).catch(async()=>{await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()}).finally(()=>{this.checking=false})},5000);this.timer.unref()
-      if(this.meta.profileSession){
+      if(this.meta.profileSession||this.hermesManaged){
         try{const opened=await this.openProfile(session,params);return {...opened,session_id:session.id,stored_session_id:session.id}}
         catch(error){await this.interrupt();throw error}
       }
@@ -201,7 +219,7 @@ export class ComputerGateway {
         if(typeof params.workMarker==='string'&&/^\[yaoyao-run:[0-9a-f-]{36}:[0-9a-f-]{36}\]$/.test(params.workMarker))live.workMarker=params.workMarker
         await this.profileSession.bind();this.guard()
         live.running=true;live.session.outcome='uncertain';this.runtime.save(live.session)
-        return this.profileSession.rpc(method,{...params,text:`${PROFILE_COMPUTER_RULES}\n${String(params.text??'')}`})
+        return this.profileSession.rpc(method,{...params,text:`${this.rules}\n${String(params.text??'')}`})
       }
       return this.profileSession.rpc(method,params)
     }
@@ -239,14 +257,14 @@ export class ComputerGateway {
     if(!this.profileTarget)throw new HttpError(409,'缺少本机 Profile 连接，请更新执行节点','computer_profile_unavailable')
     if(params.session_id&&!session.profileSessionId)throw new HttpError(409,'本机 Profile 会话尚未建立，请新建会话','computer_profile_session_invalid')
     const native=new ProfileComputerSession(this.profileTarget,session.profile,this.workId,()=>this.guard(),
-      ()=>[...TOOLS,...HOST_TOOLS.filter(tool=>tool.name==='computer_copy_file'),...(this.team?.catalog??[])],
+      ()=>[...TOOLS,...(this.hermesManaged?[]:SKILL_TOOLS),...HOST_TOOLS.filter(tool=>tool.name==='computer_copy_file'),...(this.team?.catalog??[])],
       async(name,args)=>{
         const live=this.live
         if(!live||!this.active||live.paused)throw new HttpError(410,'本轮电脑工具已结束或暂停','computer_cancelled')
         const call=this.tool(live,name,args,randomUUID())
         live.toolCalls.add(call);void call.finally(()=>live.toolCalls.delete(call)).catch(()=>{})
         return call
-      })
+      },this.hermesManaged?{mode:this.meta.profileSession?'profile':'isolated',hostAccess:this.meta.hostAccess===true}:undefined,()=>this.team?.workspaceMemory===true)
     this.profileSession=native
     native.onStoredId=id=>{session.profileSessionId=id;this.runtime.save(session)}
     native.onDisconnect=()=>{void this.interrupt().finally(()=>{if(!this.closed)this.onDisconnect()}).catch(()=>{})}
@@ -270,10 +288,11 @@ export class ComputerGateway {
     this.event(frame.type,{...payload,...(payload.status==='error'?{status:'failed'}:{})})
   }
   private async startModel(live:Live,prompt:string,history:any[]){
+      if(this.hermesManaged)throw new HttpError(409,'Hermes 托管会话不能启动独立 Worker','computer_hermes_owned')
       live.received=false;live.running=true;live.session.outcome='uncertain';live.session.history.push({role:'user',content:prompt});this.runtime.save(live.session)
       const directory=join(this.runtime.home,'workers',live.session.id,this.workId,String(live.segment=(live.segment??0)+1))
       await mkdir(directory,{recursive:true,mode:0o700})
-      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...(this.meta.hostAccess?HOST_TOOLS:[]),...(this.team?.catalog??[])],prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
+      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...SKILL_TOOLS,...(this.meta.hostAccess?HOST_TOOLS:[]),...(this.team?.catalog??[])],skillInstructions:SKILL_RULES,prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
       live.worker=worker
       this.runtime.workers.set(this.workId,{environmentId:this.meta.environmentId,ownerKey:this.meta.ownerKey,process:worker});void worker.exited.then(()=>{if(this.runtime.workers.get(this.workId)?.process===worker)this.runtime.workers.delete(this.workId)})
       worker.onTool=(name,args,id,callId)=>{
@@ -292,7 +311,7 @@ export class ComputerGateway {
       }
       void worker.exited.then(()=>{if(!live.paused&&!live.received&&live.running&&!this.closed)void this.lost(live)})
   }
-  installTeamLease(id:string,catalog:WorkerTool[],call:(name:string,args:Record<string,unknown>,callId:string)=>Promise<unknown>){this.team={id,catalog,call}}
+  installTeamLease(id:string,catalog:WorkerTool[],call:(name:string,args:Record<string,unknown>,callId:string)=>Promise<unknown>,workspaceMemory=false){this.team={id,catalog,call,workspaceMemory}}
   removeTeamLease(id:string){if(this.team?.id===id)this.team=undefined}
   private async tool(live:Live,name:string,args:unknown,id:string):Promise<unknown>{
     if(live.paused)throw new HttpError(409,'电脑正在等待人工操作','computer_paused')
@@ -302,13 +321,24 @@ export class ComputerGateway {
     try{
       const team=this.team?.catalog.find(tool=>tool.name===name)
       if(team)return await this.team!.call(team.id??name,z.record(z.string(),z.unknown()).parse(args),id)
+      if(SKILL_TOOLS.some(tool=>tool.name===name)){
+        this.skillSession??=new ProfileSkillSession({
+          python:this.runtime.config.python,script:this.runtime.script,hermesSource:this.runtime.config.hermesSource,hermesHome:this.runtime.config.hermesHome,
+          profile:live.session.profile,ownerKey:this.meta.ownerKey,agentId:this.meta.agentId,taskId:this.workId,signal:live.controller.signal,
+          authorize:async()=>{await this.authorized();if(live.paused||live.received)throw new HttpError(410,'本轮技能工具已结束或暂停','computer_cancelled');this.runtime.pool.authorize(live.lease)},
+          execute:(argv,input)=>this.runtime.pool.use(live.lease,context=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input})),
+          install:(bundle,script)=>this.runtime.pool.use(live.lease,context=>this.runtime.provider.installSkill(this.spec(live.session),bundle,script,context)),
+        })
+        return await this.skillSession.call(name,args)
+      }
       return await this.runtime.pool.use(live.lease,async context=>{
         const execute=(argv:string[],input?:Buffer)=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input})
         if(this.meta.hostAccess&&name.startsWith('host_'))return hostTool(name,args,{...context,cwd:this.hostCwd})
-        if(this.meta.hostAccess&&name==='computer_copy_file'){
+        if((this.meta.hostAccess||this.hermesManaged)&&name==='computer_copy_file'){
           const body=z.object({from:z.enum(['host','vm']),source:pathField,destination:pathField}).strict().parse(args),host={...context,cwd:this.hostCwd}
           if(body.from==='host'){
-            const bytes=await readHostFile(hostPath(this.hostCwd,body.source),25*1024*1024,host)
+            const bytes=this.hermesManaged?Buffer.from(String((await this.profileSession!.file('read',body.source)).data),'base64'):await readHostFile(hostPath(this.hostCwd,body.source),25*1024*1024,host)
+            if(bytes.length>25*1024*1024)throw new HttpError(413,'文件超过传输限制','computer_file_limit')
             await execute(['python3','-c','import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read())',body.destination],bytes)
           }else{
             const snapshot=`/tmp/yaoyao-copy-${randomUUID()}`,chunks:Buffer[]=[]
@@ -320,7 +350,8 @@ export class ComputerGateway {
                 chunks.push(Buffer.from(data,'base64'))
               }
               const bytes=Buffer.concat(chunks);if(bytes.length!==size)throw new Error('文件复制不完整')
-              await writeHostFile(hostPath(this.hostCwd,body.destination),bytes,host)
+              if(this.hermesManaged)await this.profileSession!.file('write',body.destination,bytes.toString('base64'))
+              else await writeHostFile(hostPath(this.hostCwd,body.destination),bytes,host)
             }finally{await execute(['rm','-f','--',snapshot]).catch(()=>{})}
           }
           return {ok:true}
@@ -439,7 +470,7 @@ export class ComputerGateway {
     this.event('computer.resumed',{generation:live.lease.generation,notes})
     if(this.profileSession){
       await this.profileSession.bind();this.guard()
-      await this.profileSession.rpc('prompt.submit',{text:`${PROFILE_COMPUTER_RULES}\n用户已交还电脑控制权。请先检查当前状态，避免重复已完成的操作。交还说明：${notes||'无额外说明'}\n${live.workMarker??''}`})
+      await this.profileSession.rpc('prompt.submit',{text:`${this.rules}\n用户已交还电脑控制权。请先检查当前状态，避免重复已完成的操作。交还说明：${notes||'无额外说明'}\n${live.workMarker??''}`})
       return
     }
     await this.startModel(live,`用户已完成电脑接管并明确交还控制。请先检查当前电脑状态，再继续原任务；不要重复已完成的副作用。用户说明：${notes||'无额外说明'}\n${live.workMarker??''}`,structuredClone(live.session.history))

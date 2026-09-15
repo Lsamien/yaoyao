@@ -27,3 +27,6 @@ hermes-plugins/**/.pytest_cache/
 hermes-plugins/**/data/
 .runner-build/
 build-info.json
+integrations/**/__pycache__/
+integrations/**/*.py[cod]
+scripts/__pycache__/

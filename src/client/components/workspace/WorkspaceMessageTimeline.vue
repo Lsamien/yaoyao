@@ -348,12 +348,18 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
           class="message"
           :class="[`message--${message.role}`, {
             'message--failed': message.status === 'failed',
+            'message--communication': !!message.communication,
             'message--tool-only': message.role === 'assistant' && !message.content && !message.reasoning && Boolean(message.tools?.length),
             'message--assistant-internal': message.role === 'assistant' && !message.content.trim(),
             'message--assistant-anonymous': message.role === 'assistant' && !showAssistantIdentity,
           }]"
         >
-          <AgentAvatar v-if="message.role !== 'user' && (message.role !== 'assistant' || showAssistantIdentity)" class="message__avatar" :name="message.author || message.profile || (message.role === 'assistant' ? '夭' : '系')" :avatar="message.profile ? agentAvatars[message.profile] || '' : ''" :size="27" :state="avatarState(message)" />
+          <AgentAvatar v-if="!message.communication && message.role !== 'user' && (message.role !== 'assistant' || showAssistantIdentity)" class="message__avatar" :name="message.author || message.profile || (message.role === 'assistant' ? '夭' : '系')" :avatar="message.profile ? agentAvatars[message.profile] || '' : ''" :size="27" :state="avatarState(message)" />
+          <div v-if="message.communication" class="communication-caption" role="note">
+            <span>{{ message.communication.direction === 'outgoing' ? '发送给' : '消息来自' }}</span>
+            <AgentAvatar :name="message.communication.peerName" :avatar="message.communication.peerAvatar" :size="16" :animated="false" aria-hidden="true" />
+            <span class="communication-caption__name">{{ message.communication.peerName }}</span>
+          </div>
           <div class="message__body">
             <template v-if="message.timelineKind === 'delegation-complete'">
               <details class="delegation-event">
@@ -380,7 +386,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
               </details>
             </template>
             <template v-else>
-            <div v-if="message.role !== 'assistant' || showAssistantIdentity" class="message__meta">
+            <div v-if="!message.communication && (message.role !== 'assistant' || showAssistantIdentity)" class="message__meta">
               <strong><AppIcon v-if="message.isRemoteAgent" class="message__remote-agent" name="globe" :size="12" />{{ message.role === 'user' ? '你' : message.author || message.profile || (message.role === 'assistant' ? '机器人' : '系统') }}</strong>
               <span v-if="message.metadata" class="message__execution">{{ message.metadata }}</span>
               <time>{{ formatTime(message.createdAt) }}</time>
@@ -410,8 +416,8 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
                 :plain="message.role === 'user'"
                 :mention-names="mentionNames"
                 :outline-prefix="message.role === 'assistant' ? `outline-${message.id}` : ''"
-                :file-cards="message.role === 'user' || message.role === 'assistant'"
-                :process-content="message.role !== 'user' && message.role !== 'assistant'"
+                :file-cards="message.role === 'user' || message.role === 'assistant' || !!message.communication"
+                :process-content="!message.communication && message.role !== 'user' && message.role !== 'assistant'"
                 @rendered="onMarkdownRendered"
                 @file-link="(name, url) => emit('previewFile', { name, url })"
               />
@@ -428,7 +434,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
               {{ deliveryLabel(message.status) }}
             </div>
 
-            <div v-if="message.role === 'assistant' && message.attachments?.length" class="message__attachments">
+            <div v-if="(message.role === 'assistant' || message.communication) && message.attachments?.length" class="message__attachments">
               <button v-for="attachment in message.attachments" :key="attachment.id" type="button" @click="emit('preview', attachment)">
                 <img v-if="attachment.kind === 'image' && attachment.url" :src="attachment.url" :alt="attachment.name" />
                 <span v-else><AppIcon :name="attachment.kind || 'file'" :size="17" /></span>
@@ -485,6 +491,12 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 </template>
 
 <style scoped>
+.message.message--communication { flex-direction: column; align-items: flex-start; gap: 12px; margin-top: 24px; }
+.communication-caption { display: flex; width: 100%; min-width: 0; justify-content: center; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 400; line-height: 16px; }
+.communication-caption > span:first-child { flex-shrink: 0; white-space: nowrap; }
+.communication-caption__name { min-width: 0; max-width: 60%; overflow-wrap: anywhere; }
+.message.message--communication .message__body { width: fit-content; max-width: min(680px, 86%); margin: 0; padding: 12px 16px; border: 0; border-radius: 20px; background: var(--surface-soft); text-align: left; }
+
 .timeline-frame { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .timeline-header { display: flex; z-index: 6; min-height: 62px; align-items: center; gap: 13px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 92%, transparent); backdrop-filter: blur(16px); }
 .timeline-header--transparent { position: absolute; top: 0; right: 0; left: 0; min-height: 0; justify-content: flex-end; padding: 11px 14px; border: 0; background: transparent; backdrop-filter: none; pointer-events: none; }

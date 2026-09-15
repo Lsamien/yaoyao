@@ -124,6 +124,7 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  communication?: WorkspaceCommunication
   peerMessageId?: string
   revision?: number
   execution?:'profile'|'computer'
@@ -155,6 +156,15 @@ export interface WorkspaceMessagePatch {
   revision: number
   contentAppend: string
   reasoningAppend: string
+}
+/** Presentation-only provenance for a real Bot-to-Bot delivery. */
+export interface WorkspaceCommunication {
+  content?: string
+  direction: 'outgoing' | 'incoming'
+  peerId: string
+  peerName: string
+  peerAvatar: string
+  peerKind: 'agent' | 'group'
 }
 export interface WorkspaceRun {
   projectId?: string

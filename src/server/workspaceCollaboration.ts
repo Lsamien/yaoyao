@@ -101,6 +101,8 @@ export class WorkspaceCollaboration {
       const fingerprint = createHash('sha256').update(JSON.stringify([agent.id, target?.id ?? destination.id, content.normalize('NFC').replace(/\s+/g, ' '), [...input.fileIds].sort()])).digest('hex')
       if (chain.fingerprints.includes(fingerprint)) throw new HttpError(409, '本次协作已投递相同内容，请等待结果', 'peer_repeated')
       const now = Date.now(), peer: Peer = {
+        fromName: agent.name, fromAvatar: agent.avatar,
+        targetName: target?.name ?? destination.name, targetAvatar: target?.avatar ?? destination.avatar,
         id: input.requestId, chainId, fromAgentId: agent.id, toAgentId: target?.id, targetGroupId: input.groupId,
         originConversationId: conversation.id, originTaskId: work.conversationTaskId,
         originProjectId: root.projectId,

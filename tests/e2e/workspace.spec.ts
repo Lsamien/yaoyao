@@ -16,7 +16,7 @@ test.beforeAll(async ({ request }) => {
   const initial = await request.get('/api/app/bootstrap')
   const initialBody = await initial.json() as { csrfToken: string; setupRequired?: boolean }
   const login = await request.post(initialBody.setupRequired ? '/api/app/setup' : '/api/app/login', {
-    headers: { Origin: 'http://127.0.0.1:18801', 'X-CSRF-Token': initialBody.csrfToken },
+    headers: { Origin: `http://127.0.0.1:${process.env.YAOYAO_E2E_PORT || '18801'}`, 'X-CSRF-Token': initialBody.csrfToken },
     data: { username: 'admin', password: E2E_PASSWORD },
   })
   expect(login.ok()).toBe(true)
@@ -50,9 +50,9 @@ test('separates writable Web chats from read-only Hermes history', async ({ page
 })
 
 test('explains optional upstream credentials without blocking a ready connection', async ({ page }, testInfo) => {
-  await page.getByRole('button', { name: /^(打开设置中心|设置与模式)$/ }).first().click()
-  await page.getByRole('menuitem', { name: '设置', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '设置中心' })
+  await page.getByRole('button', { name: /^(打开我的设置|设置与模式)$/ }).first().click()
+  await page.getByRole('menuitem', { name: '我的设置', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '我的设置' })
   await dialog.getByRole('button', { name: 'Hermes 连接', exact: true }).click()
   await expect(dialog.locator('[aria-label="Hermes 连接状态"]')).toBeVisible()
   await expect(dialog.getByText('9119 连接正常', { exact: true })).toBeVisible()
@@ -310,20 +310,20 @@ test.skip('pins the named Agent typing status above the group composer', async (
 test.skip('reconnects the group event stream after an unexpected close', async ({ page }) => {
   await page.getByRole('button', { name: '团队' }).click()
   await expect(page.getByText('已同步', { exact: true })).toBeVisible()
-  const before = await (await page.request.get('http://127.0.0.1:19119/__test/group-connections')).json() as { count: number }
-  await page.request.post('http://127.0.0.1:19119/__test/groups/disconnect')
+  const before = await (await page.request.get(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/group-connections`)).json() as { count: number }
+  await page.request.post(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/groups/disconnect`)
   await expect.poll(async () => {
-    const value = await (await page.request.get('http://127.0.0.1:19119/__test/group-connections')).json() as { count: number }
+    const value = await (await page.request.get(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/group-connections`)).json() as { count: number }
     return value.count
   }, { timeout: 5_000 }).toBeGreaterThan(before.count)
   await expect(page.getByText('已同步', { exact: true })).toBeVisible()
 })
 
 test.skip('recovers the group page after its initial upstream connection fails', async ({ page }) => {
-  await page.request.post('http://127.0.0.1:19119/__test/groups/availability', { data: { available: false } })
+  await page.request.post(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/groups/availability`, { data: { available: false } })
   await page.getByRole('button', { name: '团队' }).click()
   await expect(page.getByRole('heading', { name: '团队服务暂不可用' })).toBeVisible()
-  await page.request.post('http://127.0.0.1:19119/__test/groups/availability', { data: { available: true } })
+  await page.request.post(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/groups/availability`, { data: { available: true } })
   await expect(page.getByRole('heading', { name: '设计验收' })).toBeVisible({ timeout: 5_000 })
 })
 
@@ -543,7 +543,7 @@ test('opens a conversation even when marking it read is unsupported', async ({ p
 })
 
 test('syncs the blue fast-mode shortcut with the iOS-compatible session config', async ({ page }) => {
-  await page.request.post('http://127.0.0.1:19119/__test/rpc-requests/reset')
+  await page.request.post(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/rpc-requests/reset`)
   await page.goto('/chat/session-demo')
   const fast = page.getByRole('button', { name: '快速模式：已关闭' })
   await expect(fast).toHaveAttribute('aria-pressed', 'false')
@@ -556,7 +556,7 @@ test('syncs the blue fast-mode shortcut with the iOS-compatible session config',
   await page.getByRole('button', { name: '发送消息' }).click()
   await expect(page.getByText('这是来自假 Gateway 的流式回复。', { exact: true })).toBeVisible()
 
-  const payload = await (await page.request.get('http://127.0.0.1:19119/__test/rpc-requests')).json() as { requests: Array<{ method: string; params: Record<string, unknown> }> }
+  const payload = await (await page.request.get(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/rpc-requests`)).json() as { requests: Array<{ method: string; params: Record<string, unknown> }> }
   const fastConfigIndex = payload.requests.findIndex(request => request.method === 'config.set' && request.params.key === 'fast')
   const promptIndex = payload.requests.findIndex(request => request.method === 'prompt.submit')
   expect(fastConfigIndex).toBeGreaterThanOrEqual(0)
@@ -566,20 +566,20 @@ test('syncs the blue fast-mode shortcut with the iOS-compatible session config',
   await enabled.click()
   await expect(page.getByRole('button', { name: '快速模式：已关闭' })).toHaveAttribute('aria-pressed', 'false')
   await expect.poll(async () => {
-    const next = await (await page.request.get('http://127.0.0.1:19119/__test/rpc-requests')).json() as typeof payload
+    const next = await (await page.request.get(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/rpc-requests`)).json() as typeof payload
     return next.requests.filter(request => request.method === 'config.set' && request.params.key === 'fast').at(-1)?.params.value
   }).toBe('normal')
 })
 
 test('reconciles an iOS fast-mode selection from the resumed 9119 session', async ({ page }) => {
-  await page.request.post('http://127.0.0.1:19119/__test/rpc-requests/reset')
+  await page.request.post(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/rpc-requests/reset`)
   await page.goto('/chat/session-yaoer?profile=yaoer')
   await expect(page.getByRole('button', { name: '快速模式：已关闭' })).toBeVisible()
   await page.getByRole('textbox', { name: '输入消息，Enter 发送，Shift + Enter 换行' }).fill('读取 iOS 快速模式')
   await page.getByRole('button', { name: '发送消息' }).click()
   await expect(page.getByRole('button', { name: '快速模式：已开启' })).toHaveCSS('color', 'rgb(22, 119, 255)')
 
-  const payload = await (await page.request.get('http://127.0.0.1:19119/__test/rpc-requests')).json() as { requests: Array<{ method: string; params: Record<string, unknown> }> }
+  const payload = await (await page.request.get(`http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}/__test/rpc-requests`)).json() as { requests: Array<{ method: string; params: Record<string, unknown> }> }
   expect(payload.requests.some(request => request.method === 'session.resume' && request.params.session_id === 'session-yaoer')).toBe(true)
   expect(payload.requests.some(request => request.method === 'config.set' && request.params.key === 'fast')).toBe(false)
 })

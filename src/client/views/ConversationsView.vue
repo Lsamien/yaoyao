@@ -932,12 +932,13 @@ onBeforeUnmount(() => {
     @create-agent="openDialog('agent')"
     @create-group="openDialog('group')"
     @create-remote-agent="remotePickerOpen = true"
+    @bot-settings-changed="knowledgeChanged"
   >
     <template #sidebar
-      ><div v-if="knowledgeEnabled" class="knowledge-shortcuts"><button @click="knowledgePanel?.open('projects')">项目</button><button @click="knowledgePanel?.open('user')">用户记忆</button></div><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
+      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <template #mobile-sidebar
-      ><div v-if="knowledgeEnabled" class="knowledge-shortcuts"><button @click="knowledgePanel?.open('projects')">项目</button><button @click="knowledgePanel?.open('user')">用户记忆</button></div><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
+      ><ConversationList :conversations="conversations" :agents="agents" :selected="selected" @select="select" @settings="openConversationSettings" @pin="action('pin', $event)" @archive="action('archive', $event)" @delete="changeLifecycle('delete', $event)"
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">

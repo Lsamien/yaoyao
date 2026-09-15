@@ -1,9 +1,9 @@
 import { randomBytes, scryptSync } from 'node:crypto'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 
-const testHome = '/tmp/hermes-yaoyao-e2e-home'
+const testHome = mkdtempSync('/tmp/hermes-yaoyao-e2e-home-')
 const testUserID = '11111111-1111-4111-8111-111111111112'
-rmSync(testHome, { recursive: true, force: true })
+process.once('exit', () => rmSync(testHome, { recursive: true, force: true }))
 mkdirSync(testHome, { recursive: true, mode: 0o700 })
 
 // The browser fixture exercises the ownership registry, not the mutable
@@ -66,8 +66,8 @@ Object.assign(process.env, {
   NODE_ENV: 'production',
   HERMES_YAOYAO_HOME: testHome,
   HERMES_YAOYAO_HOST: '127.0.0.1',
-  HERMES_YAOYAO_PORT: '18801',
-  HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:19119',
+  HERMES_YAOYAO_PORT: process.env.YAOYAO_E2E_PORT || '18801',
+  HERMES_YAOYAO_UPSTREAM: `http://127.0.0.1:${process.env.FAKE_HERMES_PORT || '19119'}`,
   HERMES_YAOYAO_UPSTREAM_USERNAME: 'test',
   HERMES_YAOYAO_UPSTREAM_PASSWORD: 'test',
 })

@@ -12,14 +12,14 @@
 
 | 标签 | 架构 |
 | --- | --- |
-| `v0.4.20-amd` | `linux/amd64` |
-| `v0.4.20` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
-| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.20` 相同的镜像 |
+| `v0.4.22-amd` | `linux/amd64` |
+| `v0.4.22` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
+| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.22` 相同的镜像 |
 
 ```sh
-docker pull samienluo/yaoyao:v0.4.20
+docker pull samienluo/yaoyao:v0.4.22
 # 需要固定 AMD64 时：
-docker pull samienluo/yaoyao:v0.4.20-amd
+docker pull samienluo/yaoyao:v0.4.22-amd
 ```
 
 每次新版本发布都会更新 `latest`，旧版本标签继续保留。需要固定部署版本时使用具体版本标签。
@@ -34,7 +34,7 @@ cp docker.env.example docker.env
 
 | 配置 | 用途 |
 | --- | --- |
-| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.20` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
+| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.22` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
 | `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址，默认 `http://host.docker.internal:9119` |
 | `HERMES_YAOYAO_BIND_ADDRESS` | Web 的宿主机发布地址，默认 `127.0.0.1`；局域网访问可设为 `0.0.0.0` |
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
@@ -61,6 +61,45 @@ docker compose --env-file docker.env ps
 ```
 
 默认打开 `http://127.0.0.1:15300`。局域网设备使用宿主机 IP 和发布端口访问。首次打开页面创建管理员账号，再到系统设置配置 Hermes 连接凭据。通过域名提供公网访问时，在反向代理上配置 HTTPS，并将域名加入允许列表。
+
+## 映射 Hermes 目录以安装工具桥
+
+可额外加载 `compose.hermes-bridge.yaml`，让“设置 → Hermes 连接 → 工具桥插件”直接检查、安装和修复共享目录中的插件。这个可选文件适用于普通 Web、标准共享桌面和 Cursor 共享桌面三种 Compose 配置。
+
+在 `docker.env` 中填写 **上游 Hermes 实际使用的数据目录** 的宿主机绝对路径。该目录应包含 `config.yaml`，命名 Profile 位于其中的 `profiles/`：
+
+```dotenv
+# Linux 示例；macOS 可填写 /Users/你的用户名/.hermes。
+HERMES_YAOYAO_HERMES_DIR=/srv/hermes-data
+```
+
+普通 Web 使用：
+
+```sh
+docker compose --env-file docker.env -f compose.yaml -f compose.hermes-bridge.yaml config --quiet
+docker compose --env-file docker.env -f compose.yaml -f compose.hermes-bridge.yaml up -d --build web
+```
+
+若使用共享桌面，将上面的第一个 `-f compose.yaml` 换成 `-f compose.desktops.yaml` 或 `-f compose.desktops.cursor.yaml`，保留第二个映射文件。
+
+- 宿主目录以读写方式挂载到容器 `/hermes`，必须已存在；路径写错时不会自动创建一个空 Hermes 目录。
+- 选择与 `HERMES_YAOYAO_UPSTREAM` 对应实例相同的数据目录。远程主机的目录需要先以共享存储等方式提供给 Docker 宿主机。
+- Web 仍使用非 root 用户，默认 UID/GID 为 `1000:1000`。映射目录需要允许该用户读取配置，并写入 `config.yaml`、`plugins/`、`profiles/` 和 `backups/`。权限不匹配时应在宿主机配置对应用户或 ACL；Web 页面会报告读取或安装失败。
+- 镜像自带 Linux Python 3 和 PyYAML。安装器只使用容器 `/usr/bin/python3`，宿主机的 `venv` 和 Hermes 程序不会被执行。
+- 安装前备份插件与配置，先安装默认 Profile 的后台入口，再处理命名 Profile。安装后在 Hermes 所在节点重启服务，再在 Web 点击“重新检查”。
+- 映射不会赋予 Web 管理 Docker 或 Hermes 进程的能力；既有 Compose 桌面数量、隔离设置及生命周期继续按原配置管理。
+
+此功能需要包含本次改动的新镜像；旧的远程镜像标签不会因添加目录映射而自动获得安装功能。可按上述命令从当前源码构建。
+
+自定义部署可使用以下容器环境变量：
+
+| 配置 | 用途 |
+| --- | --- |
+| `HERMES_YAOYAO_BRIDGE_MOUNTED=1` | 明确允许通过映射目录安装工具桥 |
+| `HERMES_YAOYAO_BRIDGE_HOME=/hermes` | 容器内实际挂载路径，必须是绝对路径 |
+| `HERMES_YAOYAO_BRIDGE_PYTHON=/usr/bin/python3` | 容器自身的 Python 路径 |
+
+仅设置目录但没有开启 `BRIDGE_MOUNTED` 时，外部 Hermes 仍只提供状态检查，不开放目录安装。
 
 ## 验证
 
@@ -152,7 +191,7 @@ curl --fail http://127.0.0.1:15300/healthz
 使用 Docker Hub 发布镜像时，在 `docker.env` 设置：
 
 ```dotenv
-HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.20
+HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.22
 YAOYAO_CURSOR_DESKTOP_IMAGE=samienluo/yaoyao-desktop:v0.4.12-cursor-amd
 ```
 

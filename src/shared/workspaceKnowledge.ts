@@ -52,6 +52,10 @@ export interface WorkspaceMemoryJob {
   error?: string
 }
 export interface WorkspacePeerMessage {
+  fromName?: string
+  fromAvatar?: string
+  targetName?: string
+  targetAvatar?: string
   id: string
   chainId: string
   fromAgentId: string

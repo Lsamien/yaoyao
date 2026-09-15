@@ -81,10 +81,20 @@ afterEach(() => {
 })
 
 describe('Settings center dialog', () => {
+  it('shows theme previews and filters settings without changing account scope', async () => {
+    const wrapper = mountSettings({initialPage:'appearance',themePreference:'light'})
+    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('我的设置')
+    expect(wrapper.findAll('.theme-options img')).toHaveLength(3)
+    await wrapper.findAll('[role="radio"]').find(button=>button.text()==='深色')!.trigger('click')
+    expect(wrapper.emitted('set-theme')).toEqual([['dark']])
+    await wrapper.get('input[aria-label="搜索设置"]').setValue('Hermes')
+    expect(wrapper.findAll('.settings-sidebar nav button').map(button=>button.text())).toEqual(['Hermes 连接'])
+    wrapper.unmount()
+  })
   it.each([false, true])('keeps independent tools and About outside settings (Bot mode=%s)', botMode => {
     const wrapper = mountSettings({ botMode, initialPage: 'bot-plugins' })
     const labels = wrapper.findAll('.settings-sidebar nav button').map(button => button.text())
-    for (const label of ['插件', '已连接应用', '自动化', '关于']) expect(labels).not.toContain(label)
+    for (const label of ['插件', '已连接应用', '自动化', '关于', '本地虚拟机']) expect(labels).not.toContain(label)
     expect(wrapper.find('[data-testid="bot-plugins"]').exists()).toBe(false)
     expect(wrapper.find('.bot-about').exists()).toBe(false)
     wrapper.unmount()
@@ -93,9 +103,9 @@ describe('Settings center dialog', () => {
     const wrapper = mountSettings()
 
     expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual([
-      '当前机器人',
-      '账号',
-      '系统 · 仅管理员',
+      '个人',
+      '管理',
+      '基础机器人',
     ])
 
     await navigationButton(wrapper, '模型与 Provider').trigger('click')
@@ -106,13 +116,11 @@ describe('Settings center dialog', () => {
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
-    expect(wrapper.get('.settings-account-summary').text()).toContain('owner')
-    expect(wrapper.get('.settings-account-summary').text()).toContain('当前账号')
-    expect(wrapper.get('.settings-account-summary .account-initial-avatar').text()).toBe('O')
+    expect(wrapper.get('.settings-content__header').text()).toContain('当前账号：owner')
 
     const voiceButton = navigationButton(wrapper, '双流语音')
     expect(voiceButton.text()).toContain('全局')
-    expect(voiceButton.element.closest('section')?.textContent).toContain('系统 · 仅管理员')
+    expect(voiceButton.element.closest('section')?.textContent).toContain('管理')
     await voiceButton.trigger('click')
     expect(wrapper.find('[data-testid="duplex-voice"]').exists()).toBe(true)
     expect(wrapper.get('.settings-content__header').text()).toContain('全局设置 · 仅管理员')
@@ -122,14 +130,14 @@ describe('Settings center dialog', () => {
     const wrapper = mountSettings({ isAdmin: false, initialPage: 'system-update' })
     const navigation = wrapper.get('.settings-sidebar nav')
 
-    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['当前机器人', '账号'])
+    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['个人'])
     expect(navigation.text()).not.toContain('模型与 Provider')
-    expect(navigation.text()).not.toContain('系统 · 仅管理员')
+    expect(navigation.text()).not.toContain('管理')
     expect(navigation.text()).not.toContain('系统概览')
     expect(navigation.text()).not.toContain('双流语音')
     expect(navigation.text()).not.toContain('更新与回滚')
     expect(wrapper.find('[data-testid="system-update"]').exists()).toBe(false)
-    expect(wrapper.get('.settings-content__header').text()).toContain('身份与头像')
+    expect(wrapper.get('.settings-content__header').text()).toContain('账号资料')
   })
 
   it('blocks closing and page changes while the update panel reports a lock', async () => {

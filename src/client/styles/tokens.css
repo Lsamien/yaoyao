@@ -8,6 +8,9 @@
   --surface-raised: #ffffff;
   --surface-soft: #f2f2ef;
   --surface-hover: #ecece8;
+  --settings-panel: #f2f2f4;
+  --settings-sidebar: #fafafa;
+  --settings-selected: #eaeaed;
   --rail-bg: #151515;
   --rail-text: rgba(255, 255, 255, .58);
   --rail-active: #ffffff;
@@ -44,6 +47,9 @@
   --surface-raised: #242423;
   --surface-soft: #282827;
   --surface-hover: #30302e;
+  --settings-panel: #2b2b2e;
+  --settings-sidebar: #202022;
+  --settings-selected: #353538;
   --rail-bg: #0d0d0d;
   --rail-text: rgba(255, 255, 255, .54);
   --rail-active: #ffffff;

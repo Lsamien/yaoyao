@@ -10,11 +10,13 @@ const props = withDefaults(defineProps<{
   open?: boolean
   formId?: string
   showActions?: boolean
+  section?: 'all' | 'profile' | 'security'
 }>(), {
   active: true,
   open: undefined,
   formId: undefined,
   showActions: true,
+  section: 'all',
 })
 
 const emit = defineEmits<{
@@ -171,7 +173,7 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
 </script>
 
 <template>
-  <section class="account-security-panel" aria-label="登录与安全">
+  <section class="account-security-panel" :aria-label="section === 'profile' ? '账号资料' : '登录与安全'">
     <header class="panel-heading">
       <div>
         <p class="panel-eyebrow">当前账号</p>
@@ -181,16 +183,17 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       <span class="account-badge">{{ auth.user?.username || '当前账号' }}</span>
     </header>
 
-    <ServerIdentityPanel v-if="auth.serverIdentity" @dirty-change="serverNameDirty = $event" />
-    <section class="account-avatar-card" aria-label="账号头像">
+    <section v-if="section !== 'security'" class="account-avatar-card" aria-label="账号头像">
       <AccountInitialAvatar :name="auth.user?.username || '当前账号'" :image-url="auth.user?.avatar" :size="64" />
-      <div><strong>账号头像</strong><small>默认显示用户名首字母。头像只在 Web 修改，iOS 会同步显示。</small></div>
+      <div><strong>{{section === 'profile' ? auth.user?.username || '当前账号' : '账号头像'}}</strong><small>头像会同步到你的其他设备。</small></div>
       <button type="button" :disabled="busy || avatarBusy" @click="avatarInput?.click()">{{ avatarBusy ? '正在保存…' : '更换头像' }}</button>
       <button v-if="auth.user?.avatar" type="button" :disabled="busy || avatarBusy" @click="resetAvatar">使用首字母</button>
-      <input ref="avatarInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp" @change="chooseAvatar" />
+      <input ref="avatarInput" class="sr-only" type="file" tabindex="-1" aria-hidden="true" accept="image/png,image/jpeg,image/webp" @change="chooseAvatar" />
     </section>
+    <ServerIdentityPanel v-if="section !== 'security' && auth.serverIdentity" @dirty-change="serverNameDirty = $event" />
+    <p v-if="section === 'profile' && (error || notice)" class="form-message" :class="error ? 'form-message--error' : 'form-message--success'" :role="error ? 'alert' : 'status'">{{error || notice}}</p>
 
-    <form :id="formId" class="security-form" @submit.prevent="save">
+    <form v-if="section !== 'profile'" :id="formId" class="security-form" @submit.prevent="save">
       <h3 v-if="isAdmin" class="security-section-title">账号信息</h3>
       <label v-if="isAdmin" class="field">
         <span>管理员用户名</span>
@@ -235,7 +238,7 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       </footer>
     </form>
 
-    <section class="logout-card" aria-label="退出登录">
+    <section v-if="section !== 'profile'" class="logout-card" aria-label="退出登录">
       <div>
         <strong>退出当前账号</strong>
         <p>只退出这个浏览器中的当前 Web 会话，不会停止服务，也不会影响其他设备。</p>

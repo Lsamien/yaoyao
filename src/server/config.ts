@@ -2,7 +2,7 @@ import { isIP } from 'node:net'
 import { normalizeReleaseSource } from '../../bin/lib/release-source.mjs'
 import { resolveDataHome } from '../../bin/lib/data-home.mjs'
 import { homedir } from 'node:os'
-import { basename, resolve } from 'node:path'
+import { basename, resolve, isAbsolute } from 'node:path'
 import { readFileSync } from 'node:fs'
 import type { APNsEnvironment } from './apns.js'
 import { loadAPNsConfiguration, type APNsConfigurationSnapshot } from './apnsConfiguration.js'
@@ -47,6 +47,7 @@ export interface ServerConfig {
   production: boolean
   superviseDashboard?: boolean
   localVmHost?: 'server' | 'runner'
+  hermesBridgeMount?: { home: string; python: string }
   composeDesktops?: ComposeDesktop[]
   releaseSource?: string
   releaseRoot?: string
@@ -170,6 +171,14 @@ export function loadServerConfig(
   const superviseDashboard = flag(env.HERMES_YAOYAO_SUPERVISE_DASHBOARD)
   const localVmHost = env.HERMES_YAOYAO_LOCAL_VM_HOST?.trim() || 'server'
   if(localVmHost!=='server'&&localVmHost!=='runner')throw new Error('HERMES_YAOYAO_LOCAL_VM_HOST must be server or runner')
+  let hermesBridgeMount: ServerConfig['hermesBridgeMount']
+  if(flag(env.HERMES_YAOYAO_BRIDGE_MOUNTED)){
+    const home=env.HERMES_YAOYAO_BRIDGE_HOME?.trim()??''
+    const python=env.HERMES_YAOYAO_BRIDGE_PYTHON?.trim()||'/usr/bin/python3'
+    if(!home||!isAbsolute(home)||/[\0\r\n]/.test(home))throw new Error('HERMES_YAOYAO_BRIDGE_HOME must be an absolute mounted Hermes directory')
+    if(!isAbsolute(python)||/[\0\r\n]/.test(python))throw new Error('HERMES_YAOYAO_BRIDGE_PYTHON must be an absolute container Python path')
+    hermesBridgeMount={home:resolve(home),python}
+  }
   const chatCacheMode = parseChatCacheMode(env.HERMES_YAOYAO_CHAT_CACHE_MODE)
   const releaseSource = parseReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE)
   const releaseRoot = resolve(env.HERMES_YAOYAO_RELEASE_ROOT?.trim() || `${homedir()}/.local/share/hermes-yaoyao`)
@@ -209,6 +218,7 @@ export function loadServerConfig(
     production,
     superviseDashboard,
     localVmHost,
+    ...(hermesBridgeMount?{hermesBridgeMount}:{}),
     composeDesktops:parseComposeDesktops(env.HERMES_YAOYAO_COMPOSE_DESKTOPS),
     chatCacheMode,
     releaseSource,

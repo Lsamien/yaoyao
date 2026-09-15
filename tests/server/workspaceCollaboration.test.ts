@@ -34,6 +34,30 @@ beforeEach(() => {
 afterEach(() => { runtime.close(); uploads.close(); store.close(); rmSync(home, { recursive: true, force: true }) })
 const bot = (name: string) => store.createAgent(owner, { name, profile: 'default' })
 const direct = (id: string) => store.list<Conversation>(owner, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === id)!
+it('projects real deliveries into compact direction metadata for live events and history without rewriting raw messages', () => {
+  vi.spyOn(runtime, 'wake').mockImplementation(() => {})
+  const a = bot('竹儿'), b = bot('研究员')
+  runtime.send(owner, direct(a.id).id, { requestId: randomUUID(), content: '请核对接口' })
+  const work = store.list<Work>(owner, 'turn')[0]!
+  work.status = 'running'; store.put(owner, 'turn', work.id, work)
+  const events: Message[] = []
+  const unsubscribe = store.observe((_owner, event) => { if (event.type === 'message.changed') events.push(event.data as Message) })
+  const input = { requestId: randomUUID(), agentId: b.id, content: '请核对接口版本，确认旧客户端是否兼容。', fileIds: [] }
+  const peer = runtime.collaboration.send(owner, work.id, input)
+  const deliveries = events.filter(m => m.peerMessageId === peer.id)
+  expect(deliveries.map(m => m.communication?.direction)).toEqual(['incoming', 'outgoing'])
+  expect(deliveries.every(m => m.role === 'system' && m.communication?.content === input.content)).toBe(true)
+  expect(deliveries[0]?.content).toContain('来自 Bot')
+  expect(deliveries[1]?.content).toContain('已向')
+  expect(deliveries[0]?.communication).toMatchObject({ peerId: a.id, peerName: '竹儿' })
+  expect(deliveries[1]?.communication).toMatchObject({ peerId: b.id, peerName: '研究员' })
+  const history = store.messages(owner, direct(a.id).id).find(m => m.peerMessageId === peer.id)!
+  expect(history.communication).toEqual(deliveries[1]?.communication)
+  expect(store.require<Message>(owner, 'message', history.id).content).toContain('已向')
+  const ordinary: Message = { ...history, id: randomUUID(), peerMessageId: undefined, communication: undefined, content: '已向 Bot 发送只是普通文本' }
+  expect(store.messageForDisplay(owner, ordinary).communication).toBeUndefined()
+  unsubscribe()
+})
 it('honors explicit round counts and finishes all eight speakers in twelve rounds', async () => {
   expect(discussionRounds('请讨论一轮')).toBe(1); expect(discussionRounds('请讨论三轮')).toBe(3); expect(discussionRounds('讨论一下')).toBe(2)
   const members = Array.from({ length: 8 }, (_, i) => bot(`成员${i}`))

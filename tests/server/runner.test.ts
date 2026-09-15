@@ -38,7 +38,7 @@ beforeEach(async()=>{
     let body='';for await(const part of req)body+=part
     if(req.url?.endsWith('/bind'))bindings.push(JSON.parse(body))
     res.setHeader('Content-Type','application/json')
-    res.end(JSON.stringify(req.url==='/api/auth/ws-ticket'?{ticket:'fixture'}:req.url==='/api/profiles'?{profiles:['default',{name:'writer'},{name:'secret'}]}:req.url?.endsWith('/capabilities')?{version:1,ready:true,in_process:true,native_tools:true}:{ok:true,native_tools:true,terminal:{cwd:'/fixture/workspace'}}))
+    res.end(JSON.stringify(req.url==='/api/auth/ws-ticket'?{ticket:'fixture'}:req.url==='/api/profiles'?{profiles:['default',{name:'writer'},{name:'secret'}]}:req.url?.endsWith('/capabilities')?{version:1,ready:true,in_process:true,native_tools:true}:{ok:true,native_tools:true,workspace_memory:body?JSON.parse(body).workspace_memory===true:false,terminal:{cwd:'/fixture/workspace'}}))
   })
   const hermesURL=await listen(hermes)
   ws=new WebSocketServer({server:hermes})
@@ -283,4 +283,13 @@ it('keeps only stop operations available on an existing channel after task permi
   await expect(gateway.rpc('prompt.submit',{session_id:session.session_id,text:'forbidden'})).rejects.toMatchObject({code:'runner_command_not_admitted'})
   expect(await gateway.rpc('session.interrupt',{session_id:session.session_id})).toEqual({ok:true})
   expect(rpc.filter(call=>call.method==='prompt.submit')).toHaveLength(0)
+})
+
+
+it('carries workspace memory policy through the Runner to the authenticated Hermes binding',async()=>{
+  const {session}=await channel(),abort=new AbortController()
+  const lease=await createWorkspaceToolLease({target,profile:'default',workId:'memory-work',workspaceMemory:true,
+    session:()=>({runtimeId:session.session_id,storedId:session.stored_session_id}),signal:abort.signal,
+    assertActive:()=>{},catalog:()=>[],call:async()=>({}),onFailure:()=>{}})
+  try{await lease.bind();expect(bindings.at(-1)).toMatchObject({workspace_memory:true})}finally{await lease.dispose()}
 })

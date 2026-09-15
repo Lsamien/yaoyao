@@ -19,7 +19,7 @@ export class ComposeDesktops {
   async call(id:string,operation:string,body:Record<string,unknown>={}):Promise<any>{
     const desktop=this.desktops.find(x=>x.id===id)
     if(!desktop)throw new HttpError(404,'该桌面不在 Compose 配置中','compose_desktop_missing')
-    if(!['health','frame','acquire','renew','release','execute'].includes(operation))throw new HttpError(409,'Compose 管理桌面数量和生命周期','compose_desktop_managed')
+    if(!['health','frame','acquire','renew','release','execute','skills-install'].includes(operation))throw new HttpError(409,'Compose 管理桌面数量和生命周期','compose_desktop_managed')
     return new Promise((resolve,reject)=>{
       const data=JSON.stringify({...body,desktopId:id}),req=request({socketPath:desktop.socketPath,path:`/${operation}`,method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)},timeout:70000},res=>{
         const chunks:Buffer[]=[];let size=0

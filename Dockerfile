@@ -16,6 +16,7 @@ COPY bin ./bin
 COPY deploy ./deploy
 COPY third-party ./third-party
 COPY src ./src
+COPY integrations/hermes-bots-bridge ./integrations/hermes-bots-bridge
 
 RUN npm run build \
   && npm run runner:build \
@@ -34,7 +35,10 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-RUN install -d -o node -g node -m 0700 /home/node/.yaoyao
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-yaml \
+  && rm -rf /var/lib/apt/lists/* \
+  && install -d -o node -g node -m 0700 /home/node/.yaoyao
 
 COPY --chown=node:node package.json package-lock.json release.json ./
 COPY --chown=node:node LICENSE NOTICE THIRD_PARTY_NOTICES.md ./

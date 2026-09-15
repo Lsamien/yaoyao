@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HermesBridgePanel from '@/components/app/HermesBridgePanel.vue'
 import { computed, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -452,6 +453,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
         <label><span>9119 密码</span><input v-model="upstreamPassword" name="upstream-password" type="password" autocomplete="new-password" :disabled="busy" /></label>
         <button class="solid-button" :disabled="busy || !upstreamUsername.trim() || !upstreamPassword">验证并保存</button>
       </form>
+      <HermesBridgePanel v-if="active" :profiles="profiles" />
       <details class="runner-settings" @toggle="runnerSettingsOpen = ($event.target as HTMLDetailsElement).open">
         <summary>执行节点</summary>
         <RunnerSettingsPanel v-if="runnerSettingsOpen" />

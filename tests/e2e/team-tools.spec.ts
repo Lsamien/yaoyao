@@ -204,8 +204,8 @@ test('registers an execution node, downloads its private config and disables it'
   await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass')
   await page.getByRole('button',{name:'登录',exact:true}).click()
   await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
-  await page.getByRole('menuitem',{name:'设置',exact:true}).click()
-  const dialog=page.getByRole('dialog',{name:'设置中心'})
+  await page.getByRole('menuitem',{name:'我的设置',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'我的设置'})
   await dialog.getByRole('button',{name:'Hermes 连接',exact:true}).click()
   await dialog.locator('details.runner-settings summary').click()
   const panel=dialog.getByRole('region',{name:'执行节点设置'})
@@ -256,6 +256,14 @@ test('configures the Agent computer in its chat panel and keeps preparation in a
  await page.screenshot({path:testInfo.outputPath('local-vm-unconfigured-agent.png')})
 })
 
+async function openVmSettings(page:any){
+ await page.locator('.desktop-sidebar').getByRole('button',{name:'工具',exact:true}).click()
+ await page.getByRole('menuitem',{name:'Bot 设置',exact:true}).click()
+ const settings=page.getByRole('dialog',{name:'Bot 设置',exact:true})
+ await settings.getByRole('button',{name:'本地虚拟机',exact:true}).click()
+ return settings
+}
+
 async function login(page:any,ready=false){
  await page.goto('/conversations');await page.getByRole('textbox',{name:'账号',exact:true}).fill('fixture');await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass');await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.desktop-sidebar .sidebar-create-trigger')).toBeVisible()
@@ -263,14 +271,13 @@ async function login(page:any,ready=false){
 }
 test('persists idle-stop settings and the host environment checkbox on desktop and mobile',async({page},testInfo)=>{
  await login(page,true)
- await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click();await page.getByRole('menuitem',{name:'设置',exact:true}).click()
- const settings=page.getByRole('dialog',{name:'设置中心'});await settings.getByRole('button',{name:'本地虚拟机',exact:true}).click()
+ const settings=await openVmSettings(page)
  const timeout=settings.getByRole('combobox',{name:'虚拟机空闲停止时间',exact:true})
  await timeout.selectOption('30');await expect(timeout).toHaveValue('30')
  await timeout.selectOption('0');await expect(settings).toContainText('空闲时保持运行')
  expect((await(await page.request.get('/api/app/admin/local-vm')).json()).idleStopMinutes).toBe(0)
  await timeout.scrollIntoViewIfNeeded();await page.screenshot({path:testInfo.outputPath('idle-stop-settings.png')})
- await settings.getByRole('button',{name:'关闭设置中心',exact:true}).click()
+ await settings.getByRole('button',{name:'关闭Bot 设置',exact:true}).click()
  await page.request.post('/__test/hybrid-runner',{data:{}})
  const seed=await(await page.request.post('/__test/computer?off=1',{data:{}})).json()
  await page.goto(`/conversations/${seed.conversationId}`);await page.getByRole('button',{name:'电脑与定时任务',exact:true}).click()
@@ -323,10 +330,7 @@ test('cloud VM keeps its own selection while the host option can be checked and 
 test('Local VM settings replace the image catalog and prepare the managed desktop',async({page},testInfo)=>{
  await login(page)
  await expect(page.getByRole('button',{name:'电脑与环境',exact:true})).toHaveCount(0)
- await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click()
- await page.getByRole('menuitem',{name:'设置',exact:true}).click()
- const settings=page.getByRole('dialog',{name:'设置中心'})
- await settings.getByRole('button',{name:'本地虚拟机',exact:true}).click()
+ const settings=await openVmSettings(page)
  const panel=settings.getByRole('region',{name:'本地虚拟机设置'})
  await expect(panel).toContainText('隔离方式')
  await expect(panel.getByRole('button',{name:'上传并导入'})).toHaveCount(0)
@@ -334,7 +338,7 @@ test('Local VM settings replace the image catalog and prepare the managed deskto
  await expect(panel).toContainText('虚拟机环境已就绪')
  await panel.getByRole('combobox',{name:'虚拟机数量上限'}).selectOption('3')
  await expect(panel.getByRole('combobox',{name:'虚拟机数量上限'})).toHaveValue('3')
- await panel.getByRole('heading',{name:'本地虚拟机',exact:true}).scrollIntoViewIfNeeded()
+ await panel.scrollIntoViewIfNeeded()
  await page.screenshot({path:testInfo.outputPath('local-vm-settings.png')})
  expect((await page.request.get('/api/app/admin/runners/11111111-1111-4111-8111-111111111111/images')).status()).toBe(404)
 })
@@ -347,9 +351,9 @@ test('Agent computer appears as a right panel and opens an interactive desktop',
  const dock=page.getByRole('complementary',{name:'机器人电脑面板'})
  await expect(dock).toBeVisible();await expect(dock).toContainText('本地虚拟机')
  await dock.getByRole('button',{name:'设置本地虚拟机',exact:true}).click()
- const settings=page.getByRole('dialog',{name:'设置中心'})
+ const settings=page.getByRole('dialog',{name:'Bot 设置'})
  await settings.getByRole('button',{name:'准备所选镜像',exact:true}).click()
- await settings.getByRole('button',{name:'关闭设置中心',exact:true}).click()
+ await settings.getByRole('button',{name:'关闭Bot 设置',exact:true}).click()
  await expect(dock.getByRole('button',{name:/创建.*的虚拟机/})).toBeVisible({timeout:12000})
  await dock.getByRole('button',{name:/创建.*的虚拟机/}).click()
  await expect(dock.getByRole('img')).toBeVisible()

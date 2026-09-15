@@ -50,6 +50,7 @@ async function mountShell(start = '/chat') {
       stubs: {
         SettingsCenterDialog: SettingsCenterDialogStub,
         BotPluginsDialog: defineComponent({emits:['close'],template:'<div data-testid="plugins-dialog"><button @click="$emit(\'close\')">关闭已连接应用</button></div>'}),
+        BotSettingsDialog: defineComponent({props:['initialPage','isAdmin'],emits:['close'],template:'<div data-testid="bot-settings-dialog" :data-page="initialPage"><button @click="$emit(\'close\')">关闭 Bot 设置</button></div>'}),
         UpdateCheckDialog: defineComponent({emits:['close', 'manage'],template:'<div data-testid="update-dialog"><button @click="$emit(\'close\')">关闭检测更新</button><button @click="$emit(\'manage\')">前往更新</button></div>'}),
         AboutDialog: defineComponent({emits:['close'],template:'<div data-testid="about-dialog"><button @click="$emit(\'close\')">关闭关于</button></div>'}),
         AgentAvatar: true,
@@ -119,7 +120,7 @@ describe('Workspace shell account controls', () => {
     expect(settingsTrigger.attributes('aria-label')).toBe('设置与模式')
     await settingsTrigger.trigger('click')
     const actions = document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')
-    expect([...actions].map(button => button.textContent?.trim())).toEqual(['设置', '关于', '检测更新', '帮助', '进入 Bot 模式'])
+    expect([...actions].map(button => button.textContent?.trim())).toEqual(['我的设置', '关于', '检测更新', '帮助', '进入 Bot 模式'])
     actions[0]!.click()
     await wrapper.vm.$nextTick()
     const settings = wrapper.get('[data-testid="settings-center"]')
@@ -167,10 +168,10 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   expect(rail.find('.sidebar-context__heading').exists()).toBe(false)
   await rail.get('.sidebar-account-switcher__main').trigger('click')
   const accountItems = [...document.querySelectorAll<HTMLElement>('.workspace-settings-menu [role="menuitem"]')]
-  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['设置', '关于', '检测更新', '帮助', '进入聊天模式'])
+  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['我的设置', '关于', '检测更新', '帮助', '进入聊天模式'])
   expect(document.querySelector<HTMLAnchorElement>('.workspace-settings-menu a')?.href).toBe('https://yaoyao.samien.cn/')
   accountItems[0]!.click(); await wrapper.vm.$nextTick()
-  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('account-security')
+  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('account-profile')
   await wrapper.get('[data-testid="close-settings"]').trigger('click')
   await rail.get('.sidebar-create-trigger').trigger('click')
   const items = document.querySelectorAll<HTMLButtonElement>('.workspace-create-menu [role="menuitem"]')
@@ -197,16 +198,33 @@ it('shows Bot tools only in Bot mode and restores keyboard focus after closing',
   await trigger.trigger('click')
   const menu = document.querySelector<HTMLElement>('.workspace-tools-menu')!
   const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-  expect(items.map(b => b.textContent?.trim())).toEqual(['自动化', '已连接应用'])
+  expect(items.map(b => b.textContent?.trim())).toEqual(['Bot 设置', '自动化', '已连接应用'])
   expect(document.activeElement).toBe(items[0])
   menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
   expect(document.activeElement).toBe(items[1])
-  items[1]!.click(); await wrapper.vm.$nextTick()
+  items[2]!.click(); await wrapper.vm.$nextTick()
   await flushPromises()
   expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
   expect(wrapper.find('[data-testid="plugins-dialog"]').exists()).toBe(true)
   await wrapper.get('[data-testid="plugins-dialog"] button').trigger('click'); await wrapper.vm.$nextTick()
   expect(document.activeElement).toBe(trigger.element)
+  wrapper.unmount()
+})
+
+it('opens dedicated Bot settings from tools and routes the existing VM shortcut there', async () => {
+  const wrapper = await mountShell('/conversations')
+  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-tools-trigger')
+  await trigger.trigger('click')
+  ;[...document.querySelectorAll<HTMLButtonElement>('.workspace-tools-menu button')].find(b => b.textContent?.trim() === 'Bot 设置')!.click()
+  await flushPromises()
+  expect(wrapper.get('[data-testid="bot-settings-dialog"]').attributes('data-page')).toBe('projects')
+  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
+  await wrapper.get('[data-testid="bot-settings-dialog"] button').trigger('click')
+  expect(document.activeElement).toBe(trigger.element)
+  window.dispatchEvent(new Event('yaoyao:local-vm-settings'))
+  await flushPromises()
+  expect(wrapper.get('[data-testid="bot-settings-dialog"]').attributes('data-page')).toBe('vm')
+  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
   wrapper.unmount()
 })
 

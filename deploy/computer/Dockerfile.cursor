@@ -15,6 +15,7 @@ RUN set -eux; \
     install -d -o cua -g cua -m 0700 /home/cua /home/cua/workspace /run/user/1000; \
     install -d -m 0755 /run/yaoyao-private
 COPY compose_bridge.py /usr/local/libexec/yaoyao/compose_bridge.py
+COPY skill_bundle.py /usr/local/libexec/yaoyao/skill_bundle.py
 COPY cursor-desktop.py /usr/local/libexec/yaoyao/cursor-desktop.py
 COPY cursor-browser.sh /usr/local/bin/yaoyao-browser
 RUN chmod 0755 /usr/local/bin/yaoyao-browser; \

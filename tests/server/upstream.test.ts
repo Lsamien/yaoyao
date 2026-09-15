@@ -27,3 +27,16 @@ describe('upstream request boundary', () => {
     expect(jar.browserCookies[0]).not.toMatch(/Domain=/i)
   })
 })
+
+it('allows the Hermes memory helper to finish within its 90-second budget without changing normal request deadlines',async()=>{
+  vi.useFakeTimers()
+  const fetchImpl=vi.fn<typeof fetch>(()=>new Promise(done=>setTimeout(()=>done(new Response('{"text":"memory"}')),40000)))
+  const client=new UpstreamClient(new URL('http://127.0.0.1:9119'),fetchImpl)
+  try{
+    const normal=client.request('/api/status',new CookieJar()),rejected=expect(normal).rejects.toThrow('request timed out')
+    await vi.advanceTimersByTimeAsync(30001);await rejected
+    const memory=client.request('/api/plugins/yaoyao-bot-bridge/memory-extract',new CookieJar(),{method:'POST',body:{profile:'default',prompt:'facts'}})
+    await vi.advanceTimersByTimeAsync(40001)
+    expect(JSON.parse((await memory).body.toString())).toEqual({text:'memory'})
+  }finally{client.close();vi.clearAllTimers();vi.useRealTimers()}
+})

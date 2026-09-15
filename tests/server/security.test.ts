@@ -152,3 +152,14 @@ describe('server security boundary', () => {
       .toBe('ssh://git@git.example/hermes-yaoyao.git')
   })
 })
+
+it('requires explicit mounted-Hermes opt-in and container-absolute installation paths',()=>{
+  const base={HERMES_YAOYAO_LOCAL_VM_HOST:'runner',HERMES_YAOYAO_UPSTREAM:'http://hermes:9119'}
+  expect(loadServerConfig(isolatedEnv({...base,HERMES_YAOYAO_BRIDGE_HOME:'/hermes'})).hermesBridgeMount).toBeUndefined()
+  const mapped=loadServerConfig(isolatedEnv({...base,HERMES_YAOYAO_BRIDGE_MOUNTED:'1',HERMES_YAOYAO_BRIDGE_HOME:'/hermes'}))
+  expect(mapped.hermesBridgeMount).toEqual({home:'/hermes',python:'/usr/bin/python3'})
+  expect(mapped.localVmHost).toBe('runner');expect(mapped.superviseDashboard).toBe(false)
+  for(const patch of [{HERMES_YAOYAO_BRIDGE_HOME:''},{HERMES_YAOYAO_BRIDGE_HOME:'relative'},{HERMES_YAOYAO_BRIDGE_HOME:'/hermes\nother'},{HERMES_YAOYAO_BRIDGE_PYTHON:'python3'}]){
+    expect(()=>loadServerConfig(isolatedEnv({...base,HERMES_YAOYAO_BRIDGE_MOUNTED:'1',HERMES_YAOYAO_BRIDGE_HOME:'/hermes',...patch}))).toThrow()
+  }
+})

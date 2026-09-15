@@ -238,6 +238,7 @@ export class UpstreamClient {
 
     let response: Response
     let timeout: ReturnType<typeof setTimeout> | undefined
+    const requestTimeout = path === '/api/plugins/yaoyao-bot-bridge/memory-extract' && options.method === 'POST' ? 110_000 : 30_000
     const controller = new AbortController()
     try {
       response = await Promise.race([
@@ -249,7 +250,7 @@ export class UpstreamClient {
           signal: controller.signal,
         }),
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => { controller.abort(); reject(new Error('request timed out')) }, 30_000)
+          timeout = setTimeout(() => { controller.abort(); reject(new Error('request timed out')) }, requestTimeout)
           timeout.unref()
         }),
       ])

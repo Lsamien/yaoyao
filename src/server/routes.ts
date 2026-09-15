@@ -54,6 +54,7 @@ import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
+  hermesBridge: import('./hermesBridge.js').HermesBridgeManager
   onChatListChanged?: (owner:string,profile:string,id:string)=>void
   onServerIdentityChanged?: (identity: ServerIdentity) => void
   onUserAccessChanged?: (owner: string) => Promise<void>
@@ -1769,6 +1770,14 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       error,
       webNetworkScope: isLoopbackHost(dependencies.config.host) ? 'local' : 'network',
     })
+  })
+  router.get('/api/app/admin/hermes-bridge', async ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx,200,await dependencies.hermesBridge.status())
+  })
+  router.post('/api/app/admin/hermes-bridge/install', async ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx,200,await dependencies.hermesBridge.install(body(ctx)))
   })
   router.get('/api/app/admin/model-services', async (ctx) => {
     await proxyAdminFeature(ctx, dependencies, '/api/providers/custom-endpoints', {
