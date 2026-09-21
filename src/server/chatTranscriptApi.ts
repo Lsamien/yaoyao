@@ -67,8 +67,13 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','X-Accel-Buffering':'no'})
     res.flushHeaders();res.once('close',close);res.once('error',close)
     off=transcripts.subscribe(changed)
-    flush();write(`event: ready\ndata: ${JSON.stringify({epoch,cursor})}\n\n`)
-    heartbeat=setInterval(()=>{if(valid())write(': heartbeat\n\n');else close()},15_000);heartbeat.unref()
+    const control=()=>({epoch,cursor:transcripts.cursor(owner,profile,id),...transcripts.control(owner,profile,id)})
+    flush();write(`event: ready\ndata: ${JSON.stringify(control())}\n\n`)
+    heartbeat=setInterval(()=>{
+      if(!valid()){close();return}
+      if(transcripts.epochFor(owner,profile,id)!==epoch){write('event: reset\ndata: {}\n\n');close();return}
+      write(`event: state\ndata: ${JSON.stringify(control())}\n\n`)
+    },5_000);heartbeat.unref()
   })
   return router
 }

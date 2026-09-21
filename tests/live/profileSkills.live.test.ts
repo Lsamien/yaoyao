@@ -24,7 +24,7 @@ it.skipIf(!enabled).each(['local','compose'])('shares real native Profile skills
   await writeFile(join(home,'skills','source-proof','scripts','proof.py'),'print("source-skill-proof")\n')
   try{
     if(mode==='compose'){
-      await docker(['run','-d','--name',fixture,'--network','none','--shm-size','512m','--memory','2g','--cap-drop','ALL','--cap-add','SETUID','--cap-add','SETGID','--cap-add','CHOWN','--cap-add','KILL','--security-opt','no-new-privileges:true',
+      await docker(['run','-d','--name',fixture,'--network','none','--shm-size','512m','--memory','2g','--cap-drop','ALL','--cap-add','SETUID','--cap-add','SETGID','--cap-add','CHOWN','--cap-add','KILL',
         '--env','YAOYAO_COMPOSE_DESKTOP_ID='+id,'--mount',`type=bind,src=${resolve('deploy/computer')},dst=/usr/local/libexec/yaoyao,readonly`,
         '--mount',`type=volume,src=${ipc},dst=/run/yaoyao-private/bridge`,'--mount',`type=volume,src=${ipc},dst=/run/skill-test`,
         '--mount',`type=volume,src=${workspace},dst=/home/cua/workspace`,image])

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { authorizeFileRead, readFileAccess, saveFileAccess } from '../../src/server/fileAccess'
-import { serverFilePath, serverFileUrl } from '../../src/shared/serverFiles'
+import { isSupportedFilePath, serverFilePath, serverFileUrl } from '../../src/shared/serverFiles'
 import type { ServerConfig } from '../../src/server/config'
 import type { UpstreamServiceSession } from '../../src/server/localAuth'
 
@@ -72,7 +72,12 @@ describe('server-owned file permissions', () => {
       expect(url.searchParams.get('profile')).toBe('beta')
     }
     expect(serverFileUrl('/api/app/files/id/preview')).toBeUndefined()
+    expect(serverFileUrl('/files/report.pdf')).toBeUndefined()
+    expect(serverFileUrl('/history/report.pdf')).toBeUndefined()
     expect(serverFileUrl('https://example.com/a.png')).toBeUndefined()
     expect(serverFilePath('/tmp/100%25.png', false)).toBe('/tmp/100%25.png')
+    expect(isSupportedFilePath('/tmp/report.docx')).toBe(true)
+    expect(isSupportedFilePath('/tmp/no-extension')).toBe(false)
+    expect(isSupportedFilePath('/tmp/archive.exe')).toBe(false)
   })
 })

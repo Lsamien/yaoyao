@@ -13,6 +13,7 @@ import type { UpstreamRequestOptions, UpstreamResponse } from './upstream.js'
 import type { LeaseInput, WorkspaceToolLease } from './workspaceToolLease.js'
 import { RUNNER_PROTOCOL, type RunnerCommand, type RunnerRecord } from '../shared/runner.js'
 import {ComposeDesktops} from './composeDesktops.js'
+import {readHostTools} from './hostToolSettings.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const runnerBundle=()=>[resolve(dirname(fileURLToPath(import.meta.url)),'runner-bundle.tar.gz'),resolve(dirname(fileURLToPath(import.meta.url)),'../../runner-bundle.tar.gz')].find(existsSync)
@@ -37,6 +38,8 @@ export class RunnerHub {
   private artifacts=new Map<string,{runnerId:string;connectionId:string;name:string;size:number;digest:string;chunks:Buffer[];bytes:number;next:number;result?:unknown}>()
   private leases = new Map<string,Lease>()
   private watchdog: ReturnType<typeof setInterval>
+  /** Origin of the server Hermes. Satellite configs must use this, never loopback. */
+  hermesUpstream=''
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly local:GatewayTarget) {
     for (const grant of store.list<{ owner: string; runnerId: string; expiresAt: number }>('_system', 'local-vm-grant'))
       if (grant.expiresAt > Date.now()) this.localVmActivity.set(`${grant.owner}:${grant.runnerId}`, { owner: grant.owner, runnerId: grant.runnerId })
@@ -101,7 +104,8 @@ export class RunnerHub {
     if(!this.online.has(id))return Promise.reject(new HttpError(503,'执行节点未连接','runner_offline'))
     const queue=this.pending.get(id)??new Map<string,Pending>();this.pending.set(id,queue)
     if(queue.size>=64)return Promise.reject(new HttpError(429,'执行节点请求过多','runner_busy'))
-    const timeout = kind === 'http' && payload.path === '/api/plugins/yaoyao-bot-bridge/memory-extract' ? 120000 : 30000
+    // Allow Hermes' 60-second binding budget plus transport overhead.
+    const timeout = kind === 'lease.bind' ? 70000 : kind === 'http' && payload.path === '/api/plugins/yaoyao-bot-bridge/memory-extract' ? 120000 : 30000
     const command:RunnerCommand={id:randomUUID(),kind,payload,expiresAt:Date.now()+timeout}
     const bytes=Buffer.byteLength(JSON.stringify(command))
     if(bytes>36*1024*1024)return Promise.reject(new HttpError(413,'执行命令超过传输限制','runner_payload_limit'))
@@ -146,7 +150,7 @@ export class RunnerHub {
       return {status:result.status,headers:new Headers(result.headers),body:Buffer.from(result.body,'base64')}
     }
     return {url:this.local.url,client:this.local.client,session:{request:requestHTTP,webSocketCredential:async()=>{throw new Error('Runner uses its own authenticated gateway')}},
-      runner:{id:record.id,computer:!!computer,hermesComputer:!!computer&&this.online.get(record.id)?.features.includes('hermes-computer-v2')===true,helperRetirement:this.online.get(record.id)?.features.includes('helper-retirement-v1')===true,
+      runner:{id:record.id,computer:!!computer,hermesComputer:!!computer&&this.online.get(record.id)?.features.includes('hermes-computer-v2')===true,helperRetirement:this.online.get(record.id)?.features.includes('helper-retirement-v1')===true,fileTransfer:this.online.get(record.id)?.features.includes('file-transfer-v1')===true,
         open:async(onEvent,onDisconnect,scope)=>{
           requireComputer()
           if(computer&&!scope)throw new HttpError(403,'隔离执行缺少任务授权','computer_scope_required')
@@ -156,7 +160,7 @@ export class RunnerHub {
               scope?.authorize()
               if(computer&&!scope?.cleanupOnly){
                 const agent=this.store.get<import('../shared/workspace.js').WorkspaceAgent>(owner,'agent',computer.agentId)
-                if(!agent||(agent.vmExecution==='profile')!==(computer.profileSession===true))return false
+                if(!agent)return false
               }
               if(computer?.hostAccess){
                 const agent=this.store.get<import('../shared/workspace.js').WorkspaceAgent>(owner,'agent',computer.agentId)
@@ -171,6 +175,7 @@ export class RunnerHub {
           return {rpc:async(method,params)=>{
             if(closed)throw new Error('Runner gateway closed')
             const cleanup=['session.interrupt','session.close'].includes(method)
+            if(method==='computer.transfer'&&!this.online.get(record.id)?.features.includes('file-transfer-v1'))throw new HttpError(409,'请更新 Runner 以使用虚拟机文件传输','computer_transfer_upgrade_required')
             if(scope?.cleanupOnly&&(!['session.resume','session.interrupt','session.close'].includes(method)||(method==='session.resume'&&params.session_id!==scope.sessionId)))throw new HttpError(403,'清理通道只能操作原绑定会话','runner_cleanup_forbidden')
             if(!cleanup&&!valid())throw new HttpError(403,'本轮执行授权已失效','runner_command_not_admitted')
             if(!scope?.cleanupOnly&&(method==='session.create'||method==='session.resume'))requireProfile(String(params.profile??'default'))
@@ -199,7 +204,10 @@ export class RunnerHub {
   }
   computerRunner(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent){
     const record=this.records().find(record=>record.enabled&&record.sourceNodeId===agent.nodeId&&(record.sourceOwner==='_system'||record.sourceOwner===owner))
-    if(!record||!this.online.get(record.id)?.features.includes('computer-control-v1'))throw new HttpError(409,'执行节点不支持电脑查看与控制，请更新 Runner','computer_control_unavailable')
+    if(!record)throw new HttpError(409,'本地虚拟机执行节点尚未启用，请在本地虚拟机设置中完成配置','computer_control_unavailable')
+    const online=this.online.get(record.id)
+    if(!online)throw new HttpError(503,'本地虚拟机执行节点未连接，请检查 Runner 是否运行','runner_offline')
+    if(!online.features.includes('computer-control-v1'))throw new HttpError(409,'本地虚拟机执行节点不支持电脑查看与控制，请启用隔离电脑 Worker 或更新 Runner','computer_control_unavailable')
     if(this.composeDesktops.desktops.length&&!this.online.get(record.id)?.features.includes('compose-desktops-v1'))throw new HttpError(409,'当前部署需要 Compose 桌面执行节点','compose_runner_required')
     if(!record.allowedProfiles.includes(agent.profile)||!this.auth.canUseSource(owner,agent.nodeId,agent.profile))throw new HttpError(403,'电脑 Profile 未授权','computer_profile_forbidden')
     return record
@@ -224,7 +232,7 @@ export class RunnerHub {
   }
   adminRouter():Router {
     const router=new Router()
-    router.get('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body={protocol:RUNNER_PROTOCOL,fixedDesktops:this.composeDesktops.desktops.length>0,bundleAvailable:!!runnerBundle(),runners:this.records().map(r=>this.summary(r)),sources:[{id:'local',name:'本地来源'},...this.store.list<import('./workspaceGateway.js').WorkspaceNode>(actor.id,'node').filter(n=>n.transport!=='paired-web').map(n=>({id:n.id,name:n.name}))]}})
+    router.get('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body={protocol:RUNNER_PROTOCOL,hermesUpstream:this.hermesUpstream,fixedDesktops:this.composeDesktops.desktops.length>0,bundleAvailable:!!runnerBundle(),runners:this.records().map(r=>this.summary(r)),sources:[{id:'local',name:'本地来源'},...this.store.list<import('./workspaceGateway.js').WorkspaceNode>(actor.id,'node').filter(n=>n.transport!=='paired-web').map(n=>({id:n.id,name:n.name}))]}})
     router.get('/api/app/admin/runners/bundle',ctx=>{this.auth.requireAdmin(ctx);const path=runnerBundle();if(!path)throw new HttpError(404,'当前服务未打包执行节点程序，请使用配套 App 或从源码构建 Runner','runner_bundle_missing');ctx.set('Cache-Control','no-store');ctx.attachment('yaoyao-runner.tar.gz');ctx.type='application/gzip';ctx.body=createReadStream(path)})
     router.post('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body=this.enroll(actor.id,(ctx.request as any).body);ctx.status=201})
     router.delete('/api/app/admin/runners/:id',ctx=>{this.auth.requireAdmin(ctx);this.remove(ctx.params.id);ctx.body={ok:true}})
@@ -249,7 +257,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')
@@ -314,7 +322,7 @@ export class RunnerHub {
         }
         ctx.body={ok:true,next:upload!.next,result:upload!.result};return
       }
-      if(match[2]==='check'){const connection=this.connections.get(body.connectionId);ctx.body={allowed:connection?.runnerId===record.id&&connection.valid()};return}
+      if(match[2]==='check'){const connection=this.connections.get(body.connectionId);ctx.body={allowed:connection?.runnerId===record.id&&connection.valid(),fileTransferMaxBytes:readHostTools(this.store.home).fileTransferMaxMiB*1024*1024};return}
       if(match[2]==='admit') {
         const pending=this.pending.get(record.id)?.get(body.id),command=pending?.command
         let allowed=!!command&&command.expiresAt>Date.now()&&pending!.valid()

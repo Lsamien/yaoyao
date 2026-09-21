@@ -32,6 +32,7 @@ export interface GatewayTarget {
     computer?:boolean
     hermesComputer?:boolean
     helperRetirement?:boolean
+    fileTransfer?:boolean
     open(onEvent:(frame:GatewayFrame)=>void,onDisconnect:()=>void,scope?:GatewayExecutionScope):Promise<{rpc(method:string,params:Record<string,unknown>):Promise<any>;close():void}>
     lease(input:import('./workspaceToolLease.js').LeaseInput):Promise<import('./workspaceToolLease.js').WorkspaceToolLease>
   }
@@ -83,23 +84,13 @@ export class WorkspaceNodes {
     ) as T
   }
   target(owner: string, id: string): GatewayTarget {
-    const runner=this.runnerTarget?.(owner,id)
-    if(runner)return runner
+    // Model sessions always use the configured Hermes server. Runners execute tools only.
     if (id === 'local') return this.local
     const node = this.store.require<WorkspaceNode>(owner, 'node', id),
       key = `${owner}:${id}`
     let target = this.targets.get(key)
     if (!target) {
-      if (node.transport === 'paired-web') {
-        const { token } = this.open<{ token: string }>(node.secret)
-        const url = new URL(`node/${node.deviceId}`, node.url), client = new UpstreamClient(url, this.local.client.fetchImpl)
-        target = { url, client, pairedToken: token, session: {
-          request: (path, options = {}) => client.request(path, new CookieJar(), { ...options, headers: { ...options.headers, Authorization: `Bearer ${token}` } }),
-          webSocketCredential: async () => { throw new Error('Paired Web nodes use HTTP+SSE') },
-        } }
-        this.targets.set(key, target)
-        return target
-      }
+      if (node.transport === 'paired-web') throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
       const credentials = this.open<{ username: string; password: string }>(node.secret)
       const url = new URL(node.url),
         client = new UpstreamClient(url)
@@ -111,12 +102,13 @@ export class WorkspaceNodes {
   targetForAgent(owner: string, agent: { id?:string;nodeId: string; remoteAgentId?: string;execution?:string;computer?:WorkspaceAgent['computer'];allowHostEnvironment?:boolean;vmExecution?:WorkspaceAgent['vmExecution'];temporaryGoalId?:string;helperRunnerId?:string;computerEnvironmentId?:string }): GatewayTarget {
     if(agent.execution==='computer'){
       if(!agent.id||agent.remoteAgentId)throw new HttpError(409,'隔离电脑需要当前服务器管理的机器人','computer_agent_required')
-      const target=this.runnerTarget?.(owner,agent.nodeId,{environmentId:agent.computerEnvironmentId??agent.id,agentId:agent.id,ownerKey:createHash('sha256').update(owner).digest('hex'),...(agent.vmExecution==='profile'&&!agent.temporaryGoalId?{profileSession:true}:{}),...(agent.allowHostEnvironment===true&&(agent.computer==='vm'||!agent.computer)&&!agent.temporaryGoalId?{hostAccess:true}:{})})
+      const target=this.runnerTarget?.(owner,agent.nodeId,{environmentId:agent.computerEnvironmentId??agent.id,agentId:agent.id,ownerKey:createHash('sha256').update(owner).digest('hex')})
       if(agent.computerEnvironmentId&&this.store.require<import('./sharedComputers.js').SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId).runnerId!==target?.runner?.id)throw new HttpError(409,'共享电脑的原执行节点已变化，请先恢复原节点','shared_runner_changed')
       if(agent.helperRunnerId&&target?.runner?.id!==agent.helperRunnerId)throw new HttpError(409,'临时助手的原执行节点已变化，请创建新助手','helper_runner_changed')
       if(!target)throw new HttpError(409,'隔离电脑需要连接执行节点','computer_runner_required')
       return target
     }
+    if (agent.remoteAgentId) throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
     const base = this.target(owner, agent.nodeId)
     if (!agent.remoteAgentId) return base
     if (!base.pairedToken) throw new HttpError(409, '引用远端机器人需要扫码子节点', 'paired_node_required')

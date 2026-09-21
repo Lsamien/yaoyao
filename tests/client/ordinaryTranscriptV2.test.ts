@@ -109,4 +109,42 @@ describe('ordinary v2 durable Web replica', () => {
       vi.unstubAllGlobals()
     }
   })
+  it('reconciles a stale running checkpoint from the authoritative SSE ready state', async () => {
+    const { client, changed } = setup()
+    const saved = { ...fixture.snapshot, running: true, queued: false, liveStatus: '正在思考' }
+    client.restore(saved)
+    const fetchMock = vi.fn((_url: unknown, options: RequestInit) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const frame = `event: ready\ndata: ${JSON.stringify({
+            epoch: 'fixture-epoch',
+            cursor: fixture.snapshot.cursor,
+            running: false,
+            queued: false,
+            pendingApproval: null,
+            pendingClarification: null,
+            liveStatus: null,
+            error: null,
+          })}\n\n`
+          controller.enqueue(new TextEncoder().encode(frame))
+          options.signal?.addEventListener('abort', () => controller.close(), { once: true })
+        },
+      })
+      return Promise.resolve(new Response(stream, { status: 200 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const running = client.run()
+    try {
+      await vi.waitFor(() => expect(changed.mock.lastCall![0]).toMatchObject({
+        cursor: fixture.snapshot.cursor,
+        running: false,
+        queued: false,
+        liveStatus: null,
+      }))
+    } finally {
+      client.close()
+      await running
+      vi.unstubAllGlobals()
+    }
+  })
 })

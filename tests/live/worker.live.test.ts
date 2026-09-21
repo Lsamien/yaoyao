@@ -179,7 +179,7 @@ it.skipIf(!process.env.YAOYAO_HERMES_PYTHON||!process.env.YAOYAO_COMPUTER_IMAGE)
     const managed=app.workspaceRuntime.send(owner,managerChat.id,{requestId:randomUUID(),content:'fixture:team'})
     await expect.poll(()=>app.workspace.require<any>(owner,'run',managed.id).status,{timeout:45000}).toMatch(/complete|failed/)
     expect(app.workspace.require<any>(owner,'run',managed.id).status,JSON.stringify(app.workspace.messages(owner,managerChat.id))).toBe('complete')
-    expect(app.workspace.list<any>(owner,'agent').find(agent=>agent.name==='隔离创建成员')).toMatchObject({execution:'computer',canManageTeam:false,createdByAgentId:manager.id})
+    expect(app.workspace.list<any>(owner,'agent').find(agent=>agent.name==='隔离创建成员')).toMatchObject({execution:'computer',canManageTeam:true,createdByAgentId:manager.id})
     const group=app.workspace.createGroup(owner,{name:'临时助手验收团队',memberIds:[manager.id,worker.id],administratorId:manager.id})
     const task=app.workspace.tasks(owner,group.id)[0]!
     const goal=app.workspaceRuntime.tasks.begin(owner,task,manager,'临时助手必须完成隔离工作并回传文件',{conversationId:managerChat.id,runId:managed.id,agentId:manager.id})

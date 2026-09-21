@@ -37,6 +37,15 @@ export interface WorkspaceMemoryRevision {
   before?: WorkspaceMemory
   after?: WorkspaceMemory
 }
+export type MemorySkipReason = 'source_missing' | 'quote_mismatch' | 'sensitive_content' | 'project_unbound' | 'user_not_explicit' | 'forgotten'
+export interface WorkspaceMemoryJobResult {
+  extractedCount: number
+  writtenCount: number
+  duplicateCount: number
+  /** Writes acknowledged by an earlier attempt of this same request. */
+  replayedCount: number
+  skippedReasons: Partial<Record<MemorySkipReason, number>>
+}
 export interface WorkspaceMemoryJob {
   id: string
   agentId: string
@@ -50,6 +59,8 @@ export interface WorkspaceMemoryJob {
   createdAt: number
   updatedAt: number
   error?: string
+  /** Latest attempt's counts. Absent on historical jobs; complete alone never proves a save. */
+  result?: WorkspaceMemoryJobResult
 }
 export interface WorkspacePeerMessage {
   fromName?: string

@@ -288,15 +288,21 @@ export function normalizeChatMessage(value: unknown, sessionId: string, fallback
   const source = record(value)
   const contentValue = pick(source, 'content', 'text', 'output')
   let content = typeof contentValue === 'string' ? contentValue : ''
+  let contentParts: ChatMessage['contentParts']
   let attachments: ChatAttachment[] = values(pick(source, 'attachments', 'files')).map(normalizeAttachment)
   if (Array.isArray(contentValue)) {
+    contentParts = []
     const textBlocks: string[] = []
     const attachmentBlocks: ChatAttachment[] = []
     contentValue.forEach((blockValue, index) => {
       const block = record(blockValue)
       const type = string(block.type)
-      if (type === 'text') textBlocks.push(string(block.text))
-      if (type === 'image' || type === 'file') attachmentBlocks.push(normalizeAttachment(block, index))
+      if (type === 'text') { textBlocks.push(string(block.text)); contentParts!.push({ text: string(block.text) }) }
+      if (type === 'image' || type === 'file') {
+        const attachment = normalizeAttachment(block, index)
+        attachmentBlocks.push(attachment)
+        contentParts!.push({ attachmentId: attachment.id })
+      }
     })
     content = textBlocks.filter(Boolean).join('\n\n')
     attachments = [...attachments, ...attachmentBlocks]
@@ -321,6 +327,7 @@ export function normalizeChatMessage(value: unknown, sessionId: string, fallback
     profile: string(source.profile, fallbackProfile) || undefined,
     role,
     content,
+    contentParts,
     reasoning: string(pick(source, 'reasoning', 'thinking', 'reasoning_content', 'reasoningContent')) || undefined,
     timestamp: number(pick(source, 'timestamp', 'created_at', 'createdAt', 'updated_at', 'updatedAt'), Date.now() / 1000),
     sequence: number(pick(source, 'seq', 'sequence')) || undefined,

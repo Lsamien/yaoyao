@@ -16,7 +16,7 @@ const schedule=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('daily'),timezone,time:clock}).strict(),
   z.object({kind:z.literal('weekly'),timezone,time:clock,weekdays:z.array(z.number().int().min(0).max(6)).min(1).max(7)}).strict(),
 ])
-const input=z.object({name:z.string().trim().min(1).max(100),prompt:z.string().trim().min(1).max(24000),enabled:z.boolean(),schedule}).strict()
+const input=z.object({name:z.string().trim().min(1).max(100),prompt:z.string().trim().min(1).max(24000),enabled:z.boolean(),deviceHost:z.union([z.literal('local'),z.string().uuid()]).nullish(),schedule}).strict()
 export function nextRoutineAt(s:WorkspaceSchedule,after:number):number|undefined {
   if(s.kind==='once')return s.at!>after?s.at:undefined
   if(s.kind==='interval')return after+s.everyMinutes!*60000
@@ -29,6 +29,7 @@ export function nextRoutineAt(s:WorkspaceSchedule,after:number):number|undefined
 }
 const terminal=(status:string)=>['complete','failed','interrupted','skipped'].includes(status)
 export class WorkspaceRoutines {
+  paused:()=>boolean=()=>false
   private timer?:ReturnType<typeof setInterval>;private ticking=false;private closed=false
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly runtime:WorkspaceRuntime){}
   private agent(owner:string,id:string){const agent=this.store.require<WorkspaceAgent>(owner,'agent',id);if(agent.archived||agent.temporaryGoalId||agent.remoteAgentId)throw new HttpError(409,'此机器人不能建立定时任务','routine_agent_unavailable');this.nodes.requireSource(owner,agent);return agent}
@@ -37,7 +38,7 @@ export class WorkspaceRoutines {
     if(old&&old.agentId!==agentId)throw new HttpError(404,'定时任务不存在','not_found')
     const now=Date.now(),unchanged=!!old&&old.enabled===value.enabled&&JSON.stringify(parse(schedule,old.schedule))===JSON.stringify(value.schedule),nextAt=unchanged?old!.nextAt:value.enabled?nextRoutineAt(value.schedule,now):undefined
     if(value.enabled&&!nextAt)throw new HttpError(400,'请选择未来的执行时间','routine_time_invalid')
-    const routine:WorkspaceRoutine={...value,id,agentId,nextAt,createdAt:old?.createdAt??now,updatedAt:now,lastAt:old?.lastAt}
+    const routine:WorkspaceRoutine={...value,deviceHost:value.deviceHost===undefined?old?.deviceHost:value.deviceHost??undefined,id,agentId,nextAt,createdAt:old?.createdAt??now,updatedAt:now,lastAt:old?.lastAt}
     this.store.put(owner,'routine',id,routine);this.store.event(owner,'routine.changed',routine);return routine
   }
   runs(owner:string,agentId:string){return this.store.list<WorkspaceRoutineRun>(owner,'routine-run').filter(r=>r.agentId===agentId).map(r=>{
@@ -52,7 +53,7 @@ export class WorkspaceRoutines {
         if(this.store.list<WorkspaceRoutineRun>(owner,'routine-run').some(r=>r.routineId===routine.id&&!terminal((r.runId?this.store.get<WorkspaceRun>(owner,'run',r.runId)?.status:undefined)??r.status)))throw new HttpError(409,'上次定时任务仍在执行，本次已跳过','routine_overlap')
         const conversation=this.store.list<WorkspaceConversation>(owner,'conversation').find(c=>c.kind==='direct'&&!c.archived&&c.memberIds[0]===routine.agentId)
         if(!conversation)throw new HttpError(409,'机器人的聊天已归档或删除','routine_conversation_unavailable')
-        const run=this.runtime.send(owner,conversation.id,{requestId:id,content:routine.prompt})
+        const run=this.runtime.send(owner,conversation.id,{requestId:id,content:routine.prompt,deviceHost:routine.deviceHost})
         Object.assign(entry,{runId:run.id,conversationId:conversation.id})
       }catch(error){entry.status=error instanceof HttpError&&error.code==='routine_overlap'?'skipped':'failed';entry.error=error instanceof Error?error.message:'定时任务未能启动'}
       this.store.put(owner,'routine-run',id,entry)
@@ -62,7 +63,7 @@ export class WorkspaceRoutines {
     }))
   }
   tick(now=Date.now()){
-    if(this.closed||this.ticking)return;this.ticking=true
+    if(this.closed||this.ticking||this.paused())return;this.ticking=true
     try {for(const owner of this.store.owners())for(const routine of this.store.list<WorkspaceRoutine>(owner,'routine')){
       if(!routine.enabled||!routine.nextAt||routine.nextAt>now)continue
       this.store.atomic(()=>{

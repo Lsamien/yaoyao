@@ -57,6 +57,18 @@ export interface TranscriptSnapshot {
   liveStatus?: string | null
   error?: string | null
 }
+export interface TranscriptControlState {
+  running: boolean
+  queued: boolean
+  pendingApproval: Record<string, unknown> | null
+  pendingClarification: Record<string, unknown> | null
+  liveStatus: string | null
+  error: string | null
+}
+export interface TranscriptControlEvent extends TranscriptControlState {
+  epoch: string
+  cursor: number
+}
 export class TranscriptGap extends Error {
   constructor() {
     super('普通聊天消息版本不连续，需要重新同步')

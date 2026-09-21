@@ -25,13 +25,46 @@ describe('ordinary tool lifecycle and authoritative history', () => {
     expect(buildMessageTimelineRows(chatMessagesToUi(current.messages)).filter(row => row.kind === 'trace').map(row => row.status)).toEqual(['success'])
   })
 
-  it.each(['message.complete', 'error'])('settles every unfinished tool on %s without inventing success', type => {
+  it.each(['error', 'run.failed'])('settles every unfinished tool on %s without inventing success', type => {
     let current = state()
     for (const [event, payload] of [['message.start', {}], ['tool.start', { tool_id: 'call', name: 'terminal' }], ['message.interim', { text: '稍等' }], [type, { text: '结束' }]] as Array<[string, any]>)
       current = applyChatEvent(current, { type: event, payload })
     expect(current.messages.some(message => message.isStreaming)).toBe(false)
     expect(current.messages.flatMap(message => message.toolCalls ?? []).map(tool => tool.status)).toEqual(['interrupted'])
     expect(settleChatMessages(current.messages)).toEqual(current.messages)
+  })
+
+  it('keeps a successful terminal turn active until file output tools finish', () => {
+    let current = state()
+    for (const [event, payload] of [
+      ['message.start', {}],
+      ['tool.start', { tool_id: 'file', name: 'write_file' }],
+      ['message.complete', { text: '文件准备中', status: 'complete' }],
+      ['tool.generating', { tool_id: 'file', name: 'write_file' }],
+    ] as Array<[string, any]>) {
+      current = applyChatEvent(current, { type: event, payload })
+    }
+    expect(current.isStreaming).toBe(true)
+    expect(current.messages.flatMap(message => message.toolCalls ?? []).map(tool => tool.status)).toEqual(['running'])
+    expect(current.messages.some(message => message.isStreaming)).toBe(false)
+
+    current = applyChatEvent(current, { type: 'tool.completed', payload: { tool_id: 'file', name: 'write_file', result: { ok: true } } })
+    expect(current.isStreaming).toBe(false)
+    expect(current.messages.flatMap(message => message.toolCalls ?? []).map(tool => tool.status)).toEqual(['completed'])
+  })
+
+  it('reattaches a file tool that is first reported after the terminal message', () => {
+    let current = state()
+    current = applyChatEvent(current, { type: 'message.start', payload: {} })
+    current = applyChatEvent(current, { type: 'message.complete', payload: { text: '正在准备文件', status: 'complete' } })
+    expect(current.isStreaming).toBe(false)
+
+    current = applyChatEvent(current, { type: 'tool.started', payload: { tool_id: 'late-file', name: 'write_file' } })
+    expect(current.isStreaming).toBe(true)
+    expect(current.messages.at(-1)?.toolCalls?.map(tool => tool.status)).toEqual(['running'])
+
+    current = applyChatEvent(current, { type: 'tool.completed', payload: { tool_id: 'late-file', name: 'write_file', result: { ok: true } } })
+    expect(current.isStreaming).toBe(false)
   })
 
   it('recognizes persisted event status aliases and nonzero tool exit codes', () => {

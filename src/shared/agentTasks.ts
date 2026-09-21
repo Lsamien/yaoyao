@@ -42,6 +42,8 @@ export interface AgentAssignment {
   status: 'pending' | 'running' | 'review' | 'complete' | 'failed' | 'blocked' | 'cancelling' | 'cancelled'
   attempt: number
   maxAttempts?: number
+  /** Server-owned source run for this assignment and its retries. */
+  sourceRunId?: string
   runId?: string
   result?: string
   review?: string

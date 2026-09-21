@@ -4,6 +4,7 @@
   --font-code: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --canvas: #ffffff;
   --conversation-canvas: #ffffff;
+  --message-file-surface: #f1f1f1;
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --surface-soft: #f2f2ef;
@@ -22,6 +23,9 @@
   --line-strong: rgba(25, 25, 22, .19);
   --accent: #20201e;
   --accent-rgb: 32, 32, 30;
+  --workflow-accent: #2868d7;
+  --delivery-accent: #245fc5;
+  --workflow-on-accent: #ffffff;
   --danger: #b33d33;
   --success: #377a54;
   --warning: #9b6b1f;
@@ -43,6 +47,7 @@
   color-scheme: dark;
   --canvas: #181817;
   --conversation-canvas: #171a20;
+  --message-file-surface: #262626;
   --surface: #1d1d1c;
   --surface-raised: #242423;
   --surface-soft: #282827;
@@ -61,6 +66,9 @@
   --line-strong: rgba(255, 255, 250, .17);
   --accent: #efefec;
   --accent-rgb: 239, 239, 236;
+  --workflow-accent: #78a9ff;
+  --delivery-accent: #78a9ff;
+  --workflow-on-accent: #101b2f;
   --danger: #ed786f;
   --success: #77b88e;
   --warning: #d9ab60;

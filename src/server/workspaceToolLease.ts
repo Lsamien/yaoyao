@@ -17,8 +17,21 @@ async function bridgeRequest(target: GatewayTarget, path: string, body: unknown)
   })
   let value: Record<string, unknown> = {}
   try { value = JSON.parse(response.body.toString()) } catch { /* report a bounded, credential-free error */ }
-  if (response.status !== 200 || value.ok !== true)
+  if (response.status !== 200 || value.ok !== true) {
+    const failures: Record<string, string> = {
+      initializing: '仍在初始化，尚未提交聊天消息，请稍后重试',
+      agent_initialization_failed: '初始化失败，工具桥尚未绑定',
+      binding_busy: '工具桥等待其他绑定超时，请稍后重试',
+      bridge_catalog_unreachable: '无法读取夭夭的本轮工具目录，尚未提交聊天消息',
+      session_busy: '会话仍在执行，暂时无法绑定新的轮次',
+    }
+    const code = typeof value.code === 'string' ? value.code : ''
+    const profile = body && typeof body === 'object' && 'profile' in body && typeof body.profile === 'string'
+      && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(body.profile) ? ` Profile「${body.profile}」` : ''
+    if (path === '/bind' && Object.hasOwn(failures, code))
+      throw new HttpError(response.status >= 500 ? 502 : 409, `Hermes${profile}${failures[code]}。`, `hermes_bridge_${code}`)
     throw new HttpError(409, 'Hermes 工具桥绑定失败，请确认该 Profile 已启用工具桥，并新建会话后重试。', 'team_tools_bind_failed')
+  }
   return value
 }
 
@@ -31,7 +44,7 @@ export async function requireTeamToolBridge(target: GatewayTarget, profile: stri
     const value = JSON.parse(response.body.toString())
     ready = response.status === 200 && value.version === 1 && value.ready === true && value.in_process === true && value.native_tools === true
   } catch { /* Missing or incompatible plugins do not break ordinary Bot conversations. */ }
-  if (!ready) throw new HttpError(409, '该基础机器人尚未启用新版 Hermes 工具桥（yaoyao-bot-bridge）。请在对应 Profile 安装或修复并重新加载后，再开启组队权限。', 'team_tools_unavailable')
+  if (!ready) throw new HttpError(409, '该基础机器人尚未启用新版 Hermes 工具桥（yaoyao-bot-bridge）。请在对应 Profile 安装或修复并重新加载后重试。', 'team_tools_unavailable')
 }
 
 export interface WorkspaceToolLease {
@@ -70,7 +83,7 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
   const opaqueId = (id: string) => `team_${createHash('sha256').update(`${token}:${id}`).digest('hex').slice(0,32)}`
   const server = createServer((req, res) => { void handle(req, res).catch(error => {
     json(res, error instanceof HttpError ? error.status : 500, {
-      error: error instanceof HttpError ? error.message : '团队工具执行失败',
+      error: error instanceof Error && error.message ? error.message.slice(0, 1000) : '团队工具执行失败',
       code: error instanceof HttpError ? error.code : 'team_tool_failed',
     })
   }) })
@@ -134,7 +147,8 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
           if(value&&typeof value==='object'&&Array.isArray((value as any).content))return value
           return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }
         } catch (error) {
-          return { content: [{ type: 'text', text: JSON.stringify({ error: error instanceof HttpError ? error.message : '团队操作失败，请检查当前状态后再重试。', code: error instanceof HttpError ? error.code : 'team_tool_failed' }) }], isError: true }
+          const message = error instanceof Error && error.message ? error.message.slice(0, 1000) : '团队操作失败，请检查当前状态后再重试。'
+          return { content: [{ type: 'text', text: JSON.stringify({ error: message, code: error instanceof HttpError ? error.code : 'team_tool_failed' }) }], isError: true }
         }
       })
       previous = { fingerprint, result }; calls.set(call.callId, previous)

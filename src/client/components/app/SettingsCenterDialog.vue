@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
+import ChatAppearancePanel from '@/components/app/ChatAppearancePanel.vue'
 import AccountSecurityPanel from '@/components/app/AccountSecurityPanel.vue'
+import DesktopModePanel from '@/components/app/DesktopModePanel.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
 import DuplexVoicePanel from '@/components/app/DuplexVoicePanel.vue'
 import ModelServicesPanel from '@/components/app/ModelServicesPanel.vue'
 import NodePairingPanel from '@/components/app/NodePairingPanel.vue'
-import WorkspaceNodesPanel from '@/components/workspace/WorkspaceNodesPanel.vue'
 import WorkspaceVoiceProviders from '@/components/workspace/WorkspaceVoiceProviders.vue'
 import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
 import SystemOverviewPanel from '@/components/app/SystemOverviewPanel.vue'
-import FileAccessPanel from '@/components/app/FileAccessPanel.vue'
 import SystemUpdatePanel from '@/components/app/SystemUpdatePanel.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import type { ProfileIdentityInput } from '@/api/profiles'
@@ -24,12 +24,12 @@ type SettingsPage =
   | 'account-security'
   | 'account-mobile'
   | 'appearance'
+  | 'chat-appearance'
+  | 'desktop-mode'
   | 'system-overview'
-  | 'system-file-access'
   | 'system-users'
   | 'system-connection'
   | 'system-push'
-  | 'system-nodes'
   | 'system-voice'
   | 'system-update'
 
@@ -97,14 +97,16 @@ const updateLocked = ref(false)
 const accountCanSave = ref(false)
 const dirtyPages = reactive<Partial<Record<SettingsPage, boolean>>>({})
 const settingsQuery = ref('')
+const desktopModesAvailable = Boolean(window.yaoyaoDesktop?.modeState && window.yaoyaoDesktop?.switchMode)
 
-const agentItems = computed<NavigationItem[]>(() => !props.isAdmin ? [] : [
+const agentItems = computed<NavigationItem[]>(() => !props.isAdmin || props.botMode ? [] : [
   { key: 'agent-identity', label: '身份与头像', icon: 'users' },
   ...(props.isAdmin ? [{ key: 'agent-models', label: '模型与 Provider', icon: 'model' } satisfies NavigationItem] : []),
 ])
 const accountItems = computed<NavigationItem[]>(() => [
   { key: 'account-profile', label: '账号资料', icon: 'users' },
   { key: 'account-security', label: '登录与安全', icon: 'settings' },
+  ...(desktopModesAvailable ? [{ key: 'desktop-mode', label: '运行模式', icon: 'monitor' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
   ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
 ])
@@ -112,18 +114,17 @@ const systemItems: NavigationItem[] = [
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
   { key: 'system-connection', label: 'Hermes 连接', icon: 'link' },
   { key: 'system-users', label: '用户与权限', icon: 'users' },
-  { key: 'system-nodes', label: '节点与设备', icon: 'panel' },
-  { key: 'system-file-access', label: '文件访问', icon: 'panel' },
   { key: 'system-push', label: '消息推送', icon: 'bell' },
   { key: 'system-voice', label: '双流语音', icon: 'audio' },
   { key: 'system-update', label: '更新与回滚', icon: 'refresh' },
 ]
-const matchesSearch = (item: NavigationItem) => item.label.toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
+const matchesSearch = (item: NavigationItem) => (item.key === 'appearance' ? `${item.label} 聊天气泡 Grok Bot Codex 颜色` : item.label).toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
 const visibleAccounts = computed(() => accountItems.value.filter(matchesSearch))
 const visibleSystems = computed(() => systemItems.filter(matchesSearch))
 const visibleAgents = computed(() => agentItems.value.filter(matchesSearch))
 
 const allAllowedPages = computed(() => new Set<SettingsPage>([
+  'chat-appearance',
   ...agentItems.value.map(item => item.key),
   ...accountItems.value.map(item => item.key),
   ...(props.isAdmin ? systemItems.map(item => item.key) : []),
@@ -137,22 +138,24 @@ const activeTitle = computed(() => ({
   'account-security': '登录与安全',
   'account-mobile': '手机登录',
   appearance: '外观',
+  'chat-appearance': '聊天气泡',
+  'desktop-mode': '运行模式',
   'system-overview': '系统概览',
-  'system-file-access': '文件访问',
   'system-users': '用户与权限',
   'system-connection': 'Hermes 连接',
   'system-push': '消息推送',
-  'system-nodes': '节点与设备',
   'system-voice': '双流语音',
   'system-update': '更新与回滚',
 })[activePage.value])
 const accountName = computed(() => props.pairingUserName || props.userName || '当前账号')
-const showAgentSelector = computed(() => activePage.value.startsWith('agent-'))
+const showAgentSelector = computed(() => !props.botMode && activePage.value.startsWith('agent-'))
 const activeScope = computed(() => {
   if (activePage.value.startsWith('agent-')) return `正在设置：${profileTitle(props.activeProfile)} / ${props.activeProfile?.name || '未选择'}`
   if (activePage.value === 'account-profile') return '管理你的账号头像与服务器名称。'
   if (activePage.value.startsWith('account-')) return `当前账号：${accountName.value}${props.isAdmin ? ' · 管理员' : ''}`
+  if (activePage.value === 'chat-appearance') return '预设与颜色 · 自动保存到当前设备'
   if (activePage.value === 'appearance') return '选择当前浏览器的显示方式。'
+  if (activePage.value === 'desktop-mode') return '选择这台电脑作为服务器或客户端。'
   return '全局设置 · 仅管理员'
 })
 
@@ -194,6 +197,7 @@ function requestClose() {
 }
 
 function backToMenu() {
+  if (activePage.value === 'chat-appearance') { selectPage('appearance'); return }
   if (updateLocked.value || !confirmDiscard()) return
   dirtyPages[activePage.value] = false
   mobileDetailOpen.value = false
@@ -255,7 +259,7 @@ function trapFocus(event: KeyboardEvent) {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
 }
 
-watch(() => [props.open, props.initialPage] as const, ([open, initialPage]) => {
+watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as const, ([open, initialPage]) => {
   if (!open) {
     profileMenuOpen.value = false
     updateLocked.value = false
@@ -263,7 +267,7 @@ watch(() => [props.open, props.initialPage] as const, ([open, initialPage]) => {
   }
   activePage.value = allAllowedPages.value.has(initialPage)
     ? initialPage
-    : props.isAdmin && props.activeProfile ? 'agent-identity' : 'account-profile'
+    : !props.botMode && props.isAdmin && props.activeProfile ? 'agent-identity' : 'account-profile'
   settingsQuery.value = ''
   for (const key of Object.keys(dirtyPages) as SettingsPage[]) dirtyPages[key] = false
   profileMenuOpen.value = false
@@ -283,7 +287,7 @@ function requestModeSwitch() {
         <section
           ref="dialog"
           class="settings-center"
-          :class="{ 'settings-center--mobile-detail': mobileDetailOpen }"
+          :class="{ 'settings-center--mobile-detail': mobileDetailOpen, 'settings-center--bubbles': activePage === 'chat-appearance' }"
           role="dialog"
           aria-modal="true"
           aria-label="我的设置"
@@ -317,15 +321,15 @@ function requestModeSwitch() {
                 <nav>
                   <section v-if="visibleAccounts.length">
                     <h3>个人</h3>
-                    <button v-for="item in visibleAccounts" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
+                    <button v-for="item in visibleAccounts" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
                   <section v-if="isAdmin && visibleSystems.length">
                     <h3>管理</h3>
-                    <button v-for="item in visibleSystems" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span><em v-if="item.key === 'system-voice'">全局</em></button>
+                    <button v-for="item in visibleSystems" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span><em v-if="item.key === 'system-voice'">全局</em></button>
                   </section>
                   <section v-if="visibleAgents.length">
                     <h3>基础机器人</h3>
-                    <button v-for="item in visibleAgents" :key="item.key" type="button" :class="{ active: activePage === item.key }" :aria-current="activePage === item.key ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
+                    <button v-for="item in visibleAgents" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
                   <section v-if="isAdmin && !settingsQuery"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
                   <p v-if="!visibleAccounts.length && (!isAdmin || !visibleSystems.length) && !visibleAgents.length" class="settings-search-empty">没有匹配的设置</p>
@@ -341,7 +345,7 @@ function requestModeSwitch() {
               </header>
               <div class="settings-content__scroll">
                 <AgentIdentityPanel
-                  v-if="activePage === 'agent-identity' && activeProfile"
+                  v-if="activePage === 'agent-identity' && activeProfile && !botMode"
                   :key="activeProfile.name"
                   :profile="activeProfile"
                   :busy="identityBusy"
@@ -353,7 +357,7 @@ function requestModeSwitch() {
                   @save="emit('save-identity', $event)"
                 />
                 <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择机器人。</p>
-                <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
+                <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin && !botMode" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
                 <AccountSecurityPanel
                   v-else-if="activePage === 'account-security' || activePage === 'account-profile'"
                   :key="activePage"
@@ -367,6 +371,7 @@ function requestModeSwitch() {
                   @logout="emit('logout')"
                 />
                 <NodePairingPanel v-else-if="activePage === 'account-mobile'" mode="account" :active="true" :insecure-transport="insecureTransport" :user-name="accountName" />
+                <DesktopModePanel v-else-if="activePage === 'desktop-mode' && desktopModesAvailable" />
                 <section v-else-if="activePage === 'appearance'" class="appearance-panel" aria-label="外观">
                   <h4>界面主题</h4>
                   <div class="theme-options" role="radiogroup" aria-label="界面主题">
@@ -376,14 +381,14 @@ function requestModeSwitch() {
                       <component :is="themePreference === option[0] ? CheckmarkCircle : EllipseOutline" class="theme-choice-mark" aria-hidden="true"/>
                     </button>
                   </div>
+                  <button type="button" class="bubble-settings-entry" @click="selectPage('chat-appearance')"><AppIcon name="chat" :size="20"/><span><strong>聊天气泡</strong><small>预设、背景颜色与样式</small></span><span aria-hidden="true">›</span></button>
                   <p class="appearance-note"><AppIcon name="info" :size="16"/>更改仅影响当前浏览器。</p>
                 </section>
+                <ChatAppearancePanel v-else-if="activePage === 'chat-appearance'" :theme="theme" />
                 <SystemOverviewPanel v-else-if="activePage === 'system-overview' && isAdmin" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @navigate="selectPage" />
-                <FileAccessPanel v-else-if="activePage === 'system-file-access' && isAdmin" :profile="activeProfile?.name" @dirty-change="setDirty('system-file-access', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :profiles="profiles" :active="true" @dirty-change="setDirty('system-users', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :profiles="profiles" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-push' && isAdmin" section="push" :active="true" @dirty-change="setDirty('system-push', $event)" />
-                <WorkspaceNodesPanel v-else-if="activePage === 'system-nodes' && isAdmin" />
                 <section v-else-if="activePage === 'system-voice' && isAdmin"><DuplexVoicePanel @dirty-change="setDirty('system-voice', $event)" /><WorkspaceVoiceProviders /></section>
                 <SystemUpdatePanel v-else-if="activePage === 'system-update' && isAdmin" :active="true" @lock-change="updateLocked = $event" />
               </div>
@@ -415,6 +420,8 @@ function requestModeSwitch() {
 <style scoped>
 .settings-center-layer{position:fixed;z-index:300;inset:0;display:grid;place-items:center;padding:24px;background:var(--scrim);backdrop-filter:blur(3px)}
 .settings-center{display:flex;flex-direction:column;width:min(900px,calc(100vw - 48px));height:min(650px,calc(100dvh - 64px));overflow:hidden;border:1px solid var(--line);border-radius:14px;outline:0;background:var(--surface);box-shadow:0 24px 72px #0003;color:var(--text-primary)}
+.settings-center--bubbles{width:min(1180px,calc(100vw - 48px));height:min(900px,calc(100dvh - 64px))}
+.bubble-settings-entry{display:flex;align-items:center;gap:12px;text-align:left;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text-primary);cursor:pointer}.bubble-settings-entry span:first-of-type{display:grid;gap:5px;flex:1}.bubble-settings-entry small{color:var(--text-secondary);font-size:12px}.bubble-settings-entry>span:last-child{font-size:24px}
 .settings-center__topbar{height:60px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;padding:8px 16px 8px 20px;border-bottom:1px solid var(--line)}
 .settings-center__topbar h2{margin:0;font-size:18px;font-weight:650;letter-spacing:-.02em}
 .settings-center__close,.mobile-back{display:grid;width:44px;height:44px;place-items:center;flex-shrink:0;padding:0;border:0;border-radius:9px;background:transparent;color:var(--text-secondary);cursor:pointer}
@@ -460,6 +467,7 @@ function requestModeSwitch() {
 .appearance-note{display:flex;align-items:flex-start;gap:8px;margin:2px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--text-secondary);font-size:13px;line-height:1.6}
 .settings-content__scroll :deep(.account-security-panel>.panel-heading){display:none}.settings-content__scroll :deep(.account-security-panel){gap:20px}.settings-content__scroll :deep(.account-avatar-card),.settings-content__scroll :deep(.security-form),.settings-content__scroll :deep(.server-identity){padding:20px;border:0;border-radius:12px;background:var(--settings-panel)}.settings-content__scroll :deep(.security-form){gap:16px}.settings-content__scroll :deep(.field input){background:var(--surface)}
 .settings-center-fade-enter-active,.settings-center-fade-leave-active{transition:opacity 150ms ease}.settings-center-fade-enter-active .settings-center,.settings-center-fade-leave-active .settings-center{transition:transform 180ms var(--ease-out)}.settings-center-fade-enter-from,.settings-center-fade-leave-to{opacity:0}.settings-center-fade-enter-from .settings-center,.settings-center-fade-leave-to .settings-center{transform:translateY(6px) scale(.99)}
-@media(max-width:767px){.settings-center-layer{padding:0}.settings-center{width:100vw;height:100dvh;border:0;border-radius:0}.settings-center__topbar{display:none}.settings-center__body{display:block;height:100%}.settings-sidebar{display:grid;width:100%;height:100%;box-sizing:border-box;grid-template-rows:60px minmax(0,1fr);overflow:hidden;padding:0;border-right:0}.settings-sidebar__header{display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 20px;border-bottom:1px solid var(--line)}.settings-sidebar__scroll{min-height:0;overflow-y:auto;padding:20px 16px max(24px,env(safe-area-inset-bottom))}.settings-center--mobile-detail .settings-sidebar{display:none}.settings-content{display:none;width:100%;height:100%}.settings-center--mobile-detail .settings-content{display:grid}.settings-content__header{min-height:60px;grid-template-columns:44px minmax(0,1fr) 44px;gap:4px;padding:8px 8px 8px 6px;border-bottom:1px solid var(--line)}.settings-content__header h3{font-size:17px}.settings-content__header p{display:none}.settings-center--mobile-detail .mobile-back,.settings-detail-close{display:grid}.settings-content__scroll{padding:20px 16px max(24px,env(safe-area-inset-bottom))}.settings-content--with-footer{grid-template-rows:auto minmax(0,1fr) calc(64px + env(safe-area-inset-bottom))}.settings-content__footer{padding:0 16px env(safe-area-inset-bottom)}.settings-content__footer button{flex:1}.appearance-panel{padding:14px;gap:14px}.theme-options{gap:8px}.theme-options button{padding:6px 6px 10px;gap:12px}.theme-options strong{font-size:12px}}
+@media(min-width:1000px){.settings-center--bubbles .settings-content__header{padding:14px 24px 10px}}
+@media(max-width:767px){.settings-center-layer{padding:0}.settings-center,.settings-center--bubbles{width:100vw;height:100dvh;border:0;border-radius:0}.settings-center__topbar{display:none}.settings-center__body{display:block;height:100%}.settings-sidebar{display:grid;width:100%;height:100%;box-sizing:border-box;grid-template-rows:60px minmax(0,1fr);overflow:hidden;padding:0;border-right:0}.settings-sidebar__header{display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 20px;border-bottom:1px solid var(--line)}.settings-sidebar__scroll{min-height:0;overflow-y:auto;padding:20px 16px max(24px,env(safe-area-inset-bottom))}.settings-center--mobile-detail .settings-sidebar{display:none}.settings-content{display:none;width:100%;height:100%}.settings-center--mobile-detail .settings-content{display:grid}.settings-content__header{min-height:60px;grid-template-columns:44px minmax(0,1fr) 44px;gap:4px;padding:8px 8px 8px 6px;border-bottom:1px solid var(--line)}.settings-content__header h3{font-size:17px}.settings-content__header p{display:none}.settings-center--mobile-detail .mobile-back,.settings-detail-close{display:grid}.settings-content__scroll{padding:20px 16px max(24px,env(safe-area-inset-bottom))}.settings-content--with-footer{grid-template-rows:auto minmax(0,1fr) calc(64px + env(safe-area-inset-bottom))}.settings-content__footer{padding:0 16px env(safe-area-inset-bottom)}.settings-content__footer button{flex:1}.appearance-panel{padding:14px;gap:14px}.theme-options{gap:8px}.theme-options button{padding:6px 6px 10px;gap:12px}.theme-options strong{font-size:12px}}
 @media(prefers-reduced-motion:reduce){.settings-center-fade-enter-active,.settings-center-fade-leave-active,.settings-center-fade-enter-active .settings-center,.settings-center-fade-leave-active .settings-center{transition:none}}
 </style>

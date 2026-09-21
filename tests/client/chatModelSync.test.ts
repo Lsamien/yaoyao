@@ -57,6 +57,18 @@ describe('chat model realtime synchronization', () => {
     setActivePinia(createPinia())
   })
 
+  it('keeps an unsent draft in its stable empty state without requesting history', async () => {
+    const chat = useChatStore()
+    const id = chat.createSession('alpha')
+    chat.clearSelection()
+
+    await chat.selectSession(id, 'alpha')
+
+    expect(sessionsApi.getMessages).not.toHaveBeenCalled()
+    expect(chat.activeRouteState?.historySynced).toBe(true)
+    expect(chat.activeRouteState?.isLoadingHistory).toBe(false)
+  })
+
   it('applies another viewer model switch to the active selector and session summary', () => {
     const chat = useChatStore()
     const oldModel = { id: 'model-a', name: 'Model A', provider: 'provider-a' }

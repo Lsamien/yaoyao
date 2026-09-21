@@ -23,7 +23,7 @@ export function moveSessionFastMode(userId: string, profile: string, fromSession
 }
 
 export function readAgentShowThinking(userId: string, profile: string): boolean {
-  try { return localStorage.getItem(scopedKey(THINKING_PREFIX, userId, profile)) !== '0' } catch { return true }
+  try { return localStorage.getItem(scopedKey(THINKING_PREFIX, userId, profile)) === '1' } catch { return false }
 }
 
 export function writeAgentShowThinking(userId: string, profile: string, visible: boolean): void {

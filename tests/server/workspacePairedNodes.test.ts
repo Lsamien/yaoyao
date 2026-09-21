@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { WorkspaceNodes, WorkspaceGateway, type WorkspaceNode } from '../../src/server/workspaceGateway'
+import { WorkspaceNodes, type WorkspaceNode } from '../../src/server/workspaceGateway'
 import { parseWorkspacePairCode } from '../../src/server/workspacePairedNode'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { loadServerConfig } from '../../src/server/config'
@@ -47,7 +47,7 @@ describe('workspace 15300 child nodes', () => {
     expect(()=>parseWorkspacePairCode(code().replace('://pair','://login'))).toThrow()
     expect(()=>parseWorkspacePairCode(code()+'&node='+remote)).toThrow()
   })
-  it('pairs only under the owner, encrypts credentials, preserves agent binding when changing IP, and executes via HTTP/SSE', async () => {
+  it('pairs only under the owner, encrypts credentials, preserves agent binding when changing IP, and refuses execution of a retired paired node', async () => {
     const t=setup(); await t.nodes.pair('parent-user',{qrPayload:code(),name:'远端'})
     const node=t.store.list<WorkspaceNode>('parent-user','node')[0]!
     expect(node.transport).toBe('paired-web'); expect(node.url).toContain(':15300')
@@ -56,46 +56,28 @@ describe('workspace 15300 child nodes', () => {
     const agent=t.store.createAgent('parent-user',{name:'策划',profile:'remote-profile',nodeId:node.id,instructions:''})
     await t.nodes.update('parent-user',node.id,{name:'新名字',url:'http://192.168.1.20:15300'})
     expect(t.store.require<any>('parent-user','agent',agent.id).nodeId).toBe(node.id)
-    const target=t.nodes.target('parent-user',node.id)
-    expect(target.url.hostname).toBe('192.168.1.20')
-    const profiles=await target.session.request('/api/profiles'); expect(profiles.status).toBe(200)
-    const gateway=new WorkspaceGateway(target)
-    await gateway.connect()
-    expect(await gateway.rpc('session.create',{profile:'remote-profile'})).toMatchObject({stored_session_id:'stored-child'})
-    gateway.close()
-    const command=t.seen.find(r=>r.url.pathname.endsWith('/commands'))!
-    expect(command.headers.get('idempotency-key')).toBeTruthy()
-    expect(command.body.method).toBe('session.create')
-    expect(t.seen.every(r=>r.url.port==='15300')).toBe(true)
-    expect(t.seen.some(r=>r.url.pathname.includes('/auth/password-login'))).toBe(false)
+    expect(()=>t.nodes.target('parent-user',node.id)).toThrow('远程机器人已停用')
+    expect(t.seen.some(r=>r.url.pathname.endsWith('/commands'))).toBe(false)
   })
-  it('recovers a lost command response by receipt without resubmitting the command', async () => {
+  it('refuses retired paired-node execution before issuing remote commands', async () => {
     const t=setup(); await t.nodes.pair('owner',{qrPayload:code(),name:'child'})
     const id=t.store.list<WorkspaceNode>('owner','node')[0]!.id
-    const gateway=new WorkspaceGateway(t.nodes.target('owner',id)); await gateway.connect(); t.loseResponse()
-    expect(await gateway.rpc('session.create',{profile:'remote-profile'})).toMatchObject({stored_session_id:'stored-child'})
-    gateway.close()
-    expect(t.seen.filter(r=>r.url.pathname.endsWith('/commands'))).toHaveLength(1)
-    expect(t.seen.filter(r=>r.url.pathname.includes('/api/realtime/commands/'))).toHaveLength(1)
+    t.seen.length=0
+    expect(()=>t.nodes.target('owner',id)).toThrow('远程机器人已停用')
+    expect(t.seen).toEqual([])
   })
   it('rejects self-pairing before redeeming a code', async () => {
     const t=setup(remote)
     await expect(t.nodes.pair('owner',{qrPayload:code(),name:'self'})).rejects.toThrow('自己')
     expect(t.seen).toEqual([])
   })
-  it('imports a read-only reference without duplicates and refreshes remote configuration', async () => {
+  it('refuses importing retired remote agents without creating local references', async () => {
     const t=setup();await t.nodes.pair('owner',{qrPayload:code(),name:'child'})
     const node=t.store.list<WorkspaceNode>('owner','node')[0]!, remote='66666666-6666-4666-8666-666666666666'
-    const agent=await t.nodes.importRemoteAgent('owner',node.id,remote)
-    expect(agent.remoteAgentId).toBe(remote);expect(agent.nodeId).toBe(node.id)
-    expect(()=>t.store.updateAgent('owner',agent.id,{instructions:'local edit'})).toThrow('远端')
-    expect((await t.nodes.importRemoteAgent('owner',node.id,remote)).id).toBe(agent.id)
-    t.changeRemoteRules();await t.nodes.remoteAgents('owner',node.id,true)
-    expect((await t.nodes.refreshRemoteAgent('owner',agent)).instructions).toBe('remote rules v2')
-    t.store.updateAgent('owner',agent.id,{archived:true})
-    expect((await t.nodes.importRemoteAgent('owner',node.id,remote)).archived).toBe(false)
-    expect(t.store.list('owner','agent')).toHaveLength(1)
-    expect(t.nodes.targetForAgent('owner',agent).url.pathname).toContain(`/api/workspace-agents/${remote}/gateway`)
+    t.seen.length=0
+    await expect(t.nodes.importRemoteAgent('owner',node.id,remote)).rejects.toThrow('远程机器人已停用')
+    expect(t.store.list('owner','agent')).toEqual([])
+    expect(t.seen).toEqual([])
   })
   it('checks identity at the new address before sending the saved bearer and leaves state unchanged on mismatch', async () => {
     const t=setup(); await t.nodes.pair('owner',{qrPayload:code(),name:'远端'})

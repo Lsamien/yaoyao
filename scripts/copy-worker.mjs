@@ -2,6 +2,8 @@ import {mkdir,copyFile,cp} from 'node:fs/promises'
 import {resolve} from 'node:path'
 const directory=resolve(import.meta.dirname,'../dist-server/runner/worker')
 await mkdir(directory,{recursive:true})
+await mkdir(resolve(directory,'../../shared'),{recursive:true})
+await copyFile(resolve(import.meta.dirname,'../src/shared/fileTransferEndpoint.mjs'),resolve(directory,'../../shared/fileTransferEndpoint.mjs'))
 await cp(resolve(import.meta.dirname,'../integrations/hermes-bots-bridge'),resolve(directory,'../hermes-bots-bridge'),{recursive:true,filter:source=>!source.includes('__pycache__')&&!source.endsWith('.pyc')&&!source.includes('/tests')})
 await copyFile(resolve(import.meta.dirname,'install-hermes-bridge.py'),resolve(directory,'../install-hermes-bridge.py'))
 await copyFile(resolve(import.meta.dirname,'../src/runner/worker/hermes_worker.py'),resolve(directory,'hermes_worker.py'))

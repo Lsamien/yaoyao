@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
+<title>登录远程 · 夭夭</title><link rel="stylesheet" href="remote-login.css"></head>
+<body><main>
+  <header><img src="icon.png" alt="" width="56" height="56"><h1>登录远程夭夭</h1>
+    <p>连接另一台电脑上的夭夭服务器。登录后本机无需 Hermes，也不运行 Web 服务，窗口直接使用远程夭夭；管理员账号同时会把这台 Mac 注册为可远程控制的电脑。</p></header>
+  <form id="login-form" aria-label="远程登录">
+    <label>服务器地址<input id="server" name="server" required autocomplete="off" spellcheck="false" placeholder="192.168.1.10:15300" inputmode="url"></label>
+    <label>用户名<input id="username" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+    <label>密码<input id="password" name="password" type="password" required autocomplete="current-password"></label>
+    <button type="submit" id="submit" class="primary">登录</button>
+    <p id="error" role="alert" hidden></p>
+    <p id="status" role="status" aria-live="polite" hidden></p>
+  </form>
+  <footer><button type="button" id="use-local">改为作为服务器运行</button></footer>
+</main><script src="remote-login.js"></script></body></html>

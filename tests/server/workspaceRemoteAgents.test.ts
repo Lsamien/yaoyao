@@ -97,16 +97,11 @@ describe('referenced remote Bot Agents',()=>{
     runtime.workspace.updateAgent('owner',agent.id,{archived:true})
     await call(grant,'get',`/${agent.id}`).expect(410)
   })
-  it('can reference an Agent backed by another paired child without exposing parent credentials',async()=>{
+  it('refuses to run a bot that lives on a paired child',async()=>{
     const nodes=runtime.workspaceRuntime.nodes, nodeId=randomUUID(), childDevice=randomUUID()
     runtime.workspace.put('owner','node',nodeId,{id:nodeId,name:'nested',url:'http://nested.test:15300/',transport:'paired-web',deviceId:childDevice,secret:nodes.seal({token:'nested-secret'})})
     const agent=runtime.workspace.createAgent('owner',{name:'二级远端 Agent',profile:'remote-profile',nodeId,instructions:'nested rules'})
     const grant=pair('owner'), base=`/${agent.id}/gateway/api/realtime`
-    const channel=(await call(grant,'post',`${base}/channels`).send({channel:'chat'}).expect(201)).body.id
-    await call(grant,'post',`${base}/channels/${channel}/commands`).set('Idempotency-Key',randomUUID())
-      .send({jsonrpc:'2.0',method:'session.create',params:{profile:'wrong'}}).expect(200)
-    expect(forwarded.at(-1).headers.get('authorization')).toBe('Bearer nested-secret')
-    expect(forwarded.at(-1).body.params.profile).toBe('remote-profile')
-    expect(forwarded.at(-1).headers.get('x-yaoyao-agent-hops')).toBe('1')
+    await call(grant,'post',`${base}/channels`).send({channel:'chat'}).expect(410)
   })
 })

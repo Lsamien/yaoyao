@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { foldDetail, WorkspaceTranscriptStore, type WorkspaceDetail } from '@/components/workspace/transcriptStore'
-import type { WorkspaceConversation, WorkspaceEvent, WorkspaceMessage } from '@shared/workspace'
+import { workspaceHasUnfinishedOutput, type WorkspaceConversation, type WorkspaceEvent, type WorkspaceMessage } from '@shared/workspace'
 
 const conversation: WorkspaceConversation = { id: 'c', kind: 'direct', name: 'Bot', avatar: '', memberIds: ['a'], instructions: '', administratorId: 'a', mode: 'host', autoReplyIds: [], maxReplyRounds: 3, archived: false, pinned: false, readSeq: 0, lastSeq: 3, preview: '', createdAt: 1, updatedAt: 1 }
 const message = (id: string, seq: number, content = id): WorkspaceMessage => ({ id, seq, conversationId: 'c', role: 'assistant', content, reasoning: '', status: 'complete', attachments: [], tools: [], createdAt: seq })
@@ -56,6 +56,28 @@ describe('Bot transcript cache', () => {
     store.apply(event(12, message('live', 2, '更新后的内容')))
     const current = store.finishRead(token, detail())
     expect(current.messages.at(-1)!.content).toBe('更新后的内容')
+  })
+
+  it('keeps run output active for every executing file-tool phase', () => {
+    for (const status of ['tool.start', 'tool.started', 'tool.progress', 'tool.generating', 'running']) {
+      expect(workspaceHasUnfinishedOutput([
+        { ...message('file', 3, '文件准备中'), status: 'streaming', tools: [{ id: 'file-tool', status }] },
+      ])).toBe(true)
+    }
+    expect(workspaceHasUnfinishedOutput([
+      { ...message('file', 3, '文件已输出'), status: 'complete', tools: [{ id: 'file-tool', status: 'tool.completed' }] },
+    ])).toBe(false)
+    expect(workspaceHasUnfinishedOutput([
+      { ...message('hidden', 3, '文件准备中'), status: 'complete', visible: false, tools: [{ id: 'file-tool', status: 'tool.generating' }] },
+    ])).toBe(false)
+  })
+  it.each(['complete', 'failed', 'interrupted'] as const)('does not revive %s history with stale tool events', status => {
+    const old = { ...message('old-tool', 1), status, tools: [{ id: '', status: 'tool.generating' }] }
+    const latest = message('latest-reply', 2)
+    expect(workspaceHasUnfinishedOutput([old, latest])).toBe(false)
+    for (const active of ['queued', 'streaming', 'uncertain'] as const) {
+      expect(workspaceHasUnfinishedOutput([old, { ...latest, status: active }])).toBe(true)
+    }
   })
   it('does not apply pre-snapshot replay over a newer snapshot', () => {
     const store = new WorkspaceTranscriptStore(), token = store.beginRead()

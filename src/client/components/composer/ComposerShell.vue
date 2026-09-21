@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { At, Target } from '@vicons/tabler'
 import { createId } from '@/utils/id'
 import type { ComposerAttachment, ComposerOption, ComposerReference, ComposerSubmit } from './types'
 
@@ -28,6 +29,10 @@ const props = withDefaults(defineProps<{
   slashCommands?: ComposerOption[]
   attachmentsEnabled?: boolean
   activityText?: string
+  deliveryAvailable?: boolean
+  deliveryMode?: boolean
+  deliveryDisabled?: boolean
+  deliveryDisabledReason?: string
 }>(), {
   mode: 'chat',
   draftKey: '',
@@ -52,6 +57,10 @@ const props = withDefaults(defineProps<{
   slashCommands: () => [],
   attachmentsEnabled: true,
   activityText: '',
+  deliveryAvailable: false,
+  deliveryMode: false,
+  deliveryDisabled: false,
+  deliveryDisabledReason: '',
 })
 
 const emit = defineEmits<{
@@ -65,6 +74,7 @@ const emit = defineEmits<{
   toolTraceToggle: []
   clearReference: []
   error: [message: string]
+  'update:deliveryMode': [enabled: boolean]
 }>()
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024
@@ -83,13 +93,18 @@ const menuQuery = ref('')
 const chosenMentionIds = ref<string[]>([])
 const reasoningOpen = ref(false)
 const settingsOpen = ref(false)
+const actionsOpen = ref(false)
+const actionsAnchor = ref<HTMLElement | null>(null)
+const actionsTrigger = ref<HTMLButtonElement | null>(null)
+const hasGroupActions = computed(() => props.mode === 'group' && (props.mentionOptions.length > 0 || props.deliveryAvailable))
 const localError = ref('')
 let errorTimer: number | undefined
 
 const canSubmit = computed(() => !props.disabled && !props.sending && (text.value.trim().length > 0 || attachments.value.length > 0))
-// A running group still accepts new room messages. Only an ordinary session
-// turns its primary send affordance into an interrupt control.
-const showStop = computed(() => props.streaming && !text.value.trim() && !attachments.value.length && (props.stopWhileRunning || props.mode === 'chat'))
+const canStop = computed(() => props.streaming && (props.stopWhileRunning || props.mode === 'chat'))
+// A running session keeps an explicit interrupt control even when the composer
+// holds a draft, so resource waits can always be cancelled by the user.
+const showStop = computed(() => canStop.value && !text.value.trim() && !attachments.value.length)
 const compactModel = computed(() => props.modelLabel.split('/').filter(Boolean).at(-1) || props.modelLabel)
 const contextPercent = computed(() => props.contextLimit > 0 ? Math.min(100, Math.round(props.contextUsed / props.contextLimit * 100)) : 0)
 const hasContext = computed(() => props.contextLimit > 0)
@@ -281,6 +296,61 @@ function updateMenu() {
   menuKind.value = null
 }
 
+function openActions() {
+  actionsOpen.value = !actionsOpen.value
+  reasoningOpen.value = false
+  settingsOpen.value = false
+  menuKind.value = null
+  if (actionsOpen.value) nextTick(() => actionsAnchor.value?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus())
+}
+
+function closeActions(restoreFocus = false) {
+  actionsOpen.value = false
+  if (restoreFocus) actionsTrigger.value?.focus()
+}
+
+function actionsKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault(); event.stopPropagation(); closeActions(true)
+  } else if (event.key === 'Tab') {
+    closeActions(true)
+  } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault()
+    const items = Array.from(actionsAnchor.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])
+    const index = items.indexOf(document.activeElement as HTMLButtonElement)
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length
+    items[next]?.focus()
+  }
+}
+
+function chooseAttachment() {
+  closeActions(true)
+  fileInput.value?.click()
+}
+
+function startMention() {
+  closeActions()
+  const el = textarea.value
+  if (!el) return
+  const cursor = el.selectionStart
+  const before = text.value.slice(0, cursor)
+  const insertion = `${before && !/\s$/.test(before) ? ' ' : ''}@`
+  text.value = before + insertion + text.value.slice(el.selectionEnd)
+  nextTick(() => {
+    el.focus()
+    el.setSelectionRange(cursor + insertion.length, cursor + insertion.length)
+    updateMenu()
+    autoSize()
+  })
+}
+
+function changeDeliveryMode(enabled: boolean) {
+  if (props.disabled || props.deliveryDisabled || props.sending) return
+  emit('update:deliveryMode', enabled)
+  closeActions()
+  nextTick(() => textarea.value?.focus())
+}
+
 function selectOption(option: ComposerOption) {
   if (option.disabled) return
   const el = textarea.value
@@ -385,6 +455,7 @@ function selectReasoningByIndex(event: Event) {
 
 function onDocumentPointer(event: PointerEvent) {
   const target = event.target as HTMLElement
+  if (!actionsAnchor.value?.contains(target)) closeActions()
   if (!target.closest('.composer-shell')) {
     menuKind.value = null
     reasoningOpen.value = false
@@ -397,7 +468,9 @@ watch(() => props.draftKey, () => {
   restoreDraft()
   reasoningOpen.value = false
   settingsOpen.value = false
+  actionsOpen.value = false
 })
+watch(() => props.disabled, value => { if (value) closeActions() })
 
 onMounted(() => {
   restoreDraft()
@@ -471,7 +544,7 @@ defineExpose({
         :style="manualHeight !== null ? { height: `${manualHeight}px` } : undefined"
         rows="1"
         :disabled="disabled"
-        :placeholder="placeholder"
+        :placeholder="deliveryAvailable && deliveryMode ? '描述希望团队交付的结果…' : placeholder"
         @input="updateMenu"
         @click="updateMenu"
         @keydown="handleKeydown"
@@ -482,8 +555,28 @@ defineExpose({
 
       <div class="composer-toolbar">
         <div class="composer-tools">
-          <button class="composer-tool composer-tool--icon" type="button" :disabled="disabled || !attachmentsEnabled" :title="attachmentsEnabled ? '添加附件' : '当前上游不支持附件'" aria-label="添加附件" @click="fileInput?.click()">
+          <div v-if="hasGroupActions" ref="actionsAnchor" class="composer-popover-anchor composer-actions-anchor" @keydown="actionsKeydown">
+            <button ref="actionsTrigger" class="composer-tool composer-add" type="button" :disabled="disabled" aria-label="添加" aria-haspopup="menu" :aria-expanded="actionsOpen" @click="openActions" @keydown.down.prevent="!actionsOpen && openActions()">
+              <AppIcon name="plus" :size="20" />
+            </button>
+            <Transition name="composer-menu">
+              <div v-if="actionsOpen" class="composer-popover composer-add-menu" role="menu" aria-label="添加到消息">
+                <button type="button" role="menuitem" :disabled="!attachmentsEnabled" @click="chooseAttachment"><AppIcon name="paperclip" :size="20" /><span>添加附件</span></button>
+                <button v-if="mentionOptions.length" type="button" role="menuitem" @click="startMention"><At class="composer-action-icon" aria-hidden="true" /><span>提及成员</span></button>
+                <template v-if="deliveryAvailable">
+                  <div class="composer-add-menu__divider" role="separator" />
+                  <button type="button" role="menuitem" :disabled="deliveryDisabled || sending" @click="changeDeliveryMode(!deliveryMode)">
+                    <Target class="composer-action-icon" aria-hidden="true" /><span><strong>交付目标</strong><small>{{ deliveryDisabledReason || (deliveryMode ? '已开启；点击返回普通聊天' : '让团队持续完成一个结果') }}</small></span><AppIcon v-if="deliveryMode" name="check" :size="16" />
+                  </button>
+                </template>
+              </div>
+            </Transition>
+          </div>
+          <button v-else class="composer-tool composer-tool--icon" type="button" :disabled="disabled || !attachmentsEnabled" :title="attachmentsEnabled ? '添加附件' : '当前上游不支持附件'" aria-label="添加附件" @click="fileInput?.click()">
             <AppIcon name="paperclip" :size="16" />
+          </button>
+          <button v-if="deliveryAvailable && deliveryMode" class="composer-delivery-chip" type="button" :disabled="disabled || deliveryDisabled || sending" aria-label="关闭交付目标，返回普通聊天" title="关闭交付目标，返回普通聊天" @click="changeDeliveryMode(false)">
+            <Target class="composer-action-icon" aria-hidden="true" /><span>交付目标</span><AppIcon name="close" :size="15" />
           </button>
           <div v-if="mode === 'chat'" class="composer-popover-anchor">
             <button class="composer-tool" type="button" :class="{ active: reasoningOpen }" :disabled="disabled || !reasoningOptions.length" :title="`推理强度：${reasoningLabel}`" :aria-label="`推理强度：${reasoningLabel}`" :aria-expanded="reasoningOpen" @click="reasoningOpen = !reasoningOpen; settingsOpen = false">
@@ -532,13 +625,18 @@ defineExpose({
           >
             <AppIcon name="bolt" :size="15" />
           </button>
-          <span v-else-if="mentionOptions.length" class="composer-mention-hint"><b>@</b><span>提及成员</span></span>
+          <button v-else-if="mentionOptions.length" type="button" class="composer-tool composer-mention-hint" :disabled="disabled" aria-label="提及成员" @click="startMention"><At class="composer-action-icon" aria-hidden="true" /><span>提及成员</span></button>
         </div>
         <div class="composer-actions">
           <button v-if="mode === 'chat' && streaming && canSubmit" class="queue-toggle" :class="{ active: queueMode }" type="button" :title="queueMode ? '消息将排队发送' : '消息将 Steer 当前会话'" @click="emit('queueToggle')">
             {{ queueMode ? '排队' : 'Steer' }}
           </button>
           <span v-if="sending" class="composer-sending" role="status" aria-live="polite"><i />正在发送</span>
+          <span v-if="canStop && !showStop" class="composer-stop-hitbox">
+            <button class="composer-stop" type="button" aria-label="停止生成" title="停止生成" @click="emit('stop')">
+              <AppIcon name="stop" :size="15" />
+            </button>
+          </span>
           <span class="composer-send-hitbox">
             <button
               class="composer-send"
@@ -613,6 +711,20 @@ defineExpose({
 .composer-tools { flex: 1; }
 .composer-actions { flex: 0 0 auto; gap: 7px; }
 .composer-popover-anchor { position: relative; display: flex; flex: 0 0 auto; }
+.composer-action-icon { display: block; width: 20px; height: 20px; flex: 0 0 auto; }
+.composer-tool.composer-add { width: 36px; height: 36px; padding: 0; background: var(--surface-soft); color: var(--text-primary); }
+.composer-popover.composer-add-menu { width: min(280px, calc(100vw - 64px)); padding: 8px; cursor: default; }
+.composer-add-menu button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 9px 12px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.composer-add-menu button:hover:not(:disabled) { background: var(--surface-hover); }
+.composer-add-menu button:disabled { opacity: .5; cursor: not-allowed; }
+.composer-add-menu button > span { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.composer-add-menu strong { font-weight: 500; }
+.composer-add-menu small { color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+.composer-add-menu__divider { height: 1px; margin: 6px 12px; background: var(--line); }
+.composer-delivery-chip { --goal-color: var(--delivery-accent); display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; min-height: 36px; padding: 0 11px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--goal-color) 12%, transparent); color: var(--goal-color); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.composer-delivery-chip:hover:not(:disabled) { background: color-mix(in srgb, var(--goal-color) 18%, transparent); }
+.composer-delivery-chip:disabled { opacity: .5; cursor: not-allowed; }
+.composer-add:focus-visible, .composer-add-menu button:focus-visible, .composer-delivery-chip:focus-visible, .composer-mention-hint:focus-visible { outline: 2px solid var(--workflow-accent); outline-offset: 2px; }
 .composer-tool { display: inline-flex; min-width: 28px; height: 28px; max-width: 175px; align-items: center; justify-content: center; gap: 4px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 11px; white-space: nowrap; }
 .composer-tool:hover, .composer-tool.active { background: var(--surface-hover); color: var(--text-primary); }
 .composer-tool:disabled { cursor: not-allowed; opacity: .36; }
@@ -640,10 +752,13 @@ defineExpose({
 .queue-toggle { height: 26px; padding: 0 7px; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 10px; }
 .queue-toggle:hover, .queue-toggle.active { background: var(--surface-hover); color: var(--text-primary); }
 .composer-send-hitbox { display: grid; place-items: center; width: 34px; height: 34px; }
+.composer-stop-hitbox { display: grid; place-items: center; width: 30px; height: 34px; }
 .composer-send { display: grid; place-items: center; width: 34px; min-width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--text-on-solid); cursor: pointer; box-shadow: 0 4px 12px rgba(41,36,39,.18); transition: transform 150ms ease, box-shadow 150ms ease; }
 .composer-send:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 7px 16px rgba(41,36,39,.22); }
 .composer-send:disabled { cursor: not-allowed; background: #9f9f9f; color: #fff; }
 .composer-send--stop { background: var(--accent); }
+.composer-stop { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-raised); color: var(--text-secondary); cursor: pointer; transition: color 150ms ease, border-color 150ms ease; }
+.composer-stop:hover { color: var(--danger); border-color: var(--danger); }
 .composer-sending { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 9px; white-space: nowrap; }.composer-sending i { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); animation: composer-pulse 1s ease-in-out infinite; }
 @keyframes composer-pulse { 50% { opacity: .25; transform: scale(.7); } }
 .composer-attachments { display: flex; width: 100%; max-width: 760px; margin: 0 auto 9px; flex-wrap: wrap; gap: 7px; }
@@ -678,6 +793,10 @@ defineExpose({
   .composer-tool span, .composer-tool > :deep(svg:last-child), .composer-mention-hint span { display: none; }
   .composer-tool { width: 30px; min-width: 30px; padding: 0; }
   .composer-tools { gap: 3px; }
+  .composer-mention-hint { display: none; }
+  .composer-tool.composer-add { width: 44px; height: 44px; }
+  .composer-add > :deep(svg:last-child) { display: block; }
+  .composer-delivery-chip { min-height: 44px; padding-inline: 10px; }
   .composer-toolbar { align-items: flex-end; gap: 7px; }
   .composer-send-hitbox { width: 44px; height: 44px; margin: -5px; }
   .composer-send { width: 34px; min-width: 34px; height: 34px; }

@@ -14,12 +14,30 @@ describe('workspace chat uses the established presentation', () => {
     expect(message?.tools?.[0]).toMatchObject({name:'read_file',status:'success',output:'ok'})
     expect(message?.attachments?.[0]?.url).toBe('/api/app/files/f/download')
   })
+  it.each([
+    ['complete', 'success'], ['failed', 'error'], ['interrupted', 'interrupted'], ['uncertain', 'running'], ['streaming', 'running'],
+  ] as const)('renders stale tools in a %s message without reopening its trace', (status, expected) => {
+    const [message] = workspaceMessagesToUi([{
+      id: 'legacy', conversationId: 'c', seq: 1, role: 'assistant', content: '回复', reasoning: '',
+      status, createdAt: 1, attachments: [], tools: [
+        { id: '', name: 'tool_call', status: 'tool.generating' },
+        { id: 'failed-tool', name: 'read_file', status: 'tool.complete', result: { error: '授权已结束' } },
+      ],
+    }])
+    expect(message?.tools?.[0]?.status).toBe(expected)
+    expect(message?.tools?.[1]?.status).toBe('error')
+  })
   it('keeps peer direction outside the body without presenting it as a user message', () => {
     const communication = { direction: 'incoming' as const, peerId: 'b', peerName: '研究员', peerAvatar: '', peerKind: 'agent' as const, content: '当前为 v2' }
     const [message] = workspaceMessagesToUi([{ id: 'peer', conversationId: 'c', seq: 1, role: 'system', peerMessageId: 'p', communication, content: '来自 Bot「研究员」的回复：当前为 v2', reasoning: '', tools: [], attachments: [], status: 'complete', createdAt: 1 }])
     expect(message?.communication).toEqual(communication)
     expect(message?.content).toBe('当前为 v2')
     expect(message?.role).toBe('system')
+  })
+  it('preserves task references for the task-result notification', () => {
+    const taskReference = { conversationId: 'team', taskId: 'task' }
+    const [message] = workspaceMessagesToUi([{ id: 'result', conversationId: 'origin', seq: 1, role: 'system', taskReference, content: '任务已有结果', reasoning: '', tools: [], attachments: [], status: 'complete', createdAt: 1 }])
+    expect(message?.taskReference).toEqual(taskReference)
   })
 })
 
@@ -69,7 +87,7 @@ it('composes real member avatars and refreshes them without changing group membe
 })
 
 it.each([
-  ['direct', '机器人设置'],
+  ['direct', '编辑资料'],
   ['group', '群聊设置'],
 ] as const)('opens settings for a %s conversation from its actions menu', async (kind, label) => {
   const conversation: WorkspaceConversation = {

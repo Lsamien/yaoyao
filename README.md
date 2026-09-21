@@ -1,6 +1,6 @@
 # 夭夭 AI
 
-当前 Web 与 macOS 桌面发布版本：**v0.4.22**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.22.md)。
+当前 Web 与 macOS 桌面发布版本：**v0.4.61**。桌面版提供 Apple Silicon（arm64）DMG，详见 [发布说明](docs/releases/v0.4.61.md)。
 
 夭夭 AI 为网页、iOS 和安卓提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
 
@@ -15,6 +15,8 @@
 - 新聊天、事件及文件按登录用户隔离；基础 Profile 的工具、技能和既有记忆能力继续由 Hermes 管理。
 
 Bot 模式的“工具”菜单提供“自动化”和“已连接应用”两个独立入口。“已连接应用”统一管理应用连接与 MCP；“自动化”使用独立的日历、任务列表和运行日志页面。所有模式均可从底部菜单打开独立的“关于”对话框。这些页面不属于设置中心。
+
+远程电脑：其他 Mac 上的夭夭 App 启动时可选择「登录远程」或「进入本地」；登录远程用服务器地址加账号密码登录（与手机端一致的凭据方式），窗口直接使用远程服务器（15300）的夭夭界面，本机不运行 Web 服务；管理员账号登录同时把这台 Mac 注册为可远程控制的电脑，供服务器上的 Bot 操作。每个机器人可并列启用本地虚拟机、云端和多台 Mac 的电脑控制，工具按在线情况同时可用。详见 [服务器与电脑](docs/desktop-hosts.md)。
 
 ## 运行
 
@@ -38,7 +40,7 @@ Web 数据默认保存在 `~/.yaoyao`，可用 `YAOYAO_HOME` 指定（兼容 `HE
 
 ## macOS 桌面版
 
-在 [v0.4.22 发布页](https://github.com/Lsamien/yaoyao/releases/tag/v0.4.22) 下载 `Yaoyao-0.4.22-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
+在 [v0.4.61 发布页](https://github.com/Lsamien/yaoyao/releases/tag/v0.4.61) 下载 `Yaoyao-0.4.61-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
 
 此 DMG 使用 Apple Development 开发签名，未做 Apple 公证。
 
@@ -48,11 +50,11 @@ Web 数据默认保存在 `~/.yaoyao`，可用 `YAOYAO_HOME` 指定（兼容 `HE
 
 | 镜像 | 架构 |
 | --- | --- |
-| `samienluo/yaoyao:v0.4.22-amd` | AMD64 |
-| `samienluo/yaoyao:v0.4.22` | 自动匹配 AMD64 / ARM64 |
-| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.22` 相同 |
+| `samienluo/yaoyao:v0.4.61-amd` | AMD64 |
+| `samienluo/yaoyao:v0.4.61` | 自动匹配 AMD64 / ARM64 |
+| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.61` 相同 |
 
-准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.22`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
+准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.61`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
 
 ```sh
 docker compose --env-file docker.env pull web

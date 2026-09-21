@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { createConnection } from 'node:net'
 
 const DASHBOARD_PORT = 9119
@@ -17,6 +17,8 @@ export interface DashboardSupervisorOptions {
   probe?: Probe
   log?: (message: string) => void
   managed?: boolean
+  spawnManaged?: (command: string, args: string[], options: SpawnOptions) => ChildProcess
+  readyTimeoutMs?: number
 }
 
 function defaultRun(command: string): Run {
@@ -63,6 +65,9 @@ export class DashboardSupervisor {
   private owned: ChildProcess | undefined
   private stopped = false
   private readonly managed: boolean
+  private restarting = false
+  private readonly spawnManaged: NonNullable<DashboardSupervisorOptions['spawnManaged']>
+  private readonly readyTimeoutMs: number
 
   constructor(options: DashboardSupervisorOptions) {
     this.command = options.command ?? 'hermes'
@@ -72,6 +77,13 @@ export class DashboardSupervisor {
     this.log = options.log ?? console.info
     this.intervalMs = options.intervalMs ?? SUPERVISION_INTERVAL_MS
     this.managed = options.managed === true
+    this.spawnManaged = options.spawnManaged ?? spawn
+    this.readyTimeoutMs = options.readyTimeoutMs ?? RESTART_READY_TIMEOUT_MS
+  }
+
+  /** Only a live child started by this supervisor may be restarted from the UI. */
+  get canRestart(): boolean {
+    return this.managed && !this.stopped && !!this.owned?.pid && this.owned.exitCode === null && this.owned.signalCode === null
   }
 
   start(): void {
@@ -88,48 +100,59 @@ export class DashboardSupervisor {
   }
 
   async restart(): Promise<void> {
-    while (this.checking) await delay(25)
-    if (this.managed) {
-      if (!this.owned) throw new Error('此 Hermes 由外部服务管理，不能由桌面 App 停止。')
-      await this.stopOwned()
-      this.stopped = false
-      await this.checkNow()
-      return
+    if (this.restarting) throw new Error('Hermes Dashboard 正在重启，请等待完成。')
+    this.restarting = true
+    try {
+      while (this.checking) await delay(25)
+      if (this.stopped) throw new Error('后台服务正在停止，无法重启 Hermes Dashboard。')
+      if (this.managed) {
+        if (!this.canRestart) throw new Error('此 Hermes 由外部服务管理，不能由桌面 App 停止。')
+        await this.stopOwned()
+      } else this.run(['dashboard', '--stop'])
+      await this.ensureRunning()
+      const deadline = Date.now() + this.readyTimeoutMs
+      while (Date.now() < deadline) {
+        if (this.stopped || (this.managed && !this.canRestart)) throw new Error('Hermes Dashboard 启动失败。')
+        if (await this.probe('127.0.0.1', DASHBOARD_PORT)) {
+          if (this.stopped || (this.managed && !this.canRestart)) throw new Error('Hermes Dashboard 启动失败。')
+          return
+        }
+        await delay(100)
+      }
+      throw new Error('Hermes Dashboard 重启后未在规定时间内恢复，请重新检查。')
+    } finally {
+      this.restarting = false
     }
-    this.run(['dashboard', '--stop'])
-    await this.checkNow()
-    const deadline = Date.now() + RESTART_READY_TIMEOUT_MS
-    while (Date.now() < deadline) {
-      if (await this.probe('127.0.0.1', DASHBOARD_PORT)) return
-      await delay(100)
-    }
-    throw new Error('Hermes Dashboard did not return on 9119 after restart')
   }
 
   async checkNow(): Promise<void> {
-    if (this.checking) return
+    if (this.checking || this.restarting) return
     this.checking = true
     try {
-      // Installation must not rewrite credentials or restart/rebind an existing
-      // upstream. Only a missing managed service is started on loopback.
-      const running = await this.probe('127.0.0.1', DASHBOARD_PORT)
-      if (running || this.stopped || this.owned) return
-      this.log(`Hermes Dashboard is unavailable on 9119; starting it on ${this.dashboardHost}.`)
-      if (this.managed) {
-        const env: NodeJS.ProcessEnv = { ...process.env, HERMES_PARENT_PID: String(process.pid) }
-        for (const key of Object.keys(env)) if (key.startsWith('HERMES_YAOYAO_') || key.startsWith('ELECTRON_')) delete env[key]
-        const child = spawn(this.command, ['dashboard', '--host', this.dashboardHost, '--no-open', '--skip-build'], {
-          env, detached: process.platform !== 'win32', stdio: 'ignore',
-        })
-        this.owned = child
-        child.once('error', error => { if (this.owned === child) this.owned = undefined; this.log(`Hermes 启动失败：${error.message}`) })
-        child.once('exit', () => { if (this.owned === child) this.owned = undefined })
-      } else this.launch(['dashboard', '--host', this.dashboardHost])
+      await this.ensureRunning()
     } catch (error) {
       this.log(`Hermes Dashboard supervision failed: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       this.checking = false
     }
+  }
+
+  private async ensureRunning(): Promise<void> {
+    // Installation must not rewrite credentials or restart/rebind an existing
+    // upstream. Only a missing managed service is started on loopback.
+    const running = await this.probe('127.0.0.1', DASHBOARD_PORT)
+    if (running || this.stopped || this.owned) return
+    this.log(`Hermes Dashboard is unavailable on 9119; starting it on ${this.dashboardHost}.`)
+    if (this.managed) {
+      const env: NodeJS.ProcessEnv = { ...process.env, HERMES_PARENT_PID: String(process.pid) }
+      for (const key of Object.keys(env)) if (key.startsWith('HERMES_YAOYAO_') || key.startsWith('ELECTRON_')) delete env[key]
+      const child = this.spawnManaged(this.command, ['dashboard', '--host', this.dashboardHost, '--no-open', '--skip-build'], {
+        env, detached: process.platform !== 'win32', stdio: 'ignore',
+      })
+      this.owned = child
+      child.once('error', error => { if (this.owned === child) this.owned = undefined; this.log(`Hermes 启动失败：${error.message}`) })
+      child.once('exit', () => { if (this.owned === child) this.owned = undefined })
+    } else this.launch(['dashboard', '--host', this.dashboardHost])
   }
   async stopOwned(): Promise<void> {
     const child = this.owned

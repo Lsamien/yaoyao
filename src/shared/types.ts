@@ -144,6 +144,7 @@ export interface ChatMessage {
   stage: DeliveryStage
   isStreaming?: boolean
   error?: string
+  contentParts?: ({ text: string } | { attachmentId: string })[]
   attachments?: ChatAttachment[]
   toolCalls?: ToolCall[]
   toolCallId?: string

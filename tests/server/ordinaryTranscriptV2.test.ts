@@ -87,17 +87,47 @@ describe('ordinary v2 canonical writer', () => {
       reopened.close()
     }
   })
-  it('keeps steer in the current turn without moving the reply behind a future user', () => {
+  it('drops the local queue entry once the upstream accepts the prompt immediately', () => {
+    const { store, send } = setup()
+    store.recordCommand(...scope, 'prompt.submit', { text: '第一问', _delivery_id: 'web:prompt:one' })
+    send('command.confirmed', { delivery_id: 'web:prompt:one' })
+    send('message.start')
+    send('message.delta', { text: '第一答' })
+    // A lingering background job keeps the transcript head "running" after
+    // the visible turn finished.
+    send('message.complete', { text: '第一答', background_pending: 1 })
+    store.recordCommand(...scope, 'prompt.submit', { text: '第二问', _delivery_id: 'web:prompt:two' })
+    expect(store.transcripts.head(...scope).queued).toBe(true)
+    // The upstream was actually idle and accepted the second prompt for
+    // immediate execution; the local queue entry was only a stale mirror.
+    send('command.confirmed', { delivery_id: 'web:prompt:two' })
+    const head = store.transcripts.head(...scope)
+    expect(head.queued).toBe(false)
+    expect(head.queue).toHaveLength(0)
+    send('message.start')
+    send('message.delta', { text: '第二答' })
+    send('message.complete', { text: '第二答' })
+    const all = messages(store)
+    expect(all.filter((m) => m.role === 'user')).toHaveLength(2)
+    expect(all.filter((m) => m.final_result)).toHaveLength(2)
+    expect(new Set(all.filter((m) => m.role === 'assistant').map((m) => m.turn_id)).size).toBe(2)
+    expect(store.transcripts.head(...scope).running).toBe(false)
+  })
+  it('places a steered message at the insertion point and continues the reply after it', () => {
     const { store, send } = setup()
     store.recordCommand(...scope, 'prompt.submit', { text: '开始', _delivery_id: 'web:prompt:one' })
     send('message.delta', { text: '前' })
     const assistant = messages(store).find((m) => m.role === 'assistant')!
     store.recordCommand(...scope, 'session.steer', { text: '补充', _delivery_id: 'web:prompt:steer' })
     send('message.delta', { text: '后' })
-    send('message.complete')
-    expect(messages(store).filter((m) => m.role === 'assistant')).toMatchObject([
-      { id: assistant.id, content: '前后' },
+    send('message.complete', { text: '前后' })
+    expect(messages(store).map((m) => [m.role, m.content])).toEqual([
+      ['user', '开始'],
+      ['assistant', '前'],
+      ['user', '补充'],
+      ['assistant', '后'],
     ])
+    expect(messages(store).find((m) => m.content === '前')!.id).toBe(assistant.id)
     expect(new Set(messages(store).map((m) => m.turn_id)).size).toBe(1)
   })
   it('keeps a delayed tool result attached to its original segment', () => {
@@ -112,6 +142,22 @@ describe('ordinary v2 canonical writer', () => {
     expect(messages(store).flatMap((m) => (m.tool_calls ?? []) as object[])).toMatchObject([
       { id: 't', result: 'ok' },
     ])
+  })
+  it('keeps the visible wait through a tool-round complete', () => {
+    const { store, send } = setup()
+    send('message.delta', { text: '先查一下' })
+    send('message.complete', { text: '先查一下', finish_reason: 'tool_calls' })
+    expect(store.transcripts.head(...scope)).toMatchObject({ running: true, terminal: false })
+    send('tool.start', { tool_id: 't', name: 'terminal' })
+    send('message.complete', { text: '先查一下' })
+    expect(store.transcripts.head(...scope).running).toBe(true)
+    const calls = messages(store).flatMap((m) => (m.tool_calls ?? []) as { id: string; status: string }[])
+    expect(calls).toMatchObject([{ id: 't', status: 'running' }])
+    send('tool.complete', { tool_id: 't', result: 'ok' })
+    send('message.delta', { text: '查完了' })
+    send('message.complete', { text: '查完了', finish_reason: 'stop' })
+    expect(store.transcripts.head(...scope).running).toBe(false)
+    expect(messages(store).filter((m) => m.final_result)).toHaveLength(1)
   })
   it('deduplicates persisted source receipts after a restart', () => {
     const { store } = setup(),

@@ -41,4 +41,14 @@ describe('historical assistant MEDIA compatibility', () => {
     ].join('\n')
     expect(normalizeAssistantMediaMarkdown(input)).toBe(input)
   })
+
+  it('converts only completed standalone output paths', () => {
+    const path = '/Users/samien/.hermes/workspace/final report.pdf'
+    expect(destinations(normalizeAssistantMediaMarkdown(path))).toEqual([path])
+    expect(normalizeAssistantMediaMarkdown(path, true)).toBe(path)
+    expect(normalizeAssistantMediaMarkdown(`文件在 \`${path}\`。`)).toBe(`文件在 \`${path}\`。`)
+    expect(normalizeAssistantMediaMarkdown('relative/report.pdf')).toBe('relative/report.pdf')
+    expect(normalizeAssistantMediaMarkdown('/history/report.pdf')).toBe('/history/report.pdf')
+    expect(normalizeAssistantMediaMarkdown('/files/report.pdf')).toBe('/files/report.pdf')
+  })
 })

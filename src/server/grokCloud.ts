@@ -6,12 +6,13 @@ import {homedir} from 'node:os'
 import {join} from 'node:path'
 import {z} from 'zod'
 import {HttpError} from './errors.js'
+import {readHostTools} from './hostToolSettings.js'
 import {parse,type WorkspaceStore} from './workspaceStore.js'
 import type {LocalAuthStore} from './localAuth.js'
 import type {WorkspaceNodes,GatewayTarget} from './workspaceGateway.js'
 import {requireTeamToolBridge} from './workspaceToolLease.js'
 import type {SharedComputers} from './sharedComputers.js'
-import type {WorkspaceAgent} from '../shared/workspace.js'
+import {agentEnvs,deriveComputer,type WorkspaceAgent} from '../shared/workspace.js'
 import type {ComputerControlStatus,ComputerFrame} from '../shared/computerControl.js'
 
 interface Descriptor {gatewayUrl:string;gatewayToken:string;networkToken:string;execDaemonUrl:string;execDaemonAuthToken:string}
@@ -27,11 +28,9 @@ export const GROK_COMPUTER_TOOLS=[
   {id:'cloud_computer_desktop',name:'cloud_computer_desktop',description:'查看 Grok Bot 云端电脑桌面，返回真实截图。',inputSchema:schema({},[])},
   {id:'cloud_computer_action',name:'cloud_computer_action',description:'操作 Grok Bot 云端电脑。先查看桌面，再使用 click、text、key 或 scroll。',inputSchema:schema({kind:{enum:['click','text','key','scroll']},x:{type:'integer'},y:{type:'integer'},text:field,key:field,direction:{enum:['up','down','left','right']}},['kind'])},
 ]
-export const GROK_COMPUTER_RULES='当前电脑为 Grok Bot 云端共享虚拟机，工作目录 /workspace。电脑操作、文件读写和命令必须使用 cloud_computer_* 工具。本机路径和本机终端不属于这台电脑。多个机器人共享工作文件和浏览器登录，避免覆盖其他机器人的工作；人工接管时等待交还。'
-export function grokComputerRules(allowHostEnvironment:boolean){
-  return allowHostEnvironment
-    ? '当前电脑为 Grok Bot 云端共享虚拟机，工作目录 /workspace；云端操作必须使用 cloud_computer_* 工具。用户同时勾选了“允许本机环境”，可按任务需要使用基础 Profile 已授权的本机文件和终端工具，以及另行授权的本机桌面工具。调用前明确目标环境，本机与云端的路径、程序、文件和浏览器资料互不通用。多个机器人共享云端工作文件和浏览器登录，避免覆盖其他机器人的工作；人工接管时等待交还。'
-    : GROK_COMPUTER_RULES+' 用户未勾选“允许本机环境”：本轮不要使用本机终端、本机文件或本机桌面完成电脑操作。'
+export const GROK_COMPUTER_RULES='当前环境是云虚拟机，也就是 Grok Bot 虚拟机，工作目录 /workspace。电脑操作、文件读写和命令必须使用 cloud_computer_*。已连接的电脑、服务器和虚拟环境都不属于这台云虚拟机。多个机器人共享工作文件和浏览器登录，避免覆盖其他机器人的工作；人工接管时等待交还。'
+export function grokComputerRules(_allowHostEnvironment = false){
+  return GROK_COMPUTER_RULES
 }
 
 /** Credentials and network tokens stay on the Web server. Every robot of an
@@ -67,9 +66,12 @@ export class GrokCloud {
   preferDesktop?:(owner:string,agent:WorkspaceAgent)=>boolean
   beforeSelection?:(owner:string,agentId:string)=>void
   configured(owner:string){return !!this.store.get(owner,'grok-cloud','connection')}
-  selected(owner:string,agent:WorkspaceAgent){return agent.computer==='cloud'||(agent.computer==='auto'&&agent.execution!=='computer'&&!this.preferDesktop?.(owner,agent)&&this.configured(owner))}
+  selected(owner:string,agent:WorkspaceAgent){
+    if(agent.archived||agent.remoteAgentId)return false
+    try{return readHostTools(this.store.home).cloud&&this.configured(owner)}catch{return false}
+  }
   private credential(owner:string):Credential {const row=this.store.get<{sealed:string}>(owner,'grok-cloud','connection');if(!row)throw new HttpError(409,'请先连接 Grok Bot 云端账号','grok_cloud_not_configured');return this.nodes.open<Credential>(row.sealed)}
-  private agent(owner:string,id:string){const agent=this.store.require<WorkspaceAgent>(owner,'agent',id);if(agent.archived||agent.remoteAgentId||agent.temporaryGoalId)throw new HttpError(409,'此机器人不能连接云端电脑','grok_agent_unavailable');this.nodes.requireSource(owner,agent);return agent}
+  private agent(owner:string,id:string){const agent=this.store.require<WorkspaceAgent>(owner,'agent',id);if(agent.archived||agent.remoteAgentId)throw new HttpError(409,'此机器人不能连接云端电脑','grok_agent_unavailable');this.nodes.requireSource(owner,agent);return agent}
   private authorize(owner:string,agentId:string){const agent=this.agent(owner,agentId);if(!this.selected(owner,agent))throw new HttpError(410,'机器人已切换电脑','computer_control_expired');return agent}
   private async response(response:Response){
     const text=await response.text()
@@ -187,15 +189,24 @@ export class GrokCloud {
       if(!token)throw new HttpError(400,'请先通过浏览器完成 Grok Bot 授权。','grok_login_missing');ctx.body=await this.configure(owner,token,body.version,refreshToken)
     })
     router.put('/api/app/agents/:id/computer-selection',async ctx=>{
-      const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),body=parse(z.object({computer:z.enum(['auto','cloud','vm','local','browser','off']),allowHostEnvironment:z.boolean().optional(),vmExecution:z.enum(['worker','profile']).optional()}).strict(),(ctx.request as any).body)
+      const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),body=parse(z.union([
+        z.object({envs:z.object({vm:z.boolean().optional(),cloud:z.boolean().optional(),desktop:z.boolean().optional(),browser:z.boolean().optional()}).strict(),desktopHost:z.union([z.literal('local'),z.string().uuid(),z.null()]).optional()}).strict(),
+        z.object({computer:z.enum(['auto','cloud','vm','local','browser','off']),desktopHost:z.union([z.literal('local'),z.string().uuid(),z.null()]).optional(),allowHostEnvironment:z.boolean().optional(),vmExecution:z.enum(['worker','profile']).optional()}).strict(),
+      ]),(ctx.request as any).body)
+      const legacy='computer' in body
+      const legacyBody=legacy?body:undefined
+      const envsBody=legacy?undefined:body.envs
+      const current=agentEnvs(agent)
+      const next=envsBody?{vm:envsBody.vm===true,cloud:envsBody.cloud===true,desktop:envsBody.desktop===true,browser:envsBody.browser===true}:undefined
+      const targetComputer=next?deriveComputer(next):legacyBody!.computer
       this.beforeSelection?.(owner,agent.id);this.shared.assertLocalVmIdle(owner,[agent.id]);if(this.current(owner))throw new HttpError(409,'请先交还云端电脑','computer_busy')
-      if(body.vmExecution==='profile'&&body.allowHostEnvironment===false)throw new HttpError(400,'本机协作模式需要本机环境，请选择虚拟机模式','computer_profile_host_required')
-      const vmExecution=body.computer==='vm'?(body.vmExecution??(body.allowHostEnvironment===false?'worker':agent.vmExecution)??'worker'):'worker'
-      const allowHostEnvironment=(body.computer==='vm'&&vmExecution==='profile')||(['vm','cloud'].includes(body.computer)&&(body.allowHostEnvironment??(body.vmExecution==='worker'?false:agent.allowHostEnvironment)??false))
-      if(body.computer==='vm'&&allowHostEnvironment)this.nodes.targetForAgent(owner,{...agent,execution:'computer',computer:'vm',allowHostEnvironment:true,vmExecution})
-      const enteringCloud=body.computer==='cloud'&&agent.computer!=='cloud'
+      if(legacyBody&&legacyBody.vmExecution==='profile'&&legacyBody.allowHostEnvironment===false)throw new HttpError(400,'本机协作模式需要本机环境，请选择虚拟机模式','computer_profile_host_required')
+      const vmExecution=targetComputer==='vm'?(next?(agent.vmExecution??'worker'):(legacyBody!.vmExecution??(legacyBody!.allowHostEnvironment===false?'worker':agent.vmExecution)??'worker')):'worker'
+      const allowHostEnvironment=next?((next.vm||next.cloud)&&agent.allowHostEnvironment===true):((legacyBody!.computer==='vm'&&vmExecution==='profile')||(['vm','cloud'].includes(legacyBody!.computer)&&(legacyBody!.allowHostEnvironment??(legacyBody!.vmExecution==='worker'?false:agent.allowHostEnvironment)??false)))
+      if(legacyBody&&legacyBody.computer==='vm'&&allowHostEnvironment)this.nodes.targetForAgent(owner,{...agent,execution:'computer',computer:'vm',allowHostEnvironment:true,vmExecution})
+      const enteringCloud=(next?next.cloud:legacyBody!.computer==='cloud')&&!current.cloud
       if(enteringCloud)await this.requireAvailable(owner,agent,this.nodes.target(owner,agent.nodeId))
-      this.store.atomic(()=>{const execution=body.computer==='vm'?'computer':body.computer==='auto'?(agent.execution??'profile'):'profile';if(execution!=='computer'&&agent.computerEnvironmentId)this.shared.detachLocalVm(owner,agent);this.store.updateAgent(owner,agent.id,{computer:body.computer,execution,allowHostEnvironment,vmExecution});const current=this.store.require<WorkspaceAgent>(owner,'agent',agent.id);this.store.prepareAgent?.(owner,current);this.store.put(owner,'agent',agent.id,current)})
+      this.store.atomic(()=>{const execution=next?'profile':targetComputer==='vm'?'computer':targetComputer==='auto'?(agent.execution??'profile'):'profile';if(execution!=='computer'&&agent.computerEnvironmentId&&!(next&&next.vm))this.shared.detachLocalVm(owner,agent);this.store.updateAgent(owner,agent.id,{...(next?{envs:next}:{computer:legacyBody!.computer}),...(body.desktopHost!==undefined?{desktopHost:body.desktopHost}:{}),execution,allowHostEnvironment,vmExecution});const updated=this.store.require<WorkspaceAgent>(owner,'agent',agent.id);this.store.prepareAgent?.(owner,updated);this.store.put(owner,'agent',agent.id,updated)})
       if(enteringCloud)await this.connect(owner)
       ctx.body={agent:this.store.agentSummary(this.store.require<WorkspaceAgent>(owner,'agent',agent.id))}
     })
@@ -203,11 +214,11 @@ export class GrokCloud {
     router.post('/api/app/agents/:id/cloud-computer/open',async ctx=>{const owner=this.auth.require(ctx).id;this.authorize(owner,ctx.params.id);await this.connect(owner);ctx.body={ok:true}})
     // These routes precede the local computer router and preserve its wire
     // protocol so the desktop and iOS takeover viewers share one UI contract.
-    router.use('/api/app/agents/:id/computer',async(ctx,next)=>{const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);if(!this.selected(owner,agent))return next();this.authorize(owner,agent.id);ctx.state.grokOwner=owner;return next()})
+    router.use('/api/app/agents/:id/computer',async(ctx,next)=>{const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='cloud')return next();if(!this.selected(owner,agent))return next();this.authorize(owner,agent.id);ctx.state.grokOwner=owner;return next()})
     router.get('/api/app/agents/:id/computer',async(ctx,next)=>{const owner=ctx.state.grokOwner;if(!owner)return next();ctx.body=await this.status(owner)})
-    router.get('/api/app/agents/:id/computer/frame',async(ctx,next)=>{const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);if(!this.selected(owner,agent))return next();this.authorize(owner,agent.id);ctx.set('Cache-Control','no-store');ctx.body=await this.capture(owner)})
+    router.get('/api/app/agents/:id/computer/frame',async(ctx,next)=>{const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='cloud')return next();if(!this.selected(owner,agent))return next();this.authorize(owner,agent.id);ctx.set('Cache-Control','no-store');ctx.body=await this.capture(owner)})
     router.post('/api/app/agents/:id/computer/:action',async(ctx,next)=>{
-      const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);if(!this.selected(owner,agent))return next();this.authorize(owner,agent.id)
+      const owner=this.auth.require(ctx).id,agent=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='cloud')return next();if(!this.selected(owner,agent))return next();this.authorize(owner,agent.id)
       const body=(ctx.request as any).body,action=ctx.params.action
       if(action==='take'){
         const value=parse(z.object({requestId:z.string().uuid()}).strict(),body),old=this.current(owner)

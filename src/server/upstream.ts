@@ -114,6 +114,25 @@ export interface UpstreamRequestOptions {
   clientAddress?: string
 }
 
+function requestTimeoutMessage(path: string, options: UpstreamRequestOptions, seconds: number): string | undefined {
+  const stages: Record<string, string> = {
+    '/api/config': '读取配置',
+    '/api/plugins/yaoyao-bot-bridge/capabilities': '检查工具桥',
+    '/api/plugins/yaoyao-bot-bridge/bind': '绑定工具桥',
+    '/api/plugins/yaoyao-bot-bridge/unbind': '解除工具桥绑定',
+    '/api/plugins/yaoyao-bot-bridge/memory-extract': '提炼记忆',
+    '/api/plugins/yaoyao-bot-bridge/computer-file': '传输文件',
+  }
+  const stage = stages[path]
+  if (!stage) return undefined
+  const bodyProfile = options.body && typeof options.body === 'object' && 'profile' in options.body ? options.body.profile : undefined
+  const profile = options.search?.get('profile') ?? bodyProfile
+  // Only a validated Profile name may enter the error; never expose request
+  // bodies, query strings, bridge tokens or upstream credentials.
+  const scope = typeof profile === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(profile) ? `Profile「${profile}」` : ''
+  return `Hermes 请求超时（${seconds} 秒）：${scope}${stage}。`
+}
+
 export class UpstreamClient {
   readonly readCache: UpstreamReadCache
   private loopback = new LoopbackTransport()
@@ -238,7 +257,10 @@ export class UpstreamClient {
 
     let response: Response
     let timeout: ReturnType<typeof setTimeout> | undefined
-    const requestTimeout = path === '/api/plugins/yaoyao-bot-bridge/memory-extract' && options.method === 'POST' ? 110_000 : 30_000
+    let timedOut = false
+    const isBridgeBind = path === '/api/plugins/yaoyao-bot-bridge/bind' && options.method === 'POST'
+    const requestTimeout = isBridgeBind ? 60_000 : path === '/api/plugins/yaoyao-bot-bridge/memory-extract' && options.method === 'POST' ? 110_000 : 30_000
+    const startedAt = Date.now()
     const controller = new AbortController()
     try {
       response = await Promise.race([
@@ -250,13 +272,13 @@ export class UpstreamClient {
           signal: controller.signal,
         }),
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => { controller.abort(); reject(new Error('request timed out')) }, requestTimeout)
+          timeout = setTimeout(() => { timedOut = true; controller.abort(); reject(new Error('request timed out')) }, requestTimeout)
           timeout.unref()
         }),
       ])
     } catch (error) {
       const message = error instanceof Error ? error.message : 'connection failed'
-      throw new HttpError(502, `Unable to reach Hermes: ${message}`, 'upstream_unavailable')
+      throw new HttpError(502, (timedOut && requestTimeoutMessage(path, options, requestTimeout / 1000)) || `Unable to reach Hermes: ${message}`, 'upstream_unavailable')
     } finally {
       if (timeout) clearTimeout(timeout)
     }
@@ -274,12 +296,14 @@ export class UpstreamClient {
     const reader = response.body?.getReader()
     if (reader) {
       let bodyTimeout: ReturnType<typeof setTimeout> | undefined
+      // Binding shares one 60-second budget across headers and body reads.
+      const bodyTimeoutMs = isBridgeBind ? Math.max(0, requestTimeout - (Date.now() - startedAt)) : 30_000
       try {
         const expired = new Promise<never>((_resolve, reject) => {
           bodyTimeout = setTimeout(() => {
-            reject(new HttpError(502, 'Hermes response timed out', 'upstream_unavailable'))
+            reject(new HttpError(502, requestTimeoutMessage(path, options, isBridgeBind ? requestTimeout / 1000 : 30) ?? 'Hermes response timed out', 'upstream_unavailable'))
             void reader.cancel().catch(() => {})
-          }, 30_000)
+          }, bodyTimeoutMs)
           bodyTimeout.unref()
         })
         while (true) {

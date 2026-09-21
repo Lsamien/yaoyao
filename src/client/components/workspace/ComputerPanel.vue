@@ -2,13 +2,14 @@
 import {computed,onBeforeUnmount,onMounted,ref,watch} from 'vue'
 import {apiRequest} from '@/api/client'
 import BrowserToolbar from './BrowserToolbar.vue'
-import type {BotBrowserState} from '@shared/desktopEnvironment'
+import type {BotBrowserState,DesktopEnvironmentState} from '@shared/desktopEnvironment'
 import {createUuid} from '@/utils/id'
 import type {WorkspaceAgent} from '@shared/workspace'
 import type {ComputerControlStatus,ComputerFrame,ComputerInput} from '@shared/computerControl'
 import type {JsonValue} from '@shared/types'
-const props=defineProps<{agents:WorkspaceAgent[];embedded?:boolean;standalone?:boolean;autoTake?:boolean}>(),emit=defineEmits<{close:[];changed:[];controlRequest:[]}>()
+const props=defineProps<{agents:WorkspaceAgent[];embedded?:boolean;standalone?:boolean;autoTake?:boolean;backend?:'desktop'|'cloud'|'vm',host?:string}>(),emit=defineEmits<{close:[];changed:[];controlRequest:[];targetChanged:[backend:'desktop'|'cloud'|'vm',host?:string]}>()
 const selected=ref(props.agents[0]?.id??''),dialog=ref<HTMLDialogElement>()
+const backend=ref(props.backend),host=ref(props.host??(props.backend==='desktop'?'local':'')),envTargets=ref<{hosts:DesktopEnvironmentState['hosts'];cloudConfigured:boolean;vmEnabled:boolean}>()
 const state=ref<ComputerControlStatus>({mode:'off'}),frame=ref<ComputerFrame>(),ticket=ref<{controlId:string;token:string}>()
 const controlsOpen=ref(false),actualSize=ref(false),browserState=ref<BotBrowserState>()
 const selectedAgent=computed(()=>props.agents.find(agent=>agent.id===selected.value))
@@ -19,13 +20,50 @@ const labels:Record<ComputerControlStatus['mode'],string>={off:'电脑未运行'
 const mine=computed(()=>!!ticket.value&&ticket.value.controlId===state.value.controlId)
 const canSend=computed(()=>connectionOK.value&&!!frame.value&&mine.value&&state.value.mode==='human'&&frame.value?.generation===state.value.generation)
 const controllable=computed(()=>canSend.value&&!busy.value)
+const computerSettings=ref({vm:true,cloud:true,desktop:true,browser:false})
+const targets=computed(()=>{
+  const envs=computerSettings.value,info=envTargets.value
+  const list:{key:string;label:string;backend:'desktop'|'cloud'|'vm';host?:string;disabled?:boolean}[]=[]
+  if(envs.desktop)for(const h of info?.hosts??[])list.push({key:'desktop:'+h.id,label:(h.id==='local'?'服务器':'电脑')+' · '+(h.name||'未命名'),backend:'desktop',host:h.id,disabled:!h.online})
+  if(envs.cloud)list.push({key:'cloud',label:'云端 · Grok Bot'+(info?.cloudConfigured?'':' · 未连接'),backend:'cloud',disabled:!info?.cloudConfigured})
+  if(envs.vm)list.push({key:'vm',label:'本地虚拟机'+(info?.vmEnabled?'':' · 未启用'),backend:'vm',disabled:!info?.vmEnabled})
+  return list
+})
+const currentKey=computed(()=>targets.value.find(t=>t.backend===backend.value&&(t.host??'')===host.value)?.key??'')
+const targetAvailable=computed(()=>targets.value.some(t=>t.key===currentKey.value&&!t.disabled))
+watch([backend,host],([selectedBackend,selectedHost])=>{if(selectedBackend)emit('targetChanged',selectedBackend,selectedHost||undefined)},{immediate:true})
+async function loadTargets(){
+  if(!selected.value)return
+  const selectedId=selected.value,id=encodeURIComponent(selectedId)
+  const settings=await apiRequest<{scriptMachine:boolean;serverComputer:boolean;vm:boolean;cloud:boolean}>('/api/app/settings/host-tools')
+  if(closed||selectedId!==selected.value)return
+  computerSettings.value={vm:settings.vm,cloud:settings.cloud,desktop:settings.scriptMachine||settings.serverComputer,browser:false}
+  const [desk,cloud,vm]=await Promise.all([
+    computerSettings.value.desktop?apiRequest<DesktopEnvironmentState>(`/api/app/agents/${id}/desktop-environment`).catch(()=>undefined):Promise.resolve(undefined),
+    computerSettings.value.cloud?apiRequest<{configured:boolean}>(`/api/app/agents/${id}/cloud-computer`).catch(()=>undefined):Promise.resolve(undefined),
+    computerSettings.value.vm?apiRequest<{enabled:boolean}>(`/api/app/agents/${id}/local-vm`).catch(()=>undefined):Promise.resolve(undefined),
+  ])
+  if(closed||selectedId!==selected.value)return
+  envTargets.value={hosts:((desk as DesktopEnvironmentState|undefined)?.hosts??[]).filter(h=>h.id==='local'?settings.serverComputer:settings.scriptMachine),cloudConfigured:!!(cloud as {configured?:boolean}|undefined)?.configured,vmEnabled:!!(vm as {enabled?:boolean}|undefined)?.enabled}
+}
+async function switchTarget(key:string){
+  const next=targets.value.find(t=>t.key===key)
+  if(!next||next.disabled||key===currentKey.value)return
+  if(ticket.value){
+    try{await post('/giveback',{...ticket.value,notes:''})}catch(cause){error.value=cause instanceof Error?cause.message:'请先交还当前电脑';return}
+  }
+  backend.value=next.backend;host.value=next.host??''
+  inputs.length=0;connectionOK.value=false;generation++;takeRequestId=undefined;frame.value=undefined;ticket.value=undefined;state.value={mode:'off'};error.value=''
+  await refresh()
+}
 const endpoint=()=>`/api/app/agents/${encodeURIComponent(selected.value)}/computer`
-async function post(path:string,body:unknown){return apiRequest<any>(endpoint()+path,{method:'POST',body:body as JsonValue})}
+const query=()=>{const q=new URLSearchParams();if(backend.value)q.set('backend',backend.value);if(backend.value==='desktop'&&host.value)q.set('host',host.value);const qs=q.toString();return qs?'?'+qs:''}
+async function post(path:string,body:unknown){return apiRequest<any>(endpoint()+path+query(),{method:'POST',body:body as JsonValue})}
 async function refresh(){
-  if(polling||busy.value||closed||!selected.value||document.hidden)return
+  if(polling||busy.value||closed||!selected.value||document.hidden||!targetAvailable.value)return
   polling=true;const current=++generation,base=endpoint()
   try{
-    const status=await apiRequest<ComputerControlStatus>(base)
+    const status=await apiRequest<ComputerControlStatus>(base+query())
     if(current!==generation||closed)return
     state.value=status
     connectionOK.value=true
@@ -33,18 +71,19 @@ async function refresh(){
     if(mine.value&&Date.now()-lastRenew>8000){await post('/renew',ticket.value);lastRenew=Date.now()}
     if(status.backend==='browser'){browserState.value=await apiRequest<BotBrowserState>(`/api/app/agents/${encodeURIComponent(selected.value)}/browser`)}else browserState.value=undefined
     if(status.mode!=='off'&&(status.backend!=='browser'||browserState.value?.open)){
-      const image=await apiRequest<ComputerFrame>(base+'/frame')
+      const image=await apiRequest<ComputerFrame>(base+'/frame'+query())
       if(current===generation&&!closed)frame.value=image
     }else frame.value=undefined
     error.value=''
-  }catch(cause){if(current===generation&&!closed){connectionOK.value=false;frame.value=undefined;inputs.length=0;error.value=cause instanceof Error?cause.message:'无法读取电脑状态';if([401,403,410].includes(Number((cause as {status?:number}).status))){ticket.value=undefined;frame.value=undefined;state.value={mode:'off'}}}}
+  }catch(cause){if(current===generation&&!closed){connectionOK.value=false;frame.value=undefined;inputs.length=0;error.value=cause instanceof Error?cause.message:'无法读取电脑状态';{const code=Number((cause as {status?:number}).status)
+      if([401,410].includes(code)||(code===403&&ticket.value)){ticket.value=undefined;frame.value=undefined;state.value={mode:'off'}}}}}
   finally{polling=false}
 }
 async function run(action:()=>Promise<void>){
   if(busy.value)return;generation++;busy.value=true;error.value=''
   try{await action()}catch(cause){error.value=cause instanceof Error?cause.message:'电脑操作失败'}finally{busy.value=false;await refresh();void flushInputs()}
 }
-function take(){return run(async()=>{takeRequestId??=createUuid();const value=await post('/take',{requestId:takeRequestId});ticket.value={controlId:value.controlId,token:value.token};state.value=value;lastRenew=0})}
+function take(){return run(async()=>{if(!targetAvailable.value)throw new Error('所选电脑不可用，请重新选择');takeRequestId??=createUuid();const value=await post('/take',{requestId:takeRequestId});ticket.value={controlId:value.controlId,token:value.token};state.value=value;lastRenew=0})}
 const inputs:ComputerInput[]=[];let flushing=false,pendingClick:ComputerInput|undefined,clickTimer:ReturnType<typeof setTimeout>|undefined
 function send(action:ComputerInput){
   if(!canSend.value||closed)return
@@ -88,16 +127,31 @@ async function giveBack(){if(ticket.value){await post('/giveback',{...ticket.val
 async function close(){if(busy.value)return;await run(giveBack);if(!ticket.value){closed=true;if(!props.embedded&&!props.standalone)dialog.value?.close();emit('close')}}
 async function fullscreen(){try{if(document.fullscreenElement)await document.exitFullscreen();else await dialog.value?.requestFullscreen()}catch{error.value='无法进入全屏，请使用窗口最大化'}}
 async function cycle(){await refresh();if(!closed)timer=setTimeout(()=>void cycle(),1200)}
-watch(selected,()=>{inputs.length=0;connectionOK.value=false;generation++;takeRequestId=undefined;frame.value=undefined;ticket.value=undefined;state.value={mode:'off'};error.value='';void refresh()})
-onMounted(()=>{if(!props.embedded&&!props.standalone)dialog.value?.showModal();void cycle();if(props.autoTake)void take()})
+watch(selected,()=>{
+  inputs.length=0;connectionOK.value=false;generation++;takeRequestId=undefined;frame.value=undefined;ticket.value=undefined;state.value={mode:'off'};error.value=''
+  backend.value=props.backend;host.value=props.host??(props.backend==='desktop'?'local':'');envTargets.value=undefined
+  void loadTargets().then(async()=>{if(!backend.value){const first=targets.value.find(t=>!t.disabled);if(first)await switchTarget(first.key)}await refresh()}).catch(cause=>{error.value=cause instanceof Error?cause.message:'无法读取电脑列表'})
+})
+onMounted(async()=>{
+ if(!props.embedded&&!props.standalone)dialog.value?.showModal()
+ try{
+  await loadTargets()
+  if(closed)return
+  if(!backend.value){const first=targets.value.find(t=>!t.disabled);if(first)await switchTarget(first.key)}
+  if(!targetAvailable.value)throw new Error('所选电脑不可用，请重新选择；未打开其他电脑')
+  if(props.autoTake&&!closed)await take()
+ }catch(cause){error.value=cause instanceof Error?cause.message:'无法读取电脑列表'}
+ if(!closed)void cycle()
+})
 onBeforeUnmount(()=>{inputs.length=0;pendingClick=undefined;clearTimeout(clickTimer);closed=true;generation++;clearTimeout(timer)})
 defineExpose({take,close,releaseControl:async()=>{await run(giveBack);if(ticket.value)throw new Error(error.value||'请先交还控制权')},hasControl:()=>!!ticket.value})
 </script>
 <template>
   <Teleport to="body" :disabled="embedded||standalone">
-    <component :is="embedded||standalone?'section':'dialog'" ref="dialog" class="computer-panel" :class="{embedded,standalone}" :aria-label="state.backend==='local'?'本机':state.backend==='browser'?'浏览器':'隔离电脑'" @cancel.prevent="close">
+    <component :is="embedded||standalone?'section':'dialog'" ref="dialog" class="computer-panel" :class="{embedded,standalone}" :aria-label="targets.find(t=>t.key===currentKey)?.label||'电脑桌面'" @cancel.prevent="close">
       <header>
-        <div><strong>{{state.backend==='grok'?'Grok Bot 云端电脑':state.backend==='local'?'本机 · '+state.hostName:state.backend==='browser'?'浏览器 · '+state.hostName:'隔离电脑'}}</strong><small>{{ labels[state.mode] }}</small></div>
+        <div><strong>{{state.backend==='grok'?'Grok Bot 云端电脑':state.backend==='local'?(state.hostName??'服务器桌面'):state.backend==='browser'?'浏览器 · '+state.hostName:'本地虚拟机'}}</strong><small>{{ labels[state.mode] }}</small></div>
+        <select v-if="targets.length>1" :value="currentKey" aria-label="切换电脑环境" :disabled="!!ticket||busy" @change="switchTarget(($event.target as HTMLSelectElement).value)"><option v-for="target in targets" :key="target.key" :value="target.key" :disabled="target.disabled">{{ target.label }}</option></select>
         <select v-if="agents.length>1" v-model="selected" aria-label="选择电脑" :disabled="!!ticket"><option v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select>
         <span v-else-if="!embedded">{{ agents[0]?.name }}</span>
         <button v-if="embedded&&!ticket" :disabled="busy||state.mode==='human'" @click="emit('controlRequest')">接管电脑</button>
@@ -112,16 +166,17 @@ defineExpose({take,close,releaseControl:async()=>{await run(giveBack);if(ticket.
       </header>
       <BrowserToolbar v-if="state.backend==='browser'" :state="browserState" :enabled="controllable" @action="browserAction"/>
       <div class="computer-screen" :class="{controlling:canSend,'actual-size':actualSize}">
-        <img v-if="frame" :src="`data:image/png;base64,${frame.data}`" :alt="state.backend==='local'?'本机当前画面':state.backend==='browser'?'浏览器当前画面':'隔离电脑当前画面'" draggable="false" tabindex="0" title="点按后可使用键盘、滚轮和拖动；按 Esc 退出键盘控制" @pointerdown="down" @pointerup="up" @pointercancel="dragStart=undefined" @wheel="wheel" @keydown="keydown" @click="click" @contextmenu.prevent="click">
+        <img v-if="frame" :src="`data:image/png;base64,${frame.data}`" :alt="(targets.find(t=>t.key===currentKey)?.label||'电脑')+'当前画面'" draggable="false" tabindex="0" title="点按后可使用键盘、滚轮和拖动；按 Esc 退出键盘控制" @pointerdown="down" @pointerup="up" @pointercancel="dragStart=undefined" @wheel="wheel" @keydown="keydown" @click="click" @contextmenu.prevent="click">
         <p v-else>{{ state.mode==='off' ? '打开电脑后可查看桌面。' : '正在读取电脑画面…' }}</p>
         <span v-if="frame&&(!mine||frame.generation!==state.generation)" class="view-label">{{mine?'正在同步画面':state.mode==='off'?'上次画面':'仅查看'}}</span>
       </div>
       <p v-if="error||state.error" class="computer-error" role="alert">{{ error||state.error }}</p>
       <footer v-if="controlsOpen||(!embedded&&!ticket)">
         <p v-if="state.backend==='grok'">多个机器人共享同一台 Grok Bot 云端电脑、工作文件与浏览器资料。</p>
-        <p v-if="selectedAgent?.computerEnvironmentId">共享电脑：{{ selectedAgent.computerEnvironmentName }}。成员共用工作文件和浏览器资料，同一时间只有一名操作者。</p>
+        <p v-else-if="state.backend==='local'">当前显示{{state.hostName||'所选电脑'}}的桌面，点击、输入、按键和滚动都会发送到这台电脑。</p>
+        <p v-if="selectedAgent?.computerEnvironmentId">共享电脑：{{ selectedAgent.computerEnvironmentName }}。成员共用工作文件和浏览器资料，可同时执行命令与文件操作，桌面操作交替进行；人工接管时机器人暂停等待。</p>
         <p v-if="!ticket">查看不会输入任何内容。接管后机器人会暂停，已有操作结束后才允许人工操作。</p>
-        <button v-if="!ticket&&state.mode!=='human'" type="button" :disabled="busy" @click="embedded?emit('controlRequest'):take()">{{ state.mode==='off'?'打开并控制':'接管电脑' }}</button>
+        <button v-if="!ticket&&state.mode!=='human'" type="button" :disabled="busy||!targetAvailable" @click="embedded?emit('controlRequest'):take()">{{ state.mode==='off'?'打开并控制':'接管电脑' }}</button>
         <template v-if="mine">
 
           <section v-if="controlsOpen" class="manual-input">

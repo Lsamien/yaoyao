@@ -81,7 +81,7 @@ it.skipIf(!available)('runs the production WorkspaceRuntime create, bind, prompt
     expect(rpc.filter(r=>r.method==='session.resume')).toHaveLength(1)
     for(const row of rpc.filter(r=>r.method==='session.create')){
       expect(row.params).not.toHaveProperty('skip_memory');expect(row.params).not.toHaveProperty('workspace_memory')
-      expect(row.params).toMatchObject({hidden:true,room_plumbing:true,source:'yaoyao_workspace'})
+      expect(row.params).toMatchObject({hidden:true,room_plumbing:true,source:'yaoyao_workspace'});expect(row.params).not.toHaveProperty('disabled_toolsets')
     }
     const sent=JSON.stringify(modelCalls)
     expect(sent).toContain(botMemory);expect(sent).not.toContain(profileMemory);expect(sent).not.toContain('PROFILE_PRIVATE_USER_MUST_NOT_REACH_BOT')

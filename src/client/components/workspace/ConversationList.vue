@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import ResourceSidebar from '@/components/app/ResourceSidebar.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { workspaceAgentActivity, workspaceConversationItem } from './viewModels'
 import type { WorkspaceAgent, WorkspaceConversation } from '@shared/workspace'
 const props = withDefaults(defineProps<{ conversations: WorkspaceConversation[]; agents?: WorkspaceAgent[]; selected?: string }>(), { agents: () => [] })
@@ -33,10 +34,10 @@ function openSettings(){const id=menuId.value;menuId.value='';emit('settings',id
     <Teleport to="body">
       <div v-if="menuConversation" class="conversation-menu-dismiss" @pointerdown.self="menuId = ''" @keydown.esc="menuId = ''">
         <section class="conversation-actions" :style="menuPosition" role="menu" aria-label="聊天操作">
-          <button role="menuitem" @click="openSettings">{{ menuConversation.kind === 'direct' ? '机器人设置' : '群聊设置' }}</button>
-          <button role="menuitem" @click="action('pin')">{{ menuConversation.pinned ? '取消置顶' : '置顶聊天' }}</button>
-          <button role="menuitem" @click="action('archive')">{{ menuConversation.archived ? '恢复聊天' : '归档聊天' }}</button>
-          <button class="danger" role="menuitem" @click="action('delete')">删除聊天</button>
+          <button type="button" role="menuitem" @click="openSettings"><AppIcon :name="menuConversation.kind === 'direct' ? 'edit' : 'settings'" :size="16"/>{{ menuConversation.kind === 'direct' ? '编辑资料' : '群聊设置' }}</button>
+          <button role="menuitem" @click="action('pin')"><AppIcon :name="menuConversation.pinned ? 'pin-off' : 'pin'" :size="16"/>{{ menuConversation.pinned ? '取消置顶' : '置顶聊天' }}</button>
+          <button role="menuitem" @click="action('archive')"><AppIcon :name="menuConversation.archived ? 'refresh' : 'archive'" :size="16"/>{{ menuConversation.archived ? '恢复聊天' : '归档聊天' }}</button>
+          <button class="danger" role="menuitem" @click="action('delete')"><AppIcon name="trash" :size="16"/>删除聊天</button>
         </section>
       </div>
     </Teleport>
@@ -55,4 +56,5 @@ function openSettings(){const id=menuId.value;menuId.value='';emit('settings',id
 .conversation-list :deep(.sidebar-item__row small){font-size:10px;color:var(--text-muted)}
 .conversation-menu-dismiss{position:fixed;inset:0;z-index:200}.conversation-actions{position:absolute;display:grid;min-width:155px;padding:5px;border:1px solid var(--line);border-radius:10px;background:var(--surface-raised);box-shadow:var(--shadow-float)}.conversation-actions button{padding:9px 12px;border:0;border-radius:7px;background:transparent;color:var(--text-primary);text-align:left;cursor:pointer;font-size:12px}.conversation-actions button:hover{background:var(--surface-hover)}
 .conversation-actions button.danger{color:var(--danger)}
+.conversation-actions button{display:flex;align-items:center;gap:8px;min-height:36px}.conversation-actions button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 </style>

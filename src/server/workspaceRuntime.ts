@@ -1,5 +1,6 @@
-import {DESKTOP_ENVIRONMENT_TOOLS,DESKTOP_ENVIRONMENT_RULES,type DesktopEnvironments} from './desktopEnvironments.js'
+import {DESKTOP_ENVIRONMENT_TOOLS,DESKTOP_ENVIRONMENT_RULES,SERVER_COMPUTER_RULES,DESKTOP_FILE_TOOL_IDS,DESKTOP_FILE_TRANSFER_RULES,type DesktopEnvironments} from './desktopEnvironments.js'
 import {GROK_COMPUTER_TOOLS,grokComputerRules,type GrokCloud} from './grokCloud.js'
+import {VM_COMPUTER_TOOLS,VM_COMPUTER_RULES,VmToolSession} from './vmComputer.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -15,9 +16,34 @@ import type {
   WorkspaceMessage as Message,
   WorkspaceRun,
   WorkspaceInteraction,
+  WorkspaceAgentUsageSummary,
 } from '../shared/workspace.js'
+import { personaSection } from '../shared/workspace.js'
+import { readHostTools } from './hostToolSettings.js'
+import { resolveBotModelSettings, applyBotModelSettings, botModelTarget, BotModelConfirmationError } from './botModelSettings.js'
+function globalComputers(home: string) {
+  try { return readHostTools(home) }
+  catch { return { denyServerTools: false, approvalPolicy: 'ask' as const, scriptMachine: false, serverComputer: false, vm: false, cloud: false, fileTransferMaxMiB: 25 } }
+}
 
-import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK, WORKSPACE_CONCURRENCY_LIMIT } from './workspaceScheduler.js'
+function estimateTokens(text: string): number {
+  let units = 0
+  for (const ch of text) units += (ch.codePointAt(0) ?? 0) > 0xff ? 1 : 0.25
+  return Math.ceil(units)
+}
+
+function environmentMentions(text: string, hostNames: string[]) {
+  const cloud = /云虚拟机|云电脑|云服务器|cloud_computer|Grok/i.test(text)
+  const vm = /虚拟环境|虚拟机|\bVM\b/i.test(text) || /computer_(desktop|shell|action|read_file|write_file)/.test(text)
+  const named = hostNames.some(name => name.length >= 2 && name !== '本机' && text.includes(name))
+  const physicalComputerText = text.replace(/云虚拟机|云电脑|云服务器/g, '')
+  const script = /电脑|客户端|本机/.test(physicalComputerText) || named
+  const server = /服务器|本机/.test(text) || (/desktop_/.test(text) && !script)
+  const desktop = server || script || /desktop_/.test(text)
+  return { desktop, server, script, vm, cloud }
+}
+
+import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK, WORKSPACE_CONCURRENCY_LIMIT, RESOURCE_WAIT_CODES } from './workspaceScheduler.js'
 import type { WorkspacePlugins, OpenBotPlugins } from './botPlugins/workspacePlugins.js'
 import { mentionedAgents } from './workspaceMentions.js'
 import { WorkspaceTeamTools, TEAM_TOOL_RULES } from './workspaceTeamTools.js'
@@ -25,6 +51,7 @@ import { createWorkspaceToolLease, type WorkspaceToolLease } from './workspaceTo
 import { WorkspaceTaskCoordinator } from './taskCoordinator.js'
 import { isDiscussion, discussionRounds } from './workspaceDiscussion.js'
 import { WorkspaceKnowledge } from './workspaceKnowledge.js'
+import type { OpenVikingService } from './openVikingService.js'
 import { WorkspaceCollaboration } from './workspaceCollaboration.js'
 import { WorkspaceKnowledgeTools, BOT_KNOWLEDGE_RULES } from './workspaceKnowledgeTools.js'
 export { mentionedAgents } from './workspaceMentions.js'
@@ -59,6 +86,10 @@ interface LiveTurn {
   taskId: string
   done(error?: Error): void
 }
+const deviceHostId = z.union([
+  z.literal('local'),
+  z.string().uuid(),
+])
 export const sendInput = z
   .object({
     requestId: z.string().uuid(),
@@ -70,20 +101,26 @@ export const sendInput = z
     projectId: z.string().min(1).max(100).nullable().optional(),
     mentionIds: z.array(z.string().uuid()).max(8).default([]),
     fileIds: z.array(z.string().uuid()).max(8).default([]),
+    /** Computer the client is messaging from: 'local' or paired computer uuid. */
+    deviceHost: deviceHostId.nullish(),
   })
   .strict()
   .refine((b) => b.content.trim() || b.fileIds.length, '请输入消息或添加附件')
 export class WorkspaceRuntime extends WorkspaceScheduler {
   readonly knowledge: WorkspaceKnowledge
+  readonly openViking?: OpenVikingService
   readonly collaboration: WorkspaceCollaboration
   readonly knowledgeTools: WorkspaceKnowledgeTools
   onMemoryCandidate: (owner: string, run: Run) => void = () => {}
   plugins?: WorkspacePlugins
+  assertCanSubmit:()=>void=()=>{}
   get idleForUpdate(): boolean {
     return this.live.size === 0 && this.executing.size === 0 && !this.store.db.prepare("SELECT 1 FROM workspace_entities WHERE kind IN ('run','turn') AND COALESCE(json_extract(data,'$.status'),'unknown') NOT IN ('complete','failed','interrupted') LIMIT 1").get()
   }
   desktopEnvironments?:DesktopEnvironments
   cloud?:GrokCloud
+  /** Wired to the runner hub: false degrades envs VM turns to profile sessions. */
+  computerAvailable?:(owner:string,agent:Agent)=>boolean
   inspector?:import('./workspaceInspector.js').WorkspaceInspector
   private live = new Map<string, LiveTurn>()
   readonly teamTools: WorkspaceTeamTools
@@ -92,11 +129,12 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   publishArtifact:(owner:string,message:Message,agent:Agent,name:string,bytes:Buffer)=>import('../shared/workspace.js').WorkspaceFile=()=>{throw new Error('产物服务未初始化')}
   onTeamCreated: (owner: string, team: Conversation) => void = () => {}
   constructor(store: WorkspaceStore, readonly nodes: WorkspaceNodes, readonly uploads: UploadStore, userActive: (owner: string) => boolean = () => true,
-    readonly authorizationVersion: (owner: string) => number = () => 0) {
+    readonly authorizationVersion: (owner: string) => number = () => 0, openViking?: OpenVikingService) {
     super(store, userActive)
+    this.openViking = openViking
     this.teamTools = new WorkspaceTeamTools(store, nodes, this)
     this.tasks = new WorkspaceTaskCoordinator(store, this)
-    this.knowledge = new WorkspaceKnowledge(store.home, store)
+    this.knowledge = new WorkspaceKnowledge(store.home, store, openViking)
     this.collaboration = new WorkspaceCollaboration(store, this)
     this.knowledgeTools = new WorkspaceKnowledgeTools(this)
     this.onRunSettled = (owner, run) => {
@@ -104,17 +142,25 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       if (run.status === 'complete' && (!run.triggerKind || run.triggerKind === 'peer')) queueMicrotask(() => { if (!this.closing) this.onMemoryCandidate(owner, run) })
     }
   }
+  async bindNewAgent(owner: string, id: string): Promise<void> {
+    if (!this.openViking?.enabled) return
+    await this.openViking.ensureUser(owner, { id, temporaryGoalId: undefined })
+  }
+  async cleanupAgent(owner: string, id: string): Promise<void> {
+    if (!this.openViking) return
+    await this.openViking.removeUser(owner, { id, temporaryGoalId: undefined })
+  }
   send(owner: string, conversationId: string, input: unknown): Run {
     return this.submit(owner, conversationId, input)
   }
-  async botCapabilities(owner: string, agent: Agent, target = agent.remoteAgentId || agent.execution === 'computer' ? this.nodes.targetForAgent(owner, agent) : this.nodes.target(owner, agent.nodeId)): Promise<{ tools: boolean; memory: boolean; extraction: boolean }> {
+  async botCapabilities(owner: string, agent: Agent, target = this.nodes.target(owner, agent.nodeId)): Promise<{ tools: boolean; memory: boolean; extraction: boolean }> {
     try {
       const response = await target.session.request('/api/plugins/yaoyao-bot-bridge/capabilities', { search: new URLSearchParams({ profile: agent.profile }) })
       const value = JSON.parse(response.body.toString())
       const tools = response.status === 200 && value.ready === true && value.native_tools === true && value.in_process === true
       return { tools, memory: tools && value.memory_isolation === true, extraction: value.memory_extraction === true }
     } catch (error) {
-      if (error instanceof HttpError && ['computer_busy', 'computer_quota', 'runner_offline'].includes(error.code ?? '')) throw error
+      if (error instanceof HttpError && RESOURCE_WAIT_CODES.has(error.code ?? '')) throw error
       return { tools: false, memory: false, extraction: false }
     }
   }
@@ -131,7 +177,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   /** Server-owned provenance. This is never exposed as a model-supplied identity. */
   dispatch(owner: string, conversationId: string, input: unknown, source: {
     agentId: string; assignmentId?: string; targetAgentId?: string; kind: NonNullable<Run['triggerKind']>; instruction?: string; taskReference?: {conversationId:string;taskId:string}
-    peerMessageId?: string; collaborationChainId?: string; priority?: boolean; projectId?: string
+    peerMessageId?: string; collaborationChainId?: string; priority?: boolean; projectId?: string; deviceHost?: string
   }): Run {
     this.nodes.requireSource(owner, this.store.require<Agent>(owner, 'agent', source.agentId))
     return this.submit(owner, conversationId, input, source)
@@ -139,9 +185,10 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   private files(owner:string,ids:string[]){return ids.map(id=>{const file=this.store.get<StoredWorkspaceFile>(owner,'file',id);if(file){if(file.sourceNodeId&&file.profile)this.nodes.requireSource(owner,{nodeId:file.sourceNodeId,profile:file.profile});return file}return {...this.uploads.records([id],owner)[0]!,sender:'user' as const}})}
   private submit(owner: string, conversationId: string, input: unknown, source?: {
     agentId: string; assignmentId?: string; targetAgentId?: string; kind: NonNullable<Run['triggerKind']>; instruction?: string; taskReference?: {conversationId:string;taskId:string}
-    peerMessageId?: string; collaborationChainId?: string; priority?: boolean; projectId?: string
+    peerMessageId?: string; collaborationChainId?: string; priority?: boolean; projectId?: string; deviceHost?: string
   }): Run {
     if (!this.userActive(owner)) throw new HttpError(403,'账号授权已失效','account_inactive')
+    this.assertCanSubmit()
     const body = parse(sendInput, input)
     for (const id of this.store.require<Conversation>(owner, 'conversation', conversationId).memberIds)
       this.nodes.requireSource(owner, this.store.require<Agent>(owner, 'agent', id))
@@ -173,8 +220,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           c.administratorId = body.coordinatorId
         }
         const coordinator = this.store.require<Agent>(owner, 'agent', c.administratorId)
-        if (!coordinator.canManageTeam || coordinator.archived || coordinator.remoteAgentId)
-          throw new HttpError(403, '请先为负责人开启允许组建团队', 'goal_forbidden')
+        if (coordinator.temporaryGoalId || coordinator.archived || coordinator.remoteAgentId)
+          throw new HttpError(403, '负责人需要是本机上未归档的 Bot', 'goal_forbidden')
         if (body.coordinatorId) this.store.put(owner, 'conversation', c.id, c)
         if (this.store.list<Run>(owner, 'run').some(r => r.conversationTaskId === conversationTaskId && !['complete', 'failed', 'interrupted'].includes(r.status)))
           throw new HttpError(409, '请等待当前回复结束后再启动目标', 'goal_busy')
@@ -195,6 +242,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         peerMessageId: source?.peerMessageId,
         ...(source?.taskReference ? {taskReference:source.taskReference} : {}),
         ...(source ? { agentId: source.agentId, agentName: this.store.require<Agent>(owner, 'agent', source.agentId).name } : {}),
+        ...((source ? source.deviceHost : body.deviceHost) ? { deviceHost: (source ? source.deviceHost : body.deviceHost)! } : {}),
         content: body.content.trim(),
         reasoning: '',
         runId,
@@ -225,6 +273,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         conversationId,
         conversationTaskId,
         messageId: message.id,
+        ...((source ? source.deviceHost : body.deviceHost) ? { deviceHost: (source ? source.deviceHost : body.deviceHost)! } : {}),
         mentionIds: mentions,
         activeAgentId: c.administratorId,
         status: 'queued',
@@ -257,9 +306,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     this.requireAuthorization(owner, run.runId)
     this.store.requireAgentTask(owner,agent,c.id,run.conversationTaskId)
     this.nodes.requireSource(owner, agent)
-    if (agent.remoteAgentId) agent = await this.nodes.refreshRemoteAgent(owner,agent)
+    if (agent.remoteAgentId) throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
     const key = this.bindingKey(c.id, run.conversationTaskId, agent.id),
-      target = agent.remoteAgentId || agent.execution==='computer' ? this.nodes.targetForAgent(owner,agent) : this.nodes.target(owner, agent.nodeId)
+      chatExecution = 'profile',
+      target = this.nodes.target(owner, agent.nodeId)
+    let vmTools: VmToolSession | undefined
     const gateway = new WorkspaceGateway(target,{workId:run.id,publishArtifact:async(name,bytes)=>{
       this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
       const file=this.publishArtifact(owner,resultMessage,agent,name,bytes)
@@ -273,14 +324,15 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     }})
     gateway.onTrace=entry=>this.inspector?.record(owner,c.id,{...entry,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
     const botCapabilities = await this.botCapabilities(owner, agent, target)
+    const dispatchedVm = globalComputers(this.store.home).vm && botCapabilities.tools && !agent.remoteAgentId
     const root = this.store.require<Run>(owner, 'run', run.runId)
     if (root.peerMessageId && !recovering) {
       const peer = this.store.require<import('../shared/workspaceKnowledge.js').WorkspacePeerMessage>(owner, 'peer-message', root.peerMessageId)
       const sender = this.store.require<Agent>(owner, 'agent', peer.fromAgentId)
-      if (agent.canCollaborate === false || sender.canCollaborate === false || sender.archived || peer.status === 'stopped') throw new HttpError(403, 'Bot 协作权限已撤销', 'collaboration_forbidden')
+      if (sender.archived || peer.status === 'stopped') throw new HttpError(403, 'Bot 协作权限已撤销', 'collaboration_forbidden')
       this.nodes.requireSource(owner, sender)
     }
-    const memory = botCapabilities.memory && !recovering ? this.knowledge.context(owner, agent.id, root.projectId) : { text: '', version: 'unsupported' }
+    const memory = botCapabilities.memory && !recovering ? await this.knowledge.context(owner, agent.id, root.projectId) : { text: '', version: 'unsupported' }
     const memoryStatus = botCapabilities.memory ? 'ready' : 'upgrade_required'
     if (agent.memoryStatus !== memoryStatus) {
       agent = { ...agent, memoryStatus }
@@ -289,7 +341,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     }
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
     const memoryChanged = !recovering && !!binding?.memoryVersion && binding.memoryVersion !== memory.version
-    const movedRunner=memoryChanged||!!this.store.get(owner,'binding-reset',key)||!!binding&&((binding.vmExecution??'worker')!==(agent.vmExecution??'worker')||binding.computerEnvironmentId!==agent.computerEnvironmentId||binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==(agent.execution??'profile')||!!binding.hermesComputer!==!!target.runner?.hermesComputer)
+    const movedRunner=memoryChanged||!!this.store.get(owner,'binding-reset',key)||!!binding&&(binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==chatExecution||!!binding.hermesComputer!==!!target.runner?.hermesComputer)
     if(movedRunner) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
       binding=undefined
@@ -305,7 +357,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         conversationTaskId: run.conversationTaskId,
         seq: 0,
         role: 'assistant',
-        execution:agent.execution??'profile',
+        execution:chatExecution,
         agentId: agent.id,
         agentName: agent.name,
         content: '',
@@ -334,6 +386,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       lastFlush = 0
     let flushTimer: ReturnType<typeof setTimeout> | undefined
     let usageCompletion: Promise<void> | undefined
+    let submittedText = ''
     const toolController = new AbortController()
     let toolLease: WorkspaceToolLease | undefined
     let pluginLease: OpenBotPlugins | undefined
@@ -355,7 +408,19 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       this.live.delete(key)
       try {
         const current = this.getWork(owner, run.id)
-        if(error&&!submitted&&current.status!=='interrupted'&&error instanceof HttpError&&['computer_busy','computer_quota','runner_offline'].includes(error.code??'')){
+        if (current.cancelRequested && current.status === 'interrupted') {
+          resultMessage.status = 'interrupted'
+          resultMessage.error = '已停止'
+          this.store.atomic(() => {
+            this.store.saveMessage(owner, resultMessage)
+            this.saveWork(owner, current)
+            this.resolveInteractions(owner, current.id)
+          })
+          if (error) rejectTurn(error)
+          else resolveTurn(resultMessage)
+          return
+        }
+        if(error&&!submitted&&current.status!=='interrupted'&&error instanceof HttpError&&RESOURCE_WAIT_CODES.has(error.code??'')){
           current.status='queued';current.resourceWait=true;current.error='等待执行节点或电脑资源';resultMessage.status='queued';resultMessage.visible=false;resultMessage.error=undefined
         }else if (error) {
           current.status = current.status === 'interrupted' ? 'interrupted' : submitted ? 'uncertain' : 'failed'
@@ -395,12 +460,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         if (error) rejectTurn(error)
         else resolveTurn(resultMessage)
       } catch (failure) { rejectTurn(failure instanceof Error ? failure : new Error('无法保存执行状态')) }
-      finally { if (usageCompletion) void usageCompletion.finally(() => gateway.close()); else gateway.close() }
+      finally { vmTools?.close(); if (usageCompletion) void usageCompletion.finally(() => gateway.close()); else gateway.close() }
     }
     gateway.onDisconnect = () =>
       finish(completedEvidence ? undefined : new Error('Hermes 连接断开'))
     gateway.onEvent = (frame: GatewayFrame) => {
       if (settled || !runtimeId || frame.session_id !== runtimeId) return
+      const currentTurn = this.getWork(owner, run.id)
+      if (currentTurn.cancelRequested || currentTurn.status === 'interrupted') return
       this.inspector?.record(owner,c.id,{direction:'event',method:frame.type,data:frame.payload,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
       const p = frame.payload ?? {},
         type = frame.type
@@ -450,7 +517,15 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         current.hadInteraction = true
         current.status = 'waiting'
         this.saveWork(owner, current)
-        this.notify(owner, c, this.store.require<Run>(owner, 'run', run.runId), undefined, interaction)
+        const policy = globalComputers(this.store.home).approvalPolicy
+        if (interaction.kind === 'approval' && policy !== 'ask' && !previous) {
+          // Use the same ownership, authorization and response deduplication as
+          // a manual answer. Never grant session-wide or permanent approval.
+          void this.respond(owner, interaction.id, policy === 'allow' ? 'once' : 'deny').catch(() => {
+            const latest = this.store.get<WorkspaceInteraction>(owner, 'interaction', interaction.id)
+            if (latest && !latest.resolved) this.notify(owner, c, this.store.require<Run>(owner, 'run', run.runId), undefined, latest)
+          })
+        } else if (!previous) this.notify(owner, c, this.store.require<Run>(owner, 'run', run.runId), undefined, interaction)
       } else if(type==='interaction.cancelled'){
         const upstreamId=String(p.request_id??'')
         for(const interaction of this.store.list<WorkspaceInteraction>(owner,'interaction')){
@@ -478,41 +553,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         } else if (!completing) {
           completedEvidence = true
           completing = true
-          let timeout: ReturnType<typeof setTimeout>
-          usageCompletion = Promise.race([
-            gateway.rpc('session.usage', { session_id: runtimeId }),
-            new Promise<undefined>((resolve) => {
-              timeout = setTimeout(() => resolve(undefined), 1000)
-            }),
-          ])
-            .then((usage) => {
-              if (usage && !this.closing && this.store.get<{ taskId: string }>(owner, 'binding', key)?.taskId === run.id) {
-                const used = usage.context_used ?? usage.used_tokens,
-                  limit = usage.context_max ?? usage.context_limit
-                const contextKey = run.conversationTaskId ?? c.id,
-                  context = {
-                  ...usage,
-                  conversationTaskId: run.conversationTaskId,
-                  usedTokens: used,
-                  limitTokens: limit,
-                  percent:
-                    typeof used === 'number' && typeof limit === 'number' && limit > 0
-                      ? Math.round((used / limit) * 1000) / 10
-                      : undefined,
-                  }
-                this.store.put(owner, 'context', contextKey, context)
-                this.store.event(
-                  owner,
-                  'context.changed',
-                  context,
-                  c.id,
-                )
-              }
-            })
-            .catch(() => {})
-            .finally(() => {
-              clearTimeout(timeout)
-            })
+          const outputText = [resultMessage.content, resultMessage.reasoning, resultMessage.tools.length ? JSON.stringify(resultMessage.tools) : ''].filter(Boolean).join('\n')
+          this.recordTurnTokens(owner, agent.id, estimateTokens(submittedText), estimateTokens(outputText))
           finish()
         }
         return
@@ -521,6 +563,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         finish(new HttpError(502, String(p.message ?? p.error ?? '运行失败'), 'run_failed'))
         return
       } else if (['session.usage', 'usage.update', 'context.update'].includes(type)) {
+        if (type !== 'context.update') this.recordAgentUsage(owner, key, agent.id, p)
         const context = { ...p, conversationTaskId: run.conversationTaskId }
         this.store.put(owner, 'context', run.conversationTaskId ?? c.id, context)
         this.store.event(owner, 'context.changed', context, c.id)
@@ -557,15 +600,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       const cwd = recovering || target.pairedToken ? undefined
         : await configuredWorkingDirectory((path, options) => target.session.request(path, options), agent.profile)
       this.nodes.requireSource(owner, agent)
-      const opened = binding?.storedId
-        ? await gateway.rpc('session.resume', {
-            profile: agent.profile,
-            session_id: binding.storedId,
-            omit_messages: true,
-            ...(recovering&&target.runner?.computer?{recoverOnly:true}:{}),
-            close_on_disconnect: false,
-          })
-        : await gateway.rpc('session.create', {
+      // Hermes rejects disabled_toolsets on session.create. Host-tool denial
+      // stays a YaoYao policy; it is not a session-create parameter.
+      const createSession = () => gateway.rpc('session.create', {
             profile: agent.profile,
             title: `Yaoyao ${c.id}${run.conversationTaskId ? ` / ${run.conversationTaskId}` : ''}`,
             source: 'yaoyao_workspace',
@@ -574,6 +611,24 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             room_plumbing: true,
             close_on_disconnect: false,
           })
+      let opened
+      if (binding?.storedId) {
+        try {
+          opened = await gateway.rpc('session.resume', {
+            profile: agent.profile,
+            session_id: binding.storedId,
+            omit_messages: true,
+            ...(recovering&&target.runner?.computer?{recoverOnly:true}:{}),
+            close_on_disconnect: false,
+          })
+        } catch (error) {
+          const code = error instanceof HttpError ? error.code : ''
+          const message = error instanceof Error ? error.message : ''
+          if (recovering || (code !== 'computer_session_mode_changed' && !message.includes('执行方式已改变'))) throw error
+          binding = undefined
+          opened = await createSession()
+        }
+      } else opened = await createSession()
       runtimeId = String(opened.session_id ?? '')
       const storedId = String(
         opened.stored_session_id ?? opened.session_key ?? opened.resumed ?? binding?.storedId ?? '',
@@ -587,8 +642,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       binding = {
         memoryVersion: recovering ? binding?.memoryVersion : memory.version,
         runnerId: target.runner?.id,
-        execution:agent.execution,
-        vmExecution:agent.vmExecution,
+        execution:chatExecution,
+        vmExecution:undefined,
         hermesComputer:target.runner?.hermesComputer,
         computerEnvironmentId:agent.computerEnvironmentId,
         id: key,
@@ -653,20 +708,40 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       } else {
         if (opened.running) throw new HttpError(409, '上游会话仍在运行', 'session_busy')
         this.nodes.requireSource(owner, agent)
-        const team=agent.canManageTeam===true&&!this.store.require<Run>(owner,'run',run.runId).assignmentId
+        const team=botCapabilities.tools&&!agent.temporaryGoalId&&!agent.remoteAgentId&&!this.store.require<Run>(owner,'run',run.runId).assignmentId
         const cloud=!!this.cloud?.selected(owner,agent)
         const plugins=!!this.plugins?.selected(owner,agent)
-        const desktop=this.desktopEnvironments?.toolMode(owner,agent),desktopEpoch=this.desktopEnvironments?.epoch??''
+        const envTools=this.desktopEnvironments?.envTools(owner,agent)??{view:false,browser:false,file:false}
+        const desktop=envTools.view||envTools.file
+        const desktopEpochs=this.desktopEnvironments?.hostEpochs(owner,agent)??{}
         const knowledge = botCapabilities.tools && !agent.remoteAgentId
-        if(team||cloud||desktop||plugins||knowledge){
-          if(team){
-            const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)
-            await this.teamTools.requireAvailable(owner,agent)
+        const vmHolder:{session?:VmToolSession}={}
+        const requireVm=()=>{if(!globalComputers(this.store.home).vm)throw new HttpError(403,'全局设置未开放虚拟机。','computer_disabled')}
+        const callVm=async(name:string,args:unknown)=>{
+          requireVm()
+          if(!vmHolder.session){
+            const vmTarget=this.nodes.targetForAgent(owner,{...agent,execution:'computer'})
+            vmHolder.session=new VmToolSession(vmTarget,agent.profile,run.id,()=>{
+              requireVm();this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
+              const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id),conversation=this.store.require<Conversation>(owner,'conversation',c.id)
+              if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
+            },async(name,bytes)=>{
+              this.requireAuthorization(owner,run.runId)
+              const file=this.publishArtifact(owner,resultMessage,agent,name,bytes)
+              if(!resultMessage.attachments.some(item=>item.id===file.id))resultMessage.attachments.push(file)
+              this.store.saveMessage(owner,resultMessage)
+              return {...file,url:`/api/app/files/${file.id}/download`}
+            })
+            vmTools=vmHolder.session
           }
+          return name==='__file_transfer'?vmHolder.session.transfer(args as Record<string,unknown>):vmHolder.session.call(name,args)
+        }
+        if(team||cloud||desktop||plugins||knowledge||dispatchedVm){
+          if(team){const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)}
           if(desktop)await this.desktopEnvironments!.requireAvailable(owner,agent,target)
           if(cloud)await this.cloud!.requireAvailable(owner,agent,target)
           const assertActive=()=>{
-            if(settled||this.closing||toolController.signal.aborted)throw new Error('运行已停止')
+            if(settled||this.closing||toolController.signal.aborted)throw new HttpError(410,'本轮运行已结束，请发起新一轮对话后重试。','run_finished')
             this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,this.store.require<Agent>(owner,'agent',agent.id))
             if(team)this.teamTools.assertTurn(owner,run.id)
             if(plugins){const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id);if(current.cancelRequested||this.store.require<Run>(owner,'run',run.runId).stopRequested||latest.archived||!['running','waiting'].includes(current.status))throw new HttpError(403,'本轮插件授权已结束','plugin_grant_revoked')}
@@ -676,13 +751,37 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             target,profile:agent.profile,workId:run.id,signal:toolController.signal,
             workspaceMemory:botCapabilities.memory,
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
-            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.filter(t=>desktop==='browser'||t.id!=='desktop_browser'):[]),...(pluginLease?.catalog()??[])],
-            call:async(toolId,args)=>{assertActive();return knowledge&&this.knowledgeTools.handles(toolId)?this.knowledgeTools.call(owner,run.id,toolId,args,botCapabilities.memory):toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,desktop!,desktopEpoch):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):this.teamTools.call(owner,run.id,toolId,args)},
+            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(dispatchedVm?VM_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.map(t=>t.id==='desktop_file_copy'?{...t,description:t.description.replace('25 MiB',`${globalComputers(this.store.home).fileTransferMaxMiB} MiB`)}:t).filter(t=>(envTools.view&&['desktop_environment_view','desktop_environment_action'].includes(t.id))||(envTools.file&&DESKTOP_FILE_TOOL_IDS.has(t.id))):[]),...(pluginLease?.catalog()??[])],
+            call:async(toolId,args)=>{assertActive();return knowledge&&this.knowledgeTools.handles(toolId)?this.knowledgeTools.call(owner,run.id,toolId,args,botCapabilities.memory):toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,'local',desktopEpochs,root.deviceHost,dispatchedVm?action=>callVm('__file_transfer',action):undefined):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):toolId.startsWith('computer_')&&dispatchedVm?callVm(toolId,args):this.teamTools.call(owner,run.id,toolId,args)},
             onFailure:error=>{if(!settled)void gateway.rpc('session.interrupt',{session_id:runtimeId}).catch(()=>{}).finally(()=>finish(error))},
           })
           await toolLease.bind();if(settled)return await completion
         }
         await applyWorkingDirectory((method, params) => gateway.rpc(method, params), runtimeId, cwd, undefined, opened.info?.cwd)
+        // Binding initializes cold Hermes sessions; its persisted runtime can overwrite
+        // pre-build config acknowledgements. Apply Bot settings only after that boundary.
+        if (agent.modelSettings !== undefined) {
+          const entry = { method: 'bot.model-settings', agentId: agent.id, runId: run.runId, taskId: run.conversationTaskId }
+          const snapshot = { revision: agent.revision, settings: agent.modelSettings }
+          this.inspector?.record(owner, c.id, { ...entry, direction: 'request', data: snapshot })
+          try {
+            const resolution = await resolveBotModelSettings(target, agent.profile, agent.modelSettings)
+            const confirmed = agent.modelSettingsConfirmation === botModelTarget(resolution.effective)
+            if (resolution.confirmationMessage && !confirmed) throw new HttpError(409, '此模型需要确认，请打开 Bot 个人资料保存模型设置。', 'model_confirmation_required')
+            await applyBotModelSettings((method, params) => gateway.rpc(method, params), runtimeId, resolution.effective, confirmed)
+            this.inspector?.record(owner, c.id, { ...entry, direction: 'response', data: { ...snapshot, applied: true, effective: resolution.effective } })
+          } catch (error) {
+            // Context-dependent native warnings cannot be known from the model
+            // catalogue. Bring them back to the profile's existing save flow.
+            if (error instanceof BotModelConfirmationError) {
+              const latest = this.store.require<Agent>(owner, 'agent', agent.id)
+              if (latest.revision === agent.revision) this.store.put(owner, 'agent', latest.id, { ...latest,
+                modelSettingsPendingConfirmation: { target: error.target, message: error.confirmationMessage } })
+            }
+            this.inspector?.record(owner, c.id, { ...entry, direction: 'response', data: { ...snapshot, applied: false, error: error instanceof Error ? error.message : '模型设置应用失败' } })
+            throw error
+          }
+        }
         const trigger = this.store.require<Message>(owner, 'message', run.messageId)
         const attachmentRefs: string[] = []
         for (const file of trigger.attachments) {
@@ -705,8 +804,19 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const members = run.turnConfiguration!.members
         const goal = run.conversationTaskId ? this.store.get<import('../shared/agentTasks.js').AgentGoal>(owner, 'goal', run.conversationTaskId) : undefined
         const assignmentId = this.store.require<Run>(owner, 'run', run.runId).assignmentId
+        const globals = globalComputers(this.store.home)
+        const eligible = !agent.remoteAgentId && !agent.archived
+        const open = [eligible && globals.scriptMachine ? '电脑' : '', eligible && globals.serverComputer ? '服务器' : '', eligible && globals.vm ? '虚拟环境' : '', eligible && globals.cloud ? '云虚拟机' : ''].filter(Boolean)
+        const hostNames = this.desktopEnvironments?.hostStates(owner).map(host => host.name).filter(Boolean) ?? []
+        const prior = this.store.messages(owner, c.id, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true, run.conversationTaskId)
+          .filter(message => message.id !== resultMessage.id && message.seq <= run.triggerSeq)
+          .map(message => `${message.content}\n${message.tools.map(tool => String(tool.name ?? tool.tool_name ?? '')).join(' ')}`)
+          .join('\n')
+        const hit = environmentMentions(`${trigger.content}\n${prior}`, hostNames)
+        const envDirective = `Hermes 只运行在服务器，其原生终端和文件工具始终操作服务器，不代表用户所说的「本机」。操作用户消息来源电脑必须使用带目标的 desktop_* 工具。Hermes 的网页、浏览器、终端和文件工具均可使用。不要使用 Hermes 的 memory 工具，长期记忆只用 Bot 自己的记忆。另外可以使用全局开放的电脑环境：${open.join('、') || '无'}。所有 Bot 使用同一套全局电脑权限，环境可同时使用。没开放的电脑环境不要用。这些环境是额外的桌面，不代替 Hermes 工具。`
         const rules = [
-          `你是 ${agent.name}。以下是用户为这个独立机器人配置的角色与规则（版本 ${agent.revision}）：\n${agent.remoteAgentId ? '配置由远端机器人管理。' : agent.instructions}`,
+          envDirective,
+          `你是 ${agent.name}。${agent.description ? `描述：${agent.description}\n\n` : ''}${personaSection(agent) ? `用户为它设定的工作规范：\n${personaSection(agent)}\n\n` : ''}以下是用户为这个独立机器人配置的角色与规则（版本 ${agent.revision}）：\n${agent.remoteAgentId ? '配置由远端机器人管理。' : agent.instructions}`,
           c.kind === 'group' && Object.keys(c.memberRoles ?? {}).length
             ? `本群角色分工（仅在本群生效）：\n${members.flatMap(member => {
                 const role = c.memberRoles?.[member.id]
@@ -731,8 +841,12 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           root.projectId ? `当前项目 ID：${root.projectId}。只能使用当前项目记忆。` : '',
           `本次来源消息 ID：${run.messageId}；当前会话 ID：${c.id}。`,
           plugins ? '本轮已挂载用户为当前 Bot 授权的插件工具，工具名以 plugin_ 开头，说明中包含实际服务和操作。仅按用户当前任务使用；连接或重新授权应用请让用户打开 Bot 模式的工具 → 已连接应用。不要索取 API Key 或在回复中展示凭据。' : '',
-          desktop ? DESKTOP_ENVIRONMENT_RULES : '',
-          cloud ? grokComputerRules(agent.computer==='cloud'&&agent.allowHostEnvironment===true) : '',
+          desktop && hit.server && globals.serverComputer ? SERVER_COMPUTER_RULES+(this.desktopEnvironments?.onlineHostsLine(owner,root.deviceHost)??'') : '',
+          desktop && hit.script && globals.scriptMachine ? DESKTOP_ENVIRONMENT_RULES+(this.desktopEnvironments?.onlineHostsLine(owner,root.deviceHost)??'') : '',
+          this.desktopEnvironments?.deviceContextLine(owner,root.deviceHost) ?? '本轮未提供来源电脑；操作电脑时必须明确目标。',
+          envTools.file ? DESKTOP_FILE_TRANSFER_RULES.replace('25 MiB',`${globalComputers(this.store.home).fileTransferMaxMiB} MiB`) : '',
+          cloud && hit.cloud ? grokComputerRules() : '',
+          dispatchedVm && hit.vm ? VM_COMPUTER_RULES : '',
           `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
         ]
           .filter(Boolean)
@@ -752,10 +866,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         this.saveWork(owner, admission)
         submitted = true
         try {
+          submittedText = `${rules}\n\n${text}\n${attachmentRefs.join('\n')}`
           await gateway.rpc('prompt.submit', {
             session_id: runtimeId,
             ...(target.runner?.computer?{workMarker:`[yaoyao-run:${run.runId}:${resultMessage.id}]`}:{}),
-            text: `${rules}\n\n${text}\n${attachmentRefs.join('\n')}`,
+            text: submittedText,
           })
           this.store.remove(owner,'binding-reset',key)
           binding.contextSeq = Math.max(binding.contextSeq ?? 0, admission.contextThroughSeq)
@@ -803,16 +918,6 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const request = this.store.require<Run>(owner, 'run', work.runId).discussion ? `本次用户原始要求：\n${rootTrigger.content.slice(0, 16000)}\n\n` : ''
     return `${request}${batch ? `本批次执行结果：\n${batch}\n\n` : ''}${omitted ? `较早上下文有 ${omitted} 条因长度限制省略，请勿假定已完整读取。\n\n` : ''}${selected.join('\n\n')}`
   }
-  private resolveInteractions(owner: string, taskId: string): void {
-    for (const interaction of this.store.list<WorkspaceInteraction>(owner, 'interaction')) {
-      const binding = this.store.get<{ taskId?: string }>(owner, 'interaction-binding', interaction.id)
-      if (binding?.taskId === taskId && !interaction.resolved) {
-        interaction.resolved = true
-        this.store.put(owner, 'interaction', interaction.id, interaction)
-        this.store.event(owner, 'interaction.changed', interaction, interaction.conversationId)
-      }
-    }
-  }
   async respond(owner: string, id: string, answer: string): Promise<void> {
     type Reply = WorkspaceInteraction & { answer?: string; responseState?: 'sending' | 'uncertain' | 'sent' }
     const interaction = this.store.require<Reply>(owner, 'interaction', id)
@@ -826,13 +931,18 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const binding = this.store.require<{ key: string; upstreamId: string; taskId: string }>(owner, 'interaction-binding', id)
     const live = this.live.get(binding.key)
     if (!live || live.taskId !== binding.taskId || live.runId !== interaction.runId) throw new HttpError(409, '请先恢复此轮连接', 'interaction_offline')
-    if (interaction.kind === 'approval' && !['once', 'session', 'always', 'deny', 'allow', 'approve'].includes(answer)) throw new HttpError(400, '审批选项无效', 'invalid_approval')
+    if (interaction.kind === 'approval' && !['once', 'session', 'always', 'deny', 'allow', 'approve', 'auto'].includes(answer)) throw new HttpError(400, '审批选项无效', 'invalid_approval')
+    const automatic = interaction.kind === 'approval' && answer === 'auto'
     interaction.answer = answer; interaction.responseState = 'sending'
-    this.store.put(owner, 'interaction', id, interaction)
+    this.store.atomic(() => {
+      // Approval replies never change the global policy.
+      // Legacy auto replies approve this operation only. Global policy is admin-owned.
+      this.store.put(owner, 'interaction', id, interaction)
+    })
     try {
       await live.gateway.rpc(interaction.kind === 'approval' ? 'approval.respond' : 'clarify.respond', {
         session_id: live.runtimeId, request_id: binding.upstreamId,
-        ...(interaction.kind === 'approval' ? { choice: answer } : { answer }),
+        ...(interaction.kind === 'approval' ? { choice: automatic ? 'once' : answer } : { answer }),
       })
     } catch (error) {
       const latest = this.store.require<Reply>(owner, 'interaction', id)
@@ -840,6 +950,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         latest.responseState = error instanceof HttpError && error.code === 'gateway_rejected' ? undefined : 'uncertain'
         this.store.put(owner, 'interaction', id, latest)
       }
+      if (automatic) throw new HttpError(409, '本次答复未确认，请检查当前任务状态；全局审批策略未改变。', 'approval_auto_response_failed')
       throw error
     }
     interaction.resolved = true; interaction.responseState = 'sent'
@@ -854,7 +965,10 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     if (live?.taskId === work.id) {
       await live.gateway.rpc('session.interrupt', { session_id: live.runtimeId })
       const current = this.getWork(owner, work.id)
-      if (['complete', 'failed', 'interrupted'].includes(current.status)) return
+      if (['complete', 'failed', 'interrupted'].includes(current.status)) {
+        live.done(new Error('已停止'))
+        return
+      }
       current.status = 'interrupted'; current.error = '已停止'
       this.saveWork(owner, current)
       if(current.currentMessageId){const message=this.store.require<Message>(owner,'message',current.currentMessageId);message.status='interrupted';message.error='已停止';this.store.saveMessage(owner,message)}
@@ -895,6 +1009,57 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     for (const task of this.store.list<import('../shared/workspace.js').WorkspaceTask>(owner, 'conversation-task'))
       if (task.conversationId === conversationId) this.tasks.cancel(owner, task.id)
     await Promise.all([super.stopConversation(owner, conversationId), this.tasks.cancelOrigin(owner, conversationId)])
+  }
+  private recordTurnTokens(owner: string, agentId: string, input: number, output: number): void {
+    if (!input && !output) return
+    this.store.atomic(() => {
+      const now = new Date(),
+        date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+        id = `${agentId}:${date}`
+      const day = this.store.get<WorkspaceAgentUsageSummary & { agentId: string; date: string; updatedAt: number }>(owner, 'agent-token-day', id)
+        ?? { agentId, date, input: 0, output: 0, total: 0, updatedAt: 0 }
+      day.input += input
+      day.output += output
+      day.total += input + output
+      day.updatedAt = now.getTime()
+      this.store.put(owner, 'agent-token-day', id, day)
+    })
+  }
+
+  /**
+   * Hermes reports cumulative per-session token counters (input/output/total) alongside
+   * context occupancy. Attribute the growth since the last snapshot to the agent's daily
+   * usage bucket; a session reset (counters dropping) only re-baselines.
+   */
+  private recordAgentUsage(owner: string, key: string, agentId: string, usage: unknown): void {
+    if (!usage || typeof usage !== 'object') return
+    const value = usage as Record<string, unknown>
+    const counter = (...names: string[]) => {
+      for (const name of names) {
+        const raw = value[name]
+        if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return Math.round(raw)
+      }
+      return undefined
+    }
+    const input = counter('input', 'prompt', 'input_tokens'),
+      output = counter('output', 'completion', 'output_tokens'),
+      total = counter('total', 'total_tokens') ?? (input === undefined && output === undefined ? undefined : (input ?? 0) + (output ?? 0))
+    if (total === undefined) return
+    this.store.atomic(() => {
+      const baseline = this.store.get<{ input?: number; output?: number; total?: number }>(owner, 'usage-baseline', key) ?? {}
+      const grew = (current: number | undefined, previous: number | undefined) => (current === undefined ? 0 : Math.max(0, current - (previous ?? 0)))
+      const inputDelta = grew(input, baseline.input), outputDelta = grew(output, baseline.output), totalDelta = grew(total, baseline.total)
+      this.store.put(owner, 'usage-baseline', key, { input, output, total })
+      if (!inputDelta && !outputDelta && !totalDelta) return
+      const now = new Date(),
+        date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+        id = `${agentId}:${date}`
+      const day = this.store.get<WorkspaceAgentUsageSummary & { agentId: string; date: string; updatedAt: number }>(owner, 'agent-token-day', id)
+        ?? { agentId, date, input: 0, output: 0, total: 0, updatedAt: 0 }
+      day.input += inputDelta; day.output += outputDelta; day.total += Math.max(totalDelta, inputDelta + outputDelta)
+      day.updatedAt = now.getTime()
+      this.store.put(owner, 'agent-token-day', id, day)
+    })
   }
   close(): void {
     this.collaboration.close()

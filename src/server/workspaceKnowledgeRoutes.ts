@@ -15,28 +15,28 @@ export function workspaceKnowledgeRouter(runtime: WorkspaceRuntime, auth: LocalA
     for (const id of input.memberIds) runtime.nodes.requireSource(owner, knowledge.agent(owner, id))
     ctx.body = { project: knowledge.saveProject(owner, input) }
   })
-  router.get('/memories', ctx => {
+  router.get('/memories', async ctx => {
     const owner = auth.require(ctx).id, query = parse(memoryQueryInput, ctx.query)
-    const memories = knowledge.memories(owner, query).filter(memory => { try { runtime.nodes.requireSource(owner, knowledge.agent(owner, memory.agentId)); return true } catch { return false } })
+    const memories = (await knowledge.memories(owner, query)).filter(memory => { try { runtime.nodes.requireSource(owner, knowledge.agent(owner, memory.agentId)); return true } catch { return false } })
     ctx.set('Cache-Control', 'no-store'); ctx.body = { memories }
   })
-  router.post('/memories', ctx => {
+  router.post('/memories', async ctx => {
     const owner = auth.require(ctx).id, input = parse(memoryWriteInput, ctx.request.body)
     runtime.nodes.requireSource(owner, knowledge.agent(owner, input.agentId))
-    ctx.body = { memory: knowledge.writeMemory(owner, input) }
+    ctx.body = { memory: await knowledge.writeMemory(owner, input) }
   })
-  router.post('/memories/forget', ctx => {
+  router.post('/memories/forget', async ctx => {
     const owner = auth.require(ctx).id, input = parse(memoryForgetInput, ctx.request.body)
     runtime.nodes.requireSource(owner, knowledge.agent(owner, input.agentId))
-    ctx.body = knowledge.forget(owner, input)
+    ctx.body = await knowledge.forget(owner, input)
   })
-  router.get('/memories/:id/revisions', ctx => {
+  router.get('/memories/:id/revisions', async ctx => {
     const owner = auth.require(ctx).id, scope = parse(memoryScopeInput, ctx.query)
     runtime.nodes.requireSource(owner, knowledge.agent(owner, scope.agentId))
-    ctx.body = { revisions: knowledge.revisions(owner, scope, ctx.params.id) }
+    ctx.body = { revisions: await knowledge.revisions(owner, scope, ctx.params.id) }
   })
-  router.get('/memory-export', ctx => {
-    const owner = auth.require(ctx).id, query = parse(memoryQueryInput, ctx.query), memories = knowledge.memories(owner, query)
+  router.get('/memory-export', async ctx => {
+    const owner = auth.require(ctx).id, query = parse(memoryQueryInput, ctx.query), memories = await knowledge.memories(owner, query)
     for (const memory of memories) runtime.nodes.requireSource(owner, knowledge.agent(owner, memory.agentId))
     ctx.set('Content-Disposition', 'attachment; filename="bot-memory.md"')
     ctx.type = 'text/markdown; charset=utf-8'

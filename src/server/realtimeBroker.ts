@@ -47,6 +47,7 @@ export class RealtimeBroker {
     return this.commands.size === 0 && [...this.upstreams.values()].every(upstream => upstream.pending.size === 0 && [...upstream.routes.values()].every(route => !route.active))
   }
   protectedSession: (id: string) => boolean = () => false
+  assertCanCommand:()=>void=()=>{}
   onNativeEvent: (owner: string, profile: string, storedId: string, frame: Frame) => void = () => {}
   onNativeGlobalEvent: (owner: string, type: string, upstreamInvalidation?: boolean) => void = () => {}
   onNativeCommand: (owner: string, profile: string, storedId: string, method: string, params: Frame) => void = () => {}
@@ -141,6 +142,7 @@ export class RealtimeBroker {
 
   command(c: RealtimeChannel, requestId: string, input: Frame): Promise<CommandReceipt> {
     if (this.closed) throw new HttpError(503, 'Realtime broker is stopping', 'broker_stopping')
+    this.assertCanCommand()
     if (c.kind !== 'chat') throw new HttpError(403, 'Group event channel is read-only', 'read_only')
     const normalized = checkedChatFrame(Buffer.from(JSON.stringify(input)), false, c.principal.paired)
     const frame = JSON.parse(normalized) as Frame

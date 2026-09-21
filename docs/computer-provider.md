@@ -7,8 +7,8 @@
 - Docker 和 Podman 使用同一份接口与配置校验；远程引擎要求将 Runner 放到目的电脑，避免把本机目录误当作远程挂载路径。
 - 镜像必须使用完整不可变 ID，并验证兼容的 CUA 驱动标签。当前采用本机已有的 OpenMausBot CUA 0.20.0、layer 5 镜像接口；没有复制或修改参考仓库。
 - 环境运行在容器隔离层。macOS 上 Docker/Podman 的底层 Linux 虚拟机由运行时提供，每个环境不是一台独占内核的 VM。
-- 仅挂载该环境的持久工作目录；不挂载 Docker socket、宿主 HOME、Hermes 配置或凭据。命令固定以 guest UID/GID 1000 执行，工作目录为 `/home/cua/workspace`。
-- 固定独立 IPC/cgroup 命名空间、禁止提权、收紧 capability，并设置 CPU、内存、swap 与进程数上限。每次执行前核对运行实例、镜像、归属、挂载与约束。
+- 仅挂载该环境的持久工作目录；不挂载 Docker socket、宿主 HOME、Hermes 配置或凭据。命令默认以 guest UID/GID 1000 执行，也可显式选择 root；工作目录为 `/home/cua/workspace`。
+- 固定独立 IPC/cgroup 命名空间并收紧 capability，同时设置 CPU、内存、swap 与进程数上限。每次执行前核对运行实例、镜像、归属、挂载与约束；Bot 可显式选择 cua 或 root 用户执行 Linux 命令。
 - 默认 `--network none`，不发布任何端口。容器只有 loopback 网卡，不能直接访问宿主服务或外网。自己的主机名映射到 loopback，保证 XFCE/VNC 在无网络环境下正常启动。可通过专属进程通道启用受控公网代理，仍不增加外部网卡或端口。详见 `docs/computer-network.md`。
 - 桌面通过容器内的 CUA socket 操作；验收已读取真实截图。查看和人工接管已接入账号鉴权及独立控制租约，见 `docs/computer-control.md`。
 - 取消或无法确认的 guest 命令会停止所属私有容器，确认停止后才释放串行执行位置。仅终止 `docker exec` 客户端不能证明 guest 进程已停止。

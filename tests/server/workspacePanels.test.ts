@@ -118,8 +118,8 @@ it('persists the separate host option, checks the Runner grant and refuses chang
  const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(error:any){ctx.status=error.status??500;ctx.body={error:error.message}}});app.use(bodyParser());app.use(cloud.router().routes())
  const path=`/api/app/agents/${agent.id}/computer-selection`
  const response=await request(app.callback()).put(path).send({computer:'vm',allowHostEnvironment:true}).expect(200)
- expect(response.body.agent).toMatchObject({computer:'vm',execution:'computer',allowHostEnvironment:true})
- expect(target).toHaveBeenCalledWith('owner','local',expect.objectContaining({agentId:agent.id,hostAccess:true}))
+ expect(response.body.agent).toMatchObject({computer:'vm',execution:'profile',allowHostEnvironment:true})
+ const granted=target.mock.calls.at(-1)?.[2];expect(granted).toMatchObject({agentId:agent.id});expect(granted).not.toHaveProperty('hostAccess')
  await request(app.callback()).put(path).set('x-user','other').send({computer:'vm',allowHostEnvironment:true}).expect(404)
  store.put('owner','turn','active-hybrid',{agentId:agent.id,status:'running'})
  await request(app.callback()).put(path).send({computer:'vm',allowHostEnvironment:false}).expect(409)
@@ -134,8 +134,10 @@ it('persists the separate Profile execution mode, checks its Runner capability a
  const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(error:any){ctx.status=error.status??500;ctx.body={error:error.message}}});app.use(bodyParser());app.use(cloud.router().routes())
  const path=`/api/app/agents/${agent.id}/computer-selection`
  const changed=await request(app.callback()).put(path).send({computer:'vm',vmExecution:'profile'}).expect(200)
- expect(changed.body.agent).toMatchObject({computer:'vm',execution:'computer',vmExecution:'profile',allowHostEnvironment:true})
- expect(target).toHaveBeenCalledWith('owner','local',expect.objectContaining({profileSession:true,hostAccess:true}))
+ expect(changed.body.agent).toMatchObject({computer:'vm',execution:'profile',vmExecution:'profile',allowHostEnvironment:true})
+ const opened=target.mock.calls.at(-1)?.[2]
+ expect(opened).not.toHaveProperty('profileSession')
+ expect(opened).not.toHaveProperty('hostAccess')
  store.put('owner','turn','active-profile',{agentId:agent.id,status:'running'})
  await request(app.callback()).put(path).send({computer:'vm',vmExecution:'worker'}).expect(409)
  expect(()=>store.updateAgent('owner',agent.id,{vmExecution:'worker'})).toThrow('先停止当前任务')
@@ -166,18 +168,18 @@ it('allows the host option for cloud and VM only and clears it when selecting an
  }
  expect(connect).not.toHaveBeenCalled();expect(available).not.toHaveBeenCalled()
  for(const computer of ['auto','off','local','browser']){
-  store.updateAgent('owner',agent.id,{computer:'vm',execution:'computer',allowHostEnvironment:true})
+  store.updateAgent('owner',agent.id,{computer:'vm',execution:'profile',allowHostEnvironment:true})
   const switched=await request(app.callback()).put(path).send({computer,allowHostEnvironment:true}).expect(200)
   expect(switched.body.agent.allowHostEnvironment).toBe(false)
   const returned=await request(app.callback()).put(path).send({computer:'vm'}).expect(200)
   expect(returned.body.agent.allowHostEnvironment).toBe(false)
  }
  await request(app.callback()).put(path).send({computer:'hybrid'}).expect(400)
- expect(grokComputerRules(true)).toContain('基础 Profile 已授权的本机文件和终端工具')
- expect(grokComputerRules(false)).toContain('本轮不要使用本机终端')
+ expect(grokComputerRules(true)).toContain('cloud_computer_*')
+ expect(grokComputerRules(false)).not.toContain('允许本机环境')
 })
 it('clears inapplicable host grants through generic updates and migrates the previous combined choice once',()=>{
- const agent=store.createAgent('owner',{name:'权限迁移',profile:'default',computer:'vm',execution:'computer',allowHostEnvironment:true})
+ const agent=store.createAgent('owner',{name:'权限迁移',profile:'default',computer:'vm',execution:'profile',allowHostEnvironment:true})
  expect(store.updateAgent('owner',agent.id,{computer:'auto'}).allowHostEnvironment).toBe(false)
  store.put('owner','agent',agent.id,{...agent,computer:'hybrid',allowHostEnvironment:undefined})
  store.db.prepare('DELETE FROM workspace_migrations WHERE id=?').run('host-environment-option-v1')
@@ -225,4 +227,26 @@ it('keeps cloud tools paused after a lost human lease until a new explicit handb
  const renewed=await request(app.callback()).post(base+'/take').send({requestId:randomUUID()});expect(renewed.status).toBe(200)
  await request(app.callback()).post(base+'/giveback').send({controlId:renewed.body.controlId,token:renewed.body.token,notes:'已完成登录'})
  expect(await work).toMatchObject({handoffNote:'已完成登录'});expect(counts().exec).toBe(1)
+})
+
+it('keeps the chat on the server profile when the virtual environment is checked',async()=>{
+ const {cloud}=fakeCloud(),agent=store.createAgent('owner',{name:'虚拟环境外派',profile:'default',computer:'off',execution:'profile'})
+ const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(error:any){ctx.status=error.status??500;ctx.body={error:error.message}}});app.use(bodyParser());app.use(cloud.router().routes())
+ const response=await request(app.callback()).put(`/api/app/agents/${agent.id}/computer-selection`).send({envs:{vm:true,cloud:false,desktop:true}}).expect(200)
+ expect(response.body.agent).toMatchObject({execution:'profile',computer:'vm'})
+ expect(response.body.agent.envs).toMatchObject({vm:true,desktop:true,cloud:true})
+})
+
+it('pins a routine to its saved source and preserves it across edits and restart',()=>{
+ const bot=store.createAgent('owner',{name:'来源固定',profile:'default'}),send=vi.fn(()=>({id:randomUUID()}))
+ let service=new WorkspaceRoutines(store,auth,nodes,{send} as any)
+ const deviceHost=randomUUID(),body={name:'每日任务',prompt:'读取本机文件',enabled:true,deviceHost,schedule:{kind:'interval',timezone:'UTC',everyMinutes:60}}
+ const saved=service.save('owner',bot.id,body)
+ const {deviceHost:_origin,...edit}=body
+ service.save('owner',bot.id,{...edit,name:'改名'},saved.id)
+ service=new WorkspaceRoutines(store,auth,nodes,{send} as any)
+ const restored=store.require<any>('owner','routine',saved.id)
+ service.run('owner',restored,0)
+ expect(send).toHaveBeenCalledWith('owner',expect.any(String),expect.objectContaining({deviceHost}))
+ expect(service.save('owner',bot.id,{...edit,deviceHost:null},saved.id).deviceHost).toBeUndefined()
 })

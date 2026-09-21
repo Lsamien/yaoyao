@@ -8,8 +8,10 @@ import { z } from 'zod'
 import { HttpError } from './errors.js'
 import { isVisibleMessageFile } from '../shared/messageFiles.js'
 import type { StoredWorkspaceFile } from './workspaceAssets.js'
+import type { SharedComputer } from './sharedComputers.js'
 import { notificationPlainText } from './notificationText.js'
-import {supportsHostEnvironment} from '../shared/workspace.js'
+import {readHostTools} from './hostToolSettings.js'
+import {supportsHostEnvironment,deriveComputer} from '../shared/workspace.js'
 import type { WorkspaceLifecycleAction, WorkspaceLifecyclePreview } from '../shared/workspaceLifecycle.js'
 import { decodeAgentMascotAvatar, isAgentImageAvatar, defaultAgentIdentity, encodeAgentAvatar, normalizeAvatar, randomAgentIdentity, MAX_AVATAR_DESCRIPTOR_LENGTH } from '../shared/agentIdentity.js'
 import type {
@@ -35,30 +37,54 @@ const avatar = z
     '请选择有效的内置头像或 PNG、JPEG、WebP 图片',
   )
 const taskTitle = z.string().trim().min(1).max(100).refine((v) => !/[\u0000-\u001f]/.test(v), '标题不能包含控制字符')
+const envsInput = z.object({ vm: z.boolean().optional(), cloud: z.boolean().optional(), desktop: z.boolean().optional(), browser: z.boolean().optional() }).strict()
+const personaInput = {
+  job: z.string().trim().max(120).optional(),
+  antiJobs: z.array(z.string().trim().min(1).max(120)).max(8).optional(),
+  voice: z.enum(['concise', 'casual', 'rigorous', 'custom']).optional(),
+  voiceCustom: z.string().max(200).optional(),
+  actBias: z.enum(['ask_first', 'ask_key_then_act', 'act_now']).optional(),
+}
+const modelIdentifier = z.string().trim().min(1).max(512).refine(value => !/[\s"'\\\u0000-\u001f]/.test(value) && !value.startsWith('-'), '模型或 Provider 标识无效')
+export const botModelSettingsInput = z.object({
+  provider: modelIdentifier.nullable(), model: modelIdentifier.nullable(),
+  reasoningEffort: z.enum(['none','minimal','low','medium','high','xhigh','max','ultra']).nullable(),
+  fastMode: z.enum(['normal','fast','auto','cold']).nullable(),
+}).strict().refine(value => (value.provider === null) === (value.model === null), '模型与 Provider 必须一起选择')
 export const agentInput = z
   .object({
     name,
     avatar: avatar.default(''),
     instructions: z.string().max(24_000).default(''),
+    description: z.string().trim().max(500).default(''),
     execution:z.enum(['profile','computer']).default('profile'),
     computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
+    envs:envsInput.optional(),
+    desktopHost:z.union([z.literal('local'),z.string().uuid(),z.null()]).optional(),
     allowHostEnvironment:z.boolean().default(false),
     vmExecution:z.enum(['worker','profile']).optional(),
     browserProfile:z.enum(['persistent','temporary']).optional(),
-    canManageTeam: z.boolean().default(false),
+    canManageTeam: z.boolean().default(true),
     canCollaborate: z.boolean().default(true),
     memoryEnabled: z.boolean().default(true),
+    approvalPolicy: z.enum(['ask', 'allow', 'deny']).default('ask'),
+    ...personaInput,
     nodeId: z.string().default('local'),
     profile: z.string().min(1).max(256),
   })
   .strict()
 export const agentPatch = z
   .object({
+    modelSettings: botModelSettingsInput.nullable().optional(),
+    expectedRevision: z.number().int().positive().optional(),
     name: name.optional(),
     avatar: avatar.optional(),
     instructions: z.string().max(24_000).optional(),
+    description: z.string().trim().max(500).optional(),
     execution:z.enum(['profile','computer']).optional(),
     computer:z.enum(['auto','cloud','vm','local','browser','off']).optional(),
+    envs:envsInput.optional(),
+    desktopHost:z.union([z.literal('local'),z.string().uuid(),z.null()]).optional(),
     allowHostEnvironment:z.boolean().optional(),
     vmExecution:z.enum(['worker','profile']).optional(),
     browserProfile:z.enum(['persistent','temporary']).optional(),
@@ -67,6 +93,12 @@ export const agentPatch = z
     canManageTeam: z.boolean().optional(),
     canCollaborate: z.boolean().optional(),
     memoryEnabled: z.boolean().optional(),
+    approvalPolicy: z.enum(['ask', 'allow', 'deny']).optional(),
+    job: z.string().trim().max(120).nullable().optional(),
+    antiJobs: z.array(z.string().trim().min(1).max(120)).max(8).nullable().optional(),
+    voice: z.enum(['concise', 'casual', 'rigorous', 'custom']).nullable().optional(),
+    voiceCustom: z.string().max(200).nullable().optional(),
+    actBias: z.enum(['ask_first', 'ask_key_then_act', 'act_now']).nullable().optional(),
     archived: z.boolean().optional(),
   })
   .strict()
@@ -378,12 +410,16 @@ export class WorkspaceStore {
     const conversation=this.require<Conversation>(owner,'conversation',conversationId)
     if(agent.temporaryGoalId!==taskId||!this.taskMemberIds(owner,conversation,taskId).includes(agent.id))throw new HttpError(403,'临时助手只能执行所属任务','helper_task_bound')
   }
-  createAgent(owner: string, input: unknown, origin?: { createdByAgentId: string; createdFromRunId: string;temporaryGoalId?:string;helperActivation?:number;helperRunnerId?:string }): Agent {
+  createAgent(owner: string, input: unknown, origin?: { createdByAgentId?: string; createdFromRunId?: string;temporaryGoalId?:string;helperActivation?:number;helperRunnerId?:string }, allocatedId = randomUUID()): Agent {
     const body = parse(agentInput, input)
+    // Legacy per-Bot permissions cannot override the shared policy.
+    body.approvalPolicy = readHostTools(this.home).approvalPolicy
+    body.canManageTeam = true
+    body.canCollaborate = true
     if(!supportsHostEnvironment(body)||origin)body.allowHostEnvironment=false
     if(body.computer!=='vm'||origin)body.vmExecution='worker'
     if(body.vmExecution==='profile')body.allowHostEnvironment=true
-    if (origin) this.require<Agent>(owner, 'agent', origin.createdByAgentId)
+    if (origin?.createdByAgentId) this.require<Agent>(owner, 'agent', origin.createdByAgentId)
     return this.atomic(() => {
       if (
         this.list<Agent>(owner, 'agent').some(
@@ -392,7 +428,7 @@ export class WorkspaceStore {
       )
         throw new HttpError(409, '机器人名称已存在', 'duplicate_agent_name')
       const now = Date.now(),
-        id = randomUUID()
+        id = allocatedId
       const agent: Agent = {
         ...body,
         ...origin,
@@ -435,10 +471,40 @@ export class WorkspaceStore {
     })
   }
   updateAgent(owner: string, id: string, input: unknown): Agent {
-    const patch = parse(agentPatch, input)
+    // Persona fields use null from clients to clear; normalizing with an
+    // always-present key keeps the clear semantics when spreading over the record.
+    const { job, antiJobs, voice, voiceCustom, actBias, expectedRevision, ...rest } = parse(agentPatch, input)
+    const patch: typeof rest & Partial<Pick<Agent, 'job' | 'antiJobs' | 'voice' | 'voiceCustom' | 'actBias'>> = rest
+    // Only materialize keys the request actually carried; null clears the field.
+    if (job !== undefined) patch.job = job ?? undefined
+    if (antiJobs !== undefined) patch.antiJobs = antiJobs ?? undefined
+    if (voice !== undefined) patch.voice = voice ?? undefined
+    if (voiceCustom !== undefined) patch.voiceCustom = voiceCustom ?? undefined
+    if (actBias !== undefined) patch.actBias = actBias ?? undefined
+    delete patch.approvalPolicy
+    delete patch.canManageTeam
+    delete patch.canCollaborate
+    if (!Object.keys(patch).length) return this.require<Agent>(owner, 'agent', id)
     if (patch.avatar !== undefined) patch.avatar = normalizeAvatar(patch.avatar)
+    if (patch.desktopHost === null) patch.desktopHost = undefined
+    if (patch.computer === 'browser') patch.computer = 'off'
     return this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
+      if (expectedRevision !== undefined && agent.revision !== expectedRevision) throw new HttpError(409, 'Bot 资料已在其他地方更新，请重新加载后保存。', 'agent_revision_conflict')
+      // Parallel-environment agents keep their set; a raw computer write only
+      // toggles the VM leg (local-vm enable/disable and Compose bindings).
+      if(patch.computer!==undefined&&agent.envs){
+        const envs={...agent.envs}
+        if(patch.computer==='vm')envs.vm=true
+        else if(patch.computer==='off'||patch.computer==='auto')envs.vm=false
+        patch.envs=envs
+      }
+      if(patch.envs){
+        patch.envs={...patch.envs,browser:false}
+        patch.computer=deriveComputer({vm:patch.envs.vm===true,cloud:patch.envs.cloud===true,desktop:patch.envs.desktop===true,browser:false})
+        patch.execution='profile'
+      }
+      const desktopHostChanged = patch.desktopHost !== undefined && patch.desktopHost !== (agent.desktopHost ?? null)
       if(patch.vmExecution==='profile'&&patch.allowHostEnvironment===false)throw new HttpError(400,'本机协作模式需要本机环境，请选择虚拟机模式','computer_profile_host_required')
       if(agent.vmExecution==='profile'){
         if(patch.allowHostEnvironment===false&&patch.vmExecution===undefined)patch.vmExecution='worker'
@@ -449,16 +515,16 @@ export class WorkspaceStore {
       if(!supportsHostEnvironment({...agent,...patch})&&(agent.allowHostEnvironment===true||patch.allowHostEnvironment!==undefined))patch.allowHostEnvironment=false
       const sourceChanged=(patch.nodeId!==undefined&&patch.nodeId!==agent.nodeId)||(patch.profile!==undefined&&patch.profile!==agent.profile)
       const hostPermissionChanged=patch.allowHostEnvironment!==undefined&&patch.allowHostEnvironment!==(agent.allowHostEnvironment===true)
-      const destinationChanged=hostPermissionChanged||(patch.vmExecution!==undefined&&patch.vmExecution!==(agent.vmExecution??'worker'))||(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
+      const destinationChanged=desktopHostChanged||hostPermissionChanged||(patch.vmExecution!==undefined&&patch.vmExecution!==(agent.vmExecution??'worker'))||(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
       if(sourceChanged||destinationChanged){
         if(this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['queued','running','waiting','uncertain','cancelling'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再修改机器人来源或电脑','agent_execution_busy')
         if(this.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(grant.agentId===id||grant.environmentId===(agent.computerEnvironmentId??id))))throw new HttpError(409,'请先交还电脑控制权','agent_execution_busy')
         if(sourceChanged&&agent.computerEnvironmentId){const shared=this.require<{nodeId:string;profile:string;managedLocalVm?:boolean;managedCompose?:boolean}>(owner,'shared-computer',agent.computerEnvironmentId);if((patch.nodeId??agent.nodeId)!==shared.nodeId||(!shared.managedLocalVm&&!shared.managedCompose&&shared.profile!=='*'&&(patch.profile??agent.profile)!==shared.profile))throw new HttpError(409,'请先解除电脑共享，再切换到其他来源','shared_computer_active')}
       }
       if(agent.temporaryGoalId&&(Object.keys(patch).some(key=>key!=='archived')||patch.archived===false))throw new HttpError(409,'临时助手由所属任务管理，不能修改权限或恢复为持久成员','helper_task_bound')
-      if(agent.computerEnvironmentId&&patch.execution==='profile')throw new HttpError(409,'请先解除电脑共享，再切换执行环境','shared_computer_active')
+      if(agent.computerEnvironmentId&&patch.execution==='profile'&&(patch.envs?.vm??agent.envs?.vm)!==true)throw new HttpError(409,'请先解除电脑共享，再切换执行环境','shared_computer_active')
       if(patch.execution&&patch.execution!==(agent.execution??'profile')&&this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['running','waiting','uncertain'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再切换执行环境','agent_execution_busy')
-      if (agent.remoteAgentId && Object.keys(patch).some(key => key !== 'archived'))
+      if (agent.remoteAgentId && Object.keys(patch).some(key => key !== 'archived' && key !== 'approvalPolicy'))
         throw new HttpError(409, '引用机器人的配置由远端管理', 'remote_agent_read_only')
       if (
         patch.name &&
@@ -468,8 +534,9 @@ export class WorkspaceStore {
       )
         throw new HttpError(409, '机器人名称已存在', 'duplicate_agent_name')
       const next = { ...agent, ...patch, revision: agent.revision + 1, updatedAt: Date.now() }
-      if (patch.canManageTeam !== undefined && patch.canManageTeam !== (agent.canManageTeam === true))
+      if (patch.archived !== undefined && patch.archived !== agent.archived)
         next.teamAuthorizationVersion = (agent.teamAuthorizationVersion ?? 0) + 1
+      if (patch.archived === true) this.detachAgentComputer(owner, next)
       this.put(owner, 'agent', id, next)
       if(sourceChanged)for(const binding of this.list<{id:string}>(owner,'binding').filter(binding=>binding.id.endsWith(`:${id}`))){this.put(owner,'binding-reset',binding.id,{id:binding.id});this.remove(owner,'binding',binding.id)}
       this.event(owner, 'agent.changed', next)
@@ -523,7 +590,6 @@ export class WorkspaceStore {
       if (preview.groups.length && !confirmationToken)
         throw new HttpError(409, '此 Bot 仍是群聊成员，请确认退出群聊后再归档或删除', 'agent_in_group')
       if (agent?.temporaryGoalId) throw new HttpError(409, '临时助手由所属任务管理', 'helper_task_bound')
-      if (agent?.computerEnvironmentId) throw new HttpError(409, '请先解除电脑共享，再归档或删除 Bot', 'shared_computer_active')
       if (agent && this.list<{ agentId: string; status: string }>(owner, 'turn').some(turn => turn.agentId === agent.id && !['complete', 'failed', 'interrupted', 'skipped'].includes(turn.status)))
         throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
       for (const conversationId of [id, ...preview.groups.map(group => group.id)]) this.requireConversationIdle(owner, conversationId)
@@ -540,17 +606,35 @@ export class WorkspaceStore {
       }
     })
   }
+  private detachAgentComputer(owner: string, agent: Agent): void {
+    const environmentId = agent.computerEnvironmentId
+    if (!environmentId) return
+    if (this.list<{ agentId: string; status: string }>(owner, 'turn').some(work => work.agentId === agent.id && !['complete', 'failed', 'interrupted', 'skipped'].includes(work.status)))
+      throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
+    if (this.list<{ owner: string; agentId: string; environmentId?: string; expiresAt: number }>('_system', 'computer-control').some(grant =>
+      grant.owner === owner && grant.expiresAt > Date.now() && (grant.agentId === agent.id || grant.environmentId === environmentId)))
+      throw new HttpError(409, '请先交还电脑控制权，再归档或删除 Bot', 'agent_execution_busy')
+    // Revoke only this membership; the desktop and other members keep their data.
+    const shared = this.get<SharedComputer>(owner, 'shared-computer', environmentId)
+    if (shared) {
+      shared.memberIds = shared.memberIds.filter(id => id !== agent.id)
+      if (!shared.memberIds.length) shared.archived = true
+      this.put(owner, 'shared-computer', shared.id, shared)
+    }
+    delete agent.computerEnvironmentId
+    delete agent.computerEnvironmentName
+  }
   deleteAgent(owner: string, id: string): void {
     this.atomic(() => {
       const agent = this.require<Agent>(owner, 'agent', id)
       if (!agent.archived) throw new HttpError(409, '请先归档 Bot，再删除', 'agent_not_archived')
       if (agent.temporaryGoalId) throw new HttpError(409, '临时助手由所属任务管理', 'helper_task_bound')
-      if (agent.computerEnvironmentId) throw new HttpError(409, '请先解除电脑共享，再删除 Bot', 'shared_computer_active')
       const conversations = this.list<Conversation>(owner, 'conversation')
       if (conversations.some(c => c.kind === 'group' && c.memberIds.includes(id)))
         throw new HttpError(409, '此 Bot 仍是群聊成员，请先从群聊移除或删除相关群聊', 'agent_in_group')
       if (this.list<{ agentId: string; status: string }>(owner, 'turn').some(work => work.agentId === id && !['complete', 'failed', 'interrupted', 'skipped'].includes(work.status)))
         throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
+      this.detachAgentComputer(owner, agent)
       for (const conversation of conversations.filter(c => c.kind === 'direct' && c.memberIds[0] === id))
         this.deleteConversation(owner, conversation.id, true)
       for(const kind of ['routine','routine-run'])for(const item of this.list<{id:string;agentId:string}>(owner,kind).filter(item=>item.agentId===id))this.remove(owner,kind,item.id)
@@ -1022,7 +1106,8 @@ export class WorkspaceStore {
     })
   }
   agentSummary(agent: Agent): Agent {
-    return { ...agent, avatar: agent.avatar || encodeAgentAvatar(defaultAgentIdentity(agent.id, agent.name)) }
+    const policy=readHostTools(this.home)
+    return { ...agent, execution:'profile', canManageTeam:true, canCollaborate:true, approvalPolicy:policy.approvalPolicy, envs:{vm:policy.vm,cloud:policy.cloud,desktop:policy.scriptMachine||policy.serverComputer,browser:false}, avatar: agent.avatar || encodeAgentAvatar(defaultAgentIdentity(agent.id, agent.name)) }
   }
   conversationSummary(owner: string, conversation: Conversation): Conversation {
     const member = conversation.kind === 'direct' ? this.get<Agent>(owner, 'agent', conversation.memberIds[0] ?? '') : undefined

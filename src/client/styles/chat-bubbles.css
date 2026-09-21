@@ -1,0 +1,25 @@
+.chat-bubble {
+  --bubble-fill: var(--bubble-light);
+  --bubble-ink: var(--bubble-light-text);
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 11px 15px;
+  border: var(--bubble-border);
+  border-radius: var(--bubble-radius);
+  background: var(--bubble-fill);
+  color: var(--bubble-ink);
+  overflow-wrap: anywhere;
+}
+.dark .chat-bubble { --bubble-fill: var(--bubble-dark); --bubble-ink: var(--bubble-dark-text); }
+[data-bubble-theme="light"] .chat-bubble { --bubble-fill: var(--bubble-light); --bubble-ink: var(--bubble-light-text); }
+[data-bubble-theme="dark"] .chat-bubble { --bubble-fill: var(--bubble-dark); --bubble-ink: var(--bubble-dark-text); }
+.message__content.chat-bubble { width: fit-content; --text-primary: var(--bubble-ink); --text-secondary: var(--bubble-ink); --text-muted: var(--bubble-ink); }
+.message__content.chat-bubble .markdown-content { color: inherit; }
+.message--user .message__body:has(> .chat-bubble) { padding: 0; background: transparent; border-radius: 0; }
+/* Embedded cards and code keep their own surface and readable foreground. */
+.message__body { --bubble-card-ink: var(--text-primary); --bubble-card-muted: var(--text-secondary); }
+.message__content.chat-bubble :is(code, .code-block, th, .file-link-card, .media-load-error) {
+  --text-primary: var(--bubble-card-ink);
+  --text-secondary: var(--bubble-card-muted);
+  --text-muted: var(--bubble-card-muted);
+}

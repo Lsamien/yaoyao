@@ -1,4 +1,4 @@
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import type { Profile } from '@shared/types'
@@ -75,12 +75,69 @@ function navigationButton(wrapper: VueWrapper, label: string) {
 }
 
 afterEach(() => {
+  delete window.yaoyaoDesktop
   document.body.innerHTML = ''
   vi.restoreAllMocks()
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
 })
 
 describe('Settings center dialog', () => {
+  it('keeps desktop runtime controls out of a browser', () => {
+    const wrapper = mountSettings({ initialPage: 'desktop-mode' })
+    expect(wrapper.findAll('.settings-sidebar nav button').map(button => button.text())).not.toContain('运行模式')
+    expect(wrapper.find('[aria-label="服务器与客户端模式"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('lets a signed-in member switch this desktop from client to server without logging out', async () => {
+    let mode: 'client' | 'server' = 'client'
+    const switchMode = vi.fn(async (next: 'client' | 'server') => { mode = next; return { ok: true } })
+    Object.defineProperty(window, 'yaoyaoDesktop', { configurable: true, value: {
+      modeState: vi.fn(async () => ({ mode, serverURL: 'http://fixture:15300', switching: false })),
+      switchMode,
+      openRemoteLogin: vi.fn(async () => {}),
+    } })
+    const wrapper = mountSettings({ isAdmin: false, botMode: true, initialPage: 'desktop-mode' })
+    await flushPromises()
+    expect(navigationButton(wrapper, '运行模式').attributes('aria-current')).toBe('page')
+    expect(wrapper.text()).toContain('当前：客户端模式')
+    await wrapper.get('input[value="server"]').setValue()
+    expect(switchMode).not.toHaveBeenCalled()
+    await wrapper.get('.mode-primary').trigger('click')
+    await flushPromises()
+    expect(switchMode).toHaveBeenCalledWith('server')
+    expect(wrapper.text()).toContain('当前：服务器模式')
+    expect(wrapper.emitted('logout')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('preserves the current mode on a failed switch and can reopen server login', async () => {
+    const openRemoteLogin = vi.fn(async () => {})
+    Object.defineProperty(window, 'yaoyaoDesktop', { configurable: true, value: {
+      modeState: vi.fn(async () => ({ mode: 'server', serverURL: 'http://127.0.0.1:15300', switching: false })),
+      switchMode: vi.fn(async () => ({ ok: false, error: '连接失败，请重试。' })), openRemoteLogin,
+    } })
+    const wrapper = mountSettings({ initialPage: 'desktop-mode' })
+    await flushPromises()
+    await wrapper.get('input[value="client"]').setValue()
+    await wrapper.get('.mode-primary').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('连接失败')
+    expect(wrapper.text()).toContain('当前：服务器模式')
+    await wrapper.findAll('.mode-actions button').find(button => button.text() === '更换服务器…')!.trigger('click')
+    await flushPromises()
+    expect(openRemoteLogin).toHaveBeenCalledOnce()
+    expect(wrapper.get('[role="status"]').text()).toContain('服务器地址并登录')
+    wrapper.unmount()
+  })
+  it.each(['agent-identity', 'agent-models'])('keeps %s and the Profile selector out of Bot-mode personal settings', initialPage => {
+    const wrapper = mountSettings({ botMode: true, initialPage })
+    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual(['个人', '管理'])
+    expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="agent-identity"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="model-services"]').exists()).toBe(false)
+    expect(wrapper.get('.settings-content__header').text()).toContain('账号资料')
+    wrapper.unmount()
+  })
   it('shows theme previews and filters settings without changing account scope', async () => {
     const wrapper = mountSettings({initialPage:'appearance',themePreference:'light'})
     expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('我的设置')

@@ -5,6 +5,7 @@ import {
   CHAT_TRANSCRIPT_FEATURE,
   TranscriptGap,
   type TranscriptEvent,
+  type TranscriptControlEvent,
   type TranscriptMessage,
   type TranscriptSnapshot,
 } from '@shared/chatTranscript'
@@ -185,6 +186,33 @@ export class ChatTranscriptClient {
       await this.commit(next)
     })
   }
+  private async control(input: unknown) {
+    const value = input as Partial<TranscriptControlEvent>
+    const cursor = value.cursor
+    await this.serial(async () => {
+      const current = this.snapshot
+      if (
+        !current ||
+        value.epoch !== current.epoch ||
+        typeof cursor !== 'number' ||
+        !Number.isSafeInteger(cursor) ||
+        cursor < current.cursor ||
+        typeof value.running !== 'boolean' ||
+        typeof value.queued !== 'boolean'
+      ) throw new TranscriptGap()
+      const nextCursor = cursor
+      await this.commit({
+        ...current,
+        cursor: nextCursor,
+        running: value.running,
+        queued: value.queued,
+        pendingApproval: value.pendingApproval ?? null,
+        pendingClarification: value.pendingClarification ?? null,
+        liveStatus: value.liveStatus ?? null,
+        error: value.error ?? null,
+      })
+    })
+  }
   async run() {
     let needsSnapshot = !this.snapshot
     let restorePending = Boolean(this.snapshot)
@@ -225,6 +253,10 @@ export class ChatTranscriptClient {
           if (done) break
           for (const frame of parser.feed(decoder.decode(value, { stream: true }))) {
             if (frame.event === 'reset') throw new TranscriptGap()
+            if (frame.event === 'ready' || frame.event === 'state') {
+              await this.control(JSON.parse(frame.data))
+              continue
+            }
             if (frame.event === 'transcript') await this.receive(JSON.parse(frame.data))
           }
         }

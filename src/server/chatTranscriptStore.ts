@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import {
   CHAT_TRANSCRIPT_FEATURE,
   type TranscriptEvent,
+  type TranscriptControlState,
   type TranscriptMessage,
   type TranscriptSnapshot,
 } from '../shared/chatTranscript.js'
@@ -32,7 +33,7 @@ interface TurnHead {
 }
 const emptyHead = (): TurnHead => ({ running: false, queued: false, queue: [], tools: {}, pending: {} })
 const text = (p: Data): string => String(p.output ?? p.text ?? p.content ?? '')
-const controlState = (head: TurnHead) => ({
+const controlState = (head: TurnHead): TranscriptControlState => ({
   running: head.running,
   queued: head.queued,
   pendingApproval: head.pendingApproval ?? null,
@@ -309,6 +310,9 @@ export class ChatTranscriptStore {
       .get(...scope)
     return row ? JSON.parse(String(row.data)) : emptyHead()
   }
+  control(...scope: Scope): TranscriptControlState {
+    return controlState(this.head(...scope))
+  }
   message(owner: string, profile: string, sessionId: string, id: string): TranscriptMessage | undefined {
     const row = this.db
       .prepare(
@@ -344,6 +348,40 @@ export class ChatTranscriptStore {
         )
         .get(...scope)!.n,
     )
+  }
+  private parkOpenAnswer(scope: Scope, state: TurnHead) {
+    if (!state.current) return
+    const active = this.message(...scope, state.current)
+    const visible = Boolean(
+      active &&
+        (String(active.content ?? '').trim() ||
+          String(active.reasoning ?? '').trim() ||
+          (Array.isArray(active.tool_calls) && active.tool_calls.length)),
+    )
+    if (active && visible) this.put(scope, { ...active, status: 'complete', final_result: false })
+    else if (active) {
+      const revision = active.revision + 1
+      this.db
+        .prepare(
+          'UPDATE chat_transcript_messages SET deleted=1,revision=? WHERE owner=? AND profile=? AND session_id=? AND id=?',
+        )
+        .run(revision, ...scope, active.id)
+      this.event(...scope, 'message.deleted', { id: active.id, revision })
+    }
+    state.current = undefined
+    state.preview = false
+  }
+  /** A later completion often repeats the whole turn. Keep only the part written after this row. */
+  private placedOutput(scope: Scope, row: TranscriptMessage | undefined, turn: string | undefined, output: unknown, fallback: unknown): unknown {
+    if (typeof output !== 'string') return output ?? fallback
+    if (!output || !turn) return output || fallback
+    const prefix = this.all(...scope)
+      .filter((message) => message.role === 'assistant' && message.turn_id === turn && message.id !== row?.id && (!row || message.seq < row.seq))
+      .sort((left, right) => left.seq - right.seq)
+      .map((message) => String(message.content ?? ''))
+      .join('')
+    if (!prefix || !output.startsWith(prefix)) return output
+    return output.slice(prefix.length) || fallback
   }
   private put(scope: Scope, value: Data): TranscriptMessage {
     const position = Number(
@@ -690,6 +728,10 @@ export class ChatTranscriptStore {
       if (!this.alias(...scope, `client:${client}`)) {
         const previousRunning = state.running,
           steer = p.method === 'session.steer' && state.running
+        // The open answer already has a sequence. Parking it here lets the
+        // inserted user row land at this moment, and the rest of the reply
+        // continues in a later row.
+        if (steer) this.parkOpenAnswer(scope, state)
         const turn = steer ? state.turn! : randomUUID()
         const user = this.put(scope, {
           id: `user:${delivery}`,
@@ -730,6 +772,24 @@ export class ChatTranscriptStore {
           state.queue = state.queue.filter((q) => q.delivery !== p.delivery_id)
           if (state.turn === pending.turn && !state.current) state.terminal = true
           state.running = !state.terminal || state.queue.length > 0
+        } else if (p.status !== 'queued') {
+          // The upstream accepted this prompt for immediate execution. A local
+          // queue entry only exists because `state.running` looked busy at
+          // submit time (e.g. a stale background flag or a missed terminal);
+          // the upstream knows nothing about that entry, so nothing would ever
+          // drain it except a later `session.resume`. Drop it now and adopt
+          // its turn so the imminent run events attach to this user row.
+          const queued = state.queue.filter((q) => q.delivery !== p.delivery_id)
+          if (queued.length !== state.queue.length) {
+            state.queue = queued
+            if (state.terminal) {
+              state.turn = pending.turn
+              state.current = undefined
+              state.preview = false
+              state.terminal = false
+              state.tools = {}
+            }
+          }
         }
         delete state.pending[String(p.delivery_id)]
         state.queued = state.queue.length > 0
@@ -849,16 +909,52 @@ export class ChatTranscriptStore {
     } else if (['message.complete', 'run.completed', 'run.complete', 'run.failed', 'error'].includes(type)) {
       // A replayed terminal snapshot updates the terminal slot. It never starts
       // another turn (the next run.started/delta owns advancing the queue).
+      // Hermes also closes each model segment with message.complete, including
+      // a tool round. That is not the end of the user-visible turn.
       const old = current()
       const wasTerminal = state.terminal
-      state.terminal = false
       const failed =
         ['run.failed', 'error'].includes(type) || p.error || ['failed', 'error'].includes(p.status)
       const interrupted = ['interrupted', 'cancelled', 'canceled'].includes(p.status)
+      const finish = String(
+        p.finish_reason ?? p.finishReason ?? p.message?.finish_reason ?? p.message?.finishReason ?? '',
+      ).toLowerCase()
+      const payloadCalls = p.tool_calls ?? p.message?.tool_calls
+      const openTools =
+        !!state.turn &&
+        this.all(...scope).some(
+          (m) =>
+            m.turn_id === state.turn &&
+            (m.tool_calls as Data[] | undefined)?.some((t) =>
+              ['running', 'pending'].includes(String(t.status)),
+            ),
+        )
+      const explicitStop = ['stop', 'end', 'end_turn', 'length', 'content_filter'].includes(finish)
+      const toolRound =
+        ['tool_calls', 'tool_use', 'function_call'].includes(finish) ||
+        (Array.isArray(payloadCalls) && payloadCalls.length > 0)
+      const continues =
+        type === 'message.complete' && !failed && !interrupted && !explicitStop && (toolRound || openTools)
       const output = p.output ?? p.text ?? p.content ?? p.message?.content
-      if (old || output || p.attachments)
+      if (continues) {
+        const placed = this.placedOutput(scope, old, state.turn, output, old?.content ?? '')
+        const hasPlaced = typeof placed === 'string' ? placed.length > 0 : Boolean(placed)
+        if (old || hasPlaced || p.attachments)
+          saveAssistant({
+            content: placed,
+            status: 'streaming',
+            final_result: false,
+          })
+        state.running = true
+        state.terminal = false
+        state.queued = state.queue.length > 0 || Number(p.queue_remaining ?? 0) > 0
+      } else {
+      state.terminal = false
+      const placed = this.placedOutput(scope, old, state.turn, output, old?.content ?? '')
+      const hasPlaced = typeof placed === 'string' ? placed.length > 0 : Boolean(placed)
+      if (old || hasPlaced || p.attachments)
         saveAssistant({
-          content: output === '' ? (old?.content ?? '') : (output ?? old?.content ?? ''),
+          content: placed,
           status: failed ? 'failed' : interrupted ? 'interrupted' : 'complete',
           segment_kind: 'answer',
           final_result: !failed && !interrupted,
@@ -886,6 +982,7 @@ export class ChatTranscriptStore {
       state.pendingClarification = null
       state.liveStatus = null
       if (wasTerminal && state.queue.length === 0) state.running = false
+      }
     } else if (type === 'route.resumed') {
       const inflight = p.inflight ?? {},
         running = p.running === true || p.info?.running === true || inflight.streaming === true
@@ -1051,7 +1148,7 @@ export class ChatTranscriptStore {
     before = Number.MAX_SAFE_INTEGER,
     limit = 150,
   ): TranscriptSnapshot {
-    const run = this.head(owner, profile, sessionId)
+    const run = this.control(owner, profile, sessionId)
     const coverage = this.db
       .prepare(
         'SELECT complete,message_total FROM chat_sessions WHERE owner=? AND profile=? AND session_id=?',

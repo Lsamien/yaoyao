@@ -1,0 +1,35 @@
+import { test, expect } from '@playwright/test'
+import { mkdirSync } from 'node:fs'
+const evidence = 'docs/verification/2026-09-20-bot-session-transfer'
+test('shared transfer settings persist and session status is readable at desktop and narrow widths', async ({ page }) => {
+  mkdirSync(evidence, { recursive: true })
+  await page.goto('/conversations')
+  await page.getByRole('textbox', { name: '账号', exact: true }).fill('fixture')
+  await page.getByRole('textbox', { name: '密码', exact: true }).fill('fixture-pass')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  async function settings() {
+    await page.locator('.desktop-sidebar .sidebar-tools-trigger').click()
+    await page.getByRole('menuitem', { name: 'Bot 设置', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Bot 设置分类' }).getByRole('button', { name: '电脑', exact: true }).click()
+  }
+  await settings()
+  const dialog = page.getByRole('dialog', { name: 'Bot 设置' }), input = page.locator('#file-transfer-limit')
+  await expect(input).toHaveValue('25')
+  await input.fill('101'); await expect(page.locator('#file-transfer-error')).toBeVisible()
+  await expect(dialog.locator('button[type=submit]')).toBeDisabled()
+  await input.fill('100'); await dialog.locator('button[type=submit]').click()
+  await expect(dialog.getByRole('status').filter({ hasText: '已保存' })).toBeVisible()
+  await page.reload(); await settings(); await expect(input).toHaveValue('100')
+  await input.scrollIntoViewIfNeeded(); await page.screenshot({ path: `${evidence}/settings-desktop.png` })
+  await page.setViewportSize({ width: 375, height: 812 }); await input.evaluate(el => el.scrollIntoView({ block: 'center' }))
+  await expect(input).toBeInViewport()
+  expect(await dialog.locator('.bot-settings__content').evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  await page.screenshot({ path: `${evidence}/settings-narrow.png` })
+  await page.getByRole('navigation', { name: 'Bot 设置分类' }).getByRole('button', { name: 'Bot 记忆', exact: true }).click()
+  const sync = page.getByRole('region', { name: 'OpenViking 会话同步' })
+  await sync.scrollIntoViewIfNeeded(); await expect(sync).toContainText('待同步 0 · 已完成 0 · 失败 0')
+  await expect(sync).toContainText('同步已暂停')
+  await page.screenshot({ path: `${evidence}/memory-narrow.png` })
+  await page.setViewportSize({ width: 1440, height: 900 }); await sync.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${evidence}/memory-desktop.png` })
+})

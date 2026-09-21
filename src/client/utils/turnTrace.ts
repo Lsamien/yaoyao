@@ -1,4 +1,5 @@
 import type { UiMessage, UiToolCall } from '@/components/messages/types'
+import { collapseDuplicateFailures } from './messageFailure'
 
 export type TurnTraceEntry =
   | { id: string; type: 'reasoning'; messageId: string; content: string }
@@ -20,7 +21,7 @@ function assistantOwner(message: UiMessage): string {
 }
 
 function hasVisibleMessage(message: UiMessage): boolean {
-  return Boolean(message.content.trim() || message.attachments?.length || message.error)
+  return Boolean(message.content.trim() || message.attachments?.length || message.error || message.status === 'failed')
 }
 
 function traceStatus(messages: UiMessage[], entries: TurnTraceEntry[]): TurnTraceGroup['status'] {
@@ -62,7 +63,7 @@ export function buildMessageTimelineRows(messages: UiMessage[], bodies?: WeakMap
   let segment: UiMessage[] = []
   let owner = ''
   const flush = () => { appendAssistantSegment(rows, segment, bodies); segment = []; owner = '' }
-  for (const message of messages) {
+  for (const message of collapseDuplicateFailures(messages)) {
     if (message.role === 'assistant' && !message.timelineKind) {
       const nextOwner = assistantOwner(message)
       if (segment.length && nextOwner !== owner) flush()

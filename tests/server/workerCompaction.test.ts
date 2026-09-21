@@ -14,6 +14,8 @@ boot=json.loads(sys.stdin.readline())
 def emit(kind, **data):
     print(json.dumps({"nonce":boot["nonce"],"type":kind,**data}),flush=True)
 payload=json.loads(boot["prompt"])
+emit("tool",id="fixture-shell",name="computer_shell",arguments={"command":"true"})
+json.loads(sys.stdin.readline())
 emit("checkpoint",messages=payload.pop("checkpoint",boot["history"]))
 emit("probe",boot=boot)
 emit("complete",**payload)
@@ -25,6 +27,7 @@ for line in sys.stdin:
  const id=randomUUID(),meta={environmentId:id,agentId:id,ownerKey:'owner'},gateways:ComputerGateway[]=[]
  vi.spyOn(runtime,'resolve').mockResolvedValue({type:'resolved',cwd:'/home/cua/workspace',configuredCwd:'.',model:{provider:'custom',api_mode:'chat_completions',model:'fixture'},contextConfig:{compression:{enabled:true,threshold:0.5}}})
  vi.spyOn(runtime.provider,'ensure').mockResolvedValue({id,containerId:'fixture',running:true,workspace:home,isolation:'container'})
+ vi.spyOn(runtime.provider,'execute').mockResolvedValue({stdout:'',stderr:'',exitCode:0})
  const stop=vi.spyOn(runtime.provider,'stop').mockResolvedValue(),remove=vi.spyOn(runtime.provider,'remove').mockResolvedValue()
  async function turn(payload:Record<string,unknown>,sessionId?:string){
   const gateway=new ComputerGateway(runtime,meta,randomUUID(),async()=>{},async()=>({}));gateways.push(gateway)

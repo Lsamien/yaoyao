@@ -3,6 +3,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { shallowRef } from 'vue'
 import { createMemoryHistory, createRouter, matchedRouteKey } from 'vue-router'
 import ConversationsView from '@/views/ConversationsView.vue'
+import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
 import { apiRequest } from '@/api/client'
 import type { WorkspaceConversation } from '@shared/workspace'
 
@@ -19,7 +20,7 @@ it.each(['direct', 'group'] as const)('opens and saves the menu target %s while 
   const base: WorkspaceConversation = { id: 'current', kind: 'direct', name: '当前聊天', avatar: '', memberIds: ['current-bot'], instructions: '', administratorId: 'current-bot', mode: 'host', autoReplyIds: [], maxReplyRounds: 3, archived: false, pinned: false, readSeq: 0, lastSeq: 0, preview: '', createdAt: 1, updatedAt: 1 }
   const target: WorkspaceConversation = { ...base, id: 'target', kind, name: '目标聊天', memberIds: ['target-bot', ...(kind === 'group' ? ['current-bot'] : [])], administratorId: 'target-bot', instructions: '目标规则', activeAgentStates: kind === 'group' ? { 'target-bot': 'running' } : {} }
   const conversations = [base, target]
-  const agents = ['current-bot', 'target-bot'].map(id => ({ id, name: id === 'target-bot' ? '目标机器人' : '当前机器人', avatar: '', instructions: `${id}规则`, nodeId: 'local', profile: 'default', archived: false }))
+  const agents = ['current-bot', 'target-bot'].map(id => ({ id, name: id === 'target-bot' ? '目标机器人' : '当前机器人', avatar: id === 'current-bot' ? 'avatar-current' : '', instructions: `${id}规则`, nodeId: 'local', profile: 'default', archived: false }))
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.mocked(apiRequest).mockImplementation(async path => {
     if (path === '/api/app/capabilities') return { features: [], csrfToken: 'fixture-csrf' } as never
@@ -41,20 +42,34 @@ it.each(['direct', 'group'] as const)('opens and saves the menu target %s while 
     stubs: { WorkspaceShell: { template: '<div><slot name="sidebar" /><slot /></div>' }, ComposerShell: { template: '<div />', methods: { filesSnapshot: () => [], attachFiles: async () => {} } }, Teleport: false },
   } })
   await flushPromises()
+  expect(wrapper.findComponent(WorkspaceMessageTimeline).props()).toMatchObject({
+    title: '当前机器人',
+    headerAvatarName: '当前机器人',
+    headerAvatar: 'avatar-current',
+    headerAvatarKind: 'agent',
+  })
   wrapper.findComponent({ name: 'ConversationList' }).vm.$emit('settings', 'target')
   await flushPromises()
-  const dialog = document.querySelector<HTMLDialogElement>('dialog.editor')!
-  expect(dialog.open).toBe(true)
-  expect(dialog.querySelector('h2')?.textContent?.trim()).toBe(kind === 'direct' ? '机器人设置' : '群聊设置')
-  expect(dialog.querySelector<HTMLInputElement>('input[maxlength="100"]')?.value).toBe(kind === 'direct' ? '目标机器人' : '目标聊天')
   expect(router.currentRoute.value.path).toBe('/conversations/current')
-  if (kind === 'group') {
+  if (kind === 'direct') {
+    expect(document.querySelector('dialog.editor')).toBeNull()
+    const editor = wrapper.findComponent({ name: 'BotProfileDialog' })
+    expect(editor.props('agent')).toMatchObject({ id: 'target-bot', name: '目标机器人' })
+    expect(editor.props('conversationId')).toBe('target')
+    expect(editor.props('draft')).toMatchObject({ name: '目标机器人', source: '["local","default"]' })
+    editor.vm.$emit('save', { ...editor.props('draft'), name: '目标机器人' })
+  } else {
+    const dialog = document.querySelector<HTMLDialogElement>('dialog.editor')!
+    expect(dialog.open).toBe(true)
+    expect(dialog.querySelector('h2')?.textContent?.trim()).toBe('群聊设置')
+    expect(dialog.querySelector<HTMLInputElement>('input[maxlength="100"]')?.value).toBe('目标聊天')
     expect(dialog.querySelector<HTMLInputElement>('input[value="target-bot"]')?.disabled).toBe(true)
     const stop = [...dialog.querySelectorAll('button')].find(button => button.textContent === '停止 目标机器人')!
     stop.click(); await flushPromises()
     expect(apiRequest).toHaveBeenCalledWith('/api/app/conversations/target/agents/target-bot/stop', expect.objectContaining({ method: 'POST' }))
+    dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   }
-  dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await flushPromises()
   expect(apiRequest).toHaveBeenCalledWith(kind === 'direct' ? '/api/app/agents/target-bot' : '/api/app/conversations/target', expect.objectContaining({ method: 'PATCH', body: expect.objectContaining({ name: kind === 'direct' ? '目标机器人' : '目标聊天' }) }))
+  if (kind === 'direct') expect(router.currentRoute.value.path).toBe('/conversations/current')
 })

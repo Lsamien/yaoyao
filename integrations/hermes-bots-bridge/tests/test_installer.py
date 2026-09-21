@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 import yaml
+from test_profile_runtime_repair import SERVER, METHODS
 
 spec = importlib.util.spec_from_file_location('bridge_installer', Path(__file__).parents[3] / 'scripts/install-hermes-bridge.py')
 installer = importlib.util.module_from_spec(spec)
@@ -75,6 +76,27 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(installer.check(self.home, 'default', self.source)['filesCurrent'])
         (self.target / 'bridge_runtime.py').write_text('old implementation')
         self.assertFalse(installer.check(self.home, 'default', self.source)['filesCurrent'])
+
+    def test_core_repair_is_backed_up_and_rolled_back_with_a_failed_plugin_install(self):
+        installer.shutil.copyfile(Path(__file__).parents[1] / 'profile_runtime_repair.py', self.source / 'profile_runtime_repair.py')
+        runtime = self.root / 'runtime'
+        (runtime / 'tui_gateway').mkdir(parents=True)
+        server = runtime / 'tui_gateway' / 'server.py'
+        methods = runtime / 'tui_gateway' / 'methods_session.py'
+        server.write_text(SERVER); methods.write_text(METHODS)
+        config = self.config.read_bytes()
+        with patch.object(installer.yaml, 'safe_dump', side_effect=RuntimeError('fixture-failure')):
+            with self.assertRaises(RuntimeError):
+                installer.install(self.home, 'default', self.source, repair_source=runtime)
+        self.assertEqual(server.read_text(), SERVER)
+        self.assertEqual(methods.read_text(), METHODS)
+        self.assertEqual(self.config.read_bytes(), config)
+        self.assertEqual((self.target / 'old').read_text(), 'previous-plugin')
+        result = installer.install(self.home, 'default', self.source, repair_source=runtime)
+        self.assertTrue(result['profileRuntimeRepaired'])
+        self.assertIn('@_profile_scoped', methods.read_text())
+        self.assertEqual((Path(result['backup']) / 'hermes-runtime' / 'server.py').read_text(), SERVER)
+        self.assertEqual(yaml.safe_load(self.config.read_text())['model']['default'], 'keep-model')
 
 
 if __name__ == '__main__':

@@ -48,7 +48,7 @@ onMounted(cycle);onBeforeUnmount(()=>{closed=true;clearTimeout(timer)})
   <article v-if="state?.fixedCapacity"><h3>Compose 共享桌面</h3><p>已配置 {{state.maxInstances}} 台桌面，数量由 Compose 固定。请在机器人聊天的电脑面板选择已有桌面。</p><div v-for="desktop in state.desktops" :key="desktop.id" class="instance"><strong>{{desktop.name}} · {{desktop.imageKey==='cursor'?'Cursor Universal':'标准桌面'}}</strong><span>{{desktop.ready?'已就绪':desktop.online?'正在启动':'未连接'}}</span></div></article>
   <article v-else-if="state"><h3>隔离方式</h3><p>按机器人创建独立桌面，或让可信的机器人共用一个桌面。</p>
    <div class="segmented" role="group" aria-label="虚拟机隔离方式"><button :aria-pressed="state?.mode==='shared'" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @click="policy('shared')">共享虚拟机</button><button :aria-pressed="state?.mode==='per-bot'" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @click="policy('per-bot')">每个机器人独立</button></div>
-   <p class="sharing-explanation">共享指多个机器人操作同一台虚拟机，共用桌面和工作文件；与可同时运行的虚拟机数量无关。</p>
+   <p class="sharing-explanation">共享指多个机器人同时使用同一台虚拟机：命令与文件操作并行执行，桌面操作交替进行，共用桌面和工作文件。</p>
    <label class="row">虚拟机运行数量上限<select aria-label="虚拟机数量上限" :value="state?.maxInstances??2" :disabled="!state?.configured||!!state?.setupRequired||acting||state.busy" @change="policy(state!.mode,Number(($event.target as HTMLSelectElement).value))"><option v-for="n in [1,2,3,4]" :key="n" :value="n">{{n}}</option></select></label>
   </article>
   <article v-if="state&&!state.fixedCapacity"><h3>空闲自动停止</h3><p>从任务结束或交还控制权后开始计时，适用于该执行节点上的所有本地虚拟机。</p>

@@ -1,5 +1,6 @@
 import { readServerIdentity, updateServerIdentity } from './serverIdentity.js'
 import { authorizeFileRead, fileAccessWorkingDirectory, readFileAccess, saveFileAccess } from './fileAccess.js'
+import { readHostTools, saveHostTools } from './hostToolSettings.js'
 import type { ServerIdentity } from '../shared/serverIdentity.js'
 import type Koa from 'koa'
 import type { WorkspaceStore } from './workspaceStore.js'
@@ -44,6 +45,9 @@ import {
   FCMConfigurationManager,
   type FCMConfigurationInput,
 } from './fcmConfiguration.js'
+import type { OpenVikingConfigurationManager } from './openVikingConfiguration.js'
+import type { OpenVikingService } from './openVikingService.js'
+import type { OpenVikingSessionSync } from './openVikingSessionSync.js'
 import {
   AllowedHostsConfigurationManager,
   canonicalAllowedHosts,
@@ -72,6 +76,9 @@ export interface RouteDependencies {
   push: PushCoordinator
   apnsConfiguration: APNsConfigurationManager
   fcmConfiguration: FCMConfigurationManager
+  openVikingConfiguration: OpenVikingConfigurationManager
+  openVikingService: OpenVikingService
+  openVikingSessionSync: OpenVikingSessionSync
   allowedHostsConfiguration: AllowedHostsConfigurationManager
   chatCache?: ChatCacheCoordinator
 }
@@ -1177,6 +1184,14 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     dependencies.auth.requireAdmin(ctx)
     json(ctx, 200, saveFileAccess(dependencies.config.home, body(ctx)))
   })
+  router.get('/api/app/settings/host-tools', ctx => {
+    dependencies.auth.require(ctx)
+    json(ctx, 200, readHostTools(dependencies.config.home))
+  })
+  router.put('/api/app/settings/host-tools', ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx, 200, saveHostTools(dependencies.config.home, body(ctx)))
+  })
 
   registerKanbanRoutes(router, dependencies, '/api/app/kanban')
   registerKanbanRoutes(router, dependencies, '/api/kanban/v1')
@@ -1779,6 +1794,10 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     dependencies.auth.requireAdmin(ctx)
     json(ctx,200,await dependencies.hermesBridge.install(body(ctx)))
   })
+  router.post('/api/app/admin/hermes-bridge/restart', async ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx,200,await dependencies.hermesBridge.restartDashboard())
+  })
   router.get('/api/app/admin/model-services', async (ctx) => {
     await proxyAdminFeature(ctx, dependencies, '/api/providers/custom-endpoints', {
       search: searchFrom(ctx, ['profile']),
@@ -1955,6 +1974,29 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   router.get('/api/app/system/push-status', (ctx) => {
     dependencies.auth.requireAdmin(ctx)
     json(ctx, 200, pushSystemStatus(dependencies))
+  })
+  router.get('/api/app/admin/openviking', (ctx) => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx, 200, dependencies.openVikingConfiguration.snapshot())
+  })
+  router.get('/api/app/admin/openviking/session-sync', ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx, 200, dependencies.openVikingSessionSync.status())
+  })
+  router.post('/api/app/admin/openviking/session-sync/retry', ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    json(ctx, 200, dependencies.openVikingSessionSync.retry())
+  })
+  router.put('/api/app/admin/openviking', async (ctx) => {
+    dependencies.auth.requireAdmin(ctx)
+    const request = body(ctx)
+    const snapshot = await dependencies.openVikingConfiguration.update({
+      enabled: request.enabled === true,
+      url: typeof request.url === 'string' ? request.url : '',
+      accountId: typeof request.accountId === 'string' ? request.accountId : '',
+      ...(typeof request.adminKey === 'string' && request.adminKey.trim() ? { adminKey: request.adminKey } : {}),
+    }, config => dependencies.openVikingService.configure(config))
+    json(ctx, 200, snapshot)
   })
   router.get('/api/app/server-identity', (ctx) => {
     dependencies.auth.require(ctx)

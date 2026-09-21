@@ -34,7 +34,8 @@ LEASE = None
 RESTARTING = False
 DRIVER = '/usr/local/libexec/openmausbot/cua-driver'
 CUA_SOCKET = '/run/user/1000/openmausbot-cua.sock'
-ENV = {'PATH': '/opt/venv/bin:/usr/local/bin:/usr/bin:/bin', 'HOME': '/home/cua', 'USER': 'cua', 'DISPLAY': ':1'}
+BASE_ENV = {'PATH': '/opt/venv/bin:/usr/local/bin:/usr/bin:/bin', 'DISPLAY': ':1'}
+ENV = {**BASE_ENV, 'HOME': '/home/cua', 'USER': 'cua'}
 
 def reset_desktop():
     global RESTARTING, LEASE
@@ -52,14 +53,15 @@ def current(body):
         raise ValueError('桌面控制授权已失效')
     return LEASE
 
-def start(argv, cwd):
-    # Change directory after dropping privileges: the persistent workspace is
-    # owned by cua and the bridge does not need DAC_OVERRIDE.
+def start(argv, cwd, user='cua'):
+    # The bridge itself runs as root; commands run in the explicitly selected
+    # guest account without acquiring additional container capabilities.
     wrapper = 'import os,sys;os.chdir(sys.argv[1]);os.execvpe(sys.argv[2],sys.argv[2:],os.environ)'
-    return subprocess.Popen(['python3','-c',wrapper,cwd,*argv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=ENV, user=1000, group=1000, extra_groups=[], start_new_session=True)
+    uid, environment = (0, {**BASE_ENV, 'HOME': '/root', 'USER': 'root'}) if user == 'root' else (1000, ENV)
+    return subprocess.Popen(['python3','-c',wrapper,cwd,*argv], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, user=uid, group=uid, extra_groups=[], start_new_session=True)
 
-def run(argv, cwd='/home/cua/workspace', data=None, timeout=30):
-    process = start(argv, cwd)
+def run(argv, cwd='/home/cua/workspace', data=None, timeout=30, user='cua'):
+    process = start(argv, cwd, user)
     try:
         stdout, stderr = process.communicate(data, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -143,11 +145,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 cwd = body.get('cwd', '/home/cua/workspace')
                 if not isinstance(cwd, str) or (cwd != '/home/cua/workspace' and not cwd.startswith('/home/cua/workspace/')) or '..' in Path(cwd).parts:
                     raise ValueError('Compose 桌面工作目录必须位于 /home/cua/workspace')
+                user = body.get('user', 'cua')
+                if user not in ('cua', 'root'):
+                    raise ValueError('桌面命令用户无效')
                 with LOCK:
                     lease = current(body)
                     # Spawn while holding the lease lock, then release the lock
                     # before waiting so revocation can stop the container.
-                    process = start(argv, cwd)
+                    process = start(argv, cwd, user)
                     lease['active'] += 1
                 try:
                     data = base64.b64decode(body['input']) if body.get('input') else None

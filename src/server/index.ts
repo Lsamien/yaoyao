@@ -22,14 +22,12 @@ if (config.home === legacyDataHome() && process.platform === 'darwin') {
 }
 const instance = acquireServiceInstance(config.home, readReleaseManifest(resolve(process.cwd(), 'release.json')).webVersion, process.env.HERMES_YAOYAO_DESKTOP === '1', readBuildIdentity(process.cwd()))
 process.once('exit', () => instance.release())
-const runtime = createApplication({
-  config,
-})
 const dashboardSupervisor = config.superviseDashboard
   && isLocalAuthorizationTarget(config.upstream) && config.upstream.hostname === '127.0.0.1'
   && config.upstream.protocol === 'http:' && config.upstream.port === '9119'
   ? new DashboardSupervisor({ managed: process.env.HERMES_YAOYAO_DESKTOP === '1' })
   : undefined
+const runtime = createApplication({config, dashboardSupervisor})
 const nodeRuntime = createNodeServer(runtime)
 let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).

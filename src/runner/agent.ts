@@ -13,6 +13,7 @@ import { UpstreamServiceSession } from '../server/localAuth.js'
 import { WorkspaceGateway, type GatewayTarget, type GatewayFrame } from '../server/workspaceGateway.js'
 import { createWorkspaceToolLease, type WorkspaceToolLease } from '../server/workspaceToolLease.js'
 import {UNCONFIGURED_COMPUTER_IMAGE} from '../shared/runner.js'
+import {assertRunnerHermes} from './config.js'
 import type { RunnerCommand, RunnerConfiguration } from '../shared/runner.js'
 import { LoopbackTransport, isLocalAuthorizationTarget } from '../server/loopbackAuthorization.js'
 
@@ -42,7 +43,7 @@ export class RunnerAgent {
     const web=new URL(config.serverURL),hermes=new URL(config.hermesURL)
     if(web.username||web.password||web.search||web.hash||!['http:','https:'].includes(web.protocol))throw new Error('Web 地址无效')
     if(web.protocol==='http:'&&!['127.0.0.1','localhost','[::1]'].includes(web.hostname)&&!config.allowInsecureLan)throw new Error('远程执行节点必须使用 HTTPS，或明确配置可信局域网 HTTP')
-    if(hermes.username||hermes.password||hermes.search||hermes.hash||!['127.0.0.1','[::1]'].includes(hermes.hostname)||!['http:','https:'].includes(hermes.protocol))throw new Error('Runner 必须连接本机 Hermes')
+    assertRunnerHermes(hermes, config.satellite, config.allowInsecureLan)
     const client=new UpstreamClient(hermes)
     this.target={url:hermes,client,session:new UpstreamServiceSession(client,()=>config.hermesCredentials)}
     this.db=new DatabaseSync(join(home,'runner-commands.sqlite3'))
@@ -55,12 +56,14 @@ export class RunnerAgent {
     if(url.hostname==='localhost')url.hostname='127.0.0.1'
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
       method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'workspace-memory-bind-v1',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'workspace-memory-bind-v1',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
-      if(path==='desktop'){const error=await response.json().catch(()=>({})) as {error?:string;code?:string};throw new HttpError(response.status,error.error?.slice(0,300)||'Compose 桌面连接失败',error.code||'compose_desktop_error')}
-      throw new HttpError(response.status,`执行节点连接被拒绝（HTTP ${response.status}）`,response.status===403?'runner_unauthorized':'runner_request_failed')
+      const error=await response.json().catch(()=>({})) as {error?:string;code?:string}
+      if(path==='desktop')throw new HttpError(response.status,error.error?.slice(0,300)||'Compose 桌面连接失败',error.code||'compose_desktop_error')
+      // Surface the server's real tool/desktop error (e.g. path out of range) instead of a generic "connection refused".
+      throw new HttpError(response.status,error.error?.slice(0,300)||`执行节点请求失败（HTTP ${response.status}）`,error.code||(response.status===403?'runner_unauthorized':'runner_request_failed'))
     }
     const reader=response.body?.getReader();const chunks:Uint8Array[]=[];let bytes=0
     if(!reader)throw new Error('执行节点响应为空')
@@ -190,7 +193,8 @@ export class RunnerAgent {
       if(p.computer){
         const meta=p.computer as ComputerTarget
         if(!this.computers||![meta.environmentId,meta.agentId,String(p.workId)].every(value=>/^[0-9a-f-]{36}$/.test(value))||!/^[a-f0-9]{64}$/.test(meta.ownerKey))throw new HttpError(409,'电脑任务配置或授权无效','computer_unavailable')
-        gateway=new ComputerGateway(this.computers,{...meta,hermesRuntime:true},String(p.workId),async()=>{if(!this.active||!this.connected||(await this.api('check',{connectionId})).allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')},body=>this.api('artifact',{connectionId,...body}),this.target)
+        const trustedMeta={...meta,hermesRuntime:true}
+        gateway=new ComputerGateway(this.computers,trustedMeta,String(p.workId),async()=>{const state=await this.api('check',{connectionId});if(!this.active||!this.connected||state.allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked');trustedMeta.fileTransferMaxBytes=Number.isInteger(state.fileTransferMaxBytes)&&state.fileTransferMaxBytes>=1024*1024&&state.fileTransferMaxBytes<=100*1024*1024?state.fileTransferMaxBytes:25*1024*1024},body=>this.api('artifact',{connectionId,...body}),this.target)
       }else gateway=new WorkspaceGateway(this.target)
       const connection:Connection={cleanupOnly:p.cleanupOnly===true,gateway,sessions:new Map(),running:new Set(),events:Promise.resolve()}
       this.connections.set(connectionId,connection)
@@ -278,7 +282,7 @@ export class RunnerAgent {
     const pending=Promise.resolve().then(async()=>{
       if(command.expiresAt<=Date.now()||!(await this.api('admit',{id:command.id})).allowed||command.expiresAt<=Date.now())throw new HttpError(403,'命令授权已经失效，未执行','runner_command_not_admitted')
       return this.execute(command)
-    }).then(result=>({result}),error=>({error:{message:error instanceof HttpError||error instanceof ComputerError?error.message:'执行节点操作失败',code:error instanceof HttpError||error instanceof ComputerError?error.code:'runner_error'}}))
+    }).then(result=>({result}),error=>({error:{message:(error instanceof Error&&error.message?error.message:'执行节点操作失败').slice(0,1000),code:error instanceof HttpError||error instanceof ComputerError?error.code:'runner_error'}}))
       .then(reply=>{this.db.prepare("UPDATE commands SET state='complete',result=? WHERE id=?").run(JSON.stringify(reply),command.id);return reply})
       .finally(()=>this.inflight.delete(command.id))
     this.inflight.set(command.id,pending);return pending

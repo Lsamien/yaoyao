@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
-import { WorkspaceKnowledge } from '../../src/server/workspaceKnowledge'
+import { MEMORY_CONTEXT_MAX_CHARS, WorkspaceKnowledge } from '../../src/server/workspaceKnowledge'
 import type { WorkspaceAgent, WorkspaceMessage } from '../../src/shared/workspace'
 
 let home: string, store: WorkspaceStore, knowledge: WorkspaceKnowledge, a: WorkspaceAgent, b: WorkspaceAgent
@@ -24,27 +24,70 @@ function source(content: string) {
   return { messageId: message.id, conversationId: message.conversationId, quote: content }
 }
 describe('Bot file memory', () => {
-  it('preserves different shared contributions instead of overwriting the same topic', () => {
-    for (const [agent, content] of [[a, '接口使用版本一'], [b, '接口使用版本二']] as const) knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'user', agentId: agent.id, topic: '接口版本', content, tier: 'profile' })
-    const memories = knowledge.memories(owner, { scope: 'user' })
+  it('retains case-insensitive keyword filtering for local files', async () => {
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: 'API uses JSON', tier: 'profile' })
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '用户偏爱低糖饮食', tier: 'profile' })
+    expect((await knowledge.memories(owner, { scope: 'agent', agentId: a.id, search: 'json' })).map(memory => memory.content)).toEqual(['API uses JSON'])
+    expect(await knowledge.memories(owner, { scope: 'agent', agentId: a.id, search: '饮食习惯' })).toEqual([])
+  })
+  it('bounds all three scopes together without truncating or deleting long profile facts', async () => {
+    const project = knowledge.saveProject(owner, { requestId: randomUUID(), name: '长记忆项目', description: '', memberIds: [a.id], groupIds: [] })
+    const all = []
+    for (const scope of ['agent', 'project', 'user'] as const) {
+      for (let index = 0; index < 6; index++) {
+        const content = `${scope}-${index}:`.padEnd(2000, '甲')
+        all.push(await knowledge.writeMemory(owner, { requestId: randomUUID(), scope, agentId: a.id, projectId: scope === 'project' ? project.id : undefined, content, tier: 'profile' }))
+      }
+    }
+    const context = await knowledge.context(owner, a.id, project.id)
+    expect(context.text.length).toBeLessThanOrEqual(MEMORY_CONTEXT_MAX_CHARS)
+    for (const label of ['此 Bot 的记忆', '当前项目记忆', '用户共享记忆']) expect(context.text).toContain(label)
+    const selected = context.text.split('\n').filter(line => line.startsWith('- '))
+    expect(selected.length).toBeGreaterThanOrEqual(3)
+    expect(selected.every(line => all.some(memory => line === `- ${memory.content}（profile；来源 Bot ${memory.agentId}；记忆 ID ${memory.id}）`))).toBe(true)
+    const omitted = all.find(memory => !context.text.includes(memory.id))!
+    expect(omitted).toBeDefined()
+    const found = await knowledge.memories(owner, { scope: omitted.scope, agentId: a.id, projectId: omitted.projectId, search: omitted.content })
+    expect(found.map(memory => memory.id)).toContain(omitted.id)
+    expect((await knowledge.context(owner, a.id, project.id)).version).toBe(context.version)
+  })
+  it('prioritizes shared profile facts before recent private logs', async () => {
+    for (let index = 0; index < 12; index++) await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: `${index}:`.padEnd(2000, '历史'), tier: 'log' })
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'user', agentId: b.id, content: '用户长期使用中文', tier: 'profile' })
+    const context = await knowledge.context(owner, a.id)
+    expect(context.text).toContain('用户长期使用中文')
+    expect(context.text.length).toBeLessThanOrEqual(MEMORY_CONTEXT_MAX_CHARS)
+  })
+  it('preserves different shared contributions instead of overwriting the same topic', async () => {
+    for (const [agent, content] of [[a, '接口使用版本一'], [b, '接口使用版本二']] as const) await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'user', agentId: agent.id, topic: '接口版本', content, tier: 'profile' })
+    const memories = await knowledge.memories(owner, { scope: 'user' })
     expect(memories).toHaveLength(2)
     expect(memories.every(m => m.conflict)).toBe(true)
     expect(new Set(memories.map(m => m.agentId)).size).toBe(2)
   })
-  it('isolates bots sharing one Profile and merges only shared user contributions', () => {
+  it('keeps profile and log in the standing prompt and leaves notes out', async () => {
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '基础职责', tier: 'profile' })
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '昨天做过的事', tier: 'log' })
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '马上会过期', tier: 'note' })
+    const text = (await knowledge.context(owner, a.id)).text
+    expect(text).toContain('基础职责')
+    expect(text).toContain('昨天做过的事')
+    expect(text).not.toContain('马上会过期')
+  })
+  it('isolates bots sharing one Profile and merges only shared user contributions', async () => {
     const fact = source('以后请使用中文回答')
-    knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '甲自己的经验', tier: 'profile' })
-    knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'user', agentId: a.id, content: '用户偏好中文', tier: 'profile', sources: [fact] }, { agentId: a.id })
-    expect(knowledge.context(owner, a.id).text).toContain('甲自己的经验')
-    expect(knowledge.context(owner, b.id).text).not.toContain('甲自己的经验')
-    expect(knowledge.context(owner, b.id).text).toContain('用户偏好中文')
-    expect(() => knowledge.memories(owner, { scope: 'agent', agentId: a.id }, { agentId: b.id })).toThrowError(expect.objectContaining({ code: 'memory_forbidden' }))
-    expect(() => knowledge.memories('other-owner', { scope: 'agent', agentId: a.id })).not.toThrow()
-    expect(knowledge.memories('other-owner', { scope: 'agent', agentId: a.id })).toEqual([])
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '甲自己的经验', tier: 'profile' })
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'user', agentId: a.id, content: '用户偏好中文', tier: 'profile', sources: [fact] }, { agentId: a.id })
+    expect((await knowledge.context(owner, a.id)).text).toContain('甲自己的经验')
+    expect((await knowledge.context(owner, b.id)).text).not.toContain('甲自己的经验')
+    expect((await knowledge.context(owner, b.id)).text).toContain('用户偏好中文')
+    expect((await knowledge.context(owner, a.id)).text).toContain('以自己的记忆为准')
+    await expect(knowledge.memories(owner, { scope: 'agent', agentId: a.id }, { agentId: b.id })).rejects.toThrowError(expect.objectContaining({ code: 'memory_forbidden' }))
+    await expect(knowledge.memories('other-owner', { scope: 'agent', agentId: a.id })).resolves.toEqual([])
     const body = readFileSync(join(home, 'bot-workspace', owner, 'agents', a.id, 'memory', 'profile.md'), 'utf8')
     expect(body).toMatch(/- \(\d{4}-\d{2}-\d{2}\) 甲自己的经验/)
   })
-  it('keeps files authoritative and rebuilds project membership and group projections', () => {
+  it('keeps files authoritative and rebuilds project membership and group projections', async () => {
     const group = store.createGroup(owner, { name: '群', memberIds: [a.id, b.id], collaborationMode: 'discussion' })
     const requestId = randomUUID(), input = { requestId, name: '项目一', description: '共同工作', memberIds: [a.id, b.id], groupIds: [group.id] }
     const project = knowledge.saveProject(owner, input)
@@ -55,50 +98,50 @@ describe('Bot file memory', () => {
     expect(store.require<any>(owner, 'project', project.id).memberIds).toEqual([a.id, b.id].sort())
     expect(store.require<any>(owner, 'conversation', group.id).projectId).toBe(project.id)
     const fact = source('本项目使用版本化接口')
-    knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'project', projectId: project.id, agentId: a.id, content: '接口需要版本号', tier: 'profile', sources: [fact] }, { agentId: a.id })
-    expect(knowledge.context(owner, b.id, project.id).text).toContain('接口需要版本号')
-    expect(knowledge.context(owner, b.id).text).not.toContain('接口需要版本号')
+    await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'project', projectId: project.id, agentId: a.id, content: '接口需要版本号', tier: 'profile', sources: [fact] }, { agentId: a.id })
+    expect((await knowledge.context(owner, b.id, project.id)).text).toContain('接口需要版本号')
+    expect((await knowledge.context(owner, b.id)).text).not.toContain('接口需要版本号')
     knowledge.saveProject(owner, { ...input, requestId: randomUUID(), id: project.id, expectedRevision: project.revision, memberIds: [a.id], groupIds: [] })
-    expect(() => knowledge.context(owner, b.id, project.id)).toThrowError(expect.objectContaining({ code: 'project_forbidden' }))
+    await expect(knowledge.context(owner, b.id, project.id)).rejects.toThrowError(expect.objectContaining({ code: 'project_forbidden' }))
   })
-  it('rejects stale revisions, cross-contributor writes and overwrite of user-maintained facts', () => {
+  it('rejects stale revisions, cross-contributor writes and overwrite of user-maintained facts', async () => {
     const fact = source('以后请精简回复')
     const input = { requestId: randomUUID(), scope: 'user' as const, agentId: a.id, content: '用户喜欢简洁', tier: 'profile' as const, sources: [fact] }
-    const initial = knowledge.writeMemory(owner, input, { agentId: a.id })
-    expect(() => knowledge.writeMemory(owner, { ...input, requestId: randomUUID() }, { agentId: b.id })).toThrowError(expect.objectContaining({ code: 'memory_forbidden' }))
-    const edited = knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: initial.id, expectedRevision: 1, content: '回复简洁但保留依据' })
+    const initial = await knowledge.writeMemory(owner, input, { agentId: a.id })
+    await expect(knowledge.writeMemory(owner, { ...input, requestId: randomUUID() }, { agentId: b.id })).rejects.toThrowError(expect.objectContaining({ code: 'memory_forbidden' }))
+    const edited = await knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: initial.id, expectedRevision: 1, content: '回复简洁但保留依据' })
     expect(edited.revision).toBe(2)
-    expect(() => knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: initial.id, expectedRevision: 1 })).toThrowError(expect.objectContaining({ code: 'memory_revision_conflict' }))
-    expect(() => knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: initial.id, expectedRevision: 2 }, { agentId: a.id })).toThrowError(expect.objectContaining({ code: 'memory_manual_protected' }))
-    expect(knowledge.revisions(owner, input, initial.id)).toHaveLength(2)
+    await expect(knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: initial.id, expectedRevision: 1 })).rejects.toThrowError(expect.objectContaining({ code: 'memory_revision_conflict' }))
+    await expect(knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: initial.id, expectedRevision: 2 }, { agentId: a.id })).rejects.toThrowError(expect.objectContaining({ code: 'memory_manual_protected' }))
+    expect(await knowledge.revisions(owner, input, initial.id)).toHaveLength(2)
   })
-  it('keeps tombstones across restart and prevents old synthesis from resurrecting forgotten facts', () => {
+  it('keeps tombstones across restart and prevents old synthesis from resurrecting forgotten facts', async () => {
     const input = { requestId: randomUUID(), scope: 'agent' as const, agentId: a.id, content: '旧偏好', tier: 'profile' as const }
-    const memory = knowledge.writeMemory(owner, input)
-    knowledge.forget(owner, { ...input, requestId: randomUUID(), id: memory.id, expectedRevision: memory.revision })
+    const memory = await knowledge.writeMemory(owner, input)
+    await knowledge.forget(owner, { ...input, requestId: randomUUID(), id: memory.id, expectedRevision: memory.revision })
     knowledge = new WorkspaceKnowledge(home, store)
-    expect(() => knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), automatic: true, sources: [source('旧偏好')] }, { agentId: a.id })).toThrowError(expect.objectContaining({ code: 'memory_forgotten' }))
-    expect(knowledge.memories(owner, input)).toEqual([])
-    expect(knowledge.revisions(owner, input, memory.id)[0]?.operation).toBe('forget')
+    await expect(knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), automatic: true, sources: [source('旧偏好')] }, { agentId: a.id })).rejects.toThrowError(expect.objectContaining({ code: 'memory_forgotten' }))
+    expect(await knowledge.memories(owner, input)).toEqual([])
+    expect((await knowledge.revisions(owner, input, memory.id))[0]?.operation).toBe('forget')
   })
-  it('recovers a partially written multi-file transaction and does not duplicate its receipt or event', () => {
+  it('recovers a partially written multi-file transaction and does not duplicate its receipt or event', async () => {
     const input = { requestId: randomUUID(), scope: 'agent' as const, agentId: a.id, content: '需要恢复的事实', tier: 'profile' as const }
     knowledge.fault = path => { if (path.endsWith('profile.md')) throw new Error('simulated power loss') }
-    expect(() => knowledge.writeMemory(owner, input)).toThrow('simulated power loss')
+    await expect(knowledge.writeMemory(owner, input)).rejects.toThrow('simulated power loss')
     knowledge = new WorkspaceKnowledge(home, store)
-    const restored = knowledge.memories(owner, input)
+    const restored = await knowledge.memories(owner, input)
     expect(restored).toHaveLength(1)
-    expect(knowledge.writeMemory(owner, input)).toEqual(restored[0])
+    expect(await knowledge.writeMemory(owner, input)).toEqual(restored[0])
     expect(store.events(owner, 0).filter(e => e.type === 'memory.changed')).toHaveLength(1)
-    expect(knowledge.revisions(owner, input, restored[0]!.id)).toHaveLength(1)
+    expect(await knowledge.revisions(owner, input, restored[0]!.id)).toHaveLength(1)
   })
-  it('reports corrupted metadata without silently replacing it and rejects unsafe paths', () => {
+  it('reports corrupted metadata without silently replacing it and rejects unsafe paths', async () => {
     const input = { requestId: randomUUID(), scope: 'agent' as const, agentId: a.id, content: '保留事实', tier: 'log' as const }
-    knowledge.writeMemory(owner, input)
+    await knowledge.writeMemory(owner, input)
     const path = join(home, 'bot-workspace', owner, 'agents', a.id, 'memory', '.dreaming', 'records.json')
     writeFileSync(path, '{broken')
-    expect(() => knowledge.memories(owner, input)).toThrowError(expect.objectContaining({ code: 'knowledge_file_corrupt' }))
+    await expect(knowledge.memories(owner, input)).rejects.toThrowError(expect.objectContaining({ code: 'knowledge_file_corrupt' }))
     expect(readFileSync(path, 'utf8')).toBe('{broken')
-    expect(() => knowledge.memories(owner, { scope: 'project', projectId: '../other' })).toThrowError(expect.objectContaining({ code: 'knowledge_invalid_id' }))
+    await expect(knowledge.memories(owner, { scope: 'project', projectId: '../other' })).rejects.toThrowError(expect.objectContaining({ code: 'knowledge_invalid_id' }))
   })
 })

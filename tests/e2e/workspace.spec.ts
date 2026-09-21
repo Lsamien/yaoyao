@@ -586,17 +586,17 @@ test('reconciles an iOS fast-mode selection from the resumed 9119 session', asyn
 
 test('keeps the show-thinking preference across sessions of the same Agent', async ({ page }) => {
   await page.goto('/chat/session-demo')
-  await expect(page.locator('.turn-trace')).toHaveCount(1)
+  await expect(page.locator('.turn-trace')).toHaveCount(0)
   await page.locator('.composer-tool[aria-label="设置"]').click()
   const setting = page.getByRole('switch', { name: /显示思考/ })
-  await expect(setting).toHaveAttribute('aria-checked', 'true')
+  await expect(setting).toHaveAttribute('aria-checked', 'false')
   await setting.click()
-  await expect(page.locator('.turn-trace')).toHaveCount(0)
+  await expect(page.locator('.turn-trace')).toHaveCount(1)
   await openSecondSession(page)
-  await expect(page.locator('.turn-trace')).toHaveCount(0)
+  await expect(page.locator('.turn-trace')).toHaveCount(1)
   await page.locator('.composer-tool[aria-label="设置"]').click()
   await page.getByRole('switch', { name: /显示思考/ }).click()
-  await expect(page.locator('.turn-trace')).toHaveCount(1)
+  await expect(page.locator('.turn-trace')).toHaveCount(0)
 })
 
 test('restores a legacy session link under its owning Agent profile', async ({ page }) => {
@@ -729,6 +729,9 @@ test('renders persisted user image markers as direct images instead of file card
 
 test('folds tool result rows into their expandable tool call', async ({ page }) => {
   await page.goto('/chat/session-demo')
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('switch', { name: /显示思考/ }).click()
+  await page.getByRole('button', { name: '设置', exact: true }).click()
   const trace = page.locator('.turn-trace').first()
   await expect(trace).not.toHaveAttribute('open', '')
   await expect(trace).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
@@ -835,17 +838,19 @@ test('opens a local message file link as a floating preview card', async ({ page
   expect(stageHeight).toBeGreaterThan(500)
 })
 
-test('shows a thinking animation after submit until output starts', async ({ page }) => {
+test('keeps a thinking animation while output is streaming', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
   await expect(page.getByText('已整理完成。下面是', { exact: false })).toBeVisible()
   const replies = page.getByText('这是来自假 Gateway 的流式回复。', { exact: true })
   const count = await replies.count()
   await page.locator('.composer-textarea').fill('请开始思考')
   await page.getByRole('button', { name: '发送消息' }).click()
-  await expect(page.locator('.thinking-indicator')).toBeVisible()
+  const typing = page.getByTestId('chat-run-thinking-dots')
+  await expect(typing).toBeVisible()
   await expect(replies).toHaveCount(count + 1)
   await expect(replies.last()).toBeVisible()
-  await expect(page.locator('.thinking-indicator')).toHaveCount(0)
+  await expect(typing).toBeVisible()
+  await expect(typing).toHaveCount(0)
 })
 
 test.skip('uses HTTP commands and SSE for chat and team events without opening client WebSockets', async ({ page }, testInfo) => {
@@ -868,6 +873,9 @@ test.skip('uses HTTP commands and SSE for chat and team events without opening c
 
 test('keeps streamed text below sealed interim commentary and its tool trace', async ({ page }) => {
   await page.goto('/chat/session-demo?profile=yaoyao')
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('switch', { name: /显示思考/ }).click()
+  await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.locator('.composer-textarea').fill('验证流式分段')
   await page.getByRole('button', { name: '发送消息' }).click()
 
@@ -876,7 +884,7 @@ test('keeps streamed text below sealed interim commentary and its tool trace', a
   const trace = page.locator('.turn-trace').last()
   await expect(interim).toBeVisible()
   await expect(trace).toHaveClass(/turn-trace--running/)
-  await expect(page.locator('.thinking-indicator')).toBeVisible()
+  await expect(page.getByTestId('chat-run-thinking-dots')).toBeVisible()
   await expect(current).toBeVisible()
 
   const [interimBox, traceBox, currentBox] = await Promise.all([
@@ -914,7 +922,7 @@ test('keeps the canonical logo and yaoyao-webui composer geometry', async ({ pag
   await expect(assistantMessage.locator('.message__actions')).toHaveCSS('opacity', '1')
   await expect(page.locator('.message--tool-only .message__actions')).toHaveCount(0)
   await expect(page.locator('[data-message-id="message-thinking-tool"]')).toHaveCount(0)
-  await expect(page.locator('.turn-trace').first()).toBeVisible()
+  await expect(page.locator('.turn-trace')).toHaveCount(0)
   const userMessageMeta = page.locator('.message--user .message__meta')
   await expect(userMessageMeta).not.toHaveCount(0)
   expect(await userMessageMeta.evaluateAll(elements => elements.every(element => getComputedStyle(element).display === 'none'))).toBe(true)

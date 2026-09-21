@@ -1,21 +1,26 @@
 <script setup lang="ts">
 import HermesBridgePanel from '@/components/app/HermesBridgePanel.vue'
+import OpenVikingSessionSyncPanel from './OpenVikingSessionSyncPanel.vue'
 import { computed, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
 import AppIcon from '@/components/common/AppIcon.vue'
+import DesktopHostSettingsPanel from './DesktopHostSettingsPanel.vue'
 import RunnerSettingsPanel from './RunnerSettingsPanel.vue'
 import {
   createUser,
   deleteUser,
   getAllowedHostsSettings,
   getUpstreamConnectionStatus,
+  getOpenVikingSettings,
   listUsers,
   saveAllowedHostsSettings,
+  saveOpenVikingSettings,
   setUpstreamCredentials,
   updateUser,
   type AllowedHostsSettings,
   type ManagedUser,
   type UpstreamConnectionStatus,
+  type OpenVikingSettings,
 } from '@/api/admin'
 import {
   getPushSystemStatus,
@@ -25,7 +30,7 @@ import {
   type PushSystemStatus,
 } from '@/api/push'
 
-type SystemManagementSection = 'users' | 'connection' | 'push'
+type SystemManagementSection = 'users' | 'connection' | 'memory' | 'push'
 
 const props = withDefaults(defineProps<{
   profiles?: Profile[]
@@ -43,6 +48,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
 const runnerSettingsOpen = ref(false)
+const desktopHostSettingsOpen = ref(false)
 const assignedProfiles = ref<string[]>([])
 const userAssignments = ref<Record<string, string[]>>({})
 const users = ref<ManagedUser[]>([])
@@ -58,6 +64,15 @@ const allowedHostsBaseline = ref('')
 const allowedHostsBusy = ref(false)
 const allowedHostsError = ref('')
 const allowedHostsNotice = ref('')
+const openVikingSettings = ref<OpenVikingSettings>()
+const openVikingUrl = ref('http://127.0.0.1:1933')
+const openVikingAccountId = ref('')
+const openVikingAdminKey = ref('')
+const openVikingEnabled = ref(false)
+const openVikingBaseline = ref('')
+const openVikingBusy = ref(false)
+const openVikingError = ref('')
+const openVikingNotice = ref('')
 const busy = ref(false)
 const error = ref('')
 const pushStatus = ref<PushSystemStatus>()
@@ -107,6 +122,7 @@ interface FCMFormSnapshot {
 
 const apnsBaseline = ref<APNsFormSnapshot>()
 const fcmBaseline = ref<FCMFormSnapshot>()
+const openVikingSnapshot = () => `${openVikingEnabled.value ? 1 : 0}:${openVikingUrl.value}:${openVikingAccountId.value}:${openVikingAdminKey.value}`
 const pushManagedByEnvironment = computed(() => pushStatus.value?.source === 'environment')
 const fcmStatus = computed(() => pushStatus.value?.providers?.fcm)
 const fcmManagedByEnvironment = computed(() => fcmStatus.value?.source === 'environment')
@@ -159,6 +175,9 @@ const dirty = computed(() => {
       || upstreamPassword.value !== connectionBaseline.value.password
       || allowedHostsText.value !== allowedHostsBaseline.value
   }
+  if (props.section === 'memory') {
+    return openVikingSnapshot() !== openVikingBaseline.value
+  }
   if (props.section !== 'push') return false
   const apnsDirty = Boolean(apnsBaseline.value) && Object.keys(apnsSnapshot()).some(key => apnsSnapshot()[key as keyof APNsFormSnapshot] !== apnsBaseline.value?.[key as keyof APNsFormSnapshot])
   const fcmDirty = Boolean(fcmBaseline.value) && Object.keys(fcmSnapshot()).some(key => fcmSnapshot()[key as keyof FCMFormSnapshot] !== fcmBaseline.value?.[key as keyof FCMFormSnapshot])
@@ -198,6 +217,16 @@ async function refresh() {
     userAssignments.value = Object.fromEntries(users.value.map(user => [user.id, [...(user.assignedProfiles ?? [])]]))
     return
   }
+  if (props.section === 'memory') {
+    const next = await getOpenVikingSettings()
+    openVikingSettings.value = next
+    openVikingUrl.value = next.url
+    openVikingAccountId.value = next.accountId
+    openVikingAdminKey.value = ''
+    openVikingEnabled.value = next.enabled
+    openVikingBaseline.value = openVikingSnapshot()
+    return
+  }
   if (props.section === 'connection') {
     const [settings, status] = await Promise.all([
       getAllowedHostsSettings(),
@@ -223,6 +252,32 @@ async function refresh() {
   else {
     apnsBaseline.value = undefined
     fcmBaseline.value = undefined
+  }
+}
+
+async function saveOpenViking() {
+  if (openVikingBusy.value || openVikingSettings.value?.source === 'environment') return
+  openVikingBusy.value = true
+  openVikingError.value = ''
+  openVikingNotice.value = ''
+  try {
+    const next = await saveOpenVikingSettings({
+      enabled: openVikingEnabled.value,
+      url: openVikingUrl.value.trim(),
+      accountId: openVikingAccountId.value.trim(),
+      ...(openVikingAdminKey.value.trim() ? { adminKey: openVikingAdminKey.value.trim() } : {}),
+    })
+    openVikingSettings.value = next
+    openVikingUrl.value = next.url
+    openVikingAccountId.value = next.accountId
+    openVikingAdminKey.value = ''
+    openVikingEnabled.value = next.enabled
+    openVikingBaseline.value = openVikingSnapshot()
+    openVikingNotice.value = next.enabled ? 'OpenViking 验证通过，Bot 记忆已启用' : 'OpenViking 已停用，Bot 记忆已切回本地文件'
+  } catch (cause) {
+    openVikingError.value = cause instanceof Error ? cause.message : '无法保存 OpenViking 设置'
+  } finally {
+    openVikingBusy.value = false
   }
 }
 
@@ -397,6 +452,10 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
     allowedHostsError.value = ''
     allowedHostsNotice.value = ''
   }
+  if (section === 'memory') {
+    openVikingError.value = ''
+    openVikingNotice.value = ''
+  }
   void refresh().catch(cause => {
     error.value = cause instanceof Error ? cause.message : '读取系统设置失败'
   })
@@ -458,6 +517,10 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
         <summary>执行节点</summary>
         <RunnerSettingsPanel v-if="runnerSettingsOpen" />
       </details>
+      <details class="desktop-host-settings" @toggle="desktopHostSettingsOpen = ($event.target as HTMLDetailsElement).open">
+        <summary>电脑</summary>
+        <DesktopHostSettingsPanel v-if="desktopHostSettingsOpen" />
+      </details>
       <div class="block network-access-block">
         <h3>外网访问地址</h3>
         <p class="network-description">允许通过指定域名或公网 IP 访问 15300。每行填写一个地址，不要包含 <code>http://</code>、端口或路径。</p>
@@ -477,6 +540,25 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
           <footer><button class="solid-button" :disabled="allowedHostsBusy || allowedHostsText === allowedHostsBaseline">{{ allowedHostsBusy ? '保存中…' : '保存访问地址' }}</button></footer>
         </form>
       </div>
+    </div>
+
+    <div v-else-if="section === 'memory'" class="block">
+      <h3>OpenViking Bot 记忆</h3>
+      <p :class="{ ok: openVikingSettings?.enabled && openVikingSettings.status === 'ready' }">
+        {{ openVikingSettings?.source === 'environment' ? '配置由服务环境变量管理' : openVikingSettings?.enabled ? 'OpenViking 记忆服务已启用' : 'OpenViking 记忆服务未启用' }}
+      </p>
+      <p v-if="openVikingSettings?.error" class="error" role="alert">{{ openVikingSettings.error }}</p>
+      <p v-if="openVikingSettings?.source === 'environment'">服务地址、Account ID、管理员 Key 和启用状态都以环境变量为准。</p>
+      <form v-else @submit.prevent="saveOpenViking">
+        <label><span>服务地址</span><input v-model="openVikingUrl" name="openviking-url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:1933" :disabled="openVikingBusy" /></label>
+        <label><span>Account ID</span><input v-model="openVikingAccountId" name="openviking-account" autocomplete="off" spellcheck="false" :disabled="openVikingBusy" /></label>
+        <label><span>管理员 Key</span><input v-model="openVikingAdminKey" name="openviking-admin-key" type="password" autocomplete="new-password" :placeholder="openVikingSettings?.keyConfigured ? '已配置，留空表示保持不变' : ''" :disabled="openVikingBusy" /></label>
+        <label class="checkbox"><input v-model="openVikingEnabled" type="checkbox" :disabled="openVikingBusy" /><span>启用 OpenViking 作为 Bot 记忆 Provider</span></label>
+        <p v-if="openVikingError" class="error" role="alert">{{ openVikingError }}</p>
+        <p v-else-if="openVikingNotice" class="ok" role="status">{{ openVikingNotice }}</p>
+        <footer><button class="solid-button" :disabled="openVikingBusy || openVikingSnapshot() === openVikingBaseline || (openVikingEnabled && (!openVikingUrl.trim() || !openVikingAccountId.trim() || (!openVikingAdminKey.trim() && !openVikingSettings?.keyConfigured)))">{{ openVikingBusy ? '验证中…' : '验证并保存' }}</button></footer>
+      </form>
+      <OpenVikingSessionSyncPanel v-if="active" />
     </div>
 
     <template v-else>

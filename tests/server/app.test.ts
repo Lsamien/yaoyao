@@ -422,3 +422,18 @@ describe('15300 BFF', () => {
     expect(response.headers['content-disposition']).toContain('attachment')
   })
 })
+
+it.each([true,false])('enforces administrator access for transfer settings and session sync (admin=%s)',async admin=>{
+  const runtime=(admin?createApplication:createUserAuthenticatedApplication)({config:makeConfig(),fetchImpl:fakeGateway([])});runtimes.push(runtime)
+  const callback=runtime.app.callback(),bootstrap=await request(callback).get('/api/app/bootstrap?csrfOnly=1').set('Host','127.0.0.1:15300').expect(200)
+  const mutation=(path:string,method:'post'|'put',body:unknown)=>request(callback)[method](path).set('Host','127.0.0.1:15300').set('Origin','http://127.0.0.1:15300').set('Cookie',cookieHeader(bootstrap)).set('X-CSRF-Token',bootstrap.body.csrfToken).send(body as any)
+  await request(callback).get('/api/app/admin/openviking/session-sync').set('Host','127.0.0.1:15300').expect(admin?200:403)
+  await mutation('/api/app/admin/openviking/session-sync/retry','post',{}).expect(admin?200:403)
+  await mutation('/api/app/settings/host-tools','put',{fileTransferMaxMiB:100}).expect(admin?200:403)
+  if(admin){
+    await mutation('/api/app/settings/host-tools','put',{cloud:false}).expect(200)
+    const saved=await request(callback).get('/api/app/settings/host-tools').set('Host','127.0.0.1:15300').expect(200)
+    expect(saved.body.fileTransferMaxMiB).toBe(100)
+    await mutation('/api/app/settings/host-tools','put',{fileTransferMaxMiB:101}).expect(400)
+  }
+})

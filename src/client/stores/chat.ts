@@ -14,7 +14,7 @@ import { ApiError } from '@/api/client'
 import { encodeAttachment } from '@/utils/attachments'
 import { ScopedCache } from '@/utils/cache'
 import { createId, routeKey } from '@/utils/id'
-import { applyChatEvent, mergeChatMessages, settleChatMessages } from '@/utils/messageReducer'
+import { applyChatEvent, chatHasUnfinishedOutput, mergeChatMessages, settleChatMessages } from '@/utils/messageReducer'
 import { reconcileChatHistory } from '@/utils/chatHistory'
 import { bool, normalizeChatMessage, number, record, string, values } from '@/utils/normalize'
 import { appendSessionPage, pinnedSessionsFirst } from '@/utils/sessionOrder'
@@ -162,7 +162,7 @@ export const useChatStore = defineStore('chat', () => {
         latest.liveStatus=value.liveStatus??undefined
         latest.hasMoreBefore=value.hasOlder;latest.historySynced=true;latest.isLoadingHistory=false;latest.error=value.error??undefined
         const wasStreaming=latest.isStreaming
-        latest.isStreaming=value.running??canonical.some(m=>m.isStreaming);latest.isQueued=value.queued??false
+        latest.isStreaming=value.running??canonical.some(m=>m.isStreaming||chatHasUnfinishedOutput([m]));latest.isQueued=value.queued??false
         if(wasStreaming&&!latest.isStreaming)void refreshContextUsage(latest).catch(()=>{})
         if(!latest.isStreaming)latest.liveStatus=undefined
         updateInflightMarker(latest)
@@ -629,7 +629,8 @@ export const useChatStore = defineStore('chat', () => {
     // REST owns history, but an owned chat also needs a runtime subscription:
     // another device can start a turn while this viewer has never sent one.
     // History-only sessions and unsent drafts must remain unattached.
-    if (!state.historySynced) await loadHistory(state)
+    if (sessionId.startsWith('draft-')) state.historySynced = true
+    else if (!state.historySynced) await loadHistory(state)
     const refreshed = sessions.value.find(item => item.id === sessionId && item.profile === selectedProfile)
     syncSelectedModel(refreshed?.model, refreshed?.provider)
     if (refreshed?.owned === true && !sessionId.startsWith('draft-')

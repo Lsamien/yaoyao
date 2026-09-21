@@ -1,3 +1,5 @@
+import { isSupportedFilePath, serverFilePath, serverFileUrl } from '@shared/serverFiles'
+
 const IMAGE_EXTENSIONS = new Set([
   'apng', 'avif', 'bmp', 'gif', 'heic', 'heif', 'ico', 'jfi', 'jfif', 'jif',
   'jpe', 'jpeg', 'jpg', 'jxl', 'png', 'svg', 'tif', 'tiff', 'webp',
@@ -95,6 +97,16 @@ function transformLine(line: string, streaming: boolean, terminated: boolean): s
   return cursor ? output + line.slice(cursor) : line
 }
 
+function transformStandaloneFilePath(line: string, streaming: boolean): string {
+  if (streaming || HEADING.test(line) || line.includes('|') || line.includes('](')) return line
+  const match = /^(\s*)((?:[-+*]|\d+[.)])\s+)?(.+?)\s*$/.exec(line)
+  if (!match) return line
+  const candidate = match[3]
+  const path = serverFilePath(candidate)
+  if (!path || !serverFileUrl(candidate) || !isSupportedFilePath(path)) return line
+  return `${match[1]}${match[2] || ''}${asMarkdown(path)}`
+}
+
 /**
  * Compatibility for historical assistant output. New agent output is already
  * Markdown and deliberately bypasses any message mutation at send time.
@@ -110,6 +122,7 @@ export function normalizeAssistantMediaMarkdown(content: string, streaming = fal
       return part
     }
     const terminated = parts[index + 1] === '\n' || parts[index + 1] === '\r\n'
-    return inFence ? part : transformLine(part, streaming, terminated)
+    if (inFence) return part
+    return transformStandaloneFilePath(transformLine(part, streaming, terminated), streaming)
   }).join('')
 }

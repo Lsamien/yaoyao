@@ -1,20 +1,14 @@
 import {test,expect} from '@playwright/test'
 import {mkdirSync} from 'node:fs'
-test('Web controls the real connected desktop browser and shows native permissions on a narrow viewport',async({page})=>{
+test('Web shows native desktop permissions',async({page})=>{
  const evidence='test-results/native-environment';mkdirSync(evidence,{recursive:true})
  await page.goto('/conversations');await page.getByRole('textbox',{name:'账号',exact:true}).fill('fixture');await page.getByRole('textbox',{name:'密码',exact:true}).fill('fixture-pass');await page.getByRole('button',{name:'登录',exact:true}).click()
- await page.locator('.desktop-sidebar .sidebar-create-trigger').click();await page.getByRole('menuitem',{name:'新建 Bot',exact:true}).click();const editor=page.getByRole('dialog');await editor.getByRole('textbox',{name:'名称',exact:true}).fill('本机与浏览器验收');await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await page.locator('.desktop-sidebar .sidebar-create-trigger').click();await page.getByRole('menuitem',{name:'新建 Bot',exact:true}).click();const editor=page.getByRole('dialog');await editor.getByRole('textbox',{name:'名称',exact:true}).fill('本机控制验收');await editor.getByRole('button',{name:'保存',exact:true}).click()
  await page.getByRole('button',{name:'电脑与定时任务',exact:true}).click()
  const panel=page.getByRole('complementary',{name:'机器人电脑面板'})
- await expect(panel.getByRole('tab',{name:'本机',exact:true})).toBeEnabled({timeout:15000});await panel.getByRole('tab',{name:'本机',exact:true}).click()
- await expect(panel.getByRole('button',{name:'在桌面端授权',exact:true})).toBeVisible();await expect(panel.getByText(/连接电脑：/)).toBeVisible();await page.screenshot({path:evidence+'/desktop-native-permissions.png'})
- await panel.getByRole('tab',{name:'仅浏览器',exact:true}).click();await panel.getByRole('button',{name:'打开浏览器',exact:true}).click()
- const viewer=page.locator('dialog.computer-panel');await expect(viewer.getByRole('textbox',{name:'浏览器地址',exact:true})).toBeEnabled({timeout:15000})
- const url='http://127.0.0.1:18852/__test/browser-page';await viewer.getByRole('textbox',{name:'浏览器地址',exact:true}).fill(url);await viewer.getByRole('button',{name:'前往',exact:true}).click();await expect(viewer.getByRole('tab',{name:'浏览器操作验收',exact:true})).toBeVisible({timeout:15000})
- await expect(viewer.locator('.computer-screen img')).toBeVisible();await expect.poll(async()=>(await viewer.locator('.computer-screen img').getAttribute('src'))?.length??0).toBeGreaterThan(14000);await page.screenshot({path:evidence+'/desktop-browser.png'})
- await viewer.getByRole('button',{name:'交还并关闭',exact:true}).click()
- await page.setViewportSize({width:375,height:812});await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});await panel.getByRole('button',{name:'打开浏览器',exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:evidence+'/phone-browser-settings.png'})
- await panel.getByRole('button',{name:'打开浏览器',exact:true}).click();await expect(viewer.getByRole('textbox',{name:'浏览器地址',exact:true})).toBeEnabled();await expect(viewer.getByRole('textbox',{name:'浏览器地址',exact:true})).toHaveValue(url);await page.screenshot({path:evidence+'/phone-browser.png'})
- expect(await viewer.evaluate(el=>el.scrollWidth<=el.clientWidth+2)).toBe(true)
- await viewer.getByRole('button',{name:'交还并关闭',exact:true}).click()
+ const desktop=panel.getByRole('combobox',{name:'显示的桌面'})
+ await expect(desktop).toBeEnabled({timeout:15000});await desktop.selectOption('desktop:local')
+ await expect(panel.getByRole('button',{name:'在桌面端授权',exact:true})).toBeVisible();await expect(panel.getByText(/服务器是运行夭夭服务的电脑；电脑是连接这台服务器的 Mac/)).toBeVisible();await page.screenshot({path:evidence+'/desktop-native-permissions.png'})
+ await expect(panel.getByRole('tab',{name:'仅浏览器',exact:true})).toHaveCount(0)
+ await expect(panel.getByRole('checkbox',{name:'电脑浏览器',exact:true})).toHaveCount(0)
 })

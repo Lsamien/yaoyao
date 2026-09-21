@@ -70,3 +70,21 @@ export function saveAllowedHostsSettings(hosts: string[]): Promise<AllowedHostsS
     method: 'PUT', body: { hosts } as unknown as JsonValue,
   })
 }
+
+export interface OpenVikingSettings {
+  enabled: boolean
+  url: string
+  accountId: string
+  keyConfigured: boolean
+  source: 'none' | 'file' | 'environment'
+  status: 'disabled' | 'ready' | 'error'
+  error?: string
+}
+
+export function getOpenVikingSettings(): Promise<OpenVikingSettings> {
+  return apiRequest('/api/app/admin/openviking')
+}
+
+export function saveOpenVikingSettings(input: Omit<OpenVikingSettings, 'keyConfigured' | 'source' | 'status' | 'error'> & { adminKey?: string }): Promise<OpenVikingSettings> {
+  return apiRequest('/api/app/admin/openviking', { method: 'PUT', body: input as unknown as JsonValue })
+}

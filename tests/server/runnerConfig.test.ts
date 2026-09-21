@@ -35,3 +35,7 @@ it('resolves optional Hermes paths on the execution host while preserving explic
  expect(parseRunnerConfiguration({...config,computers:{...computers,hermesHome:'/custom/hermes',hermesSource:'/custom/source',python:''}}).computers?.python).toBe('/custom/source/venv/bin/python')
  expect(()=>parseRunnerConfiguration({...config,computers:{...computers,hermesHome:'relative'}})).toThrow()
 })
+
+it('rejects the retired satellite runner',()=>{
+  expect(()=>parseRunnerConfiguration({...config,satellite:true,hermesURL:'https://hermes.example',allowInsecureLan:true})).toThrow('卫星执行节点已停用')
+})

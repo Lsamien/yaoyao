@@ -1,10 +1,9 @@
 import {randomUUID,createHash} from 'node:crypto'
 import {z} from 'zod'
 import {HttpError} from '../../server/errors.js'
-import {CUA_DRIVER,CUA_SOCKET,type ComputerSpecification} from '../computers/container.js'
+import {CUA_DRIVER,CUA_SOCKET,COMPUTER_WORKSPACE,type ComputerSpecification} from '../computers/container.js'
 import type {ComputerLease} from '../computers/pool.js'
-import {ComputerPublicProxy} from '../network/computerProxy.js'
-import type {ComputerRuntime,ComputerGateway,ComputerTarget} from './gateway.js'
+import type {ComputerRuntime,ComputerGateway,ComputerTarget,ProxyHandle} from './gateway.js'
 import type {ComputerControlStatus,ComputerFrame} from '../../shared/computerControl.js'
 
 const actionSchema=z.discriminatedUnion('kind',[
@@ -16,7 +15,7 @@ const actionSchema=z.discriminatedUnion('kind',[
 ])
 interface Manual {
   id:string;meta:ComputerTarget;profile:string;mode:ComputerControlStatus['mode'];valid:boolean
-  gateway?:ComputerGateway;lease?:ComputerLease;spec?:ComputerSpecification;proxy?:ComputerPublicProxy
+  gateways:ComputerGateway[];lease?:ComputerLease;spec?:ComputerSpecification;proxyHandle?:ProxyHandle
   pending?:Promise<void>;error?:string;check():Promise<void>;checking:boolean
   stopping?:Promise<void>;actions:Map<string,{fingerprint:string;result:Promise<unknown>}>
 }
@@ -35,10 +34,13 @@ export class ComputerControls {
   private state(meta:ComputerTarget){const state=this.manual.get(meta.environmentId);if(state&&state.meta.ownerKey!==meta.ownerKey)throw new HttpError(403,'电脑归属不匹配','computer_owner_mismatch');return state}
   async status(meta:ComputerTarget):Promise<ComputerControlStatus>{
     const state=this.state(meta)
-    if(state)return {mode:state.mode,controlId:state.id,generation:state.lease?.generation,canResume:!!state.gateway,error:state.error}
+    if(state)return {mode:state.mode,controlId:state.id,generation:state.lease?.generation,canResume:!!state.gateways.length,error:state.error}
+    const gateways=[...(this.runtime.gateways.get(meta.environmentId)??[])]
+    if(gateways.some(gateway=>gateway.paused))return {mode:'pausing',generation:this.runtime.pool.status(meta.ownerKey).find(row=>row.environmentId===meta.environmentId)?.generation}
     const resource=this.runtime.pool.status(meta.ownerKey).find(item=>item.environmentId===meta.environmentId)
     if(this.runtime.provider.fixedCapacity&&(!resource||['free','idle'].includes(resource.status))){const state=await this.runtime.provider.inspect({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.config.imageId});return {mode:state?.running?'idle':'off',generation:resource?.generation??0}}
-    return {mode:resource?.status==='active'?'agent':resource?.status==='idle'?'idle':'off',generation:resource?.generation}
+    const human=resource?.holderIds.some(holderId=>holderId.startsWith('human:'))
+    return {mode:gateways.some(gateway=>gateway.active)||resource?.status==='active'?(human?'resuming':'agent'):resource?.status==='idle'?'idle':'off',generation:resource?.generation}
   }
   async frame(meta:ComputerTarget,authorize:()=>void):Promise<ComputerFrame>{
     this.runtime.assertTarget(meta);authorize()
@@ -58,18 +60,23 @@ export class ComputerControls {
     this.runtime.assertTarget(meta);await check()
     const old=this.state(meta)
     if(old){if(old.id===id)return this.status(meta);throw new HttpError(409,'电脑已由另一控制会话接管','computer_control_busy')}
-    const gateway=this.runtime.gateways.get(meta.environmentId)
-    const state:Manual={id,meta,profile,mode:'pausing',valid:true,gateway:gateway?.active?gateway:undefined,check,checking:false,actions:new Map()}
+    // Pause every bot currently working on this desktop; the human joins the
+    // same shared environment as an additional holder of its own.
+    const gateways=this.runtime.activeGateways(meta.environmentId)
+    const state:Manual={id,meta,profile,mode:'pausing',valid:true,gateways,check,checking:false,actions:new Map()}
     this.manual.set(meta.environmentId,state)
     state.pending=(async()=>{
-      if(state.gateway){state.lease=await state.gateway.takeControl(id,()=>this.guard(state));state.spec=state.gateway.specification}
-      else{
+      for(const gateway of gateways)await gateway.takeControl(id,()=>this.guard(state))
+      const resource=this.runtime.pool.status(meta.ownerKey).find(row=>row.environmentId===meta.environmentId)
+      let spec=this.runtime.pool.definition(meta.ownerKey,meta.environmentId)
+      if(!spec||resource?.status!=='active'){
         const resolved=await this.runtime.resolveWorkspace(profile);await check();this.guard(state)
-        state.spec={id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.runtime.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??'/home/cua/workspace'):resolved.cwd,network:this.runtime.config.network??'none'}
-        await this.runtime.pool.configure(state.spec,()=>this.guard(state))
-        state.lease=await this.runtime.pool.acquire(state.spec,`human:${id}`,()=>this.guard(state))
-        if(this.runtime.config.network==='public-proxy')state.proxy=await ComputerPublicProxy.start(this.runtime.provider,state.spec,this.runtime.proxyScript,()=>this.runtime.pool.authorize(state.lease!),check,()=>{void this.stop(state)})
+        spec={id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.runtime.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.runtime.config.network??'none'}
+        await this.runtime.pool.configure(spec,()=>this.guard(state))
       }
+      state.spec=spec
+      state.lease=await this.runtime.pool.acquire(spec,`human:${id}`,()=>this.guard(state))
+      if(this.runtime.config.network==='public-proxy')state.proxyHandle=await this.runtime.acquireProxy(spec,()=>{if(!this.runtime.pool.hasHolders(meta.ownerKey,meta.environmentId))throw new HttpError(410,'电脑控制权已结束','computer_control_expired')})
       await check();this.guard(state);state.mode='human'
     })().catch(async()=>{if(!state.valid)return;state.mode='error';state.error='接管未完成，请等待当前操作结束后重试';await this.stop(state).catch(()=>{})})
     return this.status(meta)
@@ -101,7 +108,7 @@ export class ComputerControls {
     }else {tool='scroll';args={...common,x:Math.floor(frame.width/2),y:Math.floor(frame.height/2),by:'line',direction:action.direction,amount:action.amount}}
     const result=this.runtime.pool.use(state.lease,async context=>{
       this.guard(state);await state.check()
-      const response=await this.runtime.provider.execute(state.spec!,argv??[CUA_DRIVER,'call',tool,JSON.stringify(args),'--socket',CUA_SOCKET],context)
+      const response=await this.runtime.provider.execute(state.spec!,argv??[CUA_DRIVER,'call',tool,JSON.stringify(args),'--socket',CUA_SOCKET],{...context,lane:'gui'})
       this.guard(state);let parsed:any;try{parsed=JSON.parse(response.stdout)}catch{}
       if(parsed?.code||parsed?.error||parsed?.isError)throw new HttpError(502,'电脑未接受这次输入，请刷新画面后重试','computer_action_failed')
       return {ok:true,result:response.stdout}
@@ -111,20 +118,20 @@ export class ComputerControls {
   async giveBack(meta:ComputerTarget,id:string,notes:string){
     const state=this.state(meta);if(!state||state.id!==id)throw new HttpError(410,'电脑控制权已结束','computer_control_expired')
     await state.pending;this.guard(state);await state.check()
-    if(state.gateway){state.mode='resuming';await state.gateway.giveBack(notes);state.valid=false;this.manual.delete(meta.environmentId)}
-    else if(this.runtime.retainDesktops&&state.lease){
-      await state.proxy?.close();await this.runtime.pool.release(state.lease,true)
-      state.valid=false;this.manual.delete(meta.environmentId)
-    }else await this.stop(state)
+    state.mode='resuming'
+    await state.proxyHandle?.release()
+    if(state.lease)await this.runtime.pool.release(state.lease,this.runtime.retainDesktops).catch(error=>{if((error as any).code!=='computer_lease_stale')throw error})
+    for(const gateway of state.gateways)await gateway.giveBack(notes)
+    state.valid=false;this.manual.delete(meta.environmentId)
     return {ok:true}
   }
   private async stop(state:Manual){
     if(state.stopping)return state.stopping
     state.valid=false
     state.stopping=(async()=>{
-      await state.proxy?.close()
-      if(state.gateway)await state.gateway.stopControl()
-      else if(state.lease)await this.runtime.pool.release(state.lease).catch(error=>{if(error.code!=='computer_lease_stale')throw error})
+      await state.proxyHandle?.release()
+      for(const gateway of state.gateways)await gateway.stopControl()
+      if(state.lease)await this.runtime.pool.release(state.lease).catch(error=>{if(error.code!=='computer_lease_stale')throw error})
       if(this.manual.get(state.meta.environmentId)===state)this.manual.delete(state.meta.environmentId)
     })().catch(error=>{state.mode='error';state.error='电脑停止状态待确认';state.stopping=undefined;throw error})
     return state.stopping

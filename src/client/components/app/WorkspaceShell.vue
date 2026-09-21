@@ -33,7 +33,6 @@ type SettingsPage =
   | 'system-users'
   | 'system-connection'
   | 'system-push'
-  | 'system-nodes'
   | 'system-voice'
   | 'system-update'
 
@@ -95,7 +94,6 @@ const emit = defineEmits<{
   saveIdentity: [input: ProfileIdentityInput]
   closeInspector: []
   createAgent: []
-  createRemoteAgent: []
   createGroup: []
   botSettingsChanged: []
 }>()
@@ -202,11 +200,10 @@ async function openCreateMenu(event: Event) {
   await nextTick()
   createMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
 }
-function chooseCreate(kind: 'agent' | 'group' | 'remote-agent') {
+function chooseCreate(kind: 'agent' | 'group') {
   closeCreateMenu()
   mobileDrawerOpen.value = false
-  if (kind === 'remote-agent' && props.isAdmin) emit('createRemoteAgent')
-  else if (kind === 'agent') emit('createAgent')
+  if (kind === 'agent') emit('createAgent')
   else emit('createGroup')
 }
 function actionMenuKeydown(event: KeyboardEvent) {
@@ -746,7 +743,6 @@ defineExpose({openLocalVm:showLocalVmSettings})
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>
-          <button v-if="isAdmin" type="button" role="menuitem" @click="chooseCreate('remote-agent')"><AppIcon name="users" :size="17" />添加远程机器人</button>
           <button type="button" role="menuitem" @click="chooseCreate('group')"><AppIcon name="groups" :size="17" />新建群聊</button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 {
   "name": "yaoyao",
-  "version": "0.4.22",
+  "version": "0.4.61",
   "private": true,
   "license": "Apache-2.0",
   "description": "夭夭 AI：聊天、多 Agent 团队、文件库与电脑工作空间",
@@ -26,6 +26,7 @@
     "release:verify": "node scripts/verify-release.mjs",
     "verify:lifecycle": "node scripts/verify-lifecycle.mjs",
     "test:e2e:workspace": "npm run build && playwright test -c playwright.workspace.config.ts",
+    "test:e2e:desktop-hosts": "npm run build && playwright test -c playwright.desktop-hosts.config.ts",
     "test:e2e:team-tools": "npm run build && playwright test -c playwright.team-tools.config.ts",
     "desktop:build": "npm run build && node scripts/build-desktop.mjs",
     "desktop:dev": "npm run desktop:build && electron .",
@@ -38,6 +39,7 @@
   "dependencies": {
     "@koa/bodyparser": "^5.0.0",
     "@koa/router": "^15.4.0",
+    "@openviking/sdk": "0.1.0",
     "@types/busboy": "^1.5.4",
     "@types/koa": "^2.15.0",
     "@types/koa-send": "^4.1.6",

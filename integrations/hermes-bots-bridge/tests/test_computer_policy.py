@@ -5,6 +5,8 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -24,6 +26,7 @@ class ComputerPolicyTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
+        self.profile_scope = ContextVar('fixture_home', default=self.home)
         self.agent = ReviewAgent(session_id='stored', enabled_toolsets=['all'], review_calls=[],
                                  skip_context_files=False, load_soul_identity=False,
                                  _background_review_agent=None, _background_review_run=None)
@@ -36,7 +39,11 @@ class ComputerPolicyTests(unittest.TestCase):
                                      computer_policy=dict(self.session['_yaoyao_computer_policy']))
         bridge._bindings.clear(); bridge._generations.clear(); bridge._children.clear()
         bridge._bindings['runtime'] = self.binding
-        self.patches = [patch.dict(sys.modules, {'agent.redact': SimpleNamespace(redact_sensitive_text=lambda text, **kw: text)}),
+        self.patches = [patch.dict(sys.modules, {
+                            'agent.redact': SimpleNamespace(redact_sensitive_text=lambda text, **kw: text),
+                            'hermes_constants': SimpleNamespace(get_hermes_home=self.profile_scope.get,
+                                set_hermes_home_override=self.profile_scope.set, reset_hermes_home_override=self.profile_scope.reset),
+                        }),
                         patch.object(bridge, '_server', return_value=self.server),
                         patch.object(bridge, '_check_session_mode'),
                         patch.object(bridge, '_transport_identity', return_value=self.binding.owner),
@@ -46,6 +53,107 @@ class ComputerPolicyTests(unittest.TestCase):
     def tearDown(self):
         for p in reversed(self.patches): p.stop()
         self.temp.cleanup()
+
+    def test_lazy_binding_starts_native_initialization_without_submitting_a_prompt(self):
+        self.session.update(agent=None, running=False, agent_error=None)
+        started = []
+        def start(sid, session):
+            started.append(sid)
+            session['agent'] = self.agent
+        self.server._start_agent_build = start
+        body = {'session_id': 'runtime', 'stored_session_id': 'stored', 'profile': 'default',
+                'generation': 'lazy-new', 'bridge_url': self.binding.bridge_url, 'token': self.binding.token,
+                'expires_at': time.time() * 1000 + 60000}
+        with patch.object(bridge, '_agent_has_tools', return_value=True), patch.object(bridge, '_isolate_profile_context'):
+            self.assertTrue(bridge.bind(self.binding.owner, body)['ok'])
+        self.assertEqual(started, ['runtime'])
+
+    def test_failed_initialization_is_reported_immediately_without_exposing_credentials(self):
+        self.session.update(agent=None, running=False, agent_error='api-key=fixture-secret')
+        body = {'session_id': 'runtime', 'stored_session_id': 'stored', 'profile': 'default',
+                'generation': 'failed-new', 'bridge_url': self.binding.bridge_url, 'token': self.binding.token,
+                'expires_at': time.time() * 1000 + 60000}
+        with self.assertRaises(bridge.BridgeError) as raised:
+            bridge.bind(self.binding.owner, body)
+        self.assertEqual(raised.exception.code, 'agent_initialization_failed')
+        self.assertNotIn('fixture-secret', str(raised.exception))
+
+    def test_binding_deadline_includes_lock_contention(self):
+        held, release = threading.Event(), threading.Event()
+        def hold():
+            with bridge._lock:
+                held.set(); release.wait(2)
+        worker = threading.Thread(target=hold)
+        worker.start(); self.assertTrue(held.wait(1))
+        try:
+            with self.assertRaises(bridge.BridgeError) as raised:
+                with bridge._bind_locks(self.server, time.monotonic() + 0.02):
+                    self.fail('contended lock unexpectedly acquired')
+            self.assertEqual(raised.exception.code, 'binding_busy')
+        finally:
+            release.set(); worker.join(1)
+        available = []
+        def check_released():
+            acquired = self.server._sessions_lock.acquire(blocking=False)
+            available.append(acquired)
+            if acquired:
+                self.server._sessions_lock.release()
+        checker = threading.Thread(target=check_released)
+        checker.start(); checker.join(1)
+        self.assertEqual(available, [True])
+
+    def test_catalog_callback_wait_is_bounded_and_distinct_from_tool_execution(self):
+        seen = []
+        def opening(request, timeout):
+            seen.append(timeout)
+            raise TimeoutError('fixture-secret')
+        opener = SimpleNamespace(open=opening)
+        with patch.object(bridge.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaises(bridge.BridgeError) as raised:
+                bridge._request(self.binding, '/tools/list', timeout=0.5)
+        self.assertEqual(seen, [0.5])
+        self.assertEqual(raised.exception.code, 'bridge_catalog_unreachable')
+        self.assertNotIn('fixture-secret', str(raised.exception))
+
+    def test_native_catalog_uses_binding_profile_and_restores_request_context(self):
+        current = ContextVar('fixture_profile', default=self.home)
+        constants = SimpleNamespace(set_hermes_home_override=current.set, reset_hermes_home_override=current.reset)
+        named = self.home / 'profiles' / 'yaoer'
+        self.binding.profile_home = named
+        self.binding.computer_policy = None
+        self.binding.toolset = 'yaoyao_turn_current'
+        other_turn = 'yaoyao_turn_other'
+        scopes = []
+
+        def definitions(enabled_toolsets, **kwargs):
+            scopes.append(current.get())
+            names = ['named_skill', self.binding.toolset, other_turn] if current.get() == named else ['default_skill']
+            return [{'function': {'name': name}} for name in names
+                    if enabled_toolsets == ['all'] or name in enabled_toolsets]
+
+        model_tools = SimpleNamespace(get_tool_definitions=definitions, get_toolset_for_tool=lambda name: name)
+        with patch.dict(sys.modules, {'hermes_constants': constants, 'model_tools': model_tools}):
+            bridge._refresh_agent_tools(self.agent, self.binding)
+        self.assertEqual(scopes, [named, named])
+        self.assertEqual(self.agent.valid_tool_names, {'named_skill', self.binding.toolset})
+        self.assertNotIn(other_turn, self.agent.enabled_toolsets)
+        self.assertEqual(current.get(), self.home)
+
+    def test_catalog_failure_restores_profile_context(self):
+        current = ContextVar('fixture_profile_failure', default=self.home)
+        constants = SimpleNamespace(set_hermes_home_override=current.set, reset_hermes_home_override=current.reset)
+        self.binding.profile_home = self.home / 'profiles' / 'yaoer'
+        self.binding.computer_policy = None
+
+        def fail(**kwargs):
+            self.assertEqual(current.get(), self.binding.profile_home)
+            raise RuntimeError('fixture catalog failed')
+
+        model_tools = SimpleNamespace(get_tool_definitions=fail, get_toolset_for_tool=lambda name: name)
+        with patch.dict(sys.modules, {'hermes_constants': constants, 'model_tools': model_tools}):
+            with self.assertRaisesRegex(RuntimeError, 'fixture catalog failed'):
+                bridge._refresh_agent_tools(self.agent, self.binding)
+        self.assertEqual(current.get(), self.home)
 
     def test_isolated_skills_and_vm_tools_use_native_catalog_but_host_operations_require_approval(self):
         for name in ['skills_list', 'skill_view', 'vision_analyze', 'yaoyao_computer_shell_aabbcc']:
@@ -99,8 +207,29 @@ class ComputerPolicyTests(unittest.TestCase):
             for owner, changed in [(('other', 'password'), body), (self.binding.owner, {**body, 'generation': 'stale'}),
                                     (self.binding.owner, {**body, 'path': 'protected'})]:
                 with self.assertRaises(bridge.BridgeError): bridge.computer_file(owner, changed)
+            transfer_id = str(uuid.uuid4())
+            transfer = {**body, 'action': 'transfer', 'direction': 'read', 'transfer': {'op': 'transfer-read-open', 'transferId': transfer_id, 'path': 'authorized', 'maxBytes': 1024 * 1024}}
+            metadata = bridge.computer_file(self.binding.owner, transfer)
+            self.assertTrue(metadata['ok']); self.assertEqual(metadata['size'], 16)
+            chunk = {**transfer, 'transfer': {'op': 'transfer-read', 'transferId': transfer_id, 'offset': 0}}
+            self.assertEqual(bridge.computer_file(self.binding.owner, chunk)['data'], 'YXV0aG9yaXplZC1pbnB1dA==')
+            for changed in [{**chunk, 'generation': 'stale'}, {**chunk, 'path': 'protected'}]:
+                with self.assertRaises(bridge.BridgeError): bridge.computer_file(self.binding.owner, changed)
+            bridge.computer_file(self.binding.owner, {**transfer, 'transfer': {'op': 'transfer-abort', 'transferId': transfer_id}})
             bridge.computer_file(self.binding.owner, {**body, 'action': 'write', 'path': 'result', 'data': 'cmVzdWx0'})
             self.assertEqual((self.home / 'result').read_bytes(), b'result')
+            staged_id = str(uuid.uuid4())
+            bridge.computer_file(self.binding.owner, {**body, 'action': 'transfer', 'direction': 'write', 'path': 'pending',
+                'transfer': {'op': 'transfer-write-open', 'transferId': staged_id, 'maxBytes': 1024 * 1024, 'size': 0,
+                             'sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'overwrite': False}})
+            staged = self.home / ('.yaoyao-transfer-' + staged_id)
+            self.assertTrue(staged.exists())
+            bridge.unbind(self.binding.owner, {'session_id': 'runtime', 'generation': 'generation'})
+            deadline = time.time() + 3
+            while staged.exists() and time.time() < deadline: time.sleep(0.02)
+            self.assertFalse(staged.exists())
+            self.assertFalse((self.home / 'pending').exists())
+
             self.session['running'] = False
             with self.assertRaises(bridge.BridgeError): bridge.computer_file(self.binding.owner, body)
 

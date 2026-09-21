@@ -44,23 +44,24 @@ describe('MarkdownContent code copy', () => {
 
 describe('Markdown file cards', () => {
   it.each([
-    '/Users/samien/.hermes/workspace/gpt-6-astra-report.md',
-    '/Users/samien/.hermes/profiles/yaoer/workspace/详细 文档.md',
-    'sandbox:/Users/samien/.hermes/workspace/gpt-6-astra-report.md',
-    '/Users/samien/Agents/report.md',
-    '/api/app/files/12/download',
-  ])('renders a preview card for %s', async path => {
+    ['/Users/samien/.hermes/workspace/gpt-6-astra-report.md', 'gpt-6-astra-report.md'],
+    ['/Users/samien/.hermes/profiles/yaoer/workspace/详细 文档.md', '详细 文档.md'],
+    ['sandbox:/Users/samien/.hermes/workspace/gpt-6-astra-report.md', 'gpt-6-astra-report.md'],
+    ['/Users/samien/Agents/report.md', 'report.md'],
+    ['/api/app/files/12/download', '报告.md'],
+    ['/api/app/files/file-ref/download', '报告.md'],
+  ])('renders a preview card for %s', async (path, expectedName) => {
     const wrapper = mount(MarkdownContent, {
       props: { content: `[报告.md](<${path}>)`, fileCards: true },
     })
     const card = wrapper.get('a.file-link-card')
     expect(card.attributes('target')).toBeUndefined()
-    expect(card.attributes('aria-label')).toBe('预览文件 报告.md')
+    expect(card.attributes('aria-label')).toBe(`预览文件 ${expectedName}`)
     await card.trigger('click')
     const href = card.attributes('href')!
     if (!path.startsWith('/api/')) expect(new URL(href, 'http://localhost').searchParams.get('path')).toBe(path.replace(/^sandbox:/, ''))
     else expect(href).toBe(path)
-    expect(wrapper.emitted('fileLink')).toEqual([['报告.md', href]])
+    expect(wrapper.emitted('fileLink')).toEqual([[expectedName, href]])
     wrapper.unmount()
   })
 
@@ -68,13 +69,74 @@ describe('Markdown file cards', () => {
     const wrapper = mount(MarkdownContent, { props: { fileCards: true, content: [
       '[外部](https://example.com/Users/samien/.hermes/workspace/report.md)',
       '[普通](https://example.com/report.md)',
-      '[配置](/Users/samien/.hermes/config.yaml)',
+      '[config.yaml](/Users/samien/.hermes/config.yaml)',
       '[未知](sandbox:/etc/passwd)',
     ].join('\n\n') } })
     expect(wrapper.findAll('.file-link-card')).toHaveLength(1)
     expect(new URL(wrapper.get('.file-link-card').attributes('href')!, 'http://localhost').searchParams.get('path')).toBe('/Users/samien/.hermes/config.yaml')
     expect(wrapper.find('a[href^="sandbox:"]').exists()).toBe(false)
     expect(wrapper.findAll('a[href]')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
+  it('uses the verified target instead of descriptive labels to identify and name file cards', () => {
+    const wrapper = mount(MarkdownContent, { props: { fileCards: true, content: [
+      '[源程序鉴别材料｜Word](/Users/samien/.hermes/workspace/源程序鉴别材料.docx)',
+      '[源程序鉴别材料｜PDF](/Users/samien/.hermes/workspace/源程序鉴别材料.pdf)',
+      '[信息采集表｜数值修订待确认](/Users/samien/.hermes/workspace/信息采集表.xlsx)',
+      '[修改说明与验证结果](/Users/samien/.hermes/workspace/修改说明.md)',
+    ].join('\n\n') } })
+
+    const cards = wrapper.findAll('.file-link-card')
+    expect(cards.map(card => card.text())).toEqual([
+      '源程序鉴别材料.docx',
+      '源程序鉴别材料.pdf',
+      '信息采集表.xlsx',
+      '修改说明.md',
+    ])
+    expect(cards.map(card => card.attributes('aria-label'))).toEqual([
+      '预览文件 源程序鉴别材料.docx',
+      '预览文件 源程序鉴别材料.pdf',
+      '预览文件 信息采集表.xlsx',
+      '预览文件 修改说明.md',
+    ])
+    wrapper.unmount()
+  })
+
+  it('only promotes standalone paragraph or list-item file links', () => {
+    const wrapper = mount(MarkdownContent, { props: { fileCards: true, content: [
+      '正文中的[报告](/Users/samien/.hermes/workspace/report.pdf)保持行内链接。',
+      '> [引用报告](/Users/samien/.hermes/workspace/quote.pdf)',
+      '# [标题报告](/Users/samien/.hermes/workspace/heading.pdf)',
+      '**[强调报告](/Users/samien/.hermes/workspace/strong.pdf)**',
+      '| 文件 |\n| --- |\n| [表格报告](/Users/samien/.hermes/workspace/table.pdf) |',
+      '- [列表报告](/Users/samien/.hermes/workspace/list.pdf)',
+    ].join('\n\n') } })
+
+    expect(wrapper.findAll('.file-link-card')).toHaveLength(1)
+    expect(wrapper.get('.file-link-card').attributes('aria-label')).toBe('预览文件 list.pdf')
+    expect(wrapper.findAll('a')).toHaveLength(6)
+    wrapper.unmount()
+  })
+
+  it('promotes supported standalone output paths only after completion', async () => {
+    const wrapper = mount(MarkdownContent, {
+      props: { content: '/Users/samien/.hermes/workspace/final report.pdf', fileCards: true, legacyMedia: true, streaming: true },
+    })
+    expect(wrapper.find('.file-link-card').exists()).toBe(false)
+    await wrapper.setProps({ streaming: false })
+    expect(wrapper.get('.file-link-card').attributes('aria-label')).toBe('预览文件 final report.pdf')
+    await wrapper.setProps({ content: '文件在 `/Users/samien/.hermes/workspace/inline.pdf`。' })
+    expect(wrapper.find('.file-link-card').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('promotes a file link that occupies its own soft-break line', () => {
+    const wrapper = mount(MarkdownContent, { props: {
+      fileCards: true,
+      content: '说明文字\n[下载报告](/Users/samien/.hermes/workspace/report.pdf)\n补充文字',
+    } })
+    expect(wrapper.get('.file-link-card').attributes('aria-label')).toBe('预览文件 report.pdf')
     wrapper.unmount()
   })
 
@@ -171,7 +233,7 @@ describe('streaming Markdown', () => {
 })
 
 it('renders process media as text while retaining message media previews', async () => {
-  const content = '![过程图](/tmp/process.png) [过程文件](/Users/test/Agents/process.pdf)'
+  const content = '![过程图](/tmp/process.png)\n\n[process.pdf](/Users/test/Agents/process.pdf)'
   const process = mount(MarkdownContent, { props: { content, processContent: true, fileCards: true } })
   await nextTick()
   expect(process.find('img').exists()).toBe(false)

@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto'
+import {randomUUID,createHash} from 'node:crypto'
 import {join,dirname,posix} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {mkdir,rm} from 'node:fs/promises'
@@ -10,34 +10,47 @@ import type {GatewayFrame,GatewayTarget} from '../../server/workspaceGateway.js'
 import {ProfileComputerSession} from './profileSession.js'
 import {UNCONFIGURED_COMPUTER_IMAGE} from '../../shared/runner.js'
 import type {RunnerConfiguration} from '../../shared/runner.js'
-import {ContainerComputerProvider,COMPUTER_WORKSPACE,CUA_DRIVER,CUA_SOCKET,type ComputerSpecification} from '../computers/container.js'
+import {ContainerComputerProvider,ComputerError,COMPUTER_WORKSPACE,CUA_DRIVER,CUA_SOCKET,type ComputerSpecification} from '../computers/container.js'
 import {ComputerPool,type ComputerLease} from '../computers/pool.js'
+import {needsVmLease,softComputerFailure} from '../computers/computerFailures.js'
 import {ComposeComputerProvider} from '../computers/compose.js'
 import {COMPOSE_DESKTOP_IMAGE,type DesktopRelay} from '../../shared/composeDesktops.js'
 import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
 import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerContextConfiguration,type WorkerTool,type WorkerFrame} from './process.js'
-import {HOST_TOOLS,hostTool,hostPath,readHostFile,writeHostFile} from './hostTools.js'
+import {HOST_TOOLS,hostTool,hostPath} from './hostTools.js'
 import {ProfileSkillSession,SKILL_TOOLS,SKILL_RULES} from './skills.js'
 import {homedir,platform} from 'node:os'
+import {VM_FILE_TRANSFER_SCRIPT} from './fileTransfer.js'
+import {FileTransferFiles} from '../../shared/fileTransferEndpoint.mjs'
+import {copyBetweenEndpoints} from '../../server/fileTransfer.js'
 
-export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean;profileSession?:boolean;hermesRuntime?:boolean}
+export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean;profileSession?:boolean;hermesRuntime?:boolean;fileTransferMaxBytes?:number}
 export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain';vmExecution?:'profile';profileSessionId?:string;hermesRuntime?:boolean}
-interface Live {workMarker?:string;paused?:boolean;pauseJob?:Promise<ComputerLease>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxy?:ComputerPublicProxy;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease:ComputerLease;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
+interface Live {toolsOnly?:boolean;workMarker?:string;paused?:boolean;desktop?:{width:number;height:number};pauseJob?:Promise<void>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxyHandle?:ProxyHandle;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease?:ComputerLease;acquiring?:Promise<ComputerLease>;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
 const text={type:'string'}
 const TOOLS:WorkerTool[]=[
   {name:'computer_export',description:'将隔离电脑中的文件作为可下载附件回传当前会话，最大 25 MiB。',inputSchema:object({path:text,name:text},['path'])},
-  {name:'computer_shell',description:'在当前隔离电脑和 Profile 工作目录执行 shell 命令。',inputSchema:object({command:text},['command'])},
+  {name:'computer_shell',description:'在当前隔离电脑和 Profile 工作目录执行 shell 命令。默认使用 cua 用户；只有安装系统软件或修改系统路径时才选择 root。',inputSchema:object({command:text,user:{type:'string',enum:['cua','root'],default:'cua'}},['command'])},
   {name:'computer_read_file',description:'读取隔离电脑内的 UTF-8 文本文件。',inputSchema:object({path:text},['path'])},
   {name:'computer_write_file',description:'向隔离电脑写入 UTF-8 文本文件。',inputSchema:object({path:text,content:text},['path','content'])},
-  {name:'computer_desktop_state',description:'查看隔离电脑当前桌面，返回真实截图。',inputSchema:object({},[])},
-  {name:'computer_action',description:'在隔离电脑内调用 CUA 动作；先查看桌面并使用可用动作。',inputSchema:object({name:text,arguments:{type:'object'}},['name','arguments'])},
+  {name:'computer_desktop_state',description:'查看虚拟环境的真实桌面，返回截图和宽高。操作前必须先看。',inputSchema:object({},[])},
+  {name:'computer_action',description:'操作虚拟环境桌面。必须先查看桌面。kind 为 click、text、key 或 scroll，坐标用截图像素。',inputSchema:object({kind:{enum:['click','drag','text','key','scroll']},x:{type:'integer'},y:{type:'integer'},fromX:{type:'integer'},fromY:{type:'integer'},toX:{type:'integer'},toY:{type:'integer'},button:{enum:['left','right','middle']},count:{type:'integer'},text:text,key:text,modifiers:{type:'array',items:{enum:['ctrl','alt','shift','super']}},direction:{enum:['up','down','left','right']},amount:{type:'integer'}},['kind'])},
 ]
 const pathField=z.string().min(1).max(4096).refine(value=>!value.includes('\0'))
+const desktopAction=z.discriminatedUnion('kind',[
+ z.object({kind:z.literal('click'),x:z.number().int().nonnegative(),y:z.number().int().nonnegative(),button:z.enum(['left','right','middle']).default('left'),count:z.number().int().min(1).max(2).default(1)}).strict(),
+ z.object({kind:z.literal('drag'),fromX:z.number().int().nonnegative(),fromY:z.number().int().nonnegative(),toX:z.number().int().nonnegative(),toY:z.number().int().nonnegative()}).strict(),
+ z.object({kind:z.literal('text'),text:z.string().max(16000)}).strict(),
+ z.object({kind:z.literal('key'),key:z.string().min(1).max(40).regex(/^[A-Za-z0-9_+ -]+$/),modifiers:z.array(z.enum(['ctrl','alt','shift','super'])).max(4).default([])}).strict(),
+ z.object({kind:z.literal('scroll'),direction:z.enum(['up','down','left','right']),amount:z.number().int().min(1).max(50).default(3)}).strict(),
+])
 const PROFILE_COMPUTER_RULES='当前使用本机协作模式：沿用基础 Profile 的本机工具、配置和上下文，本地虚拟机是独立的 Linux 电脑。computer_shell/read_file/write_file/desktop_state/action/export 只操作虚拟机；本机文件、终端和程序使用 Profile 已授权的原生工具。computer_copy_file 在两个环境间显式复制文件。调用前明确目标环境，文件路径和浏览器登录互不通用；需要回传虚拟机文件时使用 computer_export。人工接管期间停止操作，交还后先检查当前状态。'
 const HERMES_COMPUTER_RULES='本轮由 Hermes 管理模型、配置、识图、技能和授权资源。使用 Hermes 原生 skills_list、skill_view 和 skill_manage 发现、读取和维护技能；遵循当前 Profile 的技能规则。技能依赖本机登录态、环境变量或授权文件时，使用 Hermes 原生工具完成相应步骤；适合 Linux 的脚本与输入文件可经 computer_copy_file 传入虚拟机，再用 computer_shell 执行。路径、软件和登录态在本机与虚拟机之间不通用。不要自行复制 Profile 配置或凭据到虚拟机。'
-const ISOLATED_COMPUTER_RULES='当前使用隔离虚拟机：命令、文件处理和浏览器操作默认通过 computer_* 工具在指定的 Linux 电脑执行。需要使用本机文件或运行本机技能时，遵循 Hermes 返回的授权请求；拒绝后停止该操作。人工接管期间停止操作，交还后先检查当前状态。'
+const ISOLATED_COMPUTER_RULES='当前环境是虚拟环境，也就是服务端上的隔离虚拟机。先看 computer_desktop_state，再按截图像素用 computer_action 点击、输入、按键或滚动。命令和文件也通过 computer_* 在这台 Linux 电脑内部完成。不要使用服务器或已连接电脑的终端、文件或桌面，也不要在节点离线时改去服务器或电脑。电脑和云虚拟机是另外勾选的环境，不从这台虚拟机里打开。人工接管期间停止操作，交还后先检查当前状态。'
+const ISOLATED_HERMES_RULES='本轮由 Hermes 管理模型、配置和这次会话。使用 Hermes 原生 skills_list、skill_view 和 skill_manage 发现、读取和维护技能。技能和 computer_* 都留在这台虚拟机里；不要把 Profile 的本机登录、文件或凭据复制进来。'
+export interface ProxyHandle {readonly proxy:ComputerPublicProxy;release():Promise<void>}
 export class ComputerRuntime {
   retainDesktops=false
   readonly controls:ComputerControls
@@ -45,10 +58,11 @@ export class ComputerRuntime {
   readonly pool:ComputerPool
   readonly ready:Promise<void>
   readonly config:NonNullable<RunnerConfiguration['computers']>
-  readonly gateways=new Map<string,ComputerGateway>()
+  readonly gateways=new Map<string,Set<ComputerGateway>>()
   readonly workers=new Map<string,{environmentId:string;ownerKey:string;process:HermesWorkerProcess}>()
   readonly script:string
   readonly proxyScript:string
+  private proxyShares=new Map<string,{started:Promise<ComputerPublicProxy>;users:number}>()
   constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,relay?:DesktopRelay,readonly hermesTarget?:GatewayTarget){
     if(!config.computers)throw new HttpError(409,'执行节点尚未配置隔离电脑','computer_unavailable')
     this.config=config.computers
@@ -66,6 +80,30 @@ export class ComputerRuntime {
     this.controls=new ComputerControls(this)
     this.ready=this.pool.recover();void this.ready.catch(()=>{})
   }
+  attachGateway(gateway:ComputerGateway){let gateways=this.gateways.get(gateway.meta.environmentId);if(!gateways){gateways=new Set();this.gateways.set(gateway.meta.environmentId,gateways)}gateways.add(gateway)}
+  detachGateway(gateway:ComputerGateway){const gateways=this.gateways.get(gateway.meta.environmentId);if(gateways){gateways.delete(gateway);if(!gateways.size)this.gateways.delete(gateway.meta.environmentId)}}
+  activeGateways(environmentId:string):ComputerGateway[]{return [...(this.gateways.get(environmentId)??[])].filter(gateway=>gateway.active||gateway.paused)}
+  /** One guest proxy per environment, shared by every holder; the guest
+   * reserves port 3128, so concurrent holders must never start their own. */
+  acquireProxy(spec:ComputerSpecification,authorize:()=>void):Promise<ProxyHandle>{
+    let share=this.proxyShares.get(spec.id)
+    if(!share){
+      const started=ComputerPublicProxy.start(this.provider,spec,this.proxyScript,authorize,async()=>authorize(),()=>{if(this.proxyShares.get(spec.id)===share)this.proxyShares.delete(spec.id)})
+      share={started,users:0};this.proxyShares.set(spec.id,share)
+      void started.catch(()=>{if(this.proxyShares.get(spec.id)===share)this.proxyShares.delete(spec.id)})
+    }
+    return share.started.then(proxy=>{
+      share!.users++
+      let released=false
+      return {proxy,release:async()=>{
+        if(released)return;released=true
+        const current=this.proxyShares.get(spec.id)
+        if(current===share&&--share!.users>0)return
+        if(current===share)this.proxyShares.delete(spec.id)
+        await proxy.close().catch(()=>{})
+      }}
+    })
+  }
   assertTarget(meta:ComputerTarget){if(this.db.prepare('SELECT id FROM retired_computers WHERE id=?').get(meta.environmentId))throw new HttpError(410,'临时电脑已退役','computer_retired')}
   imageFor(meta:ComputerTarget):string {
     const spec=this.pool.definition(meta.ownerKey,meta.environmentId)
@@ -80,7 +118,7 @@ export class ComputerRuntime {
     this.db.prepare('INSERT OR IGNORE INTO retired_computers VALUES(?,?,NULL)').run(meta.environmentId,meta.ownerKey)
     await Promise.all([...this.workers.values()].filter(worker=>worker.environmentId===meta.environmentId&&worker.ownerKey===meta.ownerKey).map(worker=>worker.process.close()))
     const current=this.pool.status(meta.ownerKey).find(row=>row.environmentId===meta.environmentId)
-    if(current?.holderId)await this.pool.stopHolder(meta.ownerKey,meta.environmentId,current.holderId)
+    for(const holderId of current?.holderIds??[])await this.pool.stopHolder(meta.ownerKey,meta.environmentId,holderId)
     let spec=old?.spec?JSON.parse(old.spec):undefined
     spec??=this.pool.definition(meta.ownerKey,meta.environmentId)
     if(spec)this.db.prepare('UPDATE retired_computers SET spec=? WHERE id=?').run(JSON.stringify(spec),meta.environmentId)
@@ -164,8 +202,26 @@ export class ComputerGateway {
   private hostCwd=homedir()
   private profileSession?:ProfileComputerSession
   private skillSession?:ProfileSkillSession
+  private hostTransfers?:FileTransferFiles
+  private usedVmTransfers=false
+  private transferNamespace(live:Live){return createHash('sha256').update(`${this.meta.ownerKey}:${this.meta.environmentId}:${this.workId}:${live.session.id}`).digest('hex')}
+  private async transferFile(live:Live,action:Record<string,unknown>){
+    const cleanup=action.op==='transfer-abort'
+    if(live.paused&&!cleanup)throw new HttpError(409,'虚拟机正在等待人工操作','computer_paused')
+    await this.authorized();this.guard()
+    if(!cleanup&&['pausing','human','resuming','error'].includes((await this.runtime.controls.status(this.meta)).mode))throw new HttpError(409,'虚拟机正在等待人工操作','computer_paused')
+    const input=z.object({op:z.enum(['transfer-read-open','transfer-write-open','transfer-read','transfer-append','transfer-finish','transfer-status','transfer-abort']),transferId:z.string().uuid(),path:z.string().min(1).max(4096).optional(),maxBytes:z.number().int().min(1024*1024).max(100*1024*1024).optional(),size:z.number().int().min(0).max(100*1024*1024).optional(),sha256:z.string().regex(/^[a-f0-9]{64}$/).optional(),overwrite:z.boolean().optional(),offset:z.number().int().min(0).max(100*1024*1024).optional(),data:z.string().max(699052).optional()}).strict().parse(action)
+    const lease=await this.ensureLease(live)
+    this.usedVmTransfers=true
+    return this.runtime.pool.use(lease,async context=>{
+      if(live.paused&&!cleanup)throw new HttpError(409,'虚拟机正在等待人工操作','computer_paused')
+      const result=await this.runtime.provider.execute(this.spec(live.session),['python3','-c',VM_FILE_TRANSFER_SCRIPT,this.transferNamespace(live)],{...context,input:Buffer.from(JSON.stringify(input))})
+      context.authorize();this.guard()
+      return JSON.parse(result.stdout)
+    })
+  }
   private get hermesManaged(){return this.meta.hermesRuntime===true}
-  private get rules(){return this.hermesManaged?`${this.meta.profileSession?PROFILE_COMPUTER_RULES:ISOLATED_COMPUTER_RULES}\n${HERMES_COMPUTER_RULES}`:`${PROFILE_COMPUTER_RULES}\n${SKILL_RULES}`}
+  private get rules(){const sharing=this.meta.environmentId!==this.meta.agentId?'多个机器人共用这台虚拟机：命令和文件操作并行执行，桌面操作交替进行；动手前注意其他机器人可能正在使用同一桌面，避免覆盖彼此的工作。':'';if(this.meta.profileSession)return `${sharing}${PROFILE_COMPUTER_RULES}\n${this.hermesManaged?HERMES_COMPUTER_RULES:SKILL_RULES}`;return `${sharing}${ISOLATED_COMPUTER_RULES}\n${this.hermesManaged?ISOLATED_HERMES_RULES:SKILL_RULES}`}
   private team?:{id:string;catalog:WorkerTool[];call(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;workspaceMemory:boolean}
   constructor(readonly runtime:ComputerRuntime,readonly meta:ComputerTarget,readonly workId:string,readonly check:()=>Promise<void>,readonly publish:(body:Record<string,unknown>)=>Promise<any>,readonly profileTarget?:GatewayTarget){ }
   async connect(){this.runtime.assertTarget(this.meta);await this.runtime.ready;await this.authorized();if(this.hermesManaged&&!this.profileTarget)throw new HttpError(409,'缺少 Hermes 会话连接，不能回退到独立 Worker。','computer_profile_unavailable')}
@@ -180,8 +236,7 @@ export class ComputerGateway {
     if(method==='session.create'||method==='session.resume'){
       if(this.live)throw new HttpError(409,'电脑通道已有会话','computer_session_busy')
       await this.authorized()
-      if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;if(session.profileSessionId){await this.openProfile(session,params);await this.profileSession!.stop()}const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderId===this.workId)await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
-      if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
+      if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;if(session.profileSessionId){await this.openProfile(session,params);await this.profileSession!.stop()}const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderIds.includes(this.workId))await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
       const profile=String(params.profile),resolved=this.hermesManaged?{cwd:this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE,configuredCwd:'.'}:await (this.meta.profileSession?this.runtime.resolveWorkspace(profile,this.controller.signal):this.runtime.resolve(profile,this.controller.signal))
       if(this.meta.hostAccess){const configured=String(resolved.configuredCwd??'.');this.hostCwd=['.','auto','cwd'].includes(configured)?homedir():hostPath(homedir(),configured)}
       await this.authorized();this.guard()
@@ -189,18 +244,11 @@ export class ComputerGateway {
       if(this.meta.profileSession)session.vmExecution='profile'
       if(this.hermesManaged)session.hermesRuntime=true
       session.cwd=this.meta.environmentId!==this.meta.agentId?(this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd;session.configuredCwd=resolved.configuredCwd
-      await this.runtime.pool.configure(this.spec(session),()=>this.guard())
-      await this.authorized()
-      const controller=new AbortController(),lease=await this.runtime.pool.acquire(this.spec(session),this.workId,()=>{this.guard();if(controller.signal.aborted)throw new Error('cancelled')},controller.signal)
-      if(this.closed){controller.abort();await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
-      this.live={session,lease,controller,model:('model' in resolved?resolved.model:undefined) as WorkerModel,contextConfig:'contextConfig' in resolved?resolved.contextConfig as WorkerContextConfiguration:undefined,proxyEnv:'proxyEnv' in resolved?resolved.proxyEnv as WorkerProxyEnvironment:undefined,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
-      this.runtime.save(session);this.runtime.gateways.set(this.meta.environmentId,this)
-      if(this.runtime.config.network==='public-proxy'){
-        const live=this.live
-        try{live.proxy=await ComputerPublicProxy.start(this.runtime.provider,this.spec(session),this.runtime.proxyScript,()=>this.runtime.pool.authorize(live.lease),()=>this.authorized(),()=>{void this.interrupt().finally(()=>{if(!this.closed)this.onDisconnect()}).catch(()=>{})})}
-        catch(error){await this.interrupt();throw error}
-      }
-      this.timer=setInterval(()=>{if(this.checking)return;this.checking=true;void this.authorized().then(()=>this.runtime.pool.renew(this.live!.lease)).catch(async()=>{await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()}).finally(()=>{this.checking=false})},5000);this.timer.unref()
+      // Defer pool.configure/acquire until a computer_* (or skill) tool actually needs the VM.
+      const controller=new AbortController()
+      this.live={toolsOnly:params.toolsOnly===true,session,controller,model:('model' in resolved?resolved.model:undefined) as WorkerModel,contextConfig:'contextConfig' in resolved?resolved.contextConfig as WorkerContextConfiguration:undefined,proxyEnv:'proxyEnv' in resolved?resolved.proxyEnv as WorkerProxyEnvironment:undefined,images:[],running:false,received:false,toolCalls:new Set(),journal:new Map()}
+      this.runtime.save(session);this.runtime.attachGateway(this)
+      if(params.toolsOnly===true)return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:profile,tools_only:true}}
       if(this.meta.profileSession||this.hermesManaged){
         try{const opened=await this.openProfile(session,params);return {...opened,session_id:session.id,stored_session_id:session.id}}
         catch(error){await this.interrupt();throw error}
@@ -208,6 +256,18 @@ export class ComputerGateway {
       return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:profile}}
     }
     const live=this.live
+    if(method==='computer.transfer'){
+      if(!live||params.session_id!==live.session.id)throw new HttpError(403,'文件传输不属于当前电脑会话','computer_session_forbidden')
+      const call=this.transferFile(live,z.record(z.string(),z.unknown()).parse(params.action))
+      live.toolCalls.add(call);void call.finally(()=>live.toolCalls.delete(call)).catch(()=>{})
+      return call
+    }
+    if(method==='computer.invoke'){
+      if(!live||params.session_id!==live.session.id)throw new HttpError(403,'电脑会话不属于当前通道','computer_session_forbidden')
+      const name=String(params.name??'')
+      if(!TOOLS.some(tool=>tool.name===name))throw new HttpError(403,'本轮未授权该工具','computer_tool_forbidden')
+      return this.tool(live,name,params.arguments??{},typeof params.id==='string'&&params.id?params.id:randomUUID())
+    }
     if(!live||params.session_id!==live.session.id)throw new HttpError(403,'电脑会话不属于当前通道','computer_session_forbidden')
     if(method==='session.interrupt'||method==='session.close'){await this.interrupt();return {status:'interrupted'}}
     if(this.profileSession){
@@ -235,7 +295,7 @@ export class ComputerGateway {
       const encoded=method==='image.attach_bytes'?String(params.content_base64??''):String(params.data_url??'').split(',')[1]??''
       const bytes=Buffer.from(encoded,'base64');if(bytes.length>25*1024*1024)throw new HttpError(413,'附件超过 25 MiB','attachment_too_large')
       const relative=`.yaoyao-inputs/${randomUUID()}/${name}`
-      await this.runtime.pool.use(live.lease,context=>this.runtime.provider.execute(this.spec(live.session),['python3','-c','import sys,pathlib; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read())',relative],{...context,input:bytes}))
+      await this.ensureLease(live);await this.runtime.pool.use(live.lease!,context=>this.runtime.provider.execute(this.spec(live.session),['python3','-c','import sys,pathlib; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read())',relative],{...context,input:bytes}))
       if(method==='image.attach_bytes'){
         const mime=String(params.mime_type??'image/png')
         if(!/^image\/(?:png|jpeg|webp|gif)$/.test(mime))throw new HttpError(400,'图片格式无效','invalid_image')
@@ -257,7 +317,7 @@ export class ComputerGateway {
     if(!this.profileTarget)throw new HttpError(409,'缺少本机 Profile 连接，请更新执行节点','computer_profile_unavailable')
     if(params.session_id&&!session.profileSessionId)throw new HttpError(409,'本机 Profile 会话尚未建立，请新建会话','computer_profile_session_invalid')
     const native=new ProfileComputerSession(this.profileTarget,session.profile,this.workId,()=>this.guard(),
-      ()=>[...TOOLS,...(this.hermesManaged?[]:SKILL_TOOLS),...HOST_TOOLS.filter(tool=>tool.name==='computer_copy_file'),...(this.team?.catalog??[])],
+      ()=>[...TOOLS,...(this.hermesManaged?[]:SKILL_TOOLS),...HOST_TOOLS.filter(tool=>tool.name==='computer_copy_file').map(tool=>({...tool,description:tool.description.replace('25 MiB',`${(this.meta.fileTransferMaxBytes??25*1024*1024)/1024/1024} MiB`)})),...(this.team?.catalog??[])],
       async(name,args)=>{
         const live=this.live
         if(!live||!this.active||live.paused)throw new HttpError(410,'本轮电脑工具已结束或暂停','computer_cancelled')
@@ -292,7 +352,7 @@ export class ComputerGateway {
       live.received=false;live.running=true;live.session.outcome='uncertain';live.session.history.push({role:'user',content:prompt});this.runtime.save(live.session)
       const directory=join(this.runtime.home,'workers',live.session.id,this.workId,String(live.segment=(live.segment??0)+1))
       await mkdir(directory,{recursive:true,mode:0o700})
-      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...SKILL_TOOLS,...(this.meta.hostAccess?HOST_TOOLS:[]),...(this.team?.catalog??[])],skillInstructions:SKILL_RULES,prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
+      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...SKILL_TOOLS,...(this.meta.hostAccess?HOST_TOOLS.map(tool=>tool.name==='computer_copy_file'?{...tool,description:tool.description.replace('25 MiB',`${(this.meta.fileTransferMaxBytes??25*1024*1024)/1024/1024} MiB`)}:tool):[]),...(this.team?.catalog??[])],skillInstructions:SKILL_RULES,prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
       live.worker=worker
       this.runtime.workers.set(this.workId,{environmentId:this.meta.environmentId,ownerKey:this.meta.ownerKey,process:worker});void worker.exited.then(()=>{if(this.runtime.workers.get(this.workId)?.process===worker)this.runtime.workers.delete(this.workId)})
       worker.onTool=(name,args,id,callId)=>{
@@ -313,6 +373,24 @@ export class ComputerGateway {
   }
   installTeamLease(id:string,catalog:WorkerTool[],call:(name:string,args:Record<string,unknown>,callId:string)=>Promise<unknown>,workspaceMemory=false){this.team={id,catalog,call,workspaceMemory}}
   removeTeamLease(id:string){if(this.team?.id===id)this.team=undefined}
+  private ensureLease(live:Live):Promise<ComputerLease>{
+    if(live.lease)return Promise.resolve(live.lease)
+    live.acquiring??=(async()=>{
+      if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
+      await this.runtime.pool.configure(this.spec(live.session),()=>this.guard())
+      await this.authorized()
+      const lease=await this.runtime.pool.acquire(this.spec(live.session),this.workId,()=>{this.guard();if(live.controller.signal.aborted)throw new Error('cancelled')},live.controller.signal)
+      if(this.closed){await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
+      live.lease=lease
+      if(this.runtime.config.network==='public-proxy'){
+        try{live.proxyHandle=await this.runtime.acquireProxy(this.spec(live.session),()=>{if(!this.runtime.pool.hasHolders(this.meta.ownerKey,this.meta.environmentId))throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')})}
+        catch(error){await this.runtime.pool.release(lease).catch(()=>{});live.lease=undefined;throw error}
+      }
+      this.timer=setInterval(()=>{if(this.checking||!this.live?.lease)return;this.checking=true;void this.authorized().then(()=>this.runtime.pool.renew(this.live!.lease!)).catch(async()=>{await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()}).finally(()=>{this.checking=false})},5000);this.timer.unref()
+      return lease
+    })().finally(()=>{live.acquiring=undefined})
+    return live.acquiring
+  }
   private async tool(live:Live,name:string,args:unknown,id:string):Promise<unknown>{
     if(live.paused)throw new HttpError(409,'电脑正在等待人工操作','computer_paused')
     await this.authorized();this.guard()
@@ -321,41 +399,48 @@ export class ComputerGateway {
     try{
       const team=this.team?.catalog.find(tool=>tool.name===name)
       if(team)return await this.team!.call(team.id??name,z.record(z.string(),z.unknown()).parse(args),id)
+      if(name.startsWith('host_')&&!this.meta.hostAccess||name==='computer_copy_file'&&!this.meta.hostAccess&&!this.hermesManaged)throw new HttpError(403,'本轮未授权该工具','computer_tool_forbidden')
+      if(this.meta.hostAccess&&name.startsWith('host_'))return await hostTool(name,args,{cwd:this.hostCwd,signal:live.controller.signal,authorize:()=>{this.guard();if(live.paused)throw new HttpError(409,'电脑正在等待人工操作','computer_paused')}})
+      if((this.meta.hostAccess||this.hermesManaged)&&name==='computer_copy_file'){
+        const body=z.object({from:z.enum(['host','vm']),source:pathField,destination:pathField}).strict().parse(args)
+        const limit=this.meta.fileTransferMaxBytes??25*1024*1024
+        const hostPathValue=body.from==='host'?body.source:body.destination
+        this.hostTransfers??=new FileTransferFiles(this.hostCwd,{confined:false})
+        const host={host:'server',name:'执行节点本机',path:hostPathValue,chunks:true,call:async(action:Record<string,unknown>)=>{
+          await this.authorized();this.guard()
+          if(this.hermesManaged)return this.profileSession!.transfer(body.from==='host'?'read':'write',hostPathValue,action)
+          const result=await this.hostTransfers!.call({...action,...(action.path?{path:hostPath(this.hostCwd,String(action.path))}:{})},()=>{this.guard();if(live.paused)throw new HttpError(409,'电脑正在等待人工操作','computer_paused')})
+          return result.path?{...result,path:hostPathValue}:result
+        }}
+        const vm={host:'vm',name:'虚拟机',path:body.from==='host'?body.destination:body.source,chunks:true,call:(action:Record<string,unknown>)=>this.transferFile(live,action)}
+        await copyBetweenEndpoints(body.from==='host'?host:vm,body.from==='host'?vm:host,limit,true,()=>{this.guard();if(live.paused)throw new HttpError(409,'电脑正在等待人工操作','computer_paused')})
+        return {ok:true}
+      }
+      if(needsVmLease(name,this.team?.catalog.map(tool=>tool.name)??[],SKILL_TOOLS.map(tool=>tool.name))){
+        try{await this.ensureLease(live)}
+        catch(error){
+          if(softComputerFailure(error)){
+            const message=error instanceof Error&&error.message?error.message:'电脑环境不可用'
+            return {error:message,code:error instanceof HttpError||error instanceof ComputerError?error.code:'computer_unavailable'}
+          }
+          throw error
+        }
+      }
+      const lease=live.lease
       if(SKILL_TOOLS.some(tool=>tool.name===name)){
+        if(!lease)throw new HttpError(409,'电脑环境尚未就绪','computer_unavailable')
         this.skillSession??=new ProfileSkillSession({
           python:this.runtime.config.python,script:this.runtime.script,hermesSource:this.runtime.config.hermesSource,hermesHome:this.runtime.config.hermesHome,
           profile:live.session.profile,ownerKey:this.meta.ownerKey,agentId:this.meta.agentId,taskId:this.workId,signal:live.controller.signal,
-          authorize:async()=>{await this.authorized();if(live.paused||live.received)throw new HttpError(410,'本轮技能工具已结束或暂停','computer_cancelled');this.runtime.pool.authorize(live.lease)},
-          execute:(argv,input)=>this.runtime.pool.use(live.lease,context=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input})),
-          install:(bundle,script)=>this.runtime.pool.use(live.lease,context=>this.runtime.provider.installSkill(this.spec(live.session),bundle,script,context)),
+          authorize:async()=>{await this.authorized();if(live.paused||live.received)throw new HttpError(410,'本轮技能工具已结束或暂停','computer_cancelled');this.runtime.pool.authorize(lease)},
+          execute:(argv,input)=>this.runtime.pool.use(lease,context=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input})),
+          install:(bundle,script)=>this.runtime.pool.use(lease,context=>this.runtime.provider.installSkill(this.spec(live.session),bundle,script,context)),
         })
         return await this.skillSession.call(name,args)
       }
-      return await this.runtime.pool.use(live.lease,async context=>{
-        const execute=(argv:string[],input?:Buffer)=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input})
-        if(this.meta.hostAccess&&name.startsWith('host_'))return hostTool(name,args,{...context,cwd:this.hostCwd})
-        if((this.meta.hostAccess||this.hermesManaged)&&name==='computer_copy_file'){
-          const body=z.object({from:z.enum(['host','vm']),source:pathField,destination:pathField}).strict().parse(args),host={...context,cwd:this.hostCwd}
-          if(body.from==='host'){
-            const bytes=this.hermesManaged?Buffer.from(String((await this.profileSession!.file('read',body.source)).data),'base64'):await readHostFile(hostPath(this.hostCwd,body.source),25*1024*1024,host)
-            if(bytes.length>25*1024*1024)throw new HttpError(413,'文件超过传输限制','computer_file_limit')
-            await execute(['python3','-c','import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read())',body.destination],bytes)
-          }else{
-            const snapshot=`/tmp/yaoyao-copy-${randomUUID()}`,chunks:Buffer[]=[]
-            try{
-              const size=Number((await execute(['python3','-c','import pathlib,sys,shutil; p=pathlib.Path(sys.argv[1]); assert p.is_file() and p.stat().st_size<=25*1024*1024; shutil.copyfile(p,sys.argv[2]); n=pathlib.Path(sys.argv[2]).stat().st_size; assert n<=25*1024*1024; print(n)',body.source,snapshot])).stdout.trim())
-              if(!Number.isSafeInteger(size)||size<0||size>25*1024*1024)throw new Error('文件大小无效')
-              for(let offset=0;offset<size;offset+=524288){
-                const data=(await execute(['python3','-c','import sys,base64; f=open(sys.argv[1],"rb"); f.seek(int(sys.argv[2])); print(base64.b64encode(f.read(524288)).decode())',snapshot,String(offset)])).stdout.trim()
-                chunks.push(Buffer.from(data,'base64'))
-              }
-              const bytes=Buffer.concat(chunks);if(bytes.length!==size)throw new Error('文件复制不完整')
-              if(this.hermesManaged)await this.profileSession!.file('write',body.destination,bytes.toString('base64'))
-              else await writeHostFile(hostPath(this.hostCwd,body.destination),bytes,host)
-            }finally{await execute(['rm','-f','--',snapshot]).catch(()=>{})}
-          }
-          return {ok:true}
-        }
+      if(!lease)throw new HttpError(409,'电脑环境尚未就绪','computer_unavailable')
+      return await this.runtime.pool.use(lease,async context=>{
+        const execute=(argv:string[],input?:Buffer,lane?:'exec'|'gui',user?:'cua'|'root')=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input,...(lane?{lane}:{}),...(user?{user}:{})})
         if(name==='computer_export'){
           const body=z.object({path:pathField,name:z.string().min(1).max(240).optional()}).strict().parse(args)
           const snapshot=`/tmp/yaoyao-export-${randomUUID()}`
@@ -372,8 +457,8 @@ export class ComputerGateway {
           }finally{await execute(['rm','-f','--',snapshot]).catch(()=>{})}
         }
         if(name==='computer_shell'){
-          const body=z.object({command:z.string().min(1).max(65536)}).strict().parse(args)
-          try{return {exitCode:0,...await execute(['/bin/bash','-lc',body.command])}}catch(error){if(typeof(error as any).code==='number')return {exitCode:(error as any).code,stdout:String((error as any).stdout??''),stderr:String((error as any).stderr??'')};throw error}
+          const body=z.object({command:z.string().min(1).max(65536),user:z.enum(['cua','root']).default('cua')}).strict().parse(args)
+          try{return {exitCode:0,...await execute(['/bin/bash','-lc',body.command],undefined,undefined,body.user)}}catch(error){if(typeof(error as any).code==='number')return {exitCode:(error as any).code,stdout:String((error as any).stdout??''),stderr:String((error as any).stderr??'')};throw error}
         }
         if(name==='computer_read_file'){
           const body=z.object({path:pathField}).strict().parse(args)
@@ -384,24 +469,51 @@ export class ComputerGateway {
           await execute(['python3','-c','import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(sys.stdin.buffer.read())',body.path],Buffer.from(body.content));return {ok:true}
         }
         if(name==='computer_action'){
-          const body=z.object({name:z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,99}$/),arguments:z.record(z.string(),z.unknown())}).strict().parse(args)
-          return execute([CUA_DRIVER,'call',body.name,JSON.stringify(body.arguments),'--socket',CUA_SOCKET])
+          if(!live.desktop)throw new HttpError(409,'请先查看虚拟环境桌面','computer_frame_stale')
+          const frame=live.desktop,action=desktopAction.parse(args),common={scope:'desktop',session:`yaoyao-vm-${live.session.id}`}
+          let tool:string,toolArgs:Record<string,unknown>,argv:string[]|undefined
+          if(action.kind==='click'){
+            if(action.x>=frame.width||action.y>=frame.height)throw new HttpError(400,'点击位置超出画面','computer_point_invalid')
+            tool='click';toolArgs={...common,x:action.x,y:action.y,button:action.button,count:action.count}
+          }else if(action.kind==='drag'){
+            if(action.fromX>=frame.width||action.toX>=frame.width||action.fromY>=frame.height||action.toY>=frame.height)throw new HttpError(400,'拖动位置超出画面','computer_point_invalid')
+            tool='drag';toolArgs={}
+            argv=['env','DISPLAY=:1','xdotool','mousemove','--sync',String(action.fromX),String(action.fromY),'mousedown','1','mousemove','--sync',String(action.toX),String(action.toY),'mouseup','1']
+          }else if(action.kind==='text'){tool='type_text';toolArgs={...common,text:action.text}}
+          else if(action.kind==='key'){
+            const key=({Return:'enter',BackSpace:'backspace',Escape:'esc'} as Record<string,string>)[action.key]??action.key.toLowerCase()
+            tool=action.modifiers.length?'hotkey':'press_key';toolArgs=action.modifiers.length?{...common,keys:[...action.modifiers,key]}:{...common,key}
+          }else{tool='scroll';toolArgs={...common,x:Math.floor(frame.width/2),y:Math.floor(frame.height/2),by:'line',direction:action.direction,amount:action.amount}}
+          live.desktop=undefined
+          const response=await execute(argv??[CUA_DRIVER,'call',tool!,JSON.stringify(toolArgs!),'--socket',CUA_SOCKET],undefined,'gui')
+          let parsed:any;try{parsed=JSON.parse(response.stdout)}catch{}
+          if(parsed?.code||parsed?.error||parsed?.isError)throw new HttpError(502,'电脑未接受这次输入，请刷新画面后重试','computer_action_failed')
+          return {ok:true}
         }
         if(name==='computer_desktop_state'){
           z.object({}).strict().parse(args)
           const path=`/tmp/yaoyao-frame-${randomUUID()}.png`
-          const state=await execute([CUA_DRIVER,'call','get_desktop_state','{}','--socket',CUA_SOCKET,'--screenshot-out-file',path])
+          const state=await execute([CUA_DRIVER,'call','get_desktop_state','{}','--socket',CUA_SOCKET,'--screenshot-out-file',path],undefined,'gui')
           const data=(await execute(['base64','-w0',path])).stdout.trim()
-          return {_multimodal:true,text_summary:state.stdout,content:[{type:'image_url',image_url:{url:`data:image/png;base64,${data}`}}]}
+          const header=Buffer.from(data.slice(0,32),'base64'),width=header.length>=24?header.readUInt32BE(16):0,height=header.length>=24?header.readUInt32BE(20):0
+          if(width<1||height<1)throw new HttpError(502,'虚拟环境画面无效','computer_frame_failed')
+          live.desktop={width,height}
+          return {_multimodal:true,width,height,text_summary:state.stdout,content:[{type:'image_url',image_url:{url:`data:image/png;base64,${data}`}}]}
         }
         throw new HttpError(403,'本轮未授权该工具','computer_tool_forbidden')
       })
+    }catch(error){
+      if(softComputerFailure(error)){
+        const message=error instanceof Error&&error.message?error.message:'电脑环境不可用'
+        return {error:message,code:error instanceof HttpError||error instanceof ComputerError?error.code:'computer_unavailable'}
+      }
+      throw error
     }finally{this.event('tool.completed',{tool_id:id,name})}
   }
   private async finish(live:Live,frame:WorkerFrame){
     if(this.closed||live.paused||live.controller.signal.aborted)return
     await this.authorized()
-    this.runtime.pool.renew(live.lease)
+    if(live.lease)this.runtime.pool.renew(live.lease)
     const contextErrors:Record<string,string>={
       context_compaction_disabled:'模型上下文已超限，基础 Profile 关闭了自动压缩。请开启压缩、缩短输入或新建对话后继续。',
       context_compaction_failed:'模型上下文压缩未能完成，本轮已结束。请缩短输入、检查模型配置或新建对话后继续。',
@@ -425,7 +537,17 @@ export class ComputerGateway {
   private release(live:Live,keepRunning=false){
     clearInterval(this.timer)
     live.releasing??=(async()=>{
-      try{await live.proxy?.close();await this.runtime.pool.release(live.lease,keepRunning)}
+      await this.hostTransfers?.close();this.hostTransfers=undefined
+      if(!live.lease){await live.proxyHandle?.release().catch(()=>{});return}
+      if(this.usedVmTransfers){
+        // Cleanup remains allowed after cancellation, but can only remove this
+        // session's staged files in the same VM generation, never a replacement.
+        const lease=live.lease
+        const authorize=()=>{const state=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===lease.environmentId);if(state?.generation!==lease.generation||!state.holderIds.includes(this.workId))throw new Error('文件传输所属虚拟机已变化')}
+        await this.runtime.provider.execute(this.spec(live.session),['python3','-c',VM_FILE_TRANSFER_SCRIPT,this.transferNamespace(live)],{authorize,signal:AbortSignal.timeout(5000),timeout:5000,mayFence:()=>false,input:Buffer.from(JSON.stringify({op:'transfer-cleanup'}))}).catch(()=>{})
+        this.usedVmTransfers=false
+      }
+      try{await live.proxyHandle?.release();await this.runtime.pool.release(live.lease,keepRunning)}
       catch(error){await this.runtime.pool.release(live.lease).catch(()=>{});throw error}
     })()
     return live.releasing
@@ -434,15 +556,18 @@ export class ComputerGateway {
     if(!live.running||live.paused||this.closed||live.controller.signal.aborted)return
     live.running=false;await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()
   }
-  get active(){return !!this.live?.running&&!this.live.received&&!this.closed}
+  get active(){return !!this.live&&(this.live.running||this.live.toolsOnly===true&&this.live.toolCalls.size>0)&&!this.live.received&&!this.closed}
   get paused(){return this.live?.paused===true}
   get lease(){return this.live?.lease}
   get specification(){return this.live?this.spec(this.live.session):undefined}
-  async takeControl(controlId:string,authorize:()=>void):Promise<ComputerLease>{
+  /** Pauses this turn for a human takeover: settles in-flight operations and
+   * records pending tool calls so the model can resume coherently. The pool
+   * lease stays — the human acquires a holder of the same shared desktop. */
+  async takeControl(controlId:string,authorize:()=>void):Promise<void>{
     const live=this.live
     if(!live||!this.active)throw new HttpError(409,'机器人已不在执行，请重新打开电脑','computer_not_active')
-    if(live.pauseJob)return live.pauseJob
-    live.paused=true;this.event('computer.paused',{stage:'pausing'})
+    if(live.pauseJob)await live.pauseJob
+    if(!live.paused){live.paused=true;this.event('computer.paused',{stage:'pausing'})}
     live.pauseJob=(async()=>{
       await this.profileSession?.stop()
       await live.worker?.close()
@@ -455,19 +580,17 @@ export class ComputerGateway {
         history.push({role:'tool',name:tool.function?.name??entry?.name,tool_call_id:tool.id,content});done.add(tool.id)
       }
       live.session.history=history;this.runtime.save(live.session)
-      live.lease=await this.runtime.pool.transfer(live.lease,`human:${controlId}`,authorize)
-      this.event('computer.paused',{stage:'human',generation:live.lease.generation})
-      return live.lease
+      this.event('computer.paused',{stage:'human',generation:live.lease?.generation})
     })()
-    return live.pauseJob
+    await live.pauseJob
   }
   async giveBack(notes:string):Promise<void>{
     const live=this.live
     if(!live?.paused)throw new HttpError(409,'机器人没有处于接管状态','computer_not_paused')
     await live.pauseJob;await this.authorized()
-    live.lease=await this.runtime.pool.transfer(live.lease,this.workId,()=>this.guard())
     live.paused=false;live.pauseJob=undefined;live.journal.clear()
-    this.event('computer.resumed',{generation:live.lease.generation,notes})
+    this.event('computer.resumed',{generation:live.lease?.generation,notes})
+    if(live.toolsOnly)return
     if(this.profileSession){
       await this.profileSession.bind();this.guard()
       await this.profileSession.rpc('prompt.submit',{text:`${this.rules}\n用户已交还电脑控制权。请先检查当前状态，避免重复已完成的操作。交还说明：${notes||'无额外说明'}\n${live.workMarker??''}`})
@@ -490,5 +613,5 @@ export class ComputerGateway {
     return live.stopping
   }
   async stopControl(){await this.interrupt();this.event('message.complete',{text:'电脑控制已结束，本轮已停止',status:'interrupted'})}
-  async close(){if(this.runtime.gateways.get(this.meta.environmentId)===this)this.runtime.gateways.delete(this.meta.environmentId);this.closed=true;this.controller.abort();this.team=undefined;clearInterval(this.timer);try{if(this.live?.running||this.live&&!this.live.releasing)await this.interrupt()}finally{await this.profileSession?.close()}}
+  async close(){this.runtime.detachGateway(this);this.closed=true;this.controller.abort();this.team=undefined;clearInterval(this.timer);try{if(this.live?.running||this.live&&!this.live.releasing)await this.interrupt()}finally{await this.profileSession?.close()}}
 }

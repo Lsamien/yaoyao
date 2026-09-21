@@ -1,5 +1,22 @@
 /** Application-owned identities. Hermes profile/session IDs never identify a chat. */
+export type WorkspaceApprovalPolicy = 'ask' | 'allow' | 'deny'
+export type WorkspaceVoice='concise'|'casual'|'rigorous'|'custom'
+export type WorkspaceActBias='ask_first'|'ask_key_then_act'|'act_now'
 export interface WorkspaceAgent {
+  modelSettings?: import('./botModelSettings.js').BotModelSettings | null
+  /** Server-owned acknowledgement, bound to the resolved provider/model. */
+  modelSettingsConfirmation?: string
+  /** Server-owned native warning discovered while preparing an idle session. */
+  modelSettingsPendingConfirmation?: { target: string; message: string }
+  /** 一句话职责：这个 Bot 只做的一件事。 */
+  job?: string
+  /** 反任务清单：任何情况下都不做的事。 */
+  antiJobs?: string[]
+  voice?: WorkspaceVoice
+  voiceCustom?: string
+  actBias?: WorkspaceActBias
+  /** Applied to new upstream approval requests; absent on older Bots means ask. */
+  approvalPolicy?: WorkspaceApprovalPolicy
   canCollaborate?: boolean
   memoryEnabled?: boolean
   memoryStatus?: 'ready' | 'upgrade_required'
@@ -7,9 +24,15 @@ export interface WorkspaceAgent {
   name: string
   avatar: string
   instructions: string
+  /** Short standing identity, injected every turn. Absent on older records. */
+  description?: string
   /** Explicit account-owner grant; absent on older records means disabled. */
   execution?: 'profile' | 'computer'
   computer?: 'auto' | 'cloud' | 'vm' | 'local' | 'browser' | 'off'
+  /** Parallel environment toggles. Absent on older records: derive from computer. */
+  envs?: { vm?: boolean; cloud?: boolean; desktop?: boolean; browser?: boolean }
+  /** Bound computer: 'local' (loopback App) or a paired desktop-host id. */
+  desktopHost?: string | null
   allowHostEnvironment?: boolean
   /** Local VM execution backend; older records retain the isolated Worker. */
   vmExecution?: 'worker' | 'profile'
@@ -33,6 +56,38 @@ export interface WorkspaceAgent {
   createdAt: number
   updatedAt: number
 }
+export interface AgentEnvs { vm:boolean; cloud:boolean; desktop:boolean; browser:boolean }
+/** Normalized parallel environments; legacy single-choice agents derive here. */
+export function agentEnvs(agent: Pick<WorkspaceAgent,'computer'|'envs'> & {execution?:'profile'|'computer'}): AgentEnvs {
+  if(agent.envs)return {vm:agent.envs.vm===true,cloud:agent.envs.cloud===true,desktop:agent.envs.desktop===true,browser:false}
+  if(agent.computer===undefined&&agent.execution==='computer')return {vm:true,cloud:false,desktop:false,browser:false}
+  switch(agent.computer){
+    case 'vm':return {vm:true,cloud:false,desktop:false,browser:false}
+    case 'cloud':return {vm:false,cloud:true,desktop:false,browser:false}
+    case 'local':return {vm:false,cloud:false,desktop:true,browser:false}
+    case 'browser':return {vm:false,cloud:false,desktop:false,browser:false}
+    case 'auto':return {vm:true,cloud:true,desktop:true,browser:false}
+    default:return {vm:false,cloud:false,desktop:false,browser:false}
+  }
+}
+/** Single-choice projection kept for older clients reading agent.computer. */
+export function deriveComputer(envs: Pick<AgentEnvs,'vm'|'cloud'|'desktop'|'browser'>): 'vm'|'cloud'|'local'|'browser'|'off' {
+  return envs.vm?'vm':envs.cloud?'cloud':envs.desktop?'local':'off'
+}
+const VOICE_TEXT:Record<WorkspaceVoice,string>={concise:'简洁专业：直击要点，不用客套与废话。',casual:'轻松随和：像朋友一样自然交流，可以适度幽默。',rigorous:'严谨细致：条理清晰，重要结论给出依据，主动指出风险与前提。',custom:''}
+const ACT_BIAS_TEXT:Record<WorkspaceActBias,string>={ask_first:'先问再做：任务不明确时先向用户澄清，确认后再执行。',ask_key_then_act:'先问关键问题即行动：最多问 2–3 个关键问题，职责清楚后立即开始，边做边汇报。',act_now:'直接行动：合理默认即可开工，只在重要分叉点询问。'}
+/** Structured persona spec injected before free-form instructions. */
+export function personaSection(agent:Pick<WorkspaceAgent,'job'|'antiJobs'|'voice'|'voiceCustom'|'actBias'>):string{
+ const lines:string[]=[]
+ if(agent.job)lines.push(`你的唯一职责：${agent.job}`)
+ if(agent.antiJobs?.length)lines.push(`明确不做（反任务，任何情况下都不要做）：\n${agent.antiJobs.map(item=>`- ${item}`).join('\n')}`)
+ const voice=agent.voice?(agent.voice==='custom'?(agent.voiceCustom?`按以下要求把握语气：${agent.voiceCustom}`:''):VOICE_TEXT[agent.voice]):''
+ if(voice)lines.push(`语气：${voice}`)
+ if(agent.actBias)lines.push(`行动策略：${ACT_BIAS_TEXT[agent.actBias]}`)
+ return lines.join('\n')
+}
+/** Hermes toolsets a profile chat must not have. Checked environments use their own tools. */
+export const PROFILE_DENIED_TOOLSETS = ['terminal', 'file'] as const
 export function supportsHostEnvironment(agent: Pick<WorkspaceAgent,'computer'|'execution'>):boolean {
   return agent.computer==='vm'||agent.computer==='cloud'||(!agent.computer&&agent.execution==='computer')
 }
@@ -128,6 +183,8 @@ export interface WorkspaceMessage {
   peerMessageId?: string
   revision?: number
   execution?:'profile'|'computer'
+  /** Computer the user was on when sending: 'local' (YaoYao server) or paired computer uuid. */
+  deviceHost?: string
   id: string
   conversationId: string
   /** User-visible task scope. `taskId` below remains the scheduler turn ID. */
@@ -147,6 +204,13 @@ export interface WorkspaceMessage {
   attachments: WorkspaceFile[]
   tools: Array<Record<string, unknown>>
   createdAt: number
+}
+
+export function workspaceHasUnfinishedOutput(messages: WorkspaceMessage[]): boolean {
+  // Legacy transcripts may retain tool.generating after the turn has settled.
+  // A terminal message status is authoritative over those stale tool events.
+  return messages.some(message => message.visible !== false && message.role === 'assistant'
+    && ['queued', 'streaming', 'uncertain'].includes(message.status))
 }
 export interface WorkspaceMessagePatch {
   id: string
@@ -172,6 +236,8 @@ export interface WorkspaceRun {
   collaborationChainId?: string
   priority?: boolean
   discussion?: { memberIds: string[]; rounds: number }
+  /** Copied from the triggering user message when present. */
+  deviceHost?: string
   id: string
   conversationId: string
   conversationTaskId?: string
@@ -222,4 +288,19 @@ export interface WorkspaceSource {
   nodeId: string
   profile: string
   name: string
+}
+/** Per-agent token accounting derived from Hermes session usage deltas. */
+export interface WorkspaceAgentUsageSummary {
+  input: number
+  output: number
+  total: number
+}
+export interface WorkspaceAgentUsage {
+  agentId: string
+  today: string
+  month: string
+  todayUsage: WorkspaceAgentUsageSummary
+  monthUsage: WorkspaceAgentUsageSummary
+  totalUsage: WorkspaceAgentUsageSummary
+  daily: Array<{ date: string } & WorkspaceAgentUsageSummary>
 }

@@ -41,7 +41,7 @@ const mediaPreviewIndex = ref<number | null>(null)
 const outlineOpen = ref(false)
 const modelDialog = ref(false)
 const modelSwitching = ref(false)
-const showThinking = ref(true)
+const showThinking = ref(false)
 const queueMode = ref(false)
 const actionSessionId = ref('')
 const renaming = ref(false)
@@ -430,7 +430,7 @@ watch(() => chat.activeSessionId, async id => {
         :messages="messages"
         :title="activeSession?.title || '新会话'"
         :subtitle="activeSession ? `${activeSession.profile || auth.activeProfile?.name || ''} · ${activeSession.model || chat.selectedModel?.name || '默认模型'}` : '选择会话或直接开始输入'"
-        :loading="chat.activeRouteState?.isLoadingHistory || chat.isLoading"
+        :loading="chat.activeRouteState?.isLoadingHistory"
         :loading-older="chat.activeRouteState?.isLoadingHistory"
         :has-older="chat.hasMoreBefore"
         :connected="connected"

@@ -104,6 +104,19 @@ describe('ordinary v2 HTTP snapshot and durable SSE integration', () => {
     const reader = stream.body!.getReader(),
       parser = new SSEParser(),
       decoder = new TextDecoder()
+    const handshake = await reader.read()
+    expect(handshake.done).toBe(false)
+    const readyFrame = parser.feed(decoder.decode(handshake.value!, { stream: true }))
+      .find(frame => frame.event === 'ready')
+    expect(readyFrame).toBeTruthy()
+    expect(JSON.parse(readyFrame!.data)).toMatchObject({
+      epoch: base.epoch,
+      cursor: base.cursor,
+      running: false,
+      queued: false,
+      pendingApproval: null,
+      pendingClarification: null,
+    })
     let seq = 0
     for (const [type, payload] of [
       ['message.start', {}],

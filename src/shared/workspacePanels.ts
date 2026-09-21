@@ -7,6 +7,7 @@ export interface WorkspaceSchedule {
   at?:number; everyMinutes?:number; time?:string; weekdays?:number[]
 }
 export interface WorkspaceRoutine {
+  deviceHost?:string
   id:string; agentId:string; name:string; prompt:string; enabled:boolean; schedule:WorkspaceSchedule
   nextAt?:number; lastAt?:number; createdAt:number; updatedAt:number
 }

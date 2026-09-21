@@ -6,6 +6,7 @@ import type {WorkerTool} from './process.js'
 
 /** A normal Hermes Profile session, with the same native tool bridge as cloud computers. */
 export class ProfileComputerSession {
+  private fileTransferVersion=0
   private readonly gateway:WorkspaceGateway
   private toolLease?:WorkspaceToolLease
   private runtimeId=''
@@ -34,6 +35,7 @@ export class ProfileComputerSession {
     if(this.computerPolicy){
       const response=await this.target.session.request('/api/plugins/yaoyao-bot-bridge/capabilities',{search:new URLSearchParams({profile:this.profile}),cache:'reload'})
       let capability:any;try{capability=JSON.parse(response.body.toString())}catch{}
+      this.fileTransferVersion=capability?.file_transfer_version??0
       if(response.status!==200||capability?.ready!==true||capability?.computer_runtime_version!==2)
         throw new HttpError(409,'请更新夭夭工具桥并重启 Hermes Dashboard 服务，当前服务尚未加载托管虚拟机会话能力。','computer_bridge_upgrade_required')
     }
@@ -75,12 +77,20 @@ export class ProfileComputerSession {
   }
   rpc(method:string,params:Record<string,unknown>={}){
     const {session_id:_virtual,workMarker:_marker,...options}=params
+    // session.active_list is manager-scoped: Hermes' contract is extra=forbid and rejects session_id.
+    if(method==='session.active_list')return this.gateway.rpc(method,{...options,profile:this.profile})
     return this.gateway.rpc(method,{...options,session_id:this.runtimeId})
   }
   async file(action:'read'|'write',path:string,data?:string){
     this.authorize()
     if(!this.toolLease?.profileRequest)throw new HttpError(403,'Hermes 文件授权尚未建立','computer_file_forbidden')
     return this.toolLease.profileRequest('/computer-file',{action,path,...(data!==undefined?{data}:{})})
+  }
+  async transfer(direction:'read'|'write',path:string,transfer:Record<string,unknown>){
+    this.authorize()
+    if(this.fileTransferVersion!==1)throw new HttpError(409,'请更新 Hermes 工具桥以使用分块文件传输','computer_transfer_upgrade_required')
+    if(!this.toolLease?.profileRequest)throw new HttpError(403,'Hermes 文件授权尚未建立','computer_file_forbidden')
+    return this.toolLease.profileRequest('/computer-file',{action:'transfer',direction,path,transfer})
   }
   async stop(){
     if(!this.runtimeId||this.closed)return

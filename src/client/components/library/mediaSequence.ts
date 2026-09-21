@@ -1,3 +1,4 @@
+import MarkdownIt from 'markdown-it'
 import type { UiMessage } from '@/components/messages/types'
 import { normalizeAssistantMediaMarkdown } from '@/utils/mediaMarkdown'
 import { serverFileUrl } from '@shared/serverFiles'
@@ -23,6 +24,7 @@ export function mediaUrlIdentity(url: string): string {
       parsed.searchParams.delete('_retry')
       parsed.searchParams.sort()
     }
+    if (parsed.origin === window.location.origin) parsed.pathname = parsed.pathname.replace(/(\/api\/app\/files\/[^/]+)\/(?:preview|download)$/, '$1')
     return parsed.href
   } catch {
     return url
@@ -48,21 +50,37 @@ export function mediaItemsFromMessages(messages: UiMessage[]): UiLibraryItem[] {
     seen.add(identity)
     result.push(item)
   }
+  const md = new MarkdownIt({ html: false })
+  const validate = md.validateLink
+  md.validateLink = source => Boolean(serverFileUrl(source)) || validate(source)
   for (const message of messages) {
-    for (const attachment of message.attachments ?? []) {
-      if (!attachment.url || !['image', 'video'].includes(attachment.kind || 'file')) continue
-      append(previewItemFromUrl(attachment.name, attachment.url, `${message.id}:${attachment.id}`, attachment.kind))
+    if (!['user', 'assistant'].includes(message.role) && !message.communication) continue
+    const appendAttachment = (id: string) => {
+      const attachment = message.attachments?.find(item => item.id === id)
+      if (attachment?.url && ['image', 'video'].includes(attachment.kind || 'file')) {
+        append(previewItemFromUrl(attachment.name, attachment.url, `${message.id}:${attachment.id}`, attachment.kind))
+      }
     }
-    const content = message.role === 'assistant' ? normalizeAssistantMediaMarkdown(message.content) : message.content
-    const markdownMedia = /!\[[^\]]*\]\(([^)\s]+)\)|\[[^\]]+\]\(([^)\s]+)\)/g
-    for (let match = markdownMedia.exec(content); match; match = markdownMedia.exec(content)) {
-      const source = match[1] || match[2]
-      if (!source) continue
-      // Match MarkdownContent's renderer, including the selected server Profile.
-      const url = serverFileUrl(source, message.profile) || source
-      const item = previewItemFromUrl(nameFromUrl(url), url, `${message.id}:${url}`)
-      append(item)
+    const appendMarkdown = (source: string) => {
+      if (message.role === 'user') return
+      const content = normalizeAssistantMediaMarkdown(source, message.status === 'streaming')
+      for (const token of md.parse(content, {})) {
+        for (const child of token.children ?? []) {
+          const source = child.type === 'image' ? child.attrGet('src') : child.type === 'link_open' ? child.attrGet('href') : null
+          if (!source) continue
+          const url = serverFileUrl(source, message.profile) || source
+          const attached = message.attachments?.find(item => item.url && mediaUrlIdentity(item.url) === mediaUrlIdentity(url))
+          append(previewItemFromUrl(attached?.name || nameFromUrl(url), url, `${message.id}:${url}`, attached?.kind))
+        }
+      }
     }
+    if (message.contentParts?.length) {
+      for (const part of message.contentParts) {
+        if ('text' in part) appendMarkdown(part.text)
+        else appendAttachment(part.attachmentId)
+      }
+    } else appendMarkdown(message.content)
+    for (const attachment of message.attachments ?? []) appendAttachment(attachment.id)
   }
   return result
 }

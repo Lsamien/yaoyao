@@ -21,6 +21,8 @@ export interface RunnerConfiguration {
   runnerId: string
   token: string
   hermesURL: string
+  /** Satellite runners open sessions on the server Hermes, never 127.0.0.1. */
+  satellite?: boolean
   allowedProfiles: string[]
   artifactRoots: string[]
   allowInsecureLan?: boolean

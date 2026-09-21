@@ -6,6 +6,7 @@ import { botRelayIntent, relayFingerprint, relayMessageValue, REPEATED_RELAY_NOT
 import type { WorkspaceAgent as Agent, WorkspaceConversation as Conversation, WorkspaceMessage as Message, WorkspaceRun as Run, WorkspaceInteraction } from '../shared/workspace.js'
 
 export const NO_REPLY = '[[YAOYAO_NO_REPLY_V1]]'
+export const RESOURCE_WAIT_CODES = new Set(['computer_busy', 'computer_quota'])
 export const WORKSPACE_CONCURRENCY_LIMIT = 10
 export const HOST_FALLBACK = '我还不能确定你希望我处理什么，请补充具体目标、范围，或明确需要我协调的机器人。'
 const terminal = (status: string) => ['complete', 'failed', 'interrupted'].includes(status)
@@ -30,6 +31,9 @@ export interface Work {
   /** Revision captured when this turn receives a team-management grant. */
   teamManagementRevision?: number
   cancelRequested?: boolean
+  /** A locally interrupted turn still owes a remote interrupt confirmation. */
+  cleanupPending?: boolean
+  cleanupError?: string
   planned?: boolean
   silent?: boolean
   hadInteraction?: boolean
@@ -108,12 +112,22 @@ export abstract class WorkspaceScheduler {
       .map(row => JSON.parse(String(row.data)) as Work)
   }
   private pendingWorks(owner: string): Work[] {
-    return this.store.db.prepare("SELECT data FROM workspace_entities WHERE owner=? AND kind='turn' AND (json_extract(data,'$.status') NOT IN ('complete','failed','interrupted') OR coalesce(json_extract(data,'$.planned'),0)=0)").all(owner)
+    return this.store.db.prepare("SELECT data FROM workspace_entities WHERE owner=? AND kind='turn' AND (json_extract(data,'$.status') NOT IN ('complete','failed','interrupted') OR coalesce(json_extract(data,'$.planned'),0)=0 OR coalesce(json_extract(data,'$.cleanupPending'),0)=1)").all(owner)
       .map(row => JSON.parse(String(row.data)) as Work)
   }
   protected getWork(owner: string, id: string): Work { return this.store.require(owner, 'turn', id) }
   protected saveWork(owner: string, work: Work): void {
     this.store.atomic(() => { this.store.put(owner, 'turn', work.id, work); this.updateRoot(owner, work.runId) })
+  }
+  protected resolveInteractions(owner: string, taskId: string): void {
+    for (const interaction of this.store.list<WorkspaceInteraction>(owner, 'interaction')) {
+      const binding = this.store.get<{ taskId?: string }>(owner, 'interaction-binding', interaction.id)
+      if (binding?.taskId === taskId && !interaction.resolved) {
+        interaction.resolved = true
+        this.store.put(owner, 'interaction', interaction.id, interaction)
+        this.store.event(owner, 'interaction.changed', interaction, interaction.conversationId)
+      }
+    }
   }
   protected enqueue(owner: string, root: Run, agentId: string, depth: number, batchId: string, triggerSeq: number, replyMode: Work['replyMode'], requiredReply: boolean, reviewOf?: string): Work {
     const existing = this.works(owner, root.id).find(w => reviewOf ? w.reviewOf === reviewOf : w.agentId === agentId && w.depth === depth && !w.reviewOf)
@@ -295,6 +309,9 @@ export abstract class WorkspaceScheduler {
     try {
       let all = this.store.owners().flatMap(owner => this.pendingWorks(owner).map(work => ({ owner, work })))
       for (const { owner, work } of all) {
+        if (terminal(work.status) && work.cleanupPending) this.scheduleInterruptCleanup(owner, work)
+      }
+      for (const { owner, work } of all) {
         if (['running', 'waiting'].includes(work.status) && !this.executing.has(work.id)) {
           work.status = work.submitted ? 'uncertain' : 'queued'
           this.saveWork(owner, work)
@@ -381,7 +398,7 @@ export abstract class WorkspaceScheduler {
     } catch (error) {
       if (this.closing) return
       const current = this.getWork(owner, work.id)
-      if(!current.submitted&&error instanceof HttpError&&['computer_busy','computer_quota','runner_offline'].includes(error.code??'')&&current.status!=='interrupted'){
+      if(!current.submitted&&error instanceof HttpError&&RESOURCE_WAIT_CODES.has(error.code??'')&&current.status!=='interrupted'){
         current.status='queued';current.resourceWait=true;current.error='等待执行节点或电脑资源';this.saveWork(owner,current)
       }else if (!terminal(current.status) && current.status !== 'uncertain') {
         current.status = current.submitted ? 'uncertain' : 'failed'
@@ -439,22 +456,62 @@ export abstract class WorkspaceScheduler {
     await this.cancelWorks(owner, this.works(owner).filter(w => roots.some(r => r.id === w.runId)))
   }
   private async cancelWorks(owner: string, works: Work[]): Promise<void> {
-    await Promise.all(works.filter(w => !terminal(w.status)).map(async w => {
+    for (const w of works) {
+      if (terminal(w.status)) continue
       const current = this.getWork(owner, w.id)
+      const wasQueued = current.status === 'queued'
       current.cancelRequested = true
-      if (current.status === 'queued') { current.status = 'interrupted'; this.saveWork(owner, current) }
-      else {
-        this.saveWork(owner, current)
-        try { await this.interruptTurn(owner, current) }
-        catch (error) {
-          const latest = this.getWork(owner, current.id)
-          if (terminal(latest.status)) return
-          latest.status = 'uncertain'; latest.error = `停止状态待确认：${error instanceof Error ? error.message : '连接中断'}`
-          this.saveWork(owner, latest); this.recoverAfter.delete(latest.id); this.retrySoon()
-        }
-      }
-    }))
+      current.status = 'interrupted'
+      current.error = '已停止'
+      current.planned = true
+      current.cleanupPending = !wasQueued
+      if (current.currentMessageId) {
+        const message = this.store.require<Message>(owner, 'message', current.currentMessageId)
+        message.status = 'interrupted'
+        message.error = '已停止'
+        this.store.atomic(() => {
+          this.store.saveMessage(owner, message)
+          this.saveWork(owner, current)
+        })
+      } else this.saveWork(owner, current)
+      this.resolveInteractions(owner, current.id)
+      if (current.cleanupPending) this.scheduleInterruptCleanup(owner, current)
+    }
     this.wake()
+  }
+  private scheduleInterruptCleanup(owner: string, work: Work): void {
+    if (this.closing || this.interrupting.has(work.id)) return
+    if ((this.recoverAfter.get(work.id) ?? 0) > Date.now()) { this.retrySoon(); return }
+    this.interrupting.add(work.id)
+    let succeeded = false
+    void this.interruptTurn(owner, work)
+      .then(() => {
+        succeeded = true
+        const current = this.getWork(owner, work.id)
+        current.cleanupPending = false
+        current.cleanupError = undefined
+        this.saveWork(owner, current)
+      })
+      .catch(error => {
+        if (this.closing) return
+        const current = this.getWork(owner, work.id)
+        current.cleanupPending = true
+        current.cleanupError = error instanceof Error ? error.message : '连接中断'
+        this.saveWork(owner, current)
+        const attempt = this.attempts.get(work.id) ?? 0
+        this.attempts.set(work.id, attempt + 1)
+        this.recoverAfter.set(work.id, Date.now() + Math.min(30_000, 500 * 2 ** Math.min(attempt, 6)))
+        this.retrySoon()
+      })
+      .finally(() => {
+        this.interrupting.delete(work.id)
+        if (succeeded) {
+          this.attempts.delete(work.id)
+          this.recoverAfter.delete(work.id)
+        }
+        this.wake()
+      })
+      .catch(() => this.retrySoon())
   }
   protected closeScheduler(): void {
     this.closing = true

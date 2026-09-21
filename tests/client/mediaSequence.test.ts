@@ -3,6 +3,12 @@ import { mediaItemsFromMessages, mediaUrlIdentity, previewItemFromUrl } from '@/
 import type { UiMessage } from '@/components/messages/types'
 
 describe('conversation media sequence', () => {
+  it('follows inline and typed positions instead of moving direct attachments first', () => {
+    const attachments = [{ id: 'last', name: 'last.png', kind: 'image' as const, url: '/media/last.png' }]
+    expect(mediaItemsFromMessages([{ id: 'ordered', role: 'assistant', content: '![首图](/media/first.png)', attachments }]).map(item => item.name)).toEqual(['first.png', 'last.png'])
+    expect(mediaItemsFromMessages([{ id: 'typed', role: 'assistant', content: '', attachments, contentParts: [{attachmentId:'last'}, {text:'![首图](/media/first.png)'}] }]).map(item => item.name)).toEqual(['last.png', 'first.png'])
+    expect(mediaItemsFromMessages([{id:'code',role:'assistant',content:'```md\n![示例](/media/code.png)\n```'}])).toEqual([])
+  })
   it('keeps visible image and video order while deduplicating the same URL', () => {
     const messages: UiMessage[] = [
       { id: 'one', role: 'assistant', content: '![第一张](/media/first.png)' },

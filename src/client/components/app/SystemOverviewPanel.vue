@@ -7,7 +7,7 @@ import { pairedDevices, type PairedDevicesResponse } from '@/api/pairing'
 import { getPushSystemStatus, type PushSystemStatus } from '@/api/push'
 import { systemUpdateStatus, type SystemUpdateStatus } from '@/api/systemUpdate'
 
-type Destination = 'system-users' | 'system-connection' | 'system-push' | 'system-nodes' | 'system-voice' | 'system-update'
+type Destination = 'system-users' | 'system-connection' | 'system-push' | 'system-voice' | 'system-update'
 
 const props = withDefaults(defineProps<{
   active?: boolean
@@ -37,7 +37,6 @@ const pushStatus = computed(() => {
   const fcm = push.value.providers?.fcm
   return `${apns} · ${fcm?.configured && fcm.healthy ? 'FCM 已启用' : 'FCM 未配置'}`
 })
-const deviceStatus = computed(() => devices.value ? `${devices.value.devices.length} 台已授权` : '尚未读取设备状态')
 const voiceStatus = computed(() => voice.value ? `已配置 ${voice.value.voices.length} 个音色` : '尚未读取语音状态')
 const updateStatus = computed(() => {
   if (!update.value) return '尚未读取版本状态'
@@ -90,11 +89,6 @@ watch(() => props.active, active => { if (active) void refresh() }, { immediate:
       <button type="button" @click="emit('navigate', 'system-push')">
         <AppIcon name="bell" :size="22" />
         <span><strong>消息推送</strong><small>{{ pushStatus }}</small></span>
-        <AppIcon class="chevron" name="chevron-left" :size="18" />
-      </button>
-      <button type="button" @click="emit('navigate', 'system-nodes')">
-        <AppIcon name="panel" :size="22" />
-        <span><strong>节点与设备</strong><small>{{ deviceStatus }}</small></span>
         <AppIcon class="chevron" name="chevron-left" :size="18" />
       </button>
       <button type="button" @click="emit('navigate', 'system-voice')">

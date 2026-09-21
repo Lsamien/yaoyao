@@ -116,13 +116,13 @@ export class WorkspaceTaskCoordinator {
       const team = this.store.require<Conversation>(owner, 'conversation', goal.conversationId)
       this.store.requireTask(owner, team.id, goal.id)
       this.runtime.nodes.requireSource(owner, agent)
-      return this.runtime.userActive(owner) && !agent.archived && agent.canManageTeam === true
+      return this.runtime.userActive(owner) && !agent.archived && !agent.temporaryGoalId
         && (goal.authorizationVersion === undefined || goal.authorizationVersion === this.runtime.authorizationVersion(owner))
         && (agent.teamAuthorizationVersion ?? 0) === goal.authorityRevision
         && !team.archived && team.administratorId === agent.id && team.memberIds.includes(agent.id)
     } catch { return false }
   }
-  createAssignment(owner: string, actorId: string, input: unknown): AgentAssignment {
+  createAssignment(owner: string, actorId: string, input: unknown, sourceRunId?: string): AgentAssignment {
     const { requestId: command, ...body } = parse(assignmentInput, input)
     const goal = this.requireCoordinator(owner, body.goalId, actorId)
     if (terminalGoal(goal.status)) throw new HttpError(409, '目标已结束', 'goal_terminal')
@@ -136,13 +136,13 @@ export class WorkspaceTaskCoordinator {
     return this.store.command(owner, command, { actorId, operation: 'assignment.create', ...body }, () => {
       if (previous.length >= 32) throw new HttpError(409, '每个目标最多 32 个子任务', 'assignment_limit')
       const assignment: AgentAssignment = { ...body, id: randomUUID(), conversationId: goal.conversationId,
-        status: 'pending', attempt: 0, artifactIds: [], createdAt: Date.now(), updatedAt: Date.now() }
+        status: 'pending', sourceRunId: sourceRunId ?? goal.origin.runId, attempt: 0, artifactIds: [], createdAt: Date.now(), updatedAt: Date.now() }
       this.saveAssignment(owner, assignment)
       if(goal.status!=='waiting')goal.status = 'running';goal.revision++;this.saveGoal(owner, goal)
       return assignment
     })
   }
-  reviewAssignment(owner: string, actorId: string, input: unknown): AgentAssignment {
+  reviewAssignment(owner: string, actorId: string, input: unknown, sourceRunId?: string): AgentAssignment {
     const body = parse(assignmentReview, input)
     const assignment = this.store.require<AgentAssignment>(owner, 'assignment', body.assignmentId)
     const goal = this.requireCoordinator(owner, assignment.goalId, actorId)
@@ -155,13 +155,13 @@ export class WorkspaceTaskCoordinator {
         throw new HttpError(409, '此子任务已达到 3 次执行上限，请调整方案', 'assignment_retry_limit')
       assignment.review = body.review
       assignment.status = body.decision === 'accept' ? 'complete' : body.decision === 'retry' ? 'pending' : 'blocked'
-      if (body.decision === 'retry') { assignment.runId = undefined;assignment.result = undefined }
+      if (body.decision === 'retry') { assignment.runId = undefined;assignment.result = undefined;if(sourceRunId)assignment.sourceRunId=sourceRunId }
       this.saveAssignment(owner, assignment)
       if(goal.status!=='waiting')goal.status = 'running';goal.revision++;this.saveGoal(owner, goal)
       return assignment
     })
   }
-  updateAssignment(owner: string, actorId: string, input: unknown): AgentAssignment {
+  updateAssignment(owner: string, actorId: string, input: unknown, sourceRunId?: string): AgentAssignment {
     const {requestId:command,assignmentId,...patch}=parse(assignmentUpdate,input)
     const assignment=this.store.require<AgentAssignment>(owner,'assignment',assignmentId)
     const goal=this.requireCoordinator(owner,assignment.goalId,actorId)
@@ -183,7 +183,7 @@ export class WorkspaceTaskCoordinator {
         if(target.archived||target.id===actorId||!this.store.taskMemberIds(owner,team,goal.id).includes(target.id))throw new HttpError(400,'请选择有效团队成员','invalid_assignment_agent')
         assignment.status='pending';assignment.runId=undefined;assignment.result=undefined
       }
-      Object.assign(assignment,patch);this.saveAssignment(owner,assignment)
+      Object.assign(assignment,patch);if(sourceRunId)assignment.sourceRunId=sourceRunId;this.saveAssignment(owner,assignment)
       goal.revision++;this.saveGoal(owner,goal);return assignment
     })
   }
@@ -229,7 +229,7 @@ export class WorkspaceTaskCoordinator {
     this.runtime.nodes.requireSource(owner,agent)
     const source=this.store.require<Run>(owner,'run',origin.runId)
     const message=this.store.require<{role:string}>(owner,'message',source.messageId)
-    if (!this.runtime.userActive(owner)||!agent.canManageTeam||agent.archived||team.archived||goal.coordinatorId!==actorId||team.administratorId!==actorId||source.triggerKind||message.role!=='user')
+    if (!this.runtime.userActive(owner)||agent.temporaryGoalId||agent.archived||team.archived||goal.coordinatorId!==actorId||team.administratorId!==actorId||source.triggerKind||message.role!=='user')
       throw new HttpError(403,'恢复任务需要当前用户的新指令和有效管理员权限','goal_resume_forbidden')
     return this.store.command(owner,body.requestId,{actorId,operation:'goal.resume',goalId:goal.id,origin},()=>{
       if(goal.status==='cancelling')throw new HttpError(409,'旧执行尚未确认结束，请先核对状态','goal_still_running')
@@ -366,11 +366,12 @@ export class WorkspaceTaskCoordinator {
         this.store.atomic(() => {
           const content = `由管理员分派的子任务：${assignment.title}\n${assignment.brief}\n验收要求：${assignment.acceptanceCriteria.join('；') || '提供实际结果及依据'}\n${assignment.review ? `上次复核意见：${assignment.review}\n` : ''}${dependencies.map(a => `依赖结果 ${a.title}：${a.result?.slice(0,1500)}`).join('\n')}\n完成后提交结果，由管理员复核，不要自行转交。`
           const originRun=this.store.get<Run>(owner,'run',goal.origin.runId)
+          const assignmentSource=this.store.get<Run>(owner,'run',assignment.sourceRunId??goal.origin.runId)
           const inputFiles=originRun?this.store.get<Message>(owner,'message',originRun.messageId)?.attachments.map(file=>file.id)??[]:[]
           const fileIds=[...new Set([...inputFiles,...dependencies.flatMap(item=>item.artifactIds??[])])].slice(0,8)
           const run = this.runtime.dispatch(owner, goal.conversationId,
             { requestId: requestId(`assignment:${assignment.id}:${assignment.attempt}`), taskId: goal.id, content, fileIds },
-            { agentId: goal.coordinatorId, assignmentId: assignment.id, targetAgentId: assignment.agentId, kind: 'assignment' })
+            { agentId: goal.coordinatorId, assignmentId: assignment.id, targetAgentId: assignment.agentId, kind: 'assignment', deviceHost: assignmentSource?.deviceHost })
           assignment.runId = run.id;assignment.attempt++;assignment.status = 'running';this.saveAssignment(owner, assignment)
         })
       }
@@ -430,7 +431,7 @@ export class WorkspaceTaskCoordinator {
       this.store.put(owner, 'task-delivery', id, delivery)
       const run = this.runtime.dispatch(owner, source!.id,
         { requestId: id, taskId: goal.origin.conversationTaskId, content: text, fileIds:[...new Set(assignments.flatMap(assignment=>assignment.artifactIds??[]))].slice(0,8) },
-        { agentId: goal.coordinatorId, kind: kind === 'review' ? 'task_review' : 'task_result', instruction,
+        { agentId: goal.coordinatorId, kind: kind === 'review' ? 'task_review' : 'task_result', instruction, deviceHost: sourceRun?.deviceHost,
           taskReference:{conversationId:goal.conversationId,taskId:goal.id} })
       delivery!.runId = run.id;delivery!.status = 'delivered';this.store.put(owner, 'task-delivery', id, delivery)
       goal.automaticWakes++;this.saveGoal(owner, goal)

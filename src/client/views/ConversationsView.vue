@@ -6,8 +6,8 @@ import type { ServerIdentity } from '@shared/serverIdentity'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate, onBeforeRouteLeave } from 'vue-router'
 import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
-import RemoteAgentPicker from '@/components/workspace/RemoteAgentPicker.vue'
 import ConversationList from '@/components/workspace/ConversationList.vue'
+import BotProfileDialog from '@/components/workspace/BotProfileDialog.vue'
 import WorkspaceBotPanel from '@/components/workspace/WorkspaceBotPanel.vue'
 import WorkspaceKnowledgePanel from '@/components/workspace/WorkspaceKnowledgePanel.vue'
 import type { WorkspaceProject } from '@shared/workspaceKnowledge'
@@ -44,15 +44,16 @@ import { apiRequest, ApiError } from '@/api/client'
 import { updateProfileIdentity, type ProfileIdentityInput } from '@/api/profiles'
 import { encodeAgentAvatar, randomAgentIdentity } from '@shared/agentIdentity'
 import type { JsonValue } from '@shared/types'
-import type {
-  WorkspaceAgent as Agent,
-  WorkspaceConversation as Conversation,
-  WorkspaceMessage as Message,
-  WorkspaceRun as Run,
-  WorkspaceInteraction as Interaction,
-  WorkspaceSource as Source,
-  WorkspaceFile,
-  WorkspaceEvent,
+import {
+  type WorkspaceAgent as Agent,
+  type WorkspaceConversation as Conversation,
+  type WorkspaceMessage as Message,
+  type WorkspaceRun as Run,
+  type WorkspaceInteraction as Interaction,
+  type WorkspaceSource as Source,
+  type WorkspaceFile,
+  type WorkspaceEvent,
+  workspaceHasUnfinishedOutput,
 } from '@shared/workspace'
 const auth = useAuthStore(),
   theme = useThemeStore(),
@@ -66,14 +67,17 @@ const active = ref<Conversation>(),
   run = ref<Run | null>(null),
   interactions = ref<Interaction[]>([]),
   context = ref<Record<string, unknown> | null>(null)
+const thinking = computed(() =>
+  (!!run.value && ['queued', 'running', 'waiting', 'uncertain'].includes(run.value.status))
+  || workspaceHasUnfinishedOutput(messages.value))
 const activeTask = ref<WorkspaceTask | null>(null), tasks = ref<WorkspaceTask[]>([]), assignments = ref<AgentAssignment[]>([])
 const deliveryMode = ref(false)
 const knowledgePanel = ref<InstanceType<typeof WorkspaceKnowledgePanel>>()
 const knowledgeRevision = ref(0)
 const knowledgeEnabled = ref(false), projects = ref<WorkspaceProject[]>([]), directProjectId = ref(''), requestedRounds = ref<number | undefined>(), coordinatorId = ref('')
-const coordinators = computed(() => members.value.filter(a => a.canManageTeam && !a.archived && !a.remoteAgentId))
+const coordinators = computed(() => members.value.filter(a => !a.temporaryGoalId && !a.archived && !a.remoteAgentId))
 const canRequestGoal = computed(() => active.value?.kind === 'group' && !active.value.archived && !activeTask.value?.goal
-  && (active.value.collaborationMode === 'discussion' ? coordinators.value.length > 0 : members.value.some(a => a.id === active.value?.administratorId && a.canManageTeam && !a.archived && !a.remoteAgentId)))
+  && (active.value.collaborationMode === 'discussion' ? coordinators.value.length > 0 : members.value.some(a => a.id === active.value?.administratorId && !a.temporaryGoalId && !a.archived && !a.remoteAgentId)))
 const taskFiles = new Map<string,File[]>()
 const taskQuotes = new Map<string,UiMessage | null>()
 const composerKey = computed(() => `${auth.user?.id}:${active.value?.id}${activeTask.value ? `:${activeTask.value.id}` : ''}`)
@@ -89,6 +93,8 @@ const text = ref(''),
 const identityBusy = ref(false),
   identityError = ref(''),
   identityResetVersion = ref(0)
+const respondingInteractionId = ref(''), interactionError = ref('')
+watch(() => `${route.params.id}:${interactions.value[0]?.id}`, () => { interactionError.value = '' })
 const agentActivity = computed(() => workspaceAgentActivity(conversations.value))
 const searchItems = computed<SidebarItem[]>(() => [false, true].map(archived => {
   const items = conversations.value.filter(c => c.archived === archived).map(c => workspaceConversationItem(c, agents.value, agentActivity.value))
@@ -101,7 +107,7 @@ const timeline = ref<InstanceType<typeof MessageTimeline>>()
 const quoted = ref<UiMessage | null>(null)
 const preview = ref<UiLibraryItem | null>(null)
 const mediaIndex = ref<number | null>(null)
-const showThinking = ref(true)
+const showThinking = ref(false)
 const transcriptStore = new WorkspaceTranscriptStore()
 const renderedMessages = new WeakMap<Message, UiMessage>()
 const uiMessages = computed(() => messages.value.filter(m => m.visible !== false).map(message => {
@@ -167,25 +173,23 @@ const dialog = ref<'agent' | 'group' | 'editAgent' | 'editGroup' | null>(null),
   fileInput = ref<HTMLInputElement>(),
   dialogElement = ref<HTMLDialogElement>()
 const editingConversation = computed(() => conversations.value.find(c => c.id === editingConversationId.value) ?? (active.value?.id === editingConversationId.value ? active.value : undefined))
-const remotePickerOpen=ref(false)
+const editingBot = computed(() => agents.value.find(agent => agent.id === editingId.value))
 const isRemoteAgent=computed(()=>dialog.value==='editAgent' && !!agents.value.find(a=>a.id===editingId.value)?.remoteAgentId)
-async function remoteAdded(agent:Agent){
-  remotePickerOpen.value=false;await refresh()
-  if(dialog.value==='group'||dialog.value==='editGroup'){
-    if(!form.memberIds.includes(agent.id))form.memberIds.push(agent.id)
-  }else{
-    const conversation=conversations.value.find(c=>c.kind==='direct'&&c.memberIds[0]===agent.id)
-    if(conversation)await select(conversation.id)
-  }
-}
 const form = reactive({
   name: '',
   avatar: '',
   instructions: '',
+  description: '',
+  job: '',
+  antiJobs: [] as string[],
+  voice: '' as ''|'concise'|'casual'|'rigorous'|'custom',
+  voiceCustom: '',
+  actBias: '' as ''|'ask_first'|'ask_key_then_act'|'act_now',
   execution: 'profile' as 'profile'|'computer',
-  canManageTeam: false,
+  canManageTeam: true,
   canCollaborate: true,
   memoryEnabled: true,
+  approvalPolicy: 'ask' as 'ask'|'allow'|'deny',
   source: '',
   memberIds: [] as string[],
   memberRoles: {} as Record<string, WorkspaceMemberRole>,
@@ -207,7 +211,7 @@ function choosePreset(preset?: TeamPreset) {
   const available = agents.value.filter(a => !a.archived && !a.temporaryGoalId)
   if (preset && available.length < preset.roles.length) return
   selectedPresetId.value = preset?.id ?? 'custom'
-  Object.assign(form, { name: preset?.name ?? '', instructions: preset?.instructions ?? '', memberIds: preset ? available.slice(0, preset.roles.length).map(a => a.id) : [], memberRoles: {}, administratorId: '', mode: knowledgeEnabled.value ? 'discussion' : 'host', autoReplyIds: [], maxReplyRounds: 3 })
+  Object.assign(form, { name: preset?.name ?? '', instructions: preset?.instructions ?? '', job: '', antiJobs: [], voice: '', voiceCustom: '', actBias: '', memberIds: preset ? available.slice(0, preset.roles.length).map(a => a.id) : [], memberRoles: {}, administratorId: '', mode: knowledgeEnabled.value ? 'discussion' : 'host', autoReplyIds: [], maxReplyRounds: 3 })
   if (preset) applyPresetRoles(preset)
 }
 function assignPresetRole(index: number, id: string) {
@@ -228,13 +232,14 @@ let cursor = 0,
 const selected = computed(() => (typeof route.params.id === 'string' ? route.params.id : undefined))
 const selectedTask = computed(() => typeof route.query.taskId === 'string' ? route.query.taskId : '')
 const shell=ref<InstanceType<typeof WorkspaceShell>>(),vmWorkspace=ref<InstanceType<typeof LocalVmWorkspace>>(),desktopViewer=ref<InstanceType<typeof ComputerPanel>>()
-const computerOpen=ref(false),dockView=ref<'computer'|'inspector'>(),twoDesktops=ref(false),desktopAgent=ref<Agent>()
+const computerOpen=ref(false),dockView=ref<'computer'|'inspector'>(),twoDesktops=ref(false),desktopAgent=ref<Agent>(),desktopBackend=ref<'desktop'|'cloud'|'vm'>(),desktopHost=ref('')
+async function resolveDeviceHost(){try{return (await window.yaoyaoDesktop?.deviceHost?.())?.deviceHost??null}catch{return null}}
 const creatingTask=ref(false)
 const CREATE_TASK_VALUE='__create_task__'
 function toggleDock(view:'computer'|'inspector'){dockView.value=dockView.value===view?undefined:view}
-async function openComputer(agent:Agent){
-  if(window.yaoyaoDesktop?.openComputer){try{await window.yaoyaoDesktop.openComputer(agent.id)}catch(cause){error.value=cause instanceof Error?cause.message:'无法打开电脑窗口'}return}
-  desktopAgent.value=agent;computerOpen.value=true
+async function openComputer(agent:Agent,backend?:'desktop'|'cloud'|'vm',host?:string){
+  if(window.yaoyaoDesktop?.openComputer){try{await window.yaoyaoDesktop.openComputer(agent.id,{backend,host})}catch(cause){error.value=cause instanceof Error?cause.message:'无法打开电脑窗口'}return}
+  desktopAgent.value=agent;desktopBackend.value=backend;desktopHost.value=host??'';computerOpen.value=true
 }
 async function leaveComputer(){
   if(twoDesktops.value&&vmWorkspace.value&&!await vmWorkspace.value.close())return false
@@ -244,6 +249,19 @@ async function leaveComputer(){
 onBeforeRouteUpdate(leaveComputer);onBeforeRouteLeave(leaveComputer)
 const computerCandidates=computed(()=>agents.value.filter(agent=>!agent.archived&&(active.value?.memberIds.includes(agent.id)||(!!agent.temporaryGoalId&&agent.temporaryGoalId===activeTask.value?.goal?.id))))
 const members = computed(() => agents.value.filter((a) => active.value?.memberIds.includes(a.id)))
+const activeHeaderAgent = computed(() => active.value?.kind === 'direct' ? agents.value.find(agent => agent.id === active.value?.memberIds[0]) : undefined)
+const activeHeaderTitle = computed(() => activeHeaderAgent.value?.name || active.value?.name || 'Bot 模式')
+const activeHeaderAvatarName = computed(() => active.value ? activeHeaderAgent.value?.name || active.value.name : '')
+const activeHeaderAvatar = computed(() => activeHeaderAgent.value?.avatar || active.value?.avatar || '')
+const activeHeaderAvatarMembers = computed(() => active.value?.kind === 'group' ? workspaceAvatarMembers(active.value.memberIds, agents.value, active.value) : [])
+const thinkingIdentity = computed(() => {
+  const streamingAgentId = [...uiMessages.value].reverse().find(message => message.role === 'assistant' && message.status === 'streaming')?.profile
+  const agentId = activeHeaderAgent.value?.id || run.value?.activeAgentId || streamingAgentId
+    || active.value?.activeAgentId || Object.entries(active.value?.activeAgentStates ?? {}).find(([, state]) => state === 'running')?.[0]
+    || active.value?.memberIds[0]
+  const agent = agents.value.find(agent => agent.id === agentId)
+  return { name: agent?.name || active.value?.name || '机器人', avatar: agent?.avatar || (active.value?.kind === 'direct' ? active.value.avatar : '') || '' }
+})
 const isAgentDialog = computed(() => dialog.value === 'agent' || dialog.value === 'editAgent')
 const body = (v: unknown) => v as JsonValue
 async function saveProfileIdentity(input: ProfileIdentityInput) {
@@ -569,10 +587,12 @@ async function openDialog(kind: NonNullable<typeof dialog.value>, conversation =
     name: '',
     avatar: kind === 'agent' ? encodeAgentAvatar(randomAgentIdentity('new-agent', '机器人')) : '',
     instructions: '',
+    description: '',
     execution: 'profile' as 'profile'|'computer',
-  canManageTeam: false,
+  canManageTeam: true,
     canCollaborate: true,
     memoryEnabled: true,
+    approvalPolicy: 'ask',
     source: '',
     memberIds: [],
     memberRoles: {},
@@ -590,13 +610,15 @@ async function openDialog(kind: NonNullable<typeof dialog.value>, conversation =
     if (kind === 'editAgent') {
       const a = agents.value.find(a => a.id === conversation?.memberIds[0])
       if (!a) throw new Error('机器人不存在，请刷新后重试')
-      editingId.value = a.id
       Object.assign(form, a)
+      form.description ??= ''; form.job ??= ''; form.antiJobs ??= []; form.voice ??= ''; form.voiceCustom ??= ''; form.actBias ??= ''
       form.source=JSON.stringify([a.nodeId,a.profile])
       if(a.remoteAgentId){
         const remote=(await apiRequest<{agents:Agent[]}>(`/api/app/nodes/${a.nodeId}/agents`)).agents.find(candidate=>candidate.id===a.remoteAgentId)
         if(remote)Object.assign(form,remote)
       }
+      form.approvalPolicy = a.approvalPolicy ?? 'ask'
+      editingId.value = a.id
     }
     if (kind === 'editGroup' && conversation) {
       editingId.value = conversation.id
@@ -619,6 +641,11 @@ function closeDialog() {
   dialog.value = null
   editingConversationId.value = ''
 }
+function saveBotProfile(draft: Pick<typeof form, 'name'|'avatar'|'instructions'|'source'|'canManageTeam'|'canCollaborate'|'memoryEnabled'|'approvalPolicy'> & Partial<Pick<typeof form, 'description'|'job'|'antiJobs'|'voice'|'voiceCustom'|'actBias'>>) {
+  Object.assign(form, draft)
+  form.description ??= ''; form.job ??= ''; form.antiJobs ??= []; form.voice ??= ''; form.voiceCustom ??= ''; form.actBias ??= ''
+  void save()
+}
 watch(
   () => form.memberIds.slice(),
   (ids) => {
@@ -628,16 +655,19 @@ watch(
   },
 )
 async function save() {
-  if(isRemoteAgent.value)return
   busy.value = true
   error.value = ''
   try {
-    const fields = { name: form.name, ...(isAgentDialog.value ? { avatar: form.avatar, canManageTeam: form.canManageTeam, execution:form.execution, ...(knowledgeEnabled.value ? { canCollaborate: form.canCollaborate, memoryEnabled: form.memoryEnabled } : {}) } : {}), instructions: form.instructions }
-    if (dialog.value === 'agent') {
+    const fields = { name: form.name, ...(isAgentDialog.value ? { avatar: form.avatar, description: form.description.trim(), canManageTeam: form.canManageTeam, approvalPolicy: form.approvalPolicy, execution:form.execution, ...(knowledgeEnabled.value ? { canCollaborate: form.canCollaborate, memoryEnabled: form.memoryEnabled } : {}) } : {}), instructions: form.instructions }
+    const personaClears = { job: form.job.trim() ? form.job.trim() : null, antiJobs: form.antiJobs.length ? form.antiJobs : null, voice: form.voice || null, voiceCustom: form.voice === 'custom' && form.voiceCustom.trim() ? form.voiceCustom : null, actBias: form.actBias || null }
+    const personaCreates = Object.fromEntries(Object.entries(personaClears).filter(([, value]) => value !== null && value !== undefined))
+    if (isRemoteAgent.value) {
+      await apiRequest(`/api/app/agents/${editingId.value}`, { method: 'PATCH', body: { approvalPolicy: form.approvalPolicy } })
+    } else if (dialog.value === 'agent') {
       const [nodeId, profile] = JSON.parse(form.source)
       const result = await apiRequest<{ agent: Agent }>('/api/app/agents', {
         method: 'POST',
-        body: { ...fields, nodeId, profile, computer: 'auto' },
+        body: { ...fields, ...personaCreates, nodeId, profile, computer: 'auto', envs: {vm:true,cloud:true,desktop:true}, execution:'profile' },
       })
       await refresh()
       const c = conversations.value.find(
@@ -645,7 +675,7 @@ async function save() {
       )
       if (c) await select(c.id)
     } else if (dialog.value === 'editAgent')
-      await apiRequest(`/api/app/agents/${editingId.value}`, { method: 'PATCH', body: { ...fields, ...(form.source?{nodeId:JSON.parse(form.source)[0],profile:JSON.parse(form.source)[1]}:{}) } })
+      await apiRequest(`/api/app/agents/${editingId.value}`, { method: 'PATCH', body: { ...fields, ...personaClears, ...(form.source?{nodeId:JSON.parse(form.source)[0],profile:JSON.parse(form.source)[1]}:{}) } })
     else {
       const payload = {
         ...fields,
@@ -720,6 +750,7 @@ async function send() {
     pendingFingerprint = fingerprint
   }
   try {
+    const deviceHost = await resolveDeviceHost()
     const receipt = await apiRequest<WorkspaceSendReceipt>(`/api/app/conversations/${c.id}/messages`, {
       method: 'POST',
       body: {
@@ -730,6 +761,7 @@ async function send() {
         content: text.value,
         mentionIds: mentions.value,
         fileIds: files.value.map((f) => f.id),
+        deviceHost,
       },
     })
     if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return true
@@ -815,21 +847,25 @@ async function stopMember(id: string) {
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '停止失败' }
 }
 async function control(action: 'stop' | 'reconcile') {
-  if (!run.value) return
+  const targetId = run.value?.id ?? active.value?.activeRunId ?? activeTask.value?.activeRunId
+  if (!targetId) return
   try {
-    await apiRequest(`/api/app/runs/${run.value.id}/${action}`, { method: 'POST', body: {} })
+    await apiRequest(`/api/app/runs/${targetId}/${action}`, { method: 'POST', body: {} })
     await load(undefined, true)
   } catch (e) {
     error.value = String(e)
   }
 }
 async function respond(i: Interaction, answer: string) {
+  if (respondingInteractionId.value) return
+  respondingInteractionId.value = i.id
+  interactionError.value = ''
   try {
     await apiRequest(`/api/app/interactions/${i.id}/respond`, { method: 'POST', body: { answer } })
     await load(undefined, true)
   } catch (e) {
-    error.value = String(e)
-  }
+    interactionError.value = e instanceof Error ? e.message : '审批答复失败，请重试'
+  } finally { respondingInteractionId.value = '' }
 }
 async function loadOlder() {
   const c = active.value
@@ -872,7 +908,6 @@ watch([selected,selectedTask], () => {
   pendingRequestId = undefined;uploadedSources = [];uploadedReferences = []
   void load()
 })
-watch(selected,()=>{dockView.value=undefined})
 watch(() => auth.user?.id, (owner, previous) => {
   if (owner === previous) return
   knowledgePanel.value?.close(); knowledgeEnabled.value = false; projects.value = []; knowledgeRevision.value++
@@ -931,7 +966,6 @@ onBeforeUnmount(() => {
     @save-identity="saveProfileIdentity"
     @create-agent="openDialog('agent')"
     @create-group="openDialog('group')"
-    @create-remote-agent="remotePickerOpen = true"
     @bot-settings-changed="knowledgeChanged"
   >
     <template #sidebar
@@ -942,18 +976,22 @@ onBeforeUnmount(() => {
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">
-      <MessageTimeline ref="timeline" :identity="`${selected}:${activeTask?.id ?? ''}`" :loading-older="loadingOlder" :messages="uiMessages" :title="active?.name || 'Bot 模式'"
+      <MessageTimeline ref="timeline" :identity="`${selected}:${activeTask?.id ?? ''}`" :loading-older="loadingOlder" :messages="uiMessages" :title="activeHeaderTitle"
         :subtitle="active?.kind === 'group' ? `${members.length} 位成员` : ''"
-        :loading="loading" :has-older="older && !!active" :connected="!error" :synced="!loading"
-        :show-tools="showThinking" :allow-branch="false" :thinking="!!run && ['running','waiting','uncertain'].includes(run.status)"
+        :header-avatar-name="activeHeaderAvatarName" :header-avatar="activeHeaderAvatar" :header-avatar-kind="active?.kind === 'group' ? 'team' : 'agent'"
+        :header-avatar-members="activeHeaderAvatarMembers" :header-avatar-state="activeHeaderAgent ? workspaceAvatarState(active, activeHeaderAgent.id) : 'idle'" :header-avatar-activity-key="active?.lastSeq"
+        :loading="loading" :has-older="older && !!active"
+        :show-tools="showThinking" :allow-branch="false" :thinking="thinking" :thinking-identity="thinkingIdentity"
         :agent-avatars="Object.fromEntries(agents.map(a => [a.id, a.avatar]))"
         :agent-states="Object.fromEntries(members.map(a => [a.id, workspaceAvatarState(active, a.id)]))"
         :mention-names="members.map(a => a.name)"
         :empty-title="active ? '开始一段新对话' : '还没有聊天'"
         :empty-description="active ? '从下方输入框发送消息。' : '创建机器人，或选择成员新建群聊。'"
         :interaction="interactions[0] ? { id: interactions[0].id, kind: interactions[0].kind, prompt: interactions[0].message, options: interactions[0].choices } : null"
+        :interaction-busy="!!respondingInteractionId" :interaction-error="interactionError"
+        :approval-agent-name="agents.find(agent => agent.id === interactions[0]?.agentId)?.name"
         @load-older="loadOlder" @quote="quoted = $event" @preview="openPreview" @preview-file="openPreview"
-        @approve="interactions[0] && respond(interactions[0], $event ? 'once' : 'deny')"
+        @approval-choice="interactions[0] && respond(interactions[0], $event)"
         @clarify="interactions[0] && respond(interactions[0], $event)">
         <template #header-leading><button v-if="active" class="workspace-list-back icon-button" aria-label="返回 Bot 列表" @click="router.push('/conversations')"><AppIcon name="chevron-left" /></button></template>
         <template #header-actions>
@@ -967,7 +1005,7 @@ onBeforeUnmount(() => {
               </select>
               <AppIcon name="chevron-down" :size="14"/>
             </span>
-            <button class="icon-button" aria-label="聊天设置" title="聊天设置" @click="openDialog(active.kind === 'direct' ? 'editAgent' : 'editGroup')"><AppIcon name="settings" /></button>
+            <button class="icon-button" :aria-label="active.kind === 'direct' ? '编辑资料' : '群聊设置'" :title="active.kind === 'direct' ? '编辑资料' : '群聊设置'" @click="openDialog(active.kind === 'direct' ? 'editAgent' : 'editGroup')"><AppIcon :name="active.kind === 'direct' ? 'edit' : 'settings'" /></button>
             <button type="button" class="icon-button" aria-label="Inspector" title="Inspector" :aria-pressed="dockView==='inspector'" @click="toggleDock('inspector')"><AppIcon name="bug"/></button>
           </div>
         </template>
@@ -976,6 +1014,9 @@ onBeforeUnmount(() => {
       <p v-if="active?.collaborationWaiting" class="task-queue-status" role="status"><button @click="knowledgePanel?.open('collaboration', active.memberIds[0])">等待同伴回复 · 查看协作</button></p>
       <p v-if="error" class="error" role="alert">{{ error }}<button class="icon-button" @click="error = ''" aria-label="关闭错误"><AppIcon name="close" /></button></p>
       <ComposerShell v-if="active" :key="composerKey" ref="composer" mode="group" :draft-key="composerKey"
+        v-model:delivery-mode="deliveryMode" :delivery-available="active.kind === 'group' && !activeTask?.goal"
+        :delivery-disabled="!canRequestGoal || busy || loading || !!activeTask?.activeRunId"
+        :delivery-disabled-reason="!canRequestGoal ? '负责人需要是本机上未归档的 Bot' : ''"
         :disabled="active.archived || loading || active.id !== selected" :sending="busy" stop-while-running :streaming="!!active.activeRunId"
         :tool-trace-visible="showThinking" :reference="reference" :context-used="Number(context?.usedTokens || 0)" :context-limit="Number(context?.limitTokens || 0)"
         :mention-options="active.kind === 'group' ? members.map(a => ({id:a.id,label:a.name,insertText:`@${a.name} `})) : []"
@@ -987,16 +1028,12 @@ onBeforeUnmount(() => {
             <label v-if="deliveryMode && active.collaborationMode === 'discussion'">交付负责人<select v-model="coordinatorId"><option value="">{{ coordinators[0]?.name ?? '请先授权负责人' }}</option><option v-for="agent in coordinators" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select></label>
           </div>
           <TaskPlan :key="activeTask?.id" :goal="activeTask?.goal" :assignments="assignments" :agents="agents" :save-criteria="saveGoalCriteria" @stop="stopTask" @resume="resumeTask" />
-          <div v-if="active.kind === 'group' && !activeTask?.goal" class="delivery-mode">
-            <button type="button" :aria-pressed="deliveryMode" :disabled="!canRequestGoal || busy || loading || !!activeTask?.activeRunId" aria-describedby="delivery-mode-help" @click="deliveryMode = !deliveryMode">交付目标</button>
-            <small id="delivery-mode-help">{{ !canRequestGoal ? '负责人开启“允许组建团队”后可用' : deliveryMode ? '发送后由负责人推进交付；验收要求可随时查看和调整' : '默认直接聊天；需要持续完成具体交付时开启' }}</small>
-          </div>
         </template>
       </ComposerShell>
     </section>
     <WorkspaceBotPanel v-if="dockView&&active" :conversation-id="active.id" :task-id="activeTask?.id" :mode="dockView" :active="!twoDesktops" :agents="computerCandidates" :is-admin="auth.user?.role === 'admin'" @close="dockView=undefined" @changed="refresh()" @settings="shell?.openLocalVm()" @desktop="openComputer" @workspace="desktopAgent=$event;twoDesktops=true" />
     </div>
-    <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" auto-take @changed="load()" @close="computerOpen=false" />
+    <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" :backend="desktopBackend" :host="desktopHost" auto-take @changed="load()" @close="computerOpen=false" />
     <LocalVmWorkspace ref="vmWorkspace" v-if="twoDesktops&&desktopAgent" :agents="agents.filter(a=>a.execution==='computer'&&!a.archived&&!a.computerEnvironmentId)" :primary="desktopAgent.id" @close="twoDesktops=false" />
     <FloatingResourceSearch section="groups" label="搜索聊天" :items="searchItems" tabbed @open="searchActionError = ''" @select="select">
       <template #item-actions="{ item }">
@@ -1012,12 +1049,12 @@ onBeforeUnmount(() => {
     <Teleport to="body"><div v-if="lifecycleError" class="lifecycle-error" role="alert"><span>{{ lifecycleError }}</span><button type="button" aria-label="关闭聊天操作提示" @click="lifecycleError = ''"><AppIcon name="close" :size="16" /></button></div></Teleport>
     <PreviewModal v-if="preview" :item="preview" :items="media" @close="preview = null" />
     <ImagePreviewLightbox v-model="mediaIndex" :images="lightboxMedia" />
-    <RemoteAgentPicker v-if="remotePickerOpen && !auth.isBotOnly" @close="remotePickerOpen = false" @added="remoteAdded" />
-    <Teleport to="body"><dialog v-if="dialog" ref="dialogElement" class="editor" aria-labelledby="conversation-editor-title" @cancel.prevent="closeDialog">
+    <BotProfileDialog v-if="dialog === 'editAgent' && editingBot" :key="editingBot.id" :agent="editingBot" :draft="form" :sources="sources" :profiles="auth.profiles" :agents="agents" :conversations="conversations" :conversation-id="editingConversationId" :is-admin="auth.user?.role === 'admin'" :knowledge-enabled="knowledgeEnabled" :busy="busy" :error="error" @close="closeDialog" @save="saveBotProfile" @changed="knowledgeChanged" />
+    <Teleport to="body"><dialog v-if="dialog && dialog !== 'editAgent'" ref="dialogElement" class="editor" aria-labelledby="conversation-editor-title" @cancel.prevent="closeDialog">
       <form @submit.prevent="save">
         <header>
           <h2 id="conversation-editor-title">
-            {{ dialog === 'agent' ? '创建机器人' : dialog === 'group' ? '创建群聊' : dialog === 'editAgent' ? '机器人设置' : '群聊设置' }}
+            {{ dialog === 'agent' ? '创建机器人' : dialog === 'group' ? '创建群聊' : '群聊设置' }}
           </h2>
           <button type="button" class="icon-button" aria-label="关闭" @click="closeDialog"><AppIcon name="close" :size="18" /></button>
         </header>
@@ -1060,16 +1097,10 @@ onBeforeUnmount(() => {
             "
           />
         </label>
-        <label v-if="isAgentDialog && !isRemoteAgent" class="team-management-permission">
-          <span><input v-model="form.canManageTeam" type="checkbox" aria-label="允许组建团队" aria-describedby="team-management-help" />允许组建团队</span>
-          <small id="team-management-help">允许自主创建成员、组建团队并启动任务。仅使用当前账号获准的基础机器人，新成员默认不获得此权限。发起者需使用已启用工具桥的同机 Hermes，或支持团队工具的 Runner。隔离发起者新建的成员也使用隔离电脑。</small>
-        </label>
         <template v-if="knowledgeEnabled && isAgentDialog && !isRemoteAgent">
-          <label class="team-management-permission"><span><input v-model="form.canCollaborate" type="checkbox" />允许 Bot 协作</span></label>
           <label class="team-management-permission"><span><input v-model="form.memoryEnabled" type="checkbox" />自动记录长期事实</span></label>
           <button v-if="editingId" type="button" @click="knowledgePanel?.open('agent', editingId)">查看此 Bot 的记忆</button>
         </template>
-        <button v-if="!isAgentDialog && !auth.isBotOnly" type="button" class="remote-picker" @click="remotePickerOpen = true">添加远程机器人</button>
         <fieldset v-if="selectedPreset" class="preset-role-mapping">
           <legend>角色分配</legend>
           <label v-for="(role, index) in selectedPreset.roles" :key="role.name">
@@ -1206,7 +1237,6 @@ onBeforeUnmount(() => {
 .task-picker-shell{position:relative;display:inline-flex;align-items:center;max-width:210px;min-width:0}.task-picker-shell>.app-icon{position:absolute;right:11px;pointer-events:none;color:var(--text-muted)}.task-picker{width:100%;min-width:0;max-width:210px;min-height:38px;appearance:none;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text-primary);padding:6px 34px 6px 14px;font:inherit;font-size:12px;font-weight:520;text-overflow:ellipsis;cursor:pointer;box-shadow:0 1px 2px color-mix(in srgb,var(--text-primary) 5%,transparent);transition:border-color 140ms ease,background-color 140ms ease,box-shadow 140ms ease}.task-picker:hover{border-color:var(--line-strong);background:var(--surface-hover)}.task-picker:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.task-picker:disabled{cursor:wait;opacity:.55}
 .task-queue-status{margin:0 20px 8px;font-size:13px;color:var(--text-muted)}
 .group-options{margin:12px 0;border-top:1px solid var(--line)}.group-options summary{min-height:44px;align-content:center;cursor:pointer;font-size:13px;color:var(--text-secondary)}.group-options summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.group-help{font-size:13px;line-height:1.6;color:var(--text-secondary)}
-.delivery-mode{display:flex;align-items:center;gap:10px;margin:0 auto 8px;max-width:760px;width:100%;font-size:13px}.delivery-mode button{flex-shrink:0;min-height:44px;padding:7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text-secondary);font:inherit;cursor:pointer}.delivery-mode button:hover:not(:disabled){background:var(--surface-hover)}.delivery-mode button[aria-pressed=true]{border-color:var(--accent);color:var(--text-primary);background:var(--surface-hover)}.delivery-mode button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.delivery-mode button:disabled{opacity:.55;cursor:default}.delivery-mode small{font-size:12px;color:var(--text-secondary);line-height:1.5}
 @media(max-width:720px){.task-picker-shell,.task-picker{max-width:118px}.task-picker{min-height:44px;padding-left:12px}}
 .team-management-permission > span {
   display: flex;

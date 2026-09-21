@@ -6,7 +6,7 @@ const upstreamPort = Number(process.env.FAKE_HERMES_PORT || 19119)
 export default defineConfig({
   testDir: './tests/e2e',
   // These suites own different fixtures and run with their dedicated configurations.
-  testIgnore: ['**/workspace-chat.spec.ts', '**/team-tools.spec.ts', '**/avatarReference.spec.ts', '**/avatarRoundTrip.spec.ts', '**/serverIdentity.spec.ts', '**/bot-panels.spec.ts', '**/grok-auth.spec.ts', '**/native-environment.spec.ts', '**/hermes-bridge.spec.ts'],
+  testIgnore: ['**/workspace-chat.spec.ts', '**/team-tools.spec.ts', '**/avatarReference.spec.ts', '**/avatarRoundTrip.spec.ts', '**/serverIdentity.spec.ts', '**/bot-panels.spec.ts', '**/grok-auth.spec.ts', '**/native-environment.spec.ts', '**/hermes-bridge.spec.ts', '**/desktop-hosts.spec.ts'],
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,

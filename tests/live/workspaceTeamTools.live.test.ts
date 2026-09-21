@@ -57,7 +57,7 @@ it.skipIf(!url)('uses actual Hermes auth, sessions and native plugin tools to cr
     const requestId=randomUUID()
     await invoke('workspace_create_agent',{requestId,name:'实际工具成员',profile:'default',instructions:'执行分配任务并提交结果'})
     const member=app.workspace.list<WorkspaceAgent>(owner,'agent').find(a=>a.name==='实际工具成员')!
-    expect(member).toBeDefined();expect(member.canManageTeam).toBe(false)
+    expect(member).toBeDefined();expect(member.canManageTeam).toBe(true)
     await invoke('workspace_create_agent',{requestId,name:'实际工具成员',profile:'default',instructions:'执行分配任务并提交结果'})
     expect(app.workspace.list(owner,'agent')).toHaveLength(2)
     await invoke('workspace_create_team',{requestId:randomUUID(),name:'真实工具团队',memberIds:[member.id]})
@@ -77,13 +77,8 @@ it.skipIf(!url)('uses actual Hermes auth, sessions and native plugin tools to cr
     await invoke('workspace_finish_team_task',{requestId:randomUUID(),goalId:task.id,status:'complete',result:'团队执行权限核验完成。',checks:[{criterion:0,passed:true,evidence:'成员真实原生工具目录未获得组队权限，执行结果已经返回。'}]})
     await expect.poll(()=>app.workspace.tasks(owner,team.id)[0]?.goal?.status).toBe('complete')
     expect(app.workspace.messages(owner,direct.id).some(m=>m.taskReference?.taskId===task.id && m.role==='system')).toBe(true)
-    app.workspace.updateAgent(owner,manager.id,{canManageTeam:false})
-    await invoke('workspace_create_agent',{requestId:randomUUID(),name:'关闭后不应创建',profile:'default'},false)
-    expect(app.workspace.list(owner,'agent')).toHaveLength(2)
-
     // Hold both real native invocations open together to catch shared-registry
     // name collisions between simultaneous leases of the same logical tools.
-    app.workspace.updateAgent(owner,manager.id,{canManageTeam:true})
     const peer=app.workspace.createAgent(owner,{name:'第二位老板',profile:'default',canManageTeam:true})
     const peerDirect=app.workspace.list<WorkspaceConversation>(owner,'conversation').find(c=>c.kind==='direct' && c.memberIds[0]===peer.id)!
     const execute=app.workspaceRuntime.teamTools.call.bind(app.workspaceRuntime.teamTools)

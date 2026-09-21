@@ -1,6 +1,7 @@
 import {randomBytes,randomUUID,createHash,timingSafeEqual} from 'node:crypto'
 import Router from '@koa/router'
 import {z} from 'zod'
+import {readHostTools} from './hostToolSettings.js'
 import {HttpError} from './errors.js'
 import {parse,type WorkspaceStore} from './workspaceStore.js'
 import type {LocalAuthStore} from './localAuth.js'
@@ -13,7 +14,7 @@ export class ComputerControlService {
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly hub:RunnerHub){}
   private agent(owner:string,id:string){
     const agent=this.store.require<WorkspaceAgent>(owner,'agent',id)
-    if(agent.archived||agent.execution!=='computer'||agent.remoteAgentId)throw new HttpError(409,'该机器人没有可用的隔离电脑','computer_unavailable')
+    if(agent.archived||!readHostTools(this.store.home).vm||agent.remoteAgentId)throw new HttpError(409,'该机器人没有可用的隔离电脑','computer_unavailable')
     this.nodes.requireSource(owner,agent);return agent
   }
   allowed(id:string,runnerId:string):boolean{
@@ -33,20 +34,20 @@ export class ComputerControlService {
     router.get('/api/app/computers',ctx=>{
       const actor=this.auth.require(ctx),agents=this.store.list<WorkspaceAgent>(actor.id,'agent').filter(agent=>!agent.archived)
       ctx.body={canManageLocalVm:actor.role==='admin',computers:agents.map(agent=>{
-        let available=false,reason='在机器人设置中将执行环境设为隔离电脑'
-        if(agent.execution==='computer')try{this.nodes.requireSource(actor.id,agent);const record=this.hub.computerRunner(actor.id,agent),features=this.hub.summary(record).features;if(features.includes('local-vm-v1')&&!features.includes('image-ready-v1'))throw new Error('请先在应用设置的本地虚拟机页面完成准备');available=true;reason='可以打开电脑面板'}catch(error){reason=error instanceof Error?error.message:'电脑不可用'}
+        let available=false,reason='全局设置未开放虚拟环境'
+        if(readHostTools(this.store.home).vm)try{this.nodes.requireSource(actor.id,agent);const record=this.hub.computerRunner(actor.id,agent),features=this.hub.summary(record).features;if(features.includes('local-vm-v1')&&!features.includes('image-ready-v1'))throw new Error('请先在应用设置的本地虚拟机页面完成准备');available=true;reason='可以打开电脑面板'}catch(error){reason=error instanceof Error?error.message:'电脑不可用'}
         return {agent,available,reason}
       })}
     })
-    router.get('/api/app/agents/:id/computer',async ctx=>{
+    router.get('/api/app/agents/:id/computer',async (ctx,next)=>{if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='vm')return next();
       const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id)
       ctx.body=await this.hub.computer(owner,agent,'status',{},()=>{this.agent(owner,agent.id)})
     })
-    router.get('/api/app/agents/:id/computer/frame',async ctx=>{
+    router.get('/api/app/agents/:id/computer/frame',async (ctx,next)=>{if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='vm')return next();
       const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id)
       ctx.set('Cache-Control','no-store');ctx.body=await this.hub.computer(owner,agent,'frame',{},()=>{this.agent(owner,agent.id)})
     })
-    router.post('/api/app/agents/:id/computer/take',async ctx=>{
+    router.post('/api/app/agents/:id/computer/take',async (ctx,next)=>{if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='vm')return next();
       const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),input=parse(z.object({requestId:z.string().uuid()}).strict(),(ctx.request as any).body)
       const old=this.store.list<Grant>('_system','computer-control').find(grant=>grant.owner===owner&&(grant.environmentId??grant.agentId)===(agent.computerEnvironmentId??agent.id)&&grant.expiresAt>Date.now()&&this.allowed(grant.id,grant.runnerId))
       if(old&&(old.agentId!==agent.id||old.requestId!==input.requestId))throw new HttpError(409,'电脑已由另一个页面控制，关闭原页面或等待控制权到期','computer_control_busy')
@@ -57,16 +58,16 @@ export class ComputerControlService {
       const status=await this.hub.computer(owner,agent,'take',{controlId:grant.id},()=>{if(!this.allowed(grant.id,runnerId))throw new HttpError(403,'电脑控制请求已失效','computer_control_expired')})
       ctx.body={...status,controlId:grant.id,token,expiresAt:grant.expiresAt}
     })
-    router.post('/api/app/agents/:id/computer/renew',ctx=>{
+    router.post('/api/app/agents/:id/computer/renew',(ctx,next)=>{if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='vm')return next();
       const owner=this.auth.require(ctx).id,grant=this.token(owner,ctx.params.id,(ctx.request as any).body)
       grant.expiresAt=Date.now()+30000;this.store.put('_system','computer-control',grant.id,grant);ctx.body={expiresAt:grant.expiresAt}
     })
-    router.post('/api/app/agents/:id/computer/input',async ctx=>{
+    router.post('/api/app/agents/:id/computer/input',async (ctx,next)=>{if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='vm')return next();
       const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),input=parse(z.object({controlId:z.string().uuid(),token:z.string(),requestId:z.string().uuid(),generation:z.number().int().nonnegative(),frameId:z.string().uuid(),action:z.record(z.string(),z.unknown())}).strict(),(ctx.request as any).body)
       const grant=this.token(owner,agent.id,input)
       ctx.body=await this.hub.computer(owner,agent,'input',{controlId:grant.id,requestId:input.requestId,generation:input.generation,frameId:input.frameId,action:input.action},()=>{this.token(owner,agent.id,input)})
     })
-    router.post('/api/app/agents/:id/computer/giveback',async ctx=>{
+    router.post('/api/app/agents/:id/computer/giveback',async (ctx,next)=>{if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='vm')return next();
       const owner=this.auth.require(ctx).id,agent=this.agent(owner,ctx.params.id),input=parse(z.object({controlId:z.string().uuid(),token:z.string(),notes:z.string().max(4000).default('')}).strict(),(ctx.request as any).body)
       const grant=this.token(owner,agent.id,input)
       ctx.body=await this.hub.computer(owner,agent,'giveback',{controlId:grant.id,notes:input.notes},()=>{this.token(owner,agent.id,input)})

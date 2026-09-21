@@ -1,5 +1,6 @@
 import { chatTranscriptRouter } from './chatTranscriptApi.js'
 import {DesktopEnvironments} from './desktopEnvironments.js'
+import {DesktopHostHub} from './desktopHosts.js'
 import type {GrokAuth} from './grokAuth.js'
 import {GrokCloud} from './grokCloud.js'
 import {WorkspaceInspector} from './workspaceInspector.js'
@@ -48,6 +49,9 @@ import {
   FCMConfigurationManager,
   type FCMConfigurationSnapshot,
 } from './fcmConfiguration.js'
+import { OpenVikingConfigurationManager } from './openVikingConfiguration.js'
+import { OpenVikingService } from './openVikingService.js'
+import { OpenVikingSessionSync } from './openVikingSessionSync.js'
 import { PushCoordinatorEventAdapter } from './pushEventAdapter.js'
 import {
   AllowedHostsConfigurationManager,
@@ -63,8 +67,10 @@ import {SharedComputers} from './sharedComputers.js'
 import {ComputerControlService} from './computerControls.js'
 import { RunnerHub } from './runnerHub.js'
 import { HermesBridgeManager } from './hermesBridge.js'
+import type { DashboardSupervisor } from './dashboardSupervisor.js'
 
 export interface ApplicationOptions {
+  dashboardSupervisor?: Pick<DashboardSupervisor,'canRestart'|'restart'>
   hermesBridge?: HermesBridgeManager
   config?: ServerConfig
   fetchImpl?: typeof fetch
@@ -81,6 +87,7 @@ export interface ApplicationOptions {
   push?: PushCoordinator
   apnsConfiguration?: APNsConfigurationManager
   fcmConfiguration?: FCMConfigurationManager
+  openVikingConfiguration?: OpenVikingConfigurationManager
   allowedHostsConfiguration?: AllowedHostsConfigurationManager
   chatCache?: ChatCacheCoordinator
 }
@@ -105,11 +112,15 @@ export interface ApplicationRuntime {
   push: PushCoordinator
   apnsConfiguration: APNsConfigurationManager
   fcmConfiguration: FCMConfigurationManager
+  openVikingConfiguration: OpenVikingConfigurationManager
+  openVikingService: OpenVikingService
+  openVikingSessionSync: OpenVikingSessionSync
   allowedHostsConfiguration: AllowedHostsConfigurationManager
   pushEventCoordinator: PushCoordinatorEventAdapter
   chatPushJobs: ChatPushJobManager
   chatCache?: ChatCacheCoordinator
   desktopEnvironments:DesktopEnvironments
+  desktopHosts:DesktopHostHub
   grokAuth:GrokAuth
   workspaceRoutines:WorkspaceRoutines
   workspacePlugins:WorkspacePlugins
@@ -201,6 +212,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   }
   const fcmConfiguration = options.fcmConfiguration
     ?? new FCMConfigurationManager(config.home, initialFCMSettings)
+  const openVikingConfiguration = options.openVikingConfiguration
+    ?? new OpenVikingConfigurationManager(config.home)
   const initialAllowedHostsSettings: AllowedHostsConfigurationSnapshot = config.allowedHostsSettings ?? {
     source: runtimeAllowedHosts.size ? 'environment' : 'none',
     hosts: [...runtimeAllowedHosts],
@@ -227,9 +240,11 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
   // The application owns group events. No Dashboard plugin is queried.
   const workspace = new WorkspaceStore(config.home)
+  const openVikingService = new OpenVikingService(workspace, openVikingConfiguration)
   const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
   const runners=new RunnerHub(workspace,auth,workspaceNodes.local)
+  runners.hermesUpstream=config.upstream.origin
   runners.composeDesktops.desktops.push(...(config.composeDesktops??[]))
   const sharedComputers=new SharedComputers(workspace,auth,workspaceNodes,runners)
   const computerControls=new ComputerControlService(workspace,auth,workspaceNodes,runners)
@@ -237,19 +252,32 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.localVmAllowed=(id,runnerId)=>localVm.allowed(id,runnerId)
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
-  const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0)
-  const hermesBridge=options.hermesBridge??new HermesBridgeManager(config,upstreamSession,{isIdle:()=>workspaceRuntime.idleForUpdate&&runners.idleForUpdate&&realtime.broker.idleForUpdate})
+  const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0, openVikingService)
+  let pendingDashboardMutations=0
+  const hermesBridge=options.hermesBridge??new HermesBridgeManager(config,upstreamSession,{
+    dashboard:options.dashboardSupervisor,
+    isIdle:()=>workspaceRuntime.idleForUpdate&&runners.idleForUpdate&&realtime.broker.idleForUpdate&&desktopEnvironments.idleForUpdate,
+    isRestartIdle:()=>pendingDashboardMutations===0,
+  })
+  workspaceRuntime.assertCanSubmit=()=>hermesBridge.assertDashboardAvailable()
   const workspaceMemory = new WorkspaceMemorySynthesis(workspaceRuntime)
   workspaceMemory.start()
+  const openVikingSessionSync = new OpenVikingSessionSync(workspace, openVikingService, owner => auth.isUserActive(owner))
+  openVikingSessionSync.start()
   const grokCloud=new GrokCloud(workspace,auth,workspaceNodes,sharedComputers,options.grokFetch)
   const desktopEnvironments=new DesktopEnvironments(workspace,auth,workspaceNodes)
+  const desktopHosts=new DesktopHostHub(workspace,auth)
+  desktopHosts.exchange=(id,value)=>desktopEnvironments.remoteExchange(id,value)
+  desktopHosts.drop=id=>desktopEnvironments.dropHost(id)
   workspaceRuntime.desktopEnvironments=desktopEnvironments
   grokCloud.preferDesktop=(owner,agent)=>!!desktopEnvironments.selected(owner,agent)
   grokCloud.beforeSelection=(owner,id)=>desktopEnvironments.assertIdle(owner,id)
+  workspaceRuntime.computerAvailable=(owner,agent)=>{try{runners.computerRunner(owner,agent);return true}catch{return false}}
   workspaceRuntime.cloud=grokCloud
   const workspaceInspector=new WorkspaceInspector(workspace,auth)
   workspaceRuntime.inspector=workspaceInspector
   const workspaceRoutines=new WorkspaceRoutines(workspace,auth,workspaceNodes,workspaceRuntime)
+  workspaceRoutines.paused=()=>hermesBridge.dashboardRestarting
   const workspacePlugins=new WorkspacePlugins(workspace,workspaceNodes,auth,workspaceRuntime,config.home,options.pluginFetch)
   workspaceRuntime.plugins=workspacePlugins
   workspaceRuntime.retireHelper=(owner,helper)=>runners.retireHelper(owner,helper)
@@ -269,6 +297,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   }, (owner, profile, sessionID) =>
     chatCache?.store.ownsSession(owner, profile, sessionID) ?? false)
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
+  realtime.broker.assertCanCommand=()=>hermesBridge.assertDashboardAvailable()
   realtime.transcriptsAvailable = chatCache.store.transcripts.enabled
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
@@ -352,7 +381,18 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
     await next()
   })
+  app.use(async (ctx,next)=>{
+    // Count admitted requests before async parsing/authorization. A restart must
+    // not race a request which has not yet reached the runtime's task counters.
+    const mutation=isMutation(ctx.method)&&!/^\/api\/runner\/.*\/(poll|heartbeat)$/.test(ctx.path)
+      &&ctx.path!=='/api/app/admin/hermes-bridge/restart'
+    if(!mutation){await next();return}
+    hermesBridge.assertDashboardAvailable()
+    pendingDashboardMutations++
+    try{await next()}finally{pendingDashboardMutations--}
+  })
   app.use(runners.middleware())
+  app.use(desktopHosts.middleware())
   app.use(async (ctx, next) => {
     const user = auth.current(ctx)
     if (user && user.role !== 'admin' && (ctx.path.startsWith('/api/') || ctx.path.startsWith('/node/') || ctx.path.startsWith('/ws/') || ctx.path.startsWith('/Users/') || ctx.path.startsWith('/attachments/'))) {
@@ -433,6 +473,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
   const applicationRouter = workspaceRouter(workspace, workspaceRuntime, workspaceNodes, workspaceAssets, uploads, auth, push, csrf)
   app.use(runners.adminRouter().routes())
+  app.use(desktopHosts.adminRouter().routes())
   app.use(applicationRouter.routes())
   app.use(async (ctx, next) => {
     if (ctx.path.includes('/plugins/yaoyao') || ctx.path.startsWith('/api/app/groups')) throw new HttpError(410, '请使用新版聊天接口', 'retired_plugin_api')
@@ -475,6 +516,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
     push,
     apnsConfiguration,
     fcmConfiguration,
+    openVikingConfiguration,
+    openVikingService,
+    openVikingSessionSync,
     allowedHostsConfiguration,
     hermesBridge,
     chatCache,
@@ -500,6 +544,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     workspaceRoutines,
     workspacePlugins,
     desktopEnvironments,
+    desktopHosts,
     grokAuth:grokCloud.authorization,
     realtime,
     app,
@@ -516,15 +561,20 @@ export function createApplication(options: ApplicationOptions = {}): Application
     push,
     apnsConfiguration,
     fcmConfiguration,
+    openVikingConfiguration,
+    openVikingService,
+    openVikingSessionSync,
     allowedHostsConfiguration,
     pushEventCoordinator,
     chatPushJobs,
     chatCache,
     close: () => {
+      openVikingSessionSync.close()
       workspaceMemory.close()
       runners.close()
-      workspaceAssets.close()
-      desktopEnvironments.close()
+    workspaceAssets.close()
+    desktopEnvironments.close()
+    desktopHosts.close()
       grokCloud.authorization.close()
       workspaceRoutines.close()
       workspacePlugins.close()

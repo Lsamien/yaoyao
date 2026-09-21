@@ -8,6 +8,7 @@ export interface HermesBridgeProfileStatus {
   canInstall: boolean
 }
 export interface HermesBridgeStatus {
+  dashboard?: { managed: boolean; canRestart: boolean; restarting: boolean; message: string }
   endpoint: string
   local: boolean
   mapped?: boolean
@@ -16,6 +17,10 @@ export interface HermesBridgeStatus {
   installing?: string
   message?: string
   profiles: HermesBridgeProfileStatus[]
+}
+export interface HermesDashboardRestartResult {
+  message: string
+  status: HermesBridgeStatus
 }
 export interface HermesBridgeInstallResult {
   profile: string

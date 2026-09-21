@@ -4,10 +4,12 @@ import hljs from 'highlight.js'
 import MarkdownIt from 'markdown-it'
 import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import MessageAttachment from './MessageAttachment.vue'
+import type { UiMessageAttachment } from './types'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { normalizeAssistantMediaMarkdown } from '@/utils/mediaMarkdown'
 import { repairMarkdownForRender } from '@/utils/markdownRepair'
-import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
+import { isSupportedFilePath, serverFilePath, serverFileUrl } from '@shared/serverFiles'
 
 const props = withDefaults(defineProps<{
   content: string
@@ -20,9 +22,13 @@ const props = withDefaults(defineProps<{
   processContent?: boolean
   outlinePrefix?: string
   fileProfile?: string
+  separateMedia?: boolean
+  bubble?: boolean
+  attachments?: UiMessageAttachment[]
+  contentParts?: ({ text: string } | { attachmentId: string })[]
 }>(), { streaming: false, streamIntervalMs: 80, legacyMedia: false, plain: false, fileCards: false, processContent: false, outlinePrefix: '' })
 
-const emit = defineEmits<{ fileLink: [name: string, url: string]; rendered: [] }>()
+const emit = defineEmits<{ fileLink: [name: string, url: string]; preview: [attachment: UiMessageAttachment]; rendered: [] }>()
 
 const root = ref<HTMLElement | null>(null)
 const copied = ref('')
@@ -153,7 +159,7 @@ function sanitize(html: string): string {
 }
 
 const renderedBlocks = computed(() => {
-  if (props.plain) return []
+  if (props.plain || props.separateMedia) return []
   const env = {}
   const tokens = md.parse(markdownSource.value, env)
   const blocks: string[] = []
@@ -167,7 +173,77 @@ const renderedBlocks = computed(() => {
   }
   return blocks
 })
-watch(renderedBlocks, async () => {
+// Split only actual Markdown media nodes, never fenced code or prose URLs.
+// Contiguous prose keeps one bubble; media occupies its own position in the stream.
+type MessagePart = { html: string; text?: string } | { attachment: UiMessageAttachment }
+function attachmentIdentity(value: string): string {
+  try {
+    const url = new URL(value, window.location.href)
+    url.pathname = url.pathname.replace(/(\/api\/app\/files\/[^/]+)\/(?:preview|download)$/, '$1')
+    url.searchParams.delete('_retry')
+    url.searchParams.sort()
+    return url.href
+  } catch { return value }
+}
+const messageParts = computed<MessagePart[]>(() => {
+  if (!props.separateMedia) return []
+  const parts: MessagePart[] = []
+  const used = new Set<string>()
+  const attachments = props.attachments ?? []
+  function appendAttachment(item: UiMessageAttachment) {
+    used.add(item.id)
+    parts.push({ attachment: item })
+  }
+  function appendHtml(html: string) {
+    if (!html.replace(/<[^>]+>/g, '').trim() && !/<(?:img|hr|pre|table)\b/.test(html)) return
+    const last = parts.at(-1)
+    if (last && 'html' in last && !last.text) last.html += html
+    else parts.push({ html })
+  }
+  function appendSource(source: string) {
+    if (props.plain) {
+      if (source.trim()) parts.push({ html: '', text: source })
+      return
+    }
+    const container = document.createElement('template')
+    container.innerHTML = sanitize(md.render(source))
+    for (const element of [...container.content.children]) {
+      if (element.tagName !== 'P') { appendHtml(element.outerHTML); continue }
+      let prose = ''
+      for (const node of [...element.childNodes]) {
+        const child = node instanceof HTMLElement ? node : undefined
+        const image = child?.tagName === 'IMG' ? child as HTMLImageElement : undefined
+        const link = child?.tagName === 'A' ? child as HTMLAnchorElement : undefined
+        let target: ReturnType<typeof fileTarget>
+        if (link && isStandaloneFileLink(link)) {
+          try { target = fileTarget(new URL(link.href, window.location.href)) } catch { /* inert link */ }
+        }
+        if (image || target) {
+          appendHtml(`<p>${prose}</p>`); prose = ''
+          const url = image?.getAttribute('src') || link!.getAttribute('href')!
+          const match = attachments.find(item => item.url && attachmentIdentity(item.url) === attachmentIdentity(url))
+          const name = match?.name || (image ? image.alt || '图片' : fileCardName(link!, target!))
+          appendAttachment(match ?? { id: url, url, name, kind: image ? 'image' : 'file' })
+        } else {
+          prose += child ? child.outerHTML : escapeHtml(node.textContent || '')
+        }
+      }
+      appendHtml(`<p>${prose}</p>`)
+    }
+  }
+  if (props.contentParts?.length) {
+    for (const part of props.contentParts) {
+      if ('text' in part) appendSource(props.legacyMedia ? normalizeAssistantMediaMarkdown(part.text, props.streaming) : part.text)
+      else {
+        const item = attachments.find(item => item.id === part.attachmentId)
+        if (item) appendAttachment(item)
+      }
+    }
+  } else appendSource(markdownSource.value)
+  for (const item of attachments) if (!used.has(item.id)) appendAttachment(item)
+  return parts
+})
+watch([renderedBlocks, messageParts], async () => {
   await nextTick()
   emit('rendered')
 }, { flush: 'post' })
@@ -194,22 +270,50 @@ function decorateCopyButtons() {
   })
 }
 
+function isStandaloneFileLink(link: HTMLAnchorElement): boolean {
+  if (link.closest('blockquote, table, h1, h2, h3, h4, h5, h6, pre, code, strong, em, del')) return false
+  const parent = link.parentElement
+  if (!parent || (parent.tagName !== 'P' && parent.tagName !== 'LI')) return false
+  for (let node = link.previousSibling; node && node.nodeName !== 'BR'; node = node.previousSibling) {
+    if (node.nodeType !== Node.TEXT_NODE || node.textContent?.trim()) return false
+  }
+  for (let node = link.nextSibling; node && node.nodeName !== 'BR'; node = node.nextSibling) {
+    if (node.nodeType !== Node.TEXT_NODE || node.textContent?.trim()) return false
+  }
+  return true
+}
+
+function fileTarget(url: URL): { path?: string; remote: boolean } | undefined {
+  if (url.origin !== window.location.origin) return
+  if (/^\/api\/app\/files\/[^/]+\/(?:download|preview)$/i.test(url.pathname)) {
+    return { remote: true }
+  }
+  if (url.pathname !== '/api/files/download') return
+  const path = serverFilePath(url.searchParams.get('path') || '')
+  if (!path || !isSupportedFilePath(path)) return
+  return { path, remote: false }
+}
+
+function fileCardName(link: HTMLAnchorElement, target: { path?: string; remote: boolean }): string {
+  const basename = target.path?.split('/').at(-1)
+  if (basename) return basename
+  return link.textContent?.trim() || '文件'
+}
+
 function decorateFileLinks() {
   if (props.processContent || !props.fileCards || !root.value) return
   root.value.querySelectorAll<HTMLAnchorElement>('a').forEach(link => {
     if (link.dataset.fileCard) return
     let url: URL
     try { url = new URL(link.href, window.location.href) } catch { return }
-    const isAgentFile = /^\/Users\/[^/]+\/Agents\/.+/.test(url.pathname)
-    const isWorkspaceFile = /^\/Users\/[^/]+\/\.hermes\/(?:profiles\/[^/]+\/)?workspace\/.+/.test(url.pathname)
-    const isRemoteNodeFile = /^\/api\/app\/files\/(?:[0-9a-f-]{36}|[0-9]+)\/(?:download|preview)$/i.test(url.pathname)
-    const isServerFile = url.pathname === '/api/files/download' && Boolean(url.searchParams.get('path'))
-    if (url.origin !== window.location.origin || (!isAgentFile && !isWorkspaceFile && !isRemoteNodeFile && !isServerFile)) return
+    const target = fileTarget(url)
+    if (!target || !isStandaloneFileLink(link)) return
     link.dataset.fileCard = 'true'
     link.classList.add('file-link-card')
     link.removeAttribute('target')
     link.removeAttribute('rel')
-    const name = link.textContent?.trim() || decodeURIComponent(url.pathname.split('/').at(-1) || '文件')
+    const name = fileCardName(link, target)
+    link.textContent = name
     link.setAttribute('aria-label', `预览文件 ${name}`)
     link.addEventListener('click', event => {
       event.preventDefault()
@@ -221,7 +325,7 @@ function decorateFileLinks() {
 function decorateMediaPreviews() {
   if (props.processContent || !props.fileCards || !root.value) return
   root.value.querySelectorAll<HTMLImageElement>('img').forEach(image => {
-    if (image.dataset.mediaPreview) return
+    if (image.dataset.mediaPreview || image.closest('.message-media')) return
     let url: URL
     try { url = new URL(image.currentSrc || image.src, window.location.href) } catch { return }
     if (url.origin !== window.location.origin) return
@@ -290,7 +394,16 @@ onUpdated(() => { decorateCopyButtons(); decorateFileLinks(); decorateMediaPrevi
 </script>
 
 <template>
-  <div v-if="plain" class="plain-text">{{ content }}</div>
+  <div v-if="separateMedia" ref="root" class="markdown message-parts" :class="{ 'message-parts--streaming': streaming }" @click="onClick">
+    <template v-for="(part, index) in messageParts" :key="index">
+      <MessageAttachment v-if="'attachment' in part" :attachment="part.attachment" @open="item => emit('preview', item)" @rendered="emit('rendered')" />
+      <div v-else class="message-prose" :class="{ 'chat-bubble': bubble }">
+        <div v-if="part.text !== undefined" class="plain-text">{{ part.text }}</div>
+        <div v-else class="markdown-block" v-html="part.html" />
+      </div>
+    </template>
+  </div>
+  <div v-else-if="plain" class="plain-text">{{ content }}</div>
   <div v-else ref="root" class="markdown" :class="{ 'markdown--streaming': streaming }" @click="onClick">
     <div v-for="(html, index) in renderedBlocks" :key="index" class="markdown-block" v-html="html" />
   </div>
@@ -298,6 +411,13 @@ onUpdated(() => { decorateCopyButtons(); decorateFileLinks(); decorateMediaPrevi
 </template>
 
 <style scoped>
+.message-parts { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+.message-prose { width:fit-content; min-width:0; max-width:100%; }
+.message-prose.chat-bubble { --text-primary:var(--bubble-ink); --text-secondary:var(--bubble-ink); --text-muted:var(--bubble-ink); }
+.message-parts--streaming > .message-prose:last-child .markdown-block::after { content: ''; display: inline-block; width: 5px; height: 14px; margin-left: 3px; background: currentColor; animation: caret 1s step-end infinite; }
+.message-prose :deep(p:last-child) { margin-bottom:0; }
+.message-parts :deep(.message-media__image img) { max-width:min(100%, 430px); margin:0; border:0; background:transparent; border-radius:12px; }
+
 .markdown :deep(img[hidden]){display:none!important}
 .markdown :deep(.media-load-error){display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft);font-size:12px}.markdown :deep(.media-load-error span){flex:1;overflow-wrap:anywhere}.markdown :deep(.media-load-error button){min-width:48px;min-height:44px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text-primary);cursor:pointer}.markdown :deep(.media-load-error button:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 .plain-text { min-width: 0; color: inherit; font-size: 13px; line-height: 1.68; white-space: pre-wrap; overflow-wrap: anywhere; }

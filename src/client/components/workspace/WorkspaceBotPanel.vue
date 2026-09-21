@@ -6,7 +6,7 @@ import WorkspaceInspectorPanel from './WorkspaceInspectorPanel.vue'
 import WorkspaceRoutinesPanel from './WorkspaceRoutinesPanel.vue'
 import type {WorkspaceAgent} from '@shared/workspace'
 const props=defineProps<{agents:WorkspaceAgent[];conversationId:string;taskId?:string;mode:'computer'|'inspector';isAdmin:boolean;active?:boolean}>()
-const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent];workspace:[agent:WorkspaceAgent]}>()
+const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:'desktop'|'cloud'|'vm',host?:string];workspace:[agent:WorkspaceAgent]}>()
 const view=ref<'computer'|'routines'>('computer')
 watch(()=>props.conversationId,()=>{let saved;try{saved=localStorage.getItem('yaoyao-bot-panel:'+props.conversationId)}catch{}view.value=saved==='routines'?'routines':'computer'},{immediate:true})
 watch(view,value=>{try{localStorage.setItem('yaoyao-bot-panel:'+props.conversationId,value)}catch{}})
@@ -15,7 +15,7 @@ watch(view,value=>{try{localStorage.setItem('yaoyao-bot-panel:'+props.conversati
  <aside class="bot-panel" aria-label="机器人右侧栏">
   <header v-if="mode==='computer'"><div class="tabs" role="group" aria-label="电脑与定时任务"><button :aria-pressed="view==='computer'" @click="view='computer'"><AppIcon name="monitor" :size="15"/>电脑</button><button :aria-pressed="view==='routines'" @click="view='routines'"><AppIcon name="calendar" :size="15"/>定时任务</button></div><button class="close" aria-label="关闭机器人侧栏" @click="emit('close')"><AppIcon name="close"/></button></header>
   <WorkspaceInspectorPanel v-if="mode==='inspector'" show-close :conversation-id="conversationId" :task-id="taskId" @close="emit('close')"/>
-  <LocalVmChatPanel v-else-if="view==='computer'" embedded :agents="agents" :is-admin="isAdmin" :active="active" @changed="emit('changed')" @settings="emit('settings')" @desktop="emit('desktop',$event)" @workspace="emit('workspace',$event)"/>
+  <LocalVmChatPanel v-else-if="view==='computer'" embedded :agents="agents" :is-admin="isAdmin" :active="active" @changed="emit('changed')" @settings="emit('settings')" @desktop="(agent,backend,host)=>emit('desktop',agent,backend,host)" @workspace="emit('workspace',$event)"/>
   <WorkspaceRoutinesPanel v-else-if="agents[0]" :agent-id="agents[0].id"/>
  </aside>
 </template>

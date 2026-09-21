@@ -19,6 +19,7 @@ let denied: Set<string>, target: GatewayTarget, binding: Record<string, any> | u
 let leases: WorkspaceToolLease[], upstream: Array<{ path: string; body: any }>
 const owner = 'account-one'
 const call = (tool: string, args: unknown = {}) => runtime.teamTools.call(owner, work.id, `workspace_${tool}`, args) as Promise<any>
+const selfCall = (tool: 'get' | 'update', args: unknown = {}) => runtime.knowledgeTools.call(owner, work.id, `workspace_${tool}_self_rules`, args, false) as Promise<any>
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'yaoyao-team-tools-'))
@@ -88,29 +89,37 @@ describe('Agent-owned team tools', () => {
     await expect(call('start_team_task',{...input,requestId:randomUUID()})).rejects.toMatchObject({code:'goal_exists'})
   })
   it('records creator authority and archives only an unused member it created',async()=>{
-    const child=(await call('create_agent',{requestId:randomUUID(),name:'临时项目成员',profile:'default'})).agent
+    const initialRules = { instructions:'核验任务结果', description:'负责事实核验', job:'核验资料', antiJobs:['不猜测结论'], voice:'rigorous', actBias:'ask_key_then_act' }
+    const child=(await call('create_agent',{requestId:randomUUID(),name:'临时项目成员',profile:'default',...initialRules})).agent
     expect(child.createdByAgentId).toBe(manager.id)
-    const edited=await call('update_created_agent',{requestId:randomUUID(),agentId:child.id,instructions:'核验任务结果'})
-    expect(edited.agent.instructions).toBe('核验任务结果')
+    expect(store.require(owner,'agent',child.id)).toMatchObject(initialRules)
+    for (const [field, value] of Object.entries(initialRules)) await expect(call('update_created_agent',{requestId:randomUUID(),agentId:child.id,name:'改名成员',[field]:value})).rejects.toMatchObject({code:'invalid_workspace_request'})
+    expect(store.require(owner,'agent',child.id)).toMatchObject({...initialRules,revision:1})
+    const edited=await call('update_created_agent',{requestId:randomUUID(),agentId:child.id,name:'改名成员'})
+    expect(edited.agent.name).toBe('改名成员')
+    expect(store.require(owner,'agent',child.id)).toMatchObject(initialRules)
     const other=store.createAgent(owner,{name:'用户成员',profile:'default'})
     await expect(call('archive_created_agent',{requestId:randomUUID(),agentId:other.id,confirmName:other.name})).rejects.toMatchObject({status:403})
     const team=(await call('create_team',{requestId:randomUUID(),name:'成员管理测试',memberIds:[child.id]})).team
-    await expect(call('archive_created_agent',{requestId:randomUUID(),agentId:child.id,confirmName:child.name})).rejects.toMatchObject({code:'agent_in_use'})
+    await expect(call('archive_created_agent',{requestId:randomUUID(),agentId:child.id,confirmName:edited.agent.name})).rejects.toMatchObject({code:'agent_in_use'})
     await call('update_team',{requestId:randomUUID(),teamId:team.id,archived:true})
-    expect((await call('archive_created_agent',{requestId:randomUUID(),agentId:child.id,confirmName:child.name})).agent.archived).toBe(true)
+    expect((await call('archive_created_agent',{requestId:randomUUID(),agentId:child.id,confirmName:edited.agent.name})).agent.archived).toBe(true)
   })
   it('creates durable members, a managed team and one idempotent task with client-visible events', async () => {
     const requestId = randomUUID(), args = {requestId,name:'研究员',profile:'writer',instructions:'研究事实并给出处'}
     const first = await call('create_agent',args)
     expect(await call('create_agent',args)).toEqual(first)
-    expect(first.agent.canManageTeam).toBe(false)
+    expect(first.agent.canManageTeam).toBe(true)
     expect(store.list(owner,'agent')).toHaveLength(2)
     const groupArgs = {requestId:randomUUID(),name:'项目团队',memberIds:[first.agent.id]}
     const created = await call('create_team',groupArgs)
     expect(await call('create_team',groupArgs)).toEqual(created)
     expect(created.team).toMatchObject({memberIds:[manager.id,first.agent.id],administratorId:manager.id,mode:'free',collaborationMode:'discussion'})
     const taskArgs = {requestId:randomUUID(),teamId:created.team.id,title:'核对资料',content:'请研究员核对资料后汇总。'}
+    const root=store.require<any>(owner,'run',work.runId)
+    root.deviceHost=randomUUID();store.saveRun(owner,root)
     const started = await call('start_team_task',taskArgs)
+    expect(started.run.deviceHost).toBe(root.deviceHost)
     expect(await call('start_team_task',taskArgs)).toEqual(started)
     expect(started.run.status).toBe('queued')
     expect(store.tasks(owner,created.team.id)).toHaveLength(1)
@@ -130,8 +139,8 @@ describe('Agent-owned team tools', () => {
     await expect(call('list_agents',{owner:'other'})).rejects.toMatchObject({status:400})
     expect(store.list(owner,'agent')).toHaveLength(1)
     const ordinary = store.createAgent(owner,{name:'普通',profile:'default'})
-    expect(ordinary.canManageTeam).toBe(false)
-    store.updateAgent(owner,manager.id,{canManageTeam:false})
+    expect(ordinary.canManageTeam).toBe(true)
+    store.updateAgent(owner,manager.id,{archived:true})
     await expect(call('list_agents')).rejects.toMatchObject({status:403})
   })
 
@@ -141,16 +150,16 @@ describe('Agent-owned team tools', () => {
     await expect(call('create_agent',{requestId:randomUUID(),name:'越权',profile:'writer'})).rejects.toMatchObject({status:403})
     denied.clear()
     vi.spyOn(nodes,'sources').mockImplementationOnce(async () => {
-      store.updateAgent(owner,manager.id,{canManageTeam:false})
+      store.updateAgent(owner,manager.id,{archived:true})
       return {sources:[{nodeId:'local',profile:'writer',name:'写作'}],errors:[]}
     })
     await expect(call('create_agent',{requestId:randomUUID(),name:'竞态',profile:'writer'})).rejects.toMatchObject({status:403})
     expect(store.list(owner,'agent')).toHaveLength(1)
   })
 
-  it('never revives a previous turn grant after permission is disabled and re-enabled', async () => {
-    store.updateAgent(owner,manager.id,{canManageTeam:false})
-    store.updateAgent(owner,manager.id,{canManageTeam:true})
+  it('never revives a previous turn grant after archiving and restoring the Bot', async () => {
+    store.updateAgent(owner,manager.id,{archived:true})
+    store.updateAgent(owner,manager.id,{archived:false})
     await expect(call('list_agents')).rejects.toMatchObject({status:403})
     store.put(owner,'turn',work.id,{...work,teamManagementRevision:store.require<WorkspaceAgent>(owner,'agent',manager.id).revision})
     expect((await call('list_agents')).agents).toHaveLength(1)
@@ -199,13 +208,72 @@ describe('Agent-owned team tools', () => {
   })
 })
 
+describe('Bot self rules', () => {
+  it('reads full rules, edits only itself and keeps its current tools usable across retries', async () => {
+    const instructions = '完整长期角色规则。'.repeat(400)
+    store.put(owner,'agent',manager.id,{...manager,instructions,voice:'custom',voiceCustom:'原先语气'})
+    const before = (await selfCall('get')).agent
+    expect(before).toMatchObject({id:manager.id,revision:1,instructions})
+    const request = {requestId:randomUUID(),expectedRevision:before.revision,name:'核验助手',instructions:'先核验再回答',description:'事实助手',job:'核对来源',antiJobs:['不编造来源'],voice:'rigorous',voiceCustom:null,actBias:'ask_key_then_act'}
+    const updated = await selfCall('update',request)
+    expect(updated.agent).toMatchObject({id:manager.id,name:request.name,instructions:request.instructions,description:request.description,job:request.job,antiJobs:request.antiJobs,voice:request.voice,actBias:request.actBias,revision:2})
+    expect(updated.agent.voiceCustom).toBeUndefined()
+    expect(await selfCall('update',request)).toEqual(updated)
+    expect((await selfCall('get')).agent).toEqual(updated.agent)
+    expect(store.require<WorkspaceAgent>(owner,'agent',manager.id)).toMatchObject({profile:'default',nodeId:'local',revision:2,memoryEnabled:true})
+    expect(store.require<WorkspaceConversation>(owner,'conversation',work.conversationId).name).toBe(request.name)
+    expect(store.require<Work>(owner,'turn',work.id).teamManagementRevision).toBe(2)
+    expect((await call('list_agents')).agents[0].name).toBe(request.name)
+    await expect(selfCall('update',{...request,instructions:'同一编号改写'})).rejects.toMatchObject({code:'idempotency_conflict'})
+    expect(upstream).toEqual([])
+  })
+
+  it('rejects stale revisions and empty edits without overwriting a user edit', async () => {
+    const before = (await selfCall('get')).agent
+    store.updateAgent(owner,manager.id,{instructions:'用户刚保存的规则'})
+    await expect(selfCall('update',{requestId:randomUUID(),expectedRevision:before.revision,instructions:'旧版本覆盖'})).rejects.toMatchObject({code:'agent_revision_conflict'})
+    await expect(selfCall('update',{requestId:randomUUID(),expectedRevision:2})).rejects.toMatchObject({code:'invalid_workspace_request'})
+    expect(store.require<WorkspaceAgent>(owner,'agent',manager.id)).toMatchObject({instructions:'用户刚保存的规则',revision:2})
+    expect(store.require<Work>(owner,'turn',work.id).teamManagementRevision).toBe(1)
+    await expect(call('list_agents')).rejects.toMatchObject({code:'team_tools_forbidden'})
+  })
+
+  it.each([
+    ['agentId',randomUUID()], ['profile','writer'], ['nodeId','other'], ['approvalPolicy','allow'],
+    ['canManageTeam',true], ['canCollaborate',true], ['memoryEnabled',false], ['envs',{vm:true}], ['modelSettings',null],
+  ])('rejects the protected %s field', async (field, value) => {
+    await expect(selfCall('update',{requestId:randomUUID(),expectedRevision:1,instructions:'新规则',[field as string]:value})).rejects.toMatchObject({code:'invalid_workspace_request'})
+    expect(store.require<WorkspaceAgent>(owner,'agent',manager.id)).toEqual(manager)
+  })
+
+  it('keeps self edits available to a persistent assigned Bot without granting team management', async () => {
+    store.put(owner,'run',work.runId,{...store.require<WorkspaceRun>(owner,'run',work.runId),assignmentId:randomUUID()})
+    store.put(owner,'turn',work.id,{...work,teamManagementRevision:undefined})
+    const catalog = runtime.knowledgeTools.catalog(owner,work.id,false).map(tool => tool.name)
+    expect(catalog).toEqual(expect.arrayContaining(['workspace_get_self_rules','workspace_update_self_rules']))
+    expect(catalog).not.toContain('workspace_memory_write')
+    await selfCall('update',{requestId:randomUUID(),expectedRevision:1,instructions:'自己的后续规则'})
+    expect(store.require<Work>(owner,'turn',work.id).teamManagementRevision).toBeUndefined()
+    await expect(call('list_agents')).rejects.toMatchObject({code:'team_tools_forbidden'})
+  })
+
+  it('keeps temporary helpers and remote references from editing their rules', async () => {
+    for (const restricted of [{temporaryGoalId:randomUUID()},{remoteAgentId:randomUUID()}]) {
+      store.put(owner,'agent',manager.id,{...manager,...restricted})
+      if ('temporaryGoalId' in restricted) expect(()=>runtime.knowledgeTools.catalog(owner,work.id,false)).toThrow()
+      else expect(runtime.knowledgeTools.catalog(owner,work.id,false).map(tool => tool.name)).not.toContain('workspace_update_self_rules')
+      await expect(selfCall('update',{requestId:randomUUID(),expectedRevision:1,instructions:'不能修改'})).rejects.toMatchObject({code:'knowledge_tool_forbidden'})
+    }
+  })
+})
+
 async function mount(signal = new AbortController().signal) {
   const lease = await createWorkspaceToolLease({
     target, profile:manager.profile, workId:work.id,
     session:()=>({runtimeId:'runtime',storedId:'stored'}),signal,
     assertActive:()=>{runtime.teamTools.assertTurn(owner,work.id)},
-    catalog:()=>runtime.teamTools.catalog(owner,work.id),
-    call:(id,args)=>runtime.teamTools.call(owner,work.id,id,args),onFailure:()=>{},
+    catalog:()=>[...runtime.teamTools.catalog(owner,work.id),...runtime.knowledgeTools.catalog(owner,work.id,false)],
+    call:(id,args)=>runtime.knowledgeTools.handles(id)?runtime.knowledgeTools.call(owner,work.id,id,args,false):runtime.teamTools.call(owner,work.id,id,args),onFailure:()=>{},
   })
   leases.push(lease); await lease.bind()
   return lease
@@ -215,6 +283,29 @@ function http(path:string, body:unknown, options:RequestInit={}) {
 }
 
 describe('loopback tool lease', () => {
+  it('updates self rules through the bridge without ending the current tool lease', async () => {
+    await mount()
+    const catalog = await (await http('/tools/list',{})).json()
+    const readId = catalog.tools.find((tool:any)=>tool.name==='workspace_get_self_rules').id
+    const writeId = catalog.tools.find((tool:any)=>tool.name==='workspace_update_self_rules').id
+    const current = await (await http('/tools/call',{callId:'read-self',toolId:readId,arguments:{}})).json()
+    const request = {callId:'update-self',toolId:writeId,arguments:{requestId:randomUUID(),expectedRevision:current.structuredContent.agent.revision,name:'自己的新名字',instructions:'自己的新规则'}}
+    const updated = await (await http('/tools/call',request)).json()
+    expect(updated.structuredContent.agent).toMatchObject({id:manager.id,name:'自己的新名字',instructions:'自己的新规则',revision:2})
+    expect(await (await http('/tools/call',request)).json()).toEqual(updated)
+    expect((await http('/tools/list',{})).status).toBe(200)
+    const after = await (await http('/tools/call',{callId:'read-updated',toolId:readId,arguments:{}})).json()
+    expect(after.structuredContent.agent).toEqual(updated.structuredContent.agent)
+    store.updateAgent(owner,manager.id,{instructions:'用户再修改'})
+    expect((await http('/tools/list',{})).status).toBe(403)
+  })
+  it.each(['initializing','agent_initialization_failed','binding_busy','bridge_catalog_unreachable'])('preserves the Profile and the %s binding failure without reflecting upstream secrets',async code=>{
+    manager.profile='yaoer'
+    vi.mocked(target.session.request).mockImplementation(async path=>({status:path.endsWith('/bind')?409:200,
+      body:Buffer.from(JSON.stringify(path.endsWith('/bind')?{code,detail:'api-key=fixture-secret'}:{ok:true})),headers:new Headers()}))
+    await expect(mount()).rejects.toMatchObject({code:`hermes_bridge_${code}`,message:expect.stringContaining('Profile「yaoer」')})
+    await expect(leases[0]!.bind()).rejects.not.toThrow('fixture-secret')
+  })
   it('binds only the current session and executes the real HTTP catalog and call protocol', async () => {
     const lease = await mount()
     expect(binding).toMatchObject({native_tools:true,session_id:'runtime',stored_session_id:'stored',profile:'default'})
@@ -224,7 +315,7 @@ describe('loopback tool lease', () => {
     const body={callId:'same-call',toolId:catalog.tools.find((t:any)=>t.name==='workspace_create_agent').id,arguments:{requestId:randomUUID(),name:'HTTP 成员',profile:'writer'}}
     const [first,second]=await Promise.all([http('/tools/call',body).then(r=>r.json()),http('/tools/call',body).then(r=>r.json())])
     expect(second).toEqual(first)
-    expect(first.structuredContent.agent.canManageTeam).toBe(false)
+    expect(first.structuredContent.agent.canManageTeam).toBe(true)
     expect(store.list(owner,'agent')).toHaveLength(2)
     expect((await http('/tools/call',{...body,arguments:{...body.arguments,name:'替换'}})).status).toBe(409)
     await lease.dispose()
@@ -238,8 +329,37 @@ describe('loopback tool lease', () => {
     expect((await http('/tools/list',{}, {headers:{'Content-Type':'application/json',Authorization:`Bearer ${binding!.token}`,Origin:'http://evil.test'}})).status).toBe(403)
     expect((await http('/tools/list',{owner:'other'})).status).toBe(400)
     expect((await http('/tools/call',{toolId:'workspace_list_agents',arguments:{},callId:'id',owner:'other'})).status).toBe(400)
-    store.updateAgent(owner,manager.id,{canManageTeam:false})
+    store.updateAgent(owner,manager.id,{archived:true})
     expect((await http('/tools/list',{})).status).toBe(403)
+  })
+
+  it('reports the underlying error message instead of masking tool failures', async () => {
+    const lease = await createWorkspaceToolLease({
+      target, profile:manager.profile, workId:work.id,
+      session:()=>({runtimeId:'runtime',storedId:'stored'}),signal:new AbortController().signal,
+      assertActive:()=>{},catalog:()=>[{id:'workspace_probe',name:'workspace_probe',description:'probe',inputSchema:{}}],
+      call:async()=>{throw new Error('虚拟机磁盘已满')},onFailure:()=>{},
+    })
+    leases.push(lease); await lease.bind()
+    const catalog = await (await http('/tools/list',{})).json()
+    const result = await (await http('/tools/call',{toolId:catalog.tools[0].id,arguments:{},callId:'probe'})).json()
+    expect(result.isError).toBe(true)
+    expect(JSON.parse(result.content[0].text)).toMatchObject({error:'虚拟机磁盘已满',code:'team_tool_failed'})
+  })
+
+  it('keeps plain authorization stop messages readable', async () => {
+    let active = true
+    const lease = await createWorkspaceToolLease({
+      target, profile:manager.profile, workId:work.id,
+      session:()=>({runtimeId:'runtime',storedId:'stored'}),signal:new AbortController().signal,
+      assertActive:()=>{if(!active)throw new Error('运行已停止')},
+      catalog:()=>[],call:async()=>({}),onFailure:()=>{},
+    })
+    leases.push(lease); await lease.bind()
+    active = false
+    const response = await http('/tools/list',{})
+    expect(response.status).toBe(500)
+    expect(await response.json()).toMatchObject({error:'运行已停止',code:'team_tool_failed'})
   })
 
   it('checks readiness per Profile and rejects unavailable or remote bridges', async () => {
@@ -248,7 +368,6 @@ describe('loopback tool lease', () => {
     await expect(requireTeamToolBridge({...target,url:new URL('http://192.168.1.20:9119')},'default')).rejects.toMatchObject({code:'team_tools_local_required'})
     vi.mocked(target.session.request).mockResolvedValueOnce({status:404,body:Buffer.from('{}'),headers:new Headers()})
     await expect(requireTeamToolBridge(target,'default')).rejects.toMatchObject({code:'team_tools_unavailable'})
-    await expect(runtime.teamTools.requireAvailable(owner,{nodeId:'remote',profile:'default'})).rejects.toMatchObject({code:'team_tools_local_required'})
   })
 
   it('closes a cancelled lease even if binding has not returned yet', async () => {
@@ -286,9 +405,9 @@ describe('loopback tool lease', () => {
     } finally { vi.useRealTimers() }
   })
 })
-it('isolated managers cannot create host members and a running Agent cannot change execution mode',async()=>{
+it('legacy VM managers create members on server Hermes and cannot rebind a running Agent',async()=>{
   store.put(owner,'agent',manager.id,{...manager,execution:'computer'})
-  await expect(call('create_agent',{requestId:randomUUID(),name:'host bypass',profile:'default',execution:'profile'})).rejects.toMatchObject({code:'computer_scope_escalation'})
+  expect((await call('create_agent',{requestId:randomUUID(),name:'统一成员',profile:'default',execution:'profile'})).agent).toMatchObject({execution:'profile',canManageTeam:true})
   expect(()=>store.updateAgent(owner,manager.id,{execution:'profile'})).toThrow('请先停止当前任务')
 })
 it('creates a task-scoped helper once and rejects promotion or use outside its goal',async()=>{
@@ -299,11 +418,11 @@ it('creates a task-scoped helper once and rejects promotion or use outside its g
   const request={requestId:randomUUID(),goalId:goal.id,name:'临时调研',title:'调研资料',brief:'只核验当前任务的资料'}
   const created=await call('create_helper',request)
   expect(await call('create_helper',request)).toEqual(created)
-  expect(created.helper).toMatchObject({execution:'computer',canManageTeam:false,temporaryGoalId:goal.id,helperActivation:1,helperRunnerId:runnerId,createdByAgentId:manager.id})
+  expect(created.helper).toMatchObject({execution:'profile',canManageTeam:true,temporaryGoalId:goal.id,helperActivation:1,helperRunnerId:runnerId,createdByAgentId:manager.id})
   expect(store.list<WorkspaceConversation>(owner,'conversation').some(c=>c.kind==='direct'&&c.memberIds.includes(created.helper.id))).toBe(false)
   expect(store.taskMemberIds(owner,team,goal.id)).toContain(created.helper.id)
   expect(store.taskMemberIds(owner,team,randomUUID())).not.toContain(created.helper.id)
-  expect(()=>store.updateAgent(owner,created.helper.id,{canManageTeam:true})).toThrow()
+  expect(()=>store.updateAgent(owner,created.helper.id,{archived:false})).toThrow()
   expect(()=>store.createGroup(owner,{name:'错误团队',memberIds:[manager.id,created.helper.id],administratorId:manager.id})).toThrow()
   expect(()=>runtime.send(owner,team.id,{requestId:randomUUID(),taskId:store.createTask(owner,team.id,{title:'另一个任务'}).id,content:'不应跨任务',mentionIds:[created.helper.id]})).toThrow()
 })
@@ -313,7 +432,7 @@ it('retires task helpers after cancellation and retries cleanup without reviving
   nodes.runnerTarget=()=>({...target,runner:{id:randomUUID(),helperRetirement:true}} as GatewayTarget)
   const created=await call('create_helper',{requestId:randomUUID(),goalId:goal.id,name:'将退役的助手',title:'工作',brief:'完成工作'})
   const cleanup=vi.spyOn(runtime,'retireHelper').mockResolvedValue(undefined)
-  store.put(owner,'turn',work.id,{...work,status:'complete',planned:true});const source=store.require<WorkspaceRun>(owner,'run',work.runId);source.status='complete';store.saveRun(owner,source)
+  store.put(owner,'turn',work.id,{...work,status:'complete',planned:true});const source=store.require<any>(owner,'run',work.runId);source.status='complete';store.saveRun(owner,source)
   vi.mocked(runtime.wake).mockRestore()
   await runtime.stopTask(owner,team.id,task.id)
   await vi.waitFor(()=>expect(store.require<any>(owner,'agent',created.helper.id).cleanupState).toBe('complete'))

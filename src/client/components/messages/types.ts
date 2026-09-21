@@ -22,6 +22,7 @@ export type UiLocalFileLink = {
 
 export type UiMessage = {
   communication?: import('@shared/workspace').WorkspaceCommunication
+  taskReference?: { conversationId: string; taskId: string }
   id: string
   role: 'user' | 'assistant' | 'system' | 'tool'
   author?: string
@@ -31,6 +32,8 @@ export type UiMessage = {
   createdAt?: string | number | Date
   status?: 'preparing' | 'attached' | 'pending' | 'accepted' | 'streaming' | 'settled' | 'failed' | 'unknown-receipt'
   error?: string
+  runId?: string
+  contentParts?: ({ text: string } | { attachmentId: string })[]
   attachments?: UiMessageAttachment[]
   tools?: UiToolCall[]
   profile?: string

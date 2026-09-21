@@ -7,23 +7,22 @@ vi.mock('../../src/client/api/client',()=>({apiRequest:vi.fn()}))
 const images=[{key:'standard',name:'标准桌面',description:'XFCE',ready:true,imageId:'sha256:a'},{key:'cursor',name:'Cursor Universal',description:'Debian',ready:true,imageId:'sha256:b'}]
 const agent={id:'image-fixture',name:'镜像测试',computer:'vm',execution:'computer',nodeId:'local',profile:'default'} as any
 const vm={configured:true,runtime:'docker',daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false,images}
-it('selects Profile collaboration without changing the VM and locks the mode while it is in use',async()=>{
+it('does not offer a per-bot computer picker',async()=>{
  vi.spyOn(document,'hidden','get').mockReturnValue(false)
- let inUse=false
  vi.mocked(apiRequest).mockImplementation(async path=>{
   if(path.endsWith('/desktop-environment'))return {selected:null,local:{supported:false},browser:{available:false}} as any
   if(path.endsWith('/cloud-computer'))return {configured:false} as any
-  return {...vm,enabled:true,container:'missing',ready:false,inUse} as any
+  if(path.endsWith('/host-tools'))return {denyServerTools:true,scriptMachine:true,serverComputer:true,vm:true,cloud:true} as any
+  return {...vm,enabled:true,container:'missing',ready:false,inUse:false} as any
  })
  const wrapper=mount(Panel,{props:{agents:[agent],isAdmin:true,active:true},global:{stubs:{AppIcon:true,GrokAuthPanel:true}}})
  try{
-  await flushPromises();await wrapper.get('[aria-label="本地虚拟机执行方式"]').setValue('profile');await flushPromises()
-  expect(apiRequest).toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',{method:'PUT',body:{computer:'vm',vmExecution:'profile',allowHostEnvironment:true}})
-  await wrapper.setProps({agents:[{...agent,vmExecution:'profile',allowHostEnvironment:true}]});await flushPromises()
-  expect(wrapper.text()).toContain('使用基础机器人的完整本机环境')
-  expect(wrapper.find('.host-environment-option').exists()).toBe(false)
-  inUse=true;await wrapper.setProps({active:false});await wrapper.setProps({active:true});await flushPromises()
-  expect((wrapper.get('[aria-label="本地虚拟机执行方式"]').element as HTMLSelectElement).disabled).toBe(true)
+  await flushPromises()
+  expect(wrapper.find('[aria-label="本地虚拟机执行方式"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="此机器人使用的电脑（可多选）"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="本机控制"]').exists()).toBe(false)
+  expect(wrapper.text()).toContain('电脑开关在 Bot 设置里')
+  expect(apiRequest).not.toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',expect.anything())
  }finally{wrapper.unmount()}
 })
 afterEach(()=>{vi.clearAllMocks();vi.restoreAllMocks()})
@@ -41,7 +40,7 @@ it('saves never-stop and restores the selected value after refresh',async()=>{
   expect(wrapper.text()).toContain('空闲时保持运行')
  }finally{wrapper.unmount()}
 })
-it('offers a host environment checkbox without a combined environment tab',async()=>{
+it('shows parallel toggles without a combined environment tab',async()=>{
  vi.spyOn(document,'hidden','get').mockReturnValue(false)
  vi.mocked(apiRequest).mockImplementation(async path=>{
   if(path.endsWith('/desktop-environment'))return {selected:null,local:{supported:false},browser:{available:false}} as any
@@ -50,11 +49,13 @@ it('offers a host environment checkbox without a combined environment tab',async
  })
  const wrapper=mount(Panel,{props:{agents:[agent],isAdmin:true,active:true},global:{stubs:{AppIcon:true,GrokAuthPanel:true}}})
  try{
-  await flushPromises();expect(wrapper.find('[role="tab"][aria-label="本机 + 虚拟机"]').exists()).toBe(false);await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises()
-  expect(apiRequest).toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',{method:'PUT',body:{computer:'vm',allowHostEnvironment:true}})
+  await flushPromises()
+  expect(wrapper.find('[role="tab"][aria-label="本机 + 虚拟机"]').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="云端 · Grok Bot"]').exists()).toBe(false)
+  expect(wrapper.text()).toContain('电脑开关在 Bot 设置里')
  }finally{wrapper.unmount()}
 })
-it('offers the checkbox for cloud selection and hides it for other environments',async()=>{
+it('checks desktop alongside cloud and never shows the legacy host option',async()=>{
  vi.spyOn(document,'hidden','get').mockReturnValue(false)
  vi.mocked(apiRequest).mockImplementation(async path=>{
   if(path.endsWith('/desktop-environment'))return {selected:null,local:{supported:false},browser:{available:false}} as any
@@ -64,8 +65,9 @@ it('offers the checkbox for cloud selection and hides it for other environments'
  const cloudAgent={...agent,computer:'cloud',execution:'profile'}
  const wrapper=mount(Panel,{props:{agents:[cloudAgent],isAdmin:true,active:true},global:{stubs:{AppIcon:true,GrokAuthPanel:true}}})
  try{
-  await flushPromises();await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises()
-  expect(apiRequest).toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',{method:'PUT',body:{computer:'cloud',allowHostEnvironment:true}})
+  await flushPromises()
+  expect(wrapper.find('[aria-label="云端 · Grok Bot"]').exists()).toBe(false)
+  expect(wrapper.find('.host-environment-option').exists()).toBe(false)
   for(const computer of ['auto','off','local','browser']){
    await wrapper.setProps({agents:[{...cloudAgent,computer}]});await flushPromises()
    expect(wrapper.find('.host-environment-option').exists()).toBe(false)
@@ -85,8 +87,8 @@ it('keeps Compose lifecycle controls hidden while enabling host tools for an alr
  try{
   await flushPromises();expect(settings.find('[aria-label="虚拟机空闲停止时间"]').exists()).toBe(false)
   expect(wrapper.findAll('button').some(b=>b.text()==='停止虚拟机')).toBe(false)
-  await wrapper.get('input[type="checkbox"]').setValue(true);await flushPromises()
-  expect(apiRequest).toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',{method:'PUT',body:{computer:'vm',allowHostEnvironment:true}})
+  expect(wrapper.find('.host-environment-option').exists()).toBe(false)
+  expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
  }finally{settings.unmount();wrapper.unmount()}
 })
 it('prepares the selected image in Settings and explains the shared image constraint',async()=>{

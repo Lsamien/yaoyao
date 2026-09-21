@@ -46,24 +46,19 @@ Web/macOS 建群默认仅展示名称、成员、负责人和可选群规则，�
 Bot 模式的远程节点由当前主服务器按用户保存。通过 `POST /api/app/nodes`
 提交 `{qrPayload, name}`，二维码必须是目标 15300 Web 的 `yaoyao://pair` 一次性子节点码；
 服务器登录码和 9119 账号密码表单不再作为添加节点入口。主服务器验证节点身份、兑换授权并加密保存，
-手机不会切换登录服务器。节点仅提供基础 Profile，创建的 Agent 和群聊仍属于主服务器。
+手机不会切换登录服务器。当前 Bot 模式不再将已配对子节点的 Profile 列为新 Bot 来源，已有节点配对记录继续保留。
 
 `PATCH /api/app/nodes/:id` 接受 `{name, url}`。修改 IP 前验证目标的 nodeId 和 fingerprint；
 验证失败不修改记录，也不向错误地址发送保存的令牌。保存后 node ID 保持不变，已有 Agent/群成员关联继续使用。
-子节点执行使用 `/node/:deviceId/api/realtime` 的 HTTP/SSE 协议。
+已有子节点通道使用 `/node/:deviceId/api/realtime` 的 HTTP/SSE 协议；Bot 对话模型由配置的 Hermes 服务端执行。
 
 升级主服务器后即可使用；子节点需要提供现有 v1 配对协议和 HTTP/SSE 能力。
 旧密码连接请重新扫码建立子节点连接，不自动复制主服务器账号或升级子节点权限。
 
-## 引用远端 Bot Agent
+## 已停用的远端 Bot Agent 引用
 
-“添加远程 Agent”使用 `GET /api/app/nodes/:id/agents` 获取已配对子节点的 Bot 模式 Agent，
-然后以 `POST /api/app/agents/remote {nodeId, agentId}` 添加引用。主节点保存稳定的本地成员 ID 和远端 Agent ID，
-不会把它变成可独立编辑的角色；重复添加复用同一引用。名称、头像、角色规则由远端管理，本地仍可归档引用。
+当前版本不再声明 `remoteAgentReferences` 能力，Web／macOS、iOS 和 Android 均不提供新增远程 Bot 的菜单入口。兼容接口 `GET /api/app/nodes/:id/agents` 与 `POST /api/app/agents/remote` 保留，并明确返回 HTTP 410、`remote_agent_removed`。
 
-远端按签发二维码的账号授权读取与执行，私有会话不会混入引用聊天。会话按设备和 Agent 隔离，
-执行时固定远端 Profile，并注入远端当前规则；客户端不能借此修改远端模型或角色配置。
-远端 Agent 即使使用它自己的子节点，也沿既有授权连接执行，引用链超过 8 跳时拒绝。
+已有引用与聊天历史保留，不因能力下线而删除；旧引用不能启动新执行。此限制不改变独立的 Hermes Bot 原生转接入口。
 
-此功能需要主节点和远端都更新。旧配对没有 Bot Agent 的账号授权信息时，在节点详情选择“更新扫码授权”；
-新版续期保留设备身份及现有 Agent/群成员关联。不要用登录二维码替代子节点二维码。
+更新或重新扫码配对不会重新启用远程 Bot 引用。节点登录码和子节点配对码仍沿各自授权协议使用。

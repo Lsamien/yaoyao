@@ -26,7 +26,30 @@ export class SharedComputers {
     if(environmentId)environments.add(environmentId)
     if(this.store.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(ids.includes(grant.agentId)||(grant.environmentId&&environments.has(grant.environmentId)))))throw new HttpError(409,'请先交还电脑控制权，再修改共享','shared_computer_busy')
   }
-  private localVmAgents(owner:string){return this.store.list<WorkspaceAgent>(owner,'agent').filter(a=>a.nodeId==='local'&&!a.archived&&!a.remoteAgentId&&!a.temporaryGoalId&&(a.execution==='computer'||!!a.computerEnvironmentId))}
+  private localVmAgents(owner:string){return this.store.list<WorkspaceAgent>(owner,'agent').filter(a=>a.nodeId==='local'&&!a.archived&&!a.remoteAgentId&&!a.temporaryGoalId)}
+  /** A runner re-enrollment must not fork a second shared desktop: fold every
+   * stray managed group into one canonical group owned by the current runner,
+   * keeping the member-rich group so shared files and browser data survive. */
+  reconcileLocalVmGroups(owner:string,runnerId:string):SharedComputer|undefined{
+    const groups=this.store.list<SharedComputer>(owner,'shared-computer').filter(g=>g.nodeId==='local'&&!g.archived&&g.managedLocalVm)
+    const canonical=groups.find(g=>g.runnerId===runnerId)??[...groups].sort((a,b)=>b.memberIds.length-a.memberIds.length)[0]
+    if(!canonical)return undefined
+    canonical.runnerId=runnerId
+    for(const stray of groups){
+      if(stray===canonical)continue
+      for(const id of stray.memberIds){
+        const member=this.store.get<WorkspaceAgent>(owner,'agent',id)
+        if(member&&member.computerEnvironmentId===stray.id){
+          member.computerEnvironmentId=canonical.id;member.computerEnvironmentName=canonical.name;member.revision++;member.updatedAt=Date.now()
+          this.store.put(owner,'agent',id,member);this.store.event(owner,'agent.changed',member)
+        }
+        if(!canonical.memberIds.includes(id))canonical.memberIds.push(id)
+      }
+      stray.archived=true;this.store.put(owner,'shared-computer',stray.id,stray)
+    }
+    this.store.put(owner,'shared-computer',canonical.id,canonical)
+    return canonical
+  }
   assertLocalVmIdle(owner:string,ids?:string[]){this.idle(owner,ids??this.localVmAgents(owner).map(a=>a.id))}
   bindCompose(owner:string,agent:WorkspaceAgent,desktop:{id:string;name:string},runnerId:string,persist=true){
     this.idle(owner,[agent.id])
@@ -41,9 +64,9 @@ export class SharedComputers {
     if(persist){agent.revision++;agent.updatedAt=Date.now();this.store.put(owner,'agent',agent.id,agent);this.store.event(owner,'agent.changed',agent)}
   }
   attachLocalVm(owner:string,agent:WorkspaceAgent,runnerId:string){
-    if(agent.nodeId!=='local'||agent.execution!=='computer'||agent.temporaryGoalId||agent.remoteAgentId||agent.computerEnvironmentId)return
+    if(agent.nodeId!=='local'||agent.temporaryGoalId||agent.remoteAgentId||agent.computerEnvironmentId)return
     this.nodes.requireSource(owner,agent)
-    const group=this.store.list<SharedComputer>(owner,'shared-computer').find(g=>!g.archived&&g.managedLocalVm&&g.runnerId===runnerId)
+    const group=this.reconcileLocalVmGroups(owner,runnerId)
       ??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
     if(!group.memberIds.includes(agent.id))group.memberIds.push(agent.id)
     this.store.put(owner,'shared-computer',group.id,group)
@@ -57,29 +80,37 @@ export class SharedComputers {
     delete agent.computerEnvironmentId;delete agent.computerEnvironmentName
     this.store.put(owner,'agent',agent.id,agent)
   }
-  setLocalVmMode(owner:string,mode:'shared'|'per-bot',runnerId:string){
+  /** Returns the desktop environments this switch orphaned, so the caller can
+   * stop them on the runner; a leftover per-bot desktop would otherwise keep
+   * consuming the concurrency quota and block the shared desktop's members. */
+  setLocalVmMode(owner:string,mode:'shared'|'per-bot',runnerId:string):{retiredEnvironmentIds:string[]}{
     this.assertLocalVmIdle(owner)
-    this.store.atomic(()=>{
+    return this.store.atomic(()=>{
       const agents=this.localVmAgents(owner)
       const previous=new Map(agents.map(a=>[a.id,{id:a.computerEnvironmentId,name:a.computerEnvironmentName}]))
-      const groups=this.store.list<SharedComputer>(owner,'shared-computer').filter(g=>g.nodeId==='local'&&g.runnerId===runnerId)
+      const groups=this.store.list<SharedComputer>(owner,'shared-computer').filter(g=>g.nodeId==='local'&&(g.managedLocalVm||g.runnerId===runnerId))
       for(const group of groups){group.archived=true;this.store.put(owner,'shared-computer',group.id,group)}
       for(const agent of agents){
         if(agent.computerEnvironmentId&&groups.some(g=>g.id===agent.computerEnvironmentId)){delete agent.computerEnvironmentId;delete agent.computerEnvironmentName}
       }
       if(mode==='shared'){
-        const members=agents.filter(a=>a.execution==='computer'&&!a.computerEnvironmentId)
+        const members=agents.filter(a=>!a.computerEnvironmentId)
         if(members.length){
-          const group=groups.find(g=>g.managedLocalVm)??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
-          group.profile='*';group.archived=false;group.managedLocalVm=true;group.memberIds=members.map(a=>a.id);this.store.put(owner,'shared-computer',group.id,group)
+          const group=[...groups.filter(g=>g.managedLocalVm)].sort((a,b)=>b.memberIds.length-a.memberIds.length)[0]
+            ??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
+          group.profile='*';group.archived=false;group.managedLocalVm=true;group.runnerId=runnerId;group.memberIds=members.map(a=>a.id);this.store.put(owner,'shared-computer',group.id,group)
           for(const agent of members){agent.computerEnvironmentId=group.id;agent.computerEnvironmentName=group.name}
         }
       }
+      const retiredEnvironmentIds:string[]=[]
       for(const agent of agents){
         const before=previous.get(agent.id)!
         if(before.id===agent.computerEnvironmentId&&before.name===agent.computerEnvironmentName)continue
         agent.revision++;agent.updatedAt=Date.now();this.store.put(owner,'agent',agent.id,agent);this.store.event(owner,'agent.changed',agent)
+        const retired=before.id??agent.id
+        if(retired!==(agent.computerEnvironmentId??agent.id))retiredEnvironmentIds.push(retired)
       }
+      return {retiredEnvironmentIds}
     })
   }
   create(owner:string,input:unknown){
@@ -90,7 +121,7 @@ export class SharedComputers {
       const agents=body.memberIds.map(id=>this.store.require<WorkspaceAgent>(owner,'agent',id)),first=agents[0]!
       for(const agent of agents){
         this.nodes.requireSource(owner,agent)
-        if(agent.archived||agent.temporaryGoalId||agent.remoteAgentId||agent.execution!=='computer'||agent.computerEnvironmentId||agent.nodeId!==first.nodeId)throw new HttpError(400,'请选择同一来源的持久隔离成员，且成员尚未加入其他共享电脑','shared_computer_members')
+        if(agent.archived||agent.temporaryGoalId||agent.remoteAgentId||agent.computerEnvironmentId||agent.nodeId!==first.nodeId)throw new HttpError(400,'请选择同一来源的持久隔离成员，且成员尚未加入其他共享电脑','shared_computer_members')
       }
       this.idle(owner,body.memberIds)
       const runnerId=this.hub.sharedComputerRunner(owner,first).id

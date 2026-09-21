@@ -14,7 +14,7 @@ import type { AgentGoal, AgentAssignment, TaskDelivery } from '../../src/shared/
 let home: string, store: WorkspaceStore, runtime: WorkspaceRuntime, uploads: UploadStore
 let lead: WorkspaceAgent, worker: WorkspaceAgent, second: WorkspaceAgent, team: WorkspaceConversation, goal: AgentGoal
 let active: boolean, authorizationVersion: number
-const owner = 'task-owner'
+const owner = 'task-owner', sourceDevice=randomUUID()
 beforeEach(() => {
   home=mkdtempSync(join(tmpdir(),'yaoyao-goal-tests-'));store=new WorkspaceStore(home);uploads=new UploadStore(home);active=true;authorizationVersion=1
   runtime=new WorkspaceRuntime(store,{requireSource:()=>{}} as unknown as WorkspaceNodes,uploads,()=>active,()=>authorizationVersion)
@@ -24,7 +24,7 @@ beforeEach(() => {
   second=store.createAgent(owner,{name:'编辑',profile:'default'})
   team=store.createGroup(owner,{name:'工作团队',memberIds:[lead.id,worker.id,second.id],administratorId:lead.id})
   const source=store.list<WorkspaceConversation>(owner,'conversation').find(c=>c.kind==='direct'&&c.memberIds[0]===lead.id)!
-  const origin=runtime.send(owner,source.id,{requestId:randomUUID(),content:'完成调研报告'})
+  const origin=runtime.send(owner,source.id,{requestId:randomUUID(),content:'完成调研报告',deviceHost:sourceDevice})
   origin.status='complete';store.saveRun(owner,origin)
   goal=runtime.tasks.begin(owner,store.tasks(owner,team.id)[0]!,lead,'完成调研报告',{conversationId:source.id,runId:origin.id,agentId:lead.id},['内容可核对'])
 })
@@ -64,9 +64,11 @@ describe('durable team task coordination',()=>{
   })
   it('rejects delivery without a valid coordinator or during existing chat work without leaving a goal', () => {
     const conversation = store.createGroup(owner,{name:'讨论群',memberIds:[lead.id,worker.id],administratorId:worker.id})
+    store.updateAgent(owner,worker.id,{archived:true})
     const task = store.tasks(owner,conversation.id)[0]!
     const input = {requestId:randomUUID(),taskId:task.id,mode:'goal',content:'完成报告'}
-    expect(()=>runtime.send(owner,conversation.id,input)).toThrow('允许组建团队')
+    expect(()=>runtime.send(owner,conversation.id,input)).toThrow('负责人需要是本机上未归档的 Bot')
+    store.updateAgent(owner,worker.id,{archived:false})
     expect(store.get(owner,'goal',task.id)).toBeUndefined()
     expect(store.messages(owner,conversation.id)).toEqual([])
     store.updateConversation(owner,conversation.id,{administratorId:lead.id})
@@ -104,13 +106,14 @@ describe('durable team task coordination',()=>{
     await vi.waitFor(()=>expect(assignment(a.id).status).toBe('running'))
     expect(assignment(b.id).status).toBe('pending')
     const run=store.require<WorkspaceRun>(owner,'run',assignment(a.id).runId!)
-    expect(run).toMatchObject({targetAgentId:worker.id,assignmentId:a.id,triggerKind:'assignment'})
+    expect(run).toMatchObject({targetAgentId:worker.id,assignmentId:a.id,triggerKind:'assignment',deviceHost:sourceDevice})
     settle(run.id)
     await vi.waitFor(()=>expect(assignment(a.id).status).toBe('review'))
     expect(assignment(b.id).status).toBe('pending')
     await vi.waitFor(()=>expect(store.list<TaskDelivery>(owner,'task-delivery')).toHaveLength(1))
     const delivered=store.list<TaskDelivery>(owner,'task-delivery')[0]!
     expect(delivered.targetConversationId).toBe(goal.origin.conversationId)
+    expect(store.require<WorkspaceRun>(owner,'run',delivered.runId!).deviceHost).toBe(sourceDevice)
     expect(store.messages(owner,goal.origin.conversationId).at(-1)?.role).toBe('system')
     runtime.tasks.wake();await new Promise(resolve=>setTimeout(resolve,5))
     expect(store.list(owner,'task-delivery')).toHaveLength(1)
@@ -146,13 +149,13 @@ describe('durable team task coordination',()=>{
     expect(()=>runtime.tasks.finish('another',lead.id,{requestId:randomUUID(),goalId:goal.id,status:'complete',result:'伪造'})).toThrow()
   })
 
-  it.each(['disabled','credentials','permission','regranted','origin_stopped'])('never resurrects a stopped or revoked goal: %s',async reason=>{
+  it.each(['disabled','credentials','archived','restored','origin_stopped'])('never resurrects a stopped or revoked goal: %s',async reason=>{
     const a=assign('调研')
     await vi.waitFor(()=>expect(assignment(a.id).runId).toBeTruthy())
     if(reason==='disabled')active=false
     if(reason==='credentials')authorizationVersion++
-    if(reason==='permission'||reason==='regranted')store.updateAgent(owner,lead.id,{canManageTeam:false})
-    if(reason==='regranted')store.updateAgent(owner,lead.id,{canManageTeam:true})
+    if(reason==='archived'||reason==='restored')store.updateAgent(owner,lead.id,{archived:true})
+    if(reason==='restored')store.updateAgent(owner,lead.id,{archived:false})
     if(reason==='origin_stopped'){
       const source=store.require<WorkspaceRun>(owner,'run',goal.origin.runId);source.stopRequested=true;store.saveRun(owner,source)
     }
@@ -195,4 +198,16 @@ describe('durable team task coordination',()=>{
     runtime.tasks.wake();await new Promise(resolve=>setTimeout(resolve,10))
     expect(store.messages(owner,goal.origin.conversationId)).toHaveLength(count)
   })
+})
+
+it('pins new assignments to the current message device instead of the old goal origin',async()=>{
+ const deviceHost=randomUUID()
+ for(const [index,source] of [deviceHost,undefined].entries()){
+  const message=runtime.send(owner,goal.origin.conversationId,{requestId:randomUUID(),content:'按当前设备继续',deviceHost:source})
+  message.status='complete';store.saveRun(owner,message)
+  const child=runtime.tasks.createAssignment(owner,lead.id,{requestId:randomUUID(),goalId:goal.id,agentId:index===0?worker.id:second.id,title:'新子任务'+index,brief:'使用本机文件',acceptanceCriteria:[],dependsOn:[]},message.id)
+  await vi.waitFor(()=>expect(assignment(child.id).runId).toBeTruthy())
+  expect(store.require<WorkspaceRun>(owner,'run',assignment(child.id).runId!).deviceHost).toBe(source)
+ }
+ expect(store.require<WorkspaceRun>(owner,'run',goal.origin.runId).deviceHost).toBe(sourceDevice)
 })

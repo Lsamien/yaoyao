@@ -492,6 +492,7 @@ server.on('upgrade', (request, socket, head) => {
       if (requestFrame.method === 'session.usage') return respond({ context_used: 12500, context_max: 114688, total: 12500, input: 9000, output: 3500 })
       if (requestFrame.method === 'prompt.submit') {
         respond({ status: 'accepted' })
+        const slowStream = requestFrame.params.text === '请开始思考'
         setTimeout(() => {
           const emit = (type, payload) => client.send(JSON.stringify({
             jsonrpc: '2.0', method: 'event',
@@ -520,8 +521,10 @@ server.on('upgrade', (request, socket, head) => {
           }
           client.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.start', session_id: requestFrame.params.session_id, profile: 'yaoyao' } }))
           client.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.delta', session_id: requestFrame.params.session_id, profile: 'yaoyao', payload: { text: '这是来自假 Gateway 的流式回复。' } } }))
-          client.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.complete', session_id: requestFrame.params.session_id, profile: 'yaoyao', payload: { text: '这是来自假 Gateway 的流式回复。', status: 'complete' } } }))
-        }, requestFrame.params.text === '请开始思考' ? 3500 : 1200)
+          setTimeout(() => {
+            client.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.complete', session_id: requestFrame.params.session_id, profile: 'yaoyao', payload: { text: '这是来自假 Gateway 的流式回复。', status: 'complete' } } }))
+          }, slowStream ? 1_200 : 0)
+        }, slowStream ? 3_500 : 1_200)
         return
       }
       respond({ ok: true })

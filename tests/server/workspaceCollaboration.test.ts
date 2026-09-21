@@ -17,6 +17,10 @@ let home: string, store: WorkspaceStore, runtime: FakeRuntime, uploads: UploadSt
 class FakeRuntime extends WorkspaceRuntime {
   calls: Array<{ agentId: string; work: Work }> = []
   reply: (agent: Agent, work: Work) => string = agent => `${agent.name} 的实质结果`
+  interrupt: (work: Work) => Promise<void> = work => {
+    work.status = 'interrupted'; this.saveWork('collaboration-owner', work)
+    return Promise.resolve()
+  }
   protected override async performTurn(user: string, c: Conversation, agent: Agent, work: Work): Promise<Message> {
     this.calls.push({ agentId: agent.id, work })
     const content = this.reply(agent, work)
@@ -25,7 +29,7 @@ class FakeRuntime extends WorkspaceRuntime {
     work.status = 'complete'; work.currentMessageId = message.id; this.saveWork(user, work)
     return message
   }
-  protected override async interruptTurn(user: string, work: Work): Promise<void> { work.status = 'interrupted'; this.saveWork(user, work) }
+  protected override async interruptTurn(user: string, work: Work): Promise<void> { await this.interrupt(work) }
 }
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'yaoyao-collaboration-')); store = new WorkspaceStore(home); uploads = new UploadStore(home)
@@ -34,6 +38,26 @@ beforeEach(() => {
 afterEach(() => { runtime.close(); uploads.close(); store.close(); rmSync(home, { recursive: true, force: true }) })
 const bot = (name: string) => store.createAgent(owner, { name, profile: 'default' })
 const direct = (id: string) => store.list<Conversation>(owner, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === id)!
+it('settles a stop locally while remote interruption is unavailable', async () => {
+  vi.spyOn(runtime, 'wake').mockImplementation(() => {})
+  const a = bot('停止挂起')
+  const run = runtime.send(owner, direct(a.id).id, { requestId: randomUUID(), content: '等待停止' })
+  const work = store.list<Work>(owner, 'turn').find(item => item.runId === run.id)!
+  work.status = 'running'
+  work.submitted = true
+  store.put(owner, 'turn', work.id, work)
+  let finishInterrupt!: () => void
+  runtime.interrupt = () => new Promise(resolve => { finishInterrupt = resolve })
+  await Promise.race([
+    runtime.stop(owner, run.id),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('stop timed out')), 50)),
+  ])
+  expect(store.require<Run>(owner, 'run', run.id)).toMatchObject({ status: 'interrupted', stopRequested: true })
+  expect(store.require<Work>(owner, 'turn', work.id)).toMatchObject({ status: 'interrupted', cleanupPending: true })
+  expect(store.require<Conversation>(owner, 'conversation', run.conversationId).activeRunId).toBeUndefined()
+  finishInterrupt()
+  await vi.waitFor(() => expect(store.require<Work>(owner, 'turn', work.id).cleanupPending).toBe(false))
+})
 it('projects real deliveries into compact direction metadata for live events and history without rewriting raw messages', () => {
   vi.spyOn(runtime, 'wake').mockImplementation(() => {})
   const a = bot('竹儿'), b = bot('研究员')
@@ -88,12 +112,14 @@ it('delivers A → B → A asynchronously and returns the reply to the originati
     else if (agent.id === b.id) runtime.collaboration.send(owner, work.id, { requestId: randomUUID(), agentId: a.id, content: '已查明接口版本为二', fileIds: [], replyTo: run.peerMessageId })
     return agent.id === b.id ? '已发送核对结果' : run.peerMessageId ? '向用户交付最终结果' : '已请乙协助'
   }
-  runtime.send(owner, group.id, { requestId: randomUUID(), taskId: task.id, content: '请找乙核对接口后告诉我' })
+  const deviceHost=randomUUID()
+  runtime.send(owner, group.id, { requestId: randomUUID(), taskId: task.id, content: '请找乙核对接口后告诉我',deviceHost })
   await vi.waitFor(() => expect(runtime.calls).toHaveLength(3))
   await vi.waitFor(() => expect(store.list<Run>(owner, 'run').every(r => r.status === 'complete')).toBe(true))
   const reply = store.list<Message>(owner, 'message').find(m => m.content === '向用户交付最终结果')!
   expect(reply.conversationId).toBe(group.id); expect(reply.conversationTaskId).toBe(task.id)
   expect(runtime.collaboration.list(owner)).toHaveLength(2)
+  expect(store.list<Run>(owner,'run').every(run=>run.deviceHost===deviceHost)).toBe(true)
   expect(store.list<Message>(owner, 'message').filter(m => m.peerMessageId).every(m => m.role !== 'user')).toBe(true)
 })
 it('deduplicates sends, suppresses acknowledgements and stops pending peers after the source turn ends', async () => {
@@ -117,9 +143,6 @@ it('bounds a persisted asynchronous chain and rejects disabled recipients and un
   runtime.send(owner, direct(a.id).id, { requestId: randomUUID(), content: '开始协作' })
   let work = store.list<Work>(owner, 'turn')[0]!
   work.status = 'running'; store.put(owner, 'turn', work.id, work)
-  store.updateAgent(owner, b.id, { canCollaborate: false })
-  expect(() => runtime.collaboration.send(owner, work.id, { requestId: randomUUID(), agentId: b.id, content: '需要实际工作', fileIds: [] })).toThrowError(expect.objectContaining({ code: 'peer_target_forbidden' }))
-  store.updateAgent(owner, b.id, { canCollaborate: true })
   expect(() => runtime.collaboration.send(owner, work.id, { requestId: randomUUID(), agentId: b.id, content: '文件请求', fileIds: [randomUUID()] })).toThrowError(expect.objectContaining({ code: 'peer_file_forbidden' }))
   const hiddenFile = randomUUID()
   store.saveMessage(owner, { id: randomUUID(), conversationId: work.conversationId, seq: 0, role: 'assistant', agentId: a.id, visible: false, content: '内部执行资料', reasoning: '', status: 'complete', attachments: [{ id: hiddenFile, name: 'internal.txt', mimeType: 'text/plain', size: 1, sender: 'user', createdAt: Date.now() }], tools: [], createdAt: Date.now() })

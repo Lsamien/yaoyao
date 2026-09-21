@@ -5,8 +5,12 @@ import { apiRequest } from '@/api/client'
 import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import type { WorkspaceAgent } from '@shared/workspace'
 const route = useRoute(), agent = ref<WorkspaceAgent>(), error = ref(''), panel = ref<InstanceType<typeof ComputerPanel>>()
+const backend = ref<'desktop' | 'cloud' | 'vm'>(), host = ref<string>()
 let detach: (() => void) | undefined
 async function finish(){await window.yaoyaoDesktop?.computerClosed()}
+async function targetChanged(backend: 'desktop' | 'cloud' | 'vm', host?: string) {
+  await window.yaoyaoDesktop?.computerTargetChanged?.({backend,host})
+}
 async function close() {
   if (panel.value) await panel.value.close()
   else await window.yaoyaoDesktop?.computerClosed()
@@ -14,6 +18,13 @@ async function close() {
 onMounted(async () => {
   detach = window.yaoyaoDesktop?.onComputerClose(() => { void close() })
   try {
+    const requestedBackend = route.query.backend, requestedHost = route.query.host
+    if (requestedBackend !== undefined && requestedBackend !== 'desktop' && requestedBackend !== 'cloud' && requestedBackend !== 'vm')
+      throw new Error('所选电脑无效，请关闭窗口后重新选择')
+    if (requestedHost !== undefined && (requestedBackend !== 'desktop' || typeof requestedHost !== 'string' || !/^[\w-]{1,128}$/.test(requestedHost)))
+      throw new Error('所选电脑无效，请关闭窗口后重新选择')
+    backend.value = requestedBackend
+    host.value = typeof requestedHost === 'string' ? requestedHost : undefined
     const result = await apiRequest<{agents: WorkspaceAgent[]}>('/api/app/agents')
     agent.value = result.agents.find(item => item.id === route.params.agentId)
     if (!agent.value) throw new Error('这台电脑不可用，或你已没有访问权限')
@@ -22,7 +33,7 @@ onMounted(async () => {
 onBeforeUnmount(() => detach?.())
 </script>
 <template>
-  <ComputerPanel v-if="agent" ref="panel" :agents="[agent]" standalone auto-take @close="finish" />
+  <ComputerPanel v-if="agent" ref="panel" :agents="[agent]" :backend="backend" :host="host" standalone auto-take @close="finish" @target-changed="targetChanged" />
   <main v-else class="viewer-loading" role="status"><p>{{ error || '正在连接电脑…' }}</p><button v-if="error" @click="close">关闭窗口</button></main>
 </template>
 <style scoped>

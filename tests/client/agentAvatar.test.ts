@@ -8,6 +8,23 @@ import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 const transparentPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
 describe('AgentAvatar', () => {
+  it.each(['mascot', 'image'] as const)('keeps %s identity and animates ribbons only during live work', async (mode) => {
+    const identity = { ...defaultAgentIdentity('Bot'), shape: 'triangle' as const, color: '#1488ff',
+      avatarMode: mode, ...(mode === 'image' ? { imageDataURL: transparentPng } : {}) }
+    const wrapper = mount(AgentAvatar, { props: { name: 'Bot', avatar: encodeAgentAvatar(identity), state: 'working', fixedTime: 500 } })
+    expect(wrapper.findAll('[data-part=trails] path')).toHaveLength(3)
+    if (mode === 'image') {
+      expect(wrapper.get('img').attributes('src')).toBe(transparentPng)
+      expect((wrapper.get('[data-part=bodyGroup]').element as SVGElement).style.visibility).toBe('hidden')
+    } else {
+      expect(wrapper.get('[data-part=outline] path').attributes('fill')).toBe('#1488ff')
+      expect(wrapper.get('[data-part=bodyContent]').attributes('transform')).toContain('scale(.72)')
+    }
+    await wrapper.setProps({ state: 'idle', avatar: encodeAgentAvatar({ ...identity, expression: 'working' }) })
+    expect(wrapper.findAll('[data-part=trails] path')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
   it('marks real images so caller backgrounds cannot show through transparent pixels', () => {
     const wrapper = mount(AgentAvatar, { props: { name: '丫头', avatar: transparentPng } })
 
@@ -17,7 +34,7 @@ describe('AgentAvatar', () => {
   })
 
   it('renders a stable animated mascot when no image is configured', () => {
-    const wrapper = mount(AgentAvatar, { props: { name: '丫头' } })
+    const wrapper = mount(AgentAvatar, { props: { name: '丫头', avatar: encodeAgentAvatar(defaultAgentIdentity('丫头')) } })
 
     expect(wrapper.classes()).not.toContain('agent-avatar--image')
     expect(wrapper.find('img').exists()).toBe(false)
@@ -25,6 +42,28 @@ describe('AgentAvatar', () => {
     expect(wrapper.find('[data-part=outline] path').attributes('fill')).toBe('#00c875')
     expect(wrapper.attributes('data-animated')).toBe('false')
     expect(wrapper.findAll('[data-part=eye0], [data-part=eye1]')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it.each(['', 'invalid-avatar'])('keeps a neutral placeholder until avatar metadata arrives (%s)', async (avatar) => {
+    const wrapper = mount(AgentAvatar, { props: { name: '丫头', avatar, size: 56, state: 'working' } })
+    expect(wrapper.find('.agent-avatar__placeholder').exists()).toBe(true)
+    expect(wrapper.find('svg').exists()).toBe(false)
+    expect(wrapper.attributes('data-animated')).toBe('false')
+
+    await wrapper.setProps({ avatar: encodeAgentAvatar({ ...defaultAgentIdentity('丫头'), color: '#1488ff' }) })
+    expect(wrapper.find('.agent-avatar__placeholder').exists()).toBe(false)
+    expect(wrapper.get('[data-part=outline] path').attributes('fill')).toBe('#1488ff')
+    expect(wrapper.attributes('data-animated')).toBe('true')
+
+    await wrapper.setProps({ avatar: '' })
+    expect(wrapper.find('.agent-avatar__placeholder').exists()).toBe(true)
+    expect(wrapper.find('svg').exists()).toBe(false)
+    expect(wrapper.attributes('data-animated')).toBe('false')
+
+    await wrapper.setProps({ avatar: transparentPng })
+    expect(wrapper.find('.agent-avatar__placeholder').exists()).toBe(false)
+    expect(wrapper.get('img').attributes('src')).toBe(transparentPng)
     wrapper.unmount()
   })
 
@@ -68,7 +107,7 @@ it('parks animation frames for idle, hidden, background and reduced-motion avata
   vi.stubGlobal('IntersectionObserver',class {constructor(callback:typeof visible){visible=callback} observe(){} disconnect(){}})
   vi.stubGlobal('matchMedia',()=>({get matches(){return reduced},addEventListener(_event:string,fn:()=>void){motion=fn},removeEventListener(){}}))
   Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>background?'hidden':'visible'})
-  const wrapper=mount(AgentAvatar,{props:{name:'quiet',size:32}})
+  const wrapper=mount(AgentAvatar,{props:{name:'quiet',avatar:encodeAgentAvatar(defaultAgentIdentity('quiet')),size:32}})
   try {
     expect(raf).not.toHaveBeenCalled()
     await wrapper.setProps({state:'working'})
@@ -94,6 +133,10 @@ it('renders all picture crops from the same bytes and falls back cleanly on deco
   expect(wrapper.get('img').attributes('src')).toBe(transparentPng)
   await wrapper.get('img').trigger('error');await nextTick()
   expect(wrapper.find('img').exists()).toBe(false)
-  expect(wrapper.get('[data-part=outline] path').attributes('fill')).toBe('#00c875')
+  expect(wrapper.find('.agent-avatar__placeholder').exists()).toBe(true)
+  expect(wrapper.find('svg').exists()).toBe(false)
+  await wrapper.setProps({avatar:encodeAgentAvatar({...identity,imageCrop:'rounded'})})
+  expect(wrapper.find('.agent-avatar__placeholder').exists()).toBe(false)
+  expect(wrapper.get('img').attributes('src')).toBe(transparentPng)
   wrapper.unmount()
 })

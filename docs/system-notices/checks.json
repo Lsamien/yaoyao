@@ -1,0 +1,234 @@
+[
+  {
+    "name": "desktop",
+    "alignment": [
+      {
+        "title": "已分派子任务",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "任务已有新结果",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "响应超时",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "回复暂时中断",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "子任务已完成",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "上下文已压缩",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "后台子任务已完成",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      }
+    ],
+    "keyboardDisclosure": true,
+    "diagnostic": true,
+    "partialReply": true,
+    "errors": []
+  },
+  {
+    "name": "mobile",
+    "alignment": [
+      {
+        "title": "已分派子任务",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "任务已有新结果",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "响应超时",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "回复暂时中断",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "子任务已完成",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "上下文已压缩",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "后台子任务已完成",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      }
+    ],
+    "keyboardDisclosure": true,
+    "diagnostic": true,
+    "partialReply": true,
+    "errors": []
+  },
+  {
+    "name": "mobile-dark",
+    "alignment": [
+      {
+        "title": "已分派子任务",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "任务已有新结果",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "响应超时",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "回复暂时中断",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "子任务已完成",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "上下文已压缩",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "后台子任务已完成",
+        "offset": 0,
+        "color": "rgb(160, 160, 154)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      }
+    ],
+    "keyboardDisclosure": true,
+    "diagnostic": true,
+    "partialReply": true,
+    "errors": []
+  },
+  {
+    "name": "ordinary",
+    "alignment": [
+      {
+        "title": "已分派子任务",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "任务已有新结果",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "响应超时",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "回复暂时中断",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "子任务已完成",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "上下文已压缩",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      },
+      {
+        "title": "后台子任务已完成",
+        "offset": 0,
+        "color": "rgb(111, 111, 105)",
+        "background": "rgba(0, 0, 0, 0)",
+        "height": 44
+      }
+    ],
+    "keyboardDisclosure": true,
+    "diagnostic": true,
+    "partialReply": true,
+    "errors": []
+  }
+]

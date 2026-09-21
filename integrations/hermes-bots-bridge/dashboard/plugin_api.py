@@ -17,6 +17,36 @@ _bootstrap = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_bootstrap)
 bridge = _bootstrap.runtime()
 router = APIRouter()
+_model_spec = importlib.util.spec_from_file_location("_yaoyao_bot_model_settings", Path(__file__).parents[1] / "model_settings.py")
+_models = importlib.util.module_from_spec(_model_spec)
+_model_spec.loader.exec_module(_models)
+
+
+@router.get("/model-options")
+async def model_options(request: Request, profile: str = "default"):
+    try:
+        bridge.request_identity(request)
+        return await asyncio.to_thread(_models.options, profile)
+    except bridge.BridgeError as exc:
+        return _error(exc)
+    except _models.ModelSettingsError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc), "code": "invalid_model_settings"})
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "模型工具桥与 Hermes 不兼容或模型服务暂不可用，请检查并重试", "code": "model_settings_unavailable"})
+
+
+@router.post("/model-settings/resolve")
+async def resolve_model_settings(request: Request):
+    try:
+        bridge.request_identity(request)
+        body = await _body(request)
+        return await asyncio.to_thread(_models.resolve, body.get("profile"), body.get("settings"))
+    except bridge.BridgeError as exc:
+        return _error(exc)
+    except _models.ModelSettingsError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc), "code": "invalid_model_settings"})
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "无法解析 Bot 模型配置，请检查工具桥与模型服务", "code": "model_settings_unavailable"})
 
 
 def _error(exc):

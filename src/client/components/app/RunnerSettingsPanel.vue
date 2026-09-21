@@ -16,7 +16,7 @@ const computers=ref(!!props.computerSetup),computerRuntime=ref<'docker'|'podman'
 const artifactRoots = ref(''), insecure = ref(false), configuration = ref<RunnerConfiguration>()
 
 async function refresh() {
-  const data = await apiRequest<{runners:Runner[];sources:Array<{id:string;name:string}>;bundleAvailable?:boolean;fixedDesktops?:boolean}>('/api/app/admin/runners')
+  const data = await apiRequest<{runners:Runner[];sources:Array<{id:string;name:string}>;bundleAvailable?:boolean;fixedDesktops?:boolean;hermesUpstream?:string}>('/api/app/admin/runners')
   runners.value = data.runners; sources.value = data.sources;bundleAvailable.value=!!data.bundleAvailable;fixedDesktops.value=!!data.fixedDesktops
 }
 async function action(work:()=>Promise<void>) {
@@ -35,7 +35,7 @@ async function register() {
     if(computers.value&&((!!computerImage.value&&!/^sha256:[a-f0-9]{64}$/.test(computerImage.value))||[computerPython.value,hermesSource.value,hermesHome.value].some(path=>path&&!path.startsWith('/'))))throw new Error('自定义路径必须为执行电脑上的绝对路径；默认安装可留空。镜像 ID 可留空或填写完整 sha256 ID。')
     const result = await apiRequest<{runner:Runner;token:string}>('/api/app/admin/runners', {method:'POST',body:{name:name.value.trim(),sourceNodeId:source.value,allowedProfiles}})
     configuration.value = {protocol:1,serverURL:web.origin,runnerId:result.runner.id,token:result.token,hermesURL:local.toString(),allowedProfiles,artifactRoots:artifactRoots.value.split('\n').map(p=>p.trim()).filter(Boolean),...(insecure.value?{allowInsecureLan:true}:{}),...(computers.value?{computers:{...(fixedDesktops.value?{managedBy:'compose' as const}:{}),network:fixedDesktops.value?'none':computerNetwork.value,runtime:computerRuntime.value,imageId:computerImage.value||UNCONFIGURED_COMPUTER_IMAGE,python:computerPython.value,hermesSource:hermesSource.value,hermesHome:hermesHome.value}}:{})}
-    notice.value = '节点已注册，请下载配置并在 Hermes 所在电脑启动 Runner。'
+    notice.value = '节点已注册，请下载配置并在 Hermes 所在电脑启动 Runner。虚拟环境才会用到它。'
     await refresh()
   })
 }
@@ -57,7 +57,7 @@ onMounted(()=>{void action(refresh)})
 
 <template>
   <section class="runner-panel" aria-label="执行节点设置">
-    <p>在运行 Hermes 的电脑上启动 Runner，它会主动连接夭夭，接收 Bot 任务并提供本轮团队工具。注册后，该来源的 Bot 任务会交给 Runner；节点离线时无法启动新任务，恢复连接后可重试。</p>
+    <p>执行节点只给虚拟环境用。聊天和 Mac 桌面不经过这里。节点要和 Hermes 装在同一台电脑上。</p>
     <p v-if="bundleAvailable"><a href="/api/app/admin/runners/bundle" download>下载配套执行节点程序</a>（包含桌面资源，需要 Node.js 24 或更高版本）。</p>
     <div class="runner-toolbar"><strong>已注册节点</strong><button type="button" :disabled="busy" @click="action(refresh)">刷新状态</button></div>
     <ul v-if="runners.length" class="runner-list">

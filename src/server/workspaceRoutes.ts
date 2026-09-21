@@ -9,6 +9,7 @@ import type Koa from 'koa'
 import { createReadStream, statSync } from 'node:fs'
 import { z } from 'zod'
 import { WorkspaceStore, agentInput, agentPatch, parse } from './workspaceStore.js'
+import { botModelOptions, resolveBotModelSettings, botModelTarget } from './botModelSettings.js'
 import { WorkspaceRuntime, sendInput } from './workspaceRuntime.js'
 import { WorkspaceNodes, type WorkspaceNode } from './workspaceGateway.js'
 import {
@@ -26,6 +27,8 @@ import { compareWorkspaceConversations } from '../shared/workspace.js'
 import type {
   WorkspaceMessage,
   WorkspaceAgent,
+  WorkspaceAgentUsage,
+  WorkspaceAgentUsageSummary,
   WorkspaceConversation,
   WorkspaceRun,
   WorkspaceInteraction,
@@ -73,6 +76,7 @@ export function workspaceRouter(
       features: [
         ...KNOWLEDGE_FEATURES,
         'agents',
+        'botModelSettings',
         'conversations',
         'conversationTasks',
         'editableGroups',
@@ -81,7 +85,7 @@ export function workspaceRouter(
         'files',
         'voice',
         'context',
-        ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'remoteAgentReferences', 'editableNodeAddress'] : []),
+        ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'editableNodeAddress'] : []),
         'events', 'workspace-stream-v1',
         ...(store.messagePatchesEnabled ? [WORKSPACE_PATCH_CAPABILITY] : []),
       ],
@@ -92,17 +96,15 @@ export function workspaceRouter(
   })
   router.get('/api/app/agents', async (ctx) => {
     const user=owner(ctx), agents=store.list<WorkspaceAgent>(user,'agent')
-    for (const agent of agents) if (agent.remoteAgentId) void nodes.refreshRemoteAgent(user,agent).catch(()=>{})
     ctx.body = { agents: agents.map(agent=>store.agentSummary(agent)) }
   })
   router.get('/api/app/nodes/:id/agents', async ctx => {
     auth.requireAdmin(ctx)
-    ctx.body = { agents: await nodes.remoteAgents(owner(ctx),ctx.params.id) }
+    throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
   })
   router.post('/api/app/agents/remote', async ctx => {
     auth.requireAdmin(ctx)
-    const input = parse(z.object({nodeId:z.string().uuid(),agentId:z.string().uuid()}).strict(),body(ctx))
-    ctx.body = { agent: await nodes.importRemoteAgent(owner(ctx),input.nodeId,input.agentId) };ctx.status=201
+    throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
   })
   router.post('/api/app/agents', async (ctx) => {
     const user = owner(ctx),
@@ -113,22 +115,54 @@ export function workspaceRouter(
     if (!sources.sources.some((s) => s.nodeId === input.nodeId && s.profile === input.profile))
       throw new HttpError(409, '基础机器人当前不可用', 'source_unavailable')
     nodes.requireSource(user, input)
-    if (input.canManageTeam || input.execution==='computer') await runtime.teamTools.requireAvailable(user, input)
     if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
-    ctx.body = { agent: store.agentSummary(store.createAgent(user, input)) }
+    const id = randomUUID()
+    await runtime.bindNewAgent(user, id)
+    try {
+      ctx.body = { agent: store.agentSummary(store.createAgent(user, input, undefined, id)) }
+    } catch (error) {
+      await runtime.cleanupAgent(user, id).catch(() => undefined)
+      throw error
+    }
     ctx.status = 201
   })
+  router.get('/api/app/agents/:id/model-options', async ctx => {
+    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id)
+    nodes.requireSource(user, agent)
+    const options = await botModelOptions(nodes.target(user, agent.nodeId), agent.profile)
+    nodes.requireSource(user, agent)
+    if (store.require<WorkspaceAgent>(user, 'agent', agent.id).revision !== agent.revision) throw new HttpError(409, 'Bot 资料已更新，请重新加载。', 'agent_revision_conflict')
+    ctx.set('Cache-Control', 'no-store')
+    ctx.body = { ...options, settings: agent.modelSettings ?? null, revision: agent.revision }
+  })
   router.patch('/api/app/agents/:id', async (ctx) => {
-    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id), input = parse(agentPatch,body(ctx))
+    const raw = body(ctx), { confirmedModel, ...patch } = raw
+    if (confirmedModel !== undefined && (typeof confirmedModel !== 'string' || confirmedModel.length > 1100)) throw new HttpError(400, '模型确认无效', 'invalid_model_confirmation')
+    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id), input = parse(agentPatch,patch)
     const authorization = auth.pushAuthorizationVersion(user)
-    const updated={...agent,...input}
+    const updated:WorkspaceAgent={...agent,...input,job:input.job??undefined,antiJobs:input.antiJobs??undefined,voice:input.voice??undefined,voiceCustom:input.voiceCustom??undefined,actBias:input.actBias??undefined}
     const sourceChanged=updated.nodeId!==agent.nodeId||updated.profile!==agent.profile
     nodes.requireSource(user,updated)
+    let confirmation: string | undefined
+    // Source-only edits are saved first, so clients can load the new Profile's
+    // catalogue. Keep the selection intact; the next round also validates it.
+    if (input.modelSettings !== undefined) {
+      if (input.expectedRevision !== agent.revision) throw new HttpError(409, 'Bot 资料已更新，请重新加载后保存模型设置。', 'agent_revision_conflict')
+      input.expectedRevision = agent.revision
+      const resolution = await resolveBotModelSettings(nodes.target(user, updated.nodeId), updated.profile, updated.modelSettings ?? null)
+      const target = botModelTarget(resolution.effective)
+      const pending = agent.modelSettingsPendingConfirmation
+      const confirmationMessage = [resolution.confirmationMessage, pending?.target === target ? pending.message : null].filter(Boolean).join('\n\n')
+      if (confirmationMessage && confirmedModel !== target && agent.modelSettingsConfirmation !== target) {
+        ctx.body = { confirmationRequired: true, confirmationMessage, confirmationTarget: target }
+        return
+      }
+      confirmation = confirmedModel === target || agent.modelSettingsConfirmation === target ? target : ''
+    }
     if(sourceChanged){
       const sources=await nodes.sources(user)
       if(!sources.sources.some(s=>s.nodeId===updated.nodeId&&s.profile===updated.profile))throw new HttpError(409,'基础机器人当前不可用','source_unavailable')
     }
-    if ((input.canManageTeam === true && agent.canManageTeam !== true) || input.execution==='computer' || (sourceChanged&&(updated.canManageTeam||updated.execution==='computer'))) await runtime.teamTools.requireAvailable(user, updated)
     if(sourceChanged&&runtime.cloud?.selected(user,updated))await runtime.cloud.requireAvailable(user,updated,nodes.target(user,updated.nodeId))
     if (auth.pushAuthorizationVersion(user) !== authorization) throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
     nodes.requireSource(user, updated)
@@ -138,12 +172,43 @@ export function workspaceRouter(
         if (direct) store.changeConversationLifecycle(user, direct.id, 'archive')
       }
       nodes.requireSource(user,{...store.require<WorkspaceAgent>(user,'agent',ctx.params.id),...input})
-      return store.updateAgent(user, ctx.params.id, input)
+      const saved = store.updateAgent(user, ctx.params.id, input)
+      if (confirmation !== undefined) {
+        saved.modelSettingsConfirmation = confirmation || undefined
+        saved.modelSettingsPendingConfirmation = undefined
+        store.put(user, 'agent', saved.id, saved)
+      }
+      return saved
     })) }
   })
-  router.delete('/api/app/agents/:id', (ctx) => {
-    store.deleteAgent(owner(ctx), ctx.params.id)
+  router.delete('/api/app/agents/:id', async (ctx) => {
+    const user = owner(ctx)
+    await runtime.cleanupAgent(user, ctx.params.id)
+    store.deleteAgent(user, ctx.params.id)
     ctx.body = { ok: true }
+  })
+  router.get('/api/app/agents/:id/usage', (ctx) => {
+    const user = owner(ctx), agent = store.require<WorkspaceAgent>(user, 'agent', ctx.params.id)
+    const days = store
+      .list<WorkspaceAgentUsageSummary & { agentId: string; date: string; updatedAt: number }>(user, 'agent-token-day')
+      .filter(day => day.agentId === agent.id)
+      .sort((a, b) => b.date.localeCompare(a.date))
+    const now = new Date(),
+      today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
+      month = today.slice(0, 7)
+    const summarize = (rows: typeof days): WorkspaceAgentUsageSummary =>
+      rows.reduce<WorkspaceAgentUsageSummary>((sum, row) => ({
+        input: sum.input + (row.input ?? 0), output: sum.output + (row.output ?? 0), total: sum.total + (row.total ?? 0),
+      }), { input: 0, output: 0, total: 0 })
+    const usage: WorkspaceAgentUsage = {
+      agentId: agent.id,
+      today, month,
+      todayUsage: summarize(days.filter(day => day.date === today)),
+      monthUsage: summarize(days.filter(day => day.date.startsWith(month))),
+      totalUsage: summarize(days),
+      daily: days.slice(0, 31).map(day => ({ date: day.date, input: day.input ?? 0, output: day.output ?? 0, total: day.total ?? 0 })),
+    }
+    ctx.body = usage
   })
   router.delete('/api/app/conversations/:id', (ctx) => {
     store.deleteConversation(owner(ctx), ctx.params.id)
@@ -152,10 +217,16 @@ export function workspaceRouter(
   router.get('/api/app/conversations/:id/lifecycle', ctx => {
     ctx.body = store.conversationLifecycle(owner(ctx), ctx.params.id)
   })
-  router.post('/api/app/conversations/:id/lifecycle', ctx => {
+  router.post('/api/app/conversations/:id/lifecycle', async ctx => {
     const input = parse(z.object({ action: z.enum(['archive', 'restore', 'delete']), confirmationToken: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(), body(ctx))
     if (input.action !== 'restore' && !input.confirmationToken) throw new HttpError(409, '请先确认聊天操作', 'lifecycle_confirmation_required')
-    store.changeConversationLifecycle(owner(ctx), ctx.params.id, input.action, input.confirmationToken)
+    const user = owner(ctx), conversation = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id)
+    if (runtime.openViking?.enabled && input.action === 'delete' && conversation.kind === 'direct') {
+      const agent = store.require<WorkspaceAgent>(user, 'agent', conversation.memberIds[0]!)
+      store.changeConversationLifecycle(user, conversation.id, 'archive', input.confirmationToken)
+      await runtime.cleanupAgent(user, agent.id)
+      store.deleteAgent(user, agent.id)
+    } else store.changeConversationLifecycle(user, conversation.id, input.action, input.confirmationToken)
     runtime.wake()
     ctx.body = { ok: true }
   })
@@ -211,7 +282,6 @@ export function workspaceRouter(
     store.requireTask(user,ctx.params.id,ctx.params.taskId)
     const goal=store.require<import('../shared/agentTasks.js').AgentGoal>(user,'goal',ctx.params.taskId)
     const agent=store.require<WorkspaceAgent>(user,'agent',goal.coordinatorId)
-    await runtime.teamTools.requireAvailable(user,agent)
     if(auth.pushAuthorizationVersion(user)!==version)throw new HttpError(401,'账号授权已变化，请重新登录','session_revoked')
     ctx.body=store.command(user,input.requestId,{operation:'goal.resume-user',goalId:goal.id},()=>{
       const run=runtime.send(user,ctx.params.id,{requestId:randomUUID(),taskId:goal.id,content:'继续处理当前目标，请先核对已有工作，避免重复执行。'})
@@ -282,8 +352,6 @@ export function workspaceRouter(
     const input = parse(sendInput, body(ctx))
     if (input.mode === 'goal') {
       const version = auth.pushAuthorizationVersion(user)
-      const conversation = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id)
-      await runtime.teamTools.requireAvailable(user, store.require<WorkspaceAgent>(user, 'agent', conversation.administratorId))
       if (auth.pushAuthorizationVersion(user) !== version) throw new HttpError(401, '账号授权已变化，请重新登录', 'session_revoked')
     }
     const accepted = runtime.send(user, ctx.params.id, input)

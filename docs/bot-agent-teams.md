@@ -6,7 +6,7 @@
 
 日常建群只需要名称、成员、负责人和可选群规则，创建后直接聊天。团队模板和高级协作设置默认收起。顶部的「话题」用于隔离不同聊天上下文，不代表已经启动交付目标。
 
-需要机器人自主组队时，在 Bot 模式创建或编辑 Agent，打开「允许组建团队」并保存。例如只准备团队：
+Bot 模式的组队权限由服务端统一管理，可以直接要求机器人自主组队。例如只准备团队：
 
 > 建一个调研群，优先复用已有成员，先不执行任务。
 
@@ -27,7 +27,7 @@ Web/macOS 的群聊输入区可开启「交付目标」，发送后在当前话�
 - Web 服务和发起者的 Hermes 必须在同一机器/网络命名空间，以回环地址连接。远程节点和远端引用 Agent 可作为成员，不能开启发起组队权限。
 - 发起者的基础 Profile 需安装并启用既有 `yaoyao-bot-bridge` 工具桥，能力响应必须包含 `version: 1`、`ready: true`、`in_process: true`、`native_tools: true`。插件由 Hermes Bot 提供；按其安装流程部署并重新加载，Named Profile 需要各自安装、启用。
 - 服务端在首次授予权限及每轮执行前检查条件。不满足时返回具体错误，普通 Agent 对话仍不查询工具桥。
-- 先部署 Web 分支，再使用配套 iOS 分支。现有记录缺少 `canManageTeam` 时按关闭处理；新建成员默认关闭。
+- 当前版本由服务端统一开放持久 Bot 的组队与协作权限；临时助手仍受所属任务限制。
 
 ## 工具与权限
 
@@ -36,7 +36,8 @@ Web/macOS 的群聊输入区可开启「交付目标」，发送后在当前话�
 | `workspace_list_sources` | 当前账号获准的基础 Profile |
 | `workspace_list_agents` | 当前账号可使用的已有成员 |
 | `workspace_list_teams` | 发起者担任管理员的团队 |
-| `workspace_create_agent` | 创建成员，禁止授予组队权限 |
+| `workspace_create_agent` | 创建成员时填写初始提示词和角色偏好，沿用服务端统一权限 |
+| `workspace_get_self_rules` / `workspace_update_self_rules` | 读取及修改自身名称、长期提示词和角色规则，更新需要当前版本 |
 | `workspace_create_team` | 默认创建平等讨论团队，也可指定负责人协调或自由协作 |
 | `workspace_start_team_task` | 在发起者管理的团队启动任务 |
 | `workspace_update_team_goal` | 提炼或调整验收要求，校验 `expectedRevision` |
@@ -45,10 +46,12 @@ Web/macOS 的群聊输入区可开启「交付目标」，发送后在当前话�
 | `workspace_update_assignment` / `workspace_cancel_assignment` | 调整或停止子任务，保留原因与历史 |
 | `workspace_review_assignment` | 验收、明确返工或记录受阻 |
 | `workspace_finish_team_task` / `workspace_resume_team_task` | 记录目标结论，或从用户新指令恢复目标 |
-| `workspace_update_created_agent` / `workspace_archive_created_agent` | 管理自己创建且符合使用状态限制的成员 |
+| `workspace_update_created_agent` / `workspace_archive_created_agent` | 仅改名或归档自己创建且符合使用状态限制的成员，不能再修改对方规则 |
 | `workspace_update_team` | 调整空闲团队的规则、成员或归档状态 |
 
 所有变更工具要求 `requestId`（UUID）；重试同一操作必须复用它。服务端持久保存回执；相同编号用于不同参数返回冲突，重复请求不会重复创建。原生工具调用 ID 也在本轮去重。
+
+持久 Bot 可维护自己的名称、描述、`instructions`、`job`、`antiJobs`、`voice`、`voiceCustom` 和 `actBias`。先读取完整规则及版本，再提交局部更新；未提交字段保持原值，可选角色偏好传 `null` 清除。新规则在后续轮次注入，当前轮次仍可继续使用已授权工具。临时助手与远端引用不开放自我修改；基础 Hermes Profile、模型、执行环境、工具权限和记忆开关不在此接口的可写字段中。创建者只在创建成员时填写对方规则，创建后由成员自身或用户维护。
 
 账号和调用 Agent 从正在运行的服务端轮次取得，模型参数不能指定 owner、token 或调用身份。创建成员只能引用当前账号获准的基础 Profile；子账号的分配规则保持有效。只有团队管理员可以启动或读取该团队的任务。当前群内的用户指令可以将尚无目标的话题升级为目标；自动回传不能重复启动目标。
 

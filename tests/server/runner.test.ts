@@ -76,6 +76,18 @@ it('requires an upgraded Runner before granting mixed host and VM tools',()=>{
  const id=randomUUID()
  expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true})).toThrow('不支持同时使用本机和虚拟机')
 })
+it('distinguishes a missing or disabled VM runner, an offline runner and incompatible features',async()=>{
+ const agent=store.createAgent('owner',{name:'虚拟机状态',profile:'default'})
+ expect(()=>hub.computerRunner('owner',agent)).toThrow('请启用隔离电脑 Worker 或更新 Runner')
+ controller.abort();await running
+ const record=hub.records()[0]!
+ hub.remove(record.id)
+ expect(()=>hub.computerRunner('owner',agent)).toThrow('本地虚拟机执行节点尚未启用')
+ store.put('_system','runner',record.id,{...record,enabled:true})
+ expect(()=>hub.computerRunner('owner',agent)).toThrow('本地虚拟机执行节点未连接')
+ store.remove('_system','runner',record.id)
+ expect(()=>hub.computerRunner('owner',agent)).toThrow('本地虚拟机执行节点尚未启用')
+})
 it('rejects Profile collaboration on a Runner that does not advertise the execution backend',()=>{
  const id=randomUUID()
  expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true,profileSession:true})).toThrow('不支持本机协作模式')

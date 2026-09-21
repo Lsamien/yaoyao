@@ -105,10 +105,17 @@ function lastStreamingAssistant(messages: ChatMessage[], afterLatestUser = false
     .find(message => message.role === 'assistant' && message.isStreaming)
 }
 
-export function settleChatMessages(messages: ChatMessage[], current?: ChatMessage): ChatMessage[] {
+export function chatHasUnfinishedOutput(messages: ChatMessage[]): boolean {
+  return messages.some(message => message.role === 'assistant'
+    && message.toolCalls?.some(tool => ['pending', 'running'].includes(tool.status)))
+}
+
+export function settleChatMessages(messages: ChatMessage[], current?: ChatMessage, interruptUnfinishedTools = true): ChatMessage[] {
   return messages.map(message => message.role === 'assistant' && message !== current
     ? { ...message, stage: message.stage === 'streaming' ? 'settled' : message.stage, isStreaming: false,
-      toolCalls: message.toolCalls?.map(tool => ['running', 'pending'].includes(tool.status) ? { ...tool, status: 'interrupted' } : tool) }
+      toolCalls: message.toolCalls?.map(tool => interruptUnfinishedTools && ['running', 'pending'].includes(tool.status)
+        ? { ...tool, status: 'interrupted' }
+        : tool) }
     : message)
 }
 
@@ -290,8 +297,9 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
       const terminalStatus = string(payload.status).trim().toLowerCase()
       const failed = terminalStatus === 'error' || terminalStatus === 'failed' || Boolean(payload.error)
       next.messages = updateStreamingMessage(state, payload, failed ? 'failed' : 'complete')
-      next.messages = settleChatMessages(next.messages)
-      next.isStreaming = false
+      const waitingForOutput = !failed && chatHasUnfinishedOutput(next.messages)
+      next.messages = settleChatMessages(next.messages, undefined, !waitingForOutput)
+      next.isStreaming = waitingForOutput
       next.isQueued = false
       next.liveStatus = undefined
       next.usage = normalizeUsage(payload) ?? next.usage
@@ -328,6 +336,10 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
         break
       }
       const current = lastStreamingAssistant(next.messages)
+        ?? [...next.messages].reverse().find(message => message.role === 'assistant'
+          && (message.toolCalls?.some(tool => tool.id === id)
+            || message.toolCalls?.some(tool => ['pending', 'running'].includes(tool.status))))
+        ?? [...next.messages].reverse().find(message => message.role === 'assistant')
       if (!current) break
       const tool = toolFromEvent(payload, 'running')
       const tools = [...(current.toolCalls ?? [])]
@@ -337,6 +349,7 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
         status: ['completed', 'failed'].includes(tools[index].status) ? tools[index].status : tool.status }
       else tools.push(tool)
       next.messages = mergeChatMessages(next.messages, [{ ...current, toolCalls: tools }])
+      next.isStreaming = true
       next.liveStatus = undefined
       break
     }
@@ -354,6 +367,11 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
       if (index >= 0) tools[index] = { ...tools[index], ...tool }
       else tools.push(tool)
       next.messages = mergeChatMessages(next.messages, [{ ...current, toolCalls: tools }])
+      if (!chatHasUnfinishedOutput(next.messages) && !next.messages.some(message => message.isStreaming)) {
+        next.isStreaming = false
+        next.isQueued = false
+        next.liveStatus = undefined
+      }
       break
     }
     case 'approval.request':

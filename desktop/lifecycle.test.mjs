@@ -92,7 +92,7 @@ test('real desktop launches its bundled service, survives window close and recov
     assert.equal(updateStatus.installationMode,'desktop');assert.equal(updateStatus.supported,false)
     assert.equal(await desktop.evaluate(({Menu})=>Menu.getApplicationMenu().getMenuItemById('desktop-background').checked),false)
     await desktop.evaluate(async({Menu})=>{const item=Menu.getApplicationMenu().getMenuItemById('desktop-background');await item.click(item)})
-    assert.deepEqual(await until(async()=>JSON.parse(await readFile(join(home,'desktop-preferences.json'),'utf8')),value=>value.backgroundAtLogin===true,5000),{backgroundAtLogin:true})
+    assert.deepEqual(await until(async()=>JSON.parse(await readFile(join(home,'desktop-preferences.json'),'utf8')),value=>value.backgroundAtLogin===true,5000),{backgroundAtLogin:true,startupChoice:'ask',remoteServer:''})
     const external = new DesktopServiceManager({ home, port, fork: () => { throw new Error('must not fork a second service') } })
     assert.equal((await external.start()).external, true)
     await external.stop()

@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { defaultAgentIdentity, encodeAgentAvatar, decodeAgentAvatar } from '../../src/shared/agentIdentity'
+import {readHostTools,saveHostTools} from '../../src/server/hostToolSettings'
+import {DesktopEnvironments} from '../../src/server/desktopEnvironments'
 import {HttpError} from '../../src/server/errors'
 import {WorkspaceAssets} from '../../src/server/workspaceAssets'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
@@ -31,6 +33,8 @@ let requests: Array<{ method: string; params: Record<string, any> }>,
 let nodes: WorkspaceNodes
 let configuredCwds: Map<string, string>
 let rejectPrompt: string | undefined
+let observeGatewayRequest: ((frame: { method: string; params: Record<string, any> }) => void) | undefined
+let rejectedModelConfig: Record<string, unknown> | undefined
 let rejectedInterrupts: number
 let recoveryHistory: Array<{ role: string; content: string; tool_calls?: unknown }>
 let storedByRuntime: Map<string, string>, recoveryByStored: Map<string, Array<{ role: string; content: string }>>
@@ -45,6 +49,8 @@ beforeEach(async () => {
   recoveryHistory = []
   storedByRuntime = new Map(); recoveryByStored = new Map()
   rejectPrompt = undefined
+  observeGatewayRequest = undefined
+  rejectedModelConfig = undefined
   rejectedInterrupts = 0
   server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
   await new Promise<void>((resolve) => server.once('listening', resolve))
@@ -84,6 +90,7 @@ beforeEach(async () => {
     socket.on('message', (data) => {
       const frame = JSON.parse(String(data))
       requests.push(frame)
+      observeGatewayRequest?.(frame)
       const respond = (result: unknown) => socket.send(JSON.stringify({ id: frame.id, result }))
       if (frame.method === 'session.create' || frame.method === 'session.resume') {
         const runtimeId = randomUUID(), storedId = frame.method === 'session.resume' ? frame.params.session_id : randomUUID()
@@ -91,6 +98,7 @@ beforeEach(async () => {
         respond({ session_id: runtimeId, stored_session_id: storedId, running: false, info: { profile_name: frame.params.profile } })
       }
       else if (frame.method === 'session.cwd.set') respond({ cwd: frame.params.cwd })
+      else if (frame.method === 'config.set') respond(rejectedModelConfig ?? { value: frame.params.key === 'model' ? frame.params.value.split(' --provider ')[0] : frame.params.value, scope:'session' })
       else if (frame.method === 'prompt.submit') {
         if (rejectPrompt) { socket.send(JSON.stringify({id:frame.id,error:{code:4006,message:rejectPrompt}})); return }
         respond({ status: 'streaming' })
@@ -341,6 +349,7 @@ describe('Web-owned workspace', () => {
     }
     const complete = (item: typeof pending[number]) => {
         const text = item.params.text.includes('第一项工作') ? '第一项结果' : '第二项结果'
+        item.socket.send(JSON.stringify({method:'event',params:{type:'context.update',session_id:item.params.session_id,payload:{percent:40}}}))
         setTimeout(() => item.socket.send(JSON.stringify({
           method: 'event',
           params: { type: 'message.complete', session_id: item.params.session_id, payload: { text, status: 'complete' } },
@@ -523,11 +532,14 @@ describe('Web-owned workspace', () => {
     const run = runtime.send(owner, c.id, { requestId: randomUUID(), content: '执行' })
     await finished(run.id)
     expect(store.messages(owner, c.id).at(-1)?.content).toBe('本轮结果')
-    expect(store.get<{ percent: number }>(owner, 'context', c.id)?.percent).toBe(40)
+    expect(requests.some(request => request.method === 'session.usage')).toBe(false)
+    expect(store.list<any>(owner, 'agent-token-day')).toEqual([expect.objectContaining({agentId:a.id,output:4,total:expect.any(Number)})])
   })
   it('resumes a persisted uncertain run by inspecting history, without resending the prompt', async () => {
+    modelBridge()
     const a = agent('恢复测试'),
       c = direct(a.id)
+    store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'fast' } })
     reply = (socket, p) => {
       recoveryHistory = [
         { role: 'user', content: p.text },
@@ -540,10 +552,14 @@ describe('Web-owned workspace', () => {
       expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('uncertain'),
     )
     runtime.close()
+    const configured = requests.filter(r => r.method === 'config.set').length
+    expect(configured).toBe(3)
+    store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-b', reasoningEffort: 'none', fastMode: 'cold' } })
     runtime = new WorkspaceRuntime(store, nodes, uploads)
     await runtime.reconcile(owner, run.id)
     await finished(run.id)
     expect(requests.filter((r) => r.method === 'prompt.submit')).toHaveLength(1)
+    expect(requests.filter(r => r.method === 'config.set')).toHaveLength(configured)
     expect(store.messages(owner, c.id).map((m) => m.content)).toEqual(['修改一次', '已经执行完成'])
   })
   it('routes approvals and clarifications to the owning run and ignores optional push failures', async () => {
@@ -710,6 +726,45 @@ describe('Web-owned workspace', () => {
     const changed = store.updateConversation(owner, c.id, { memberIds: [a.id] })
     expect(changed.memberRoles).toEqual({ [a.id]: { name: '调研负责人', description: '汇总可信结论' } })
     expect(() => store.updateConversation(owner, c.id, { memberRoles: { [b.id]: { name: '已移除', description: '' } } })).toThrow('群成员或管理员无效')
+  })
+  it('applies self-edited names and rules on the next turn without changing a shared Hermes Profile', async () => {
+    const a = agent('原来的自己'), b = agent('同 Profile 的同伴')
+    const target = nodes.target(owner,'local'), request = target.session.request.bind(target.session)
+    const bindings = new Map<string,any>()
+    vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>{
+      if (!path.startsWith('/api/plugins/yaoyao-bot-bridge/')) return request(path,options)
+      if (path.endsWith('/bind')) bindings.set(String((options?.body as any).session_id),options?.body)
+      return {status:200,body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,in_process:true,native_tools:true})),headers:new Headers()}
+    })
+    let edited = false, toolError: unknown
+    reply = async(socket,params)=>{
+      if (!edited) {
+        edited = true
+        try {
+          const binding = bindings.get(params.session_id)
+          const toolRequest = async(path:string,body:unknown)=>(await fetch(binding.bridge_url+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${binding.token}`},body:JSON.stringify(body)})).json()
+          const catalog = await toolRequest('/tools/list',{})
+          const invoke = (name:string,args:unknown,callId:string)=>toolRequest('/tools/call',{toolId:catalog.tools.find((tool:any)=>tool.name===name).id,arguments:args,callId})
+          const current = await invoke('workspace_get_self_rules',{},'read-self')
+          const updated = await invoke('workspace_update_self_rules',{requestId:randomUUID(),expectedRevision:current.structuredContent.agent.revision,name:'自己的新名字',instructions:'后续回答先给依据',job:'独立核验事实'},'update-self')
+          expect(updated.structuredContent.agent).toMatchObject({id:a.id,revision:2})
+          expect((await toolRequest('/tools/list',{})).tools.length).toBeGreaterThan(0)
+        } catch (error) { toolError = error }
+      }
+      socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:params.session_id,payload:{text:'完成',status:'complete'}}}))
+    }
+    await finished(runtime.send(owner,direct(a.id).id,{requestId:randomUUID(),content:'修改自己的名字和规则'}).id)
+    expect(toolError).toBeUndefined()
+    const initial = requests.find(frame=>frame.method==='prompt.submit')!.params.text
+    expect(initial).toContain('你是 原来的自己')
+    expect(initial).not.toContain('后续回答先给依据')
+    await finished(runtime.send(owner,direct(a.id).id,{requestId:randomUUID(),content:'继续'}).id)
+    const next = requests.filter(frame=>frame.method==='prompt.submit').at(-1)!.params.text
+    expect(next).toContain('你是 自己的新名字')
+    expect(next).toContain('后续回答先给依据')
+    expect(next).toContain('独立核验事实')
+    expect(store.require(owner,'agent',b.id)).toEqual(b)
+    expect(requests.some(frame=>frame.method==='profiles.configure'||frame.method==='config.set')).toBe(false)
   })
   it('isolates roles over the same profile and applies edited rules on the next turn', async () => {
     const a = agent('编辑'),
@@ -927,7 +982,7 @@ it('recognizes mentions inside Chinese sentences and ignores quoted code and ema
 function completeReply(socket: WebSocket, p: Record<string, any>, text: string, status = 'complete') {
   socket.send(JSON.stringify({ method: 'event', params: { type: 'message.complete', session_id: p.session_id, payload: { text, status, ...(status === 'failed' ? { error: text } : {}) } } }))
 }
-const speaker = (p: Record<string, any>) => /^你是 (.*?)。/.exec(p.text)?.[1]
+const speaker = (p: Record<string, any>) => /你是 (.*?)。/.exec(p.text)?.[1]
 
 describe('automatic relay termination', () => {
   const receipt = '收到 @审核 终审维持通过。\n\n交付状态（不变）：入草稿箱 Media ID `draft-123`，发布目录 `/work/final/`。\n等民哥群发指令。'
@@ -1222,7 +1277,7 @@ it('serializes a session and stops only that task while the same Agent keeps rep
   expect(requests.filter(r=>r.method==='session.resume').map(r=>r.params.session_id)).toEqual([firstBinding.storedId])
   expect(pending[2]!.p.text).not.toContain('第二话题独立执行')
   await runtime.stopTask(owner,c.id,first.id)
-  expect(requests.filter(r=>r.method==='session.interrupt').map(r=>r.params.session_id)).toEqual([pending[2]!.p.session_id])
+  await vi.waitFor(()=>expect(requests.filter(r=>r.method==='session.interrupt').map(r=>r.params.session_id)).toEqual([pending[2]!.p.session_id]))
   expect(store.require<WorkspaceRun>(owner,'run',other.id).status).toBe('running')
   expect(store.require<any>(owner,'conversation-task',second.id).activeRunStatus).toBe('running')
   completeReply(pending[1]!.socket,pending[1]!.p,'第二话题独立完成')
@@ -1280,6 +1335,139 @@ it('supports unlimited rounds beyond the finite limit and still permits stopping
   expect(count).toBe(2)
   expect(store.require<WorkspaceRun>(owner,'run',root.id).round).toBe(101)
   expect(()=>store.updateConversation(owner,g.id,{maxReplyRounds:0})).toThrow()
+})
+
+it('applies one global approval policy to all Bots, ignoring legacy overrides and duplicate requests', async () => {
+  const bots=[agent('旧询问'),agent('旧允许'),agent('旧拒绝')]
+  bots.forEach((bot,index)=>store.put(owner,'agent',bot.id,{...bot,approvalPolicy:['ask','allow','deny'][index]}))
+  server.on('connection',socket=>socket.on('message',raw=>{const frame=JSON.parse(String(raw));if(frame.method==='approval.respond')completeReply(socket,frame.params,'审批已处理')}))
+  reply=(socket,params)=>{const frame=JSON.stringify({method:'event',params:{type:'approval.request',session_id:params.session_id,payload:{request_id:'same-id',message:'是否执行'}}});socket.send(frame);socket.send(frame)}
+  for(const policy of ['allow','deny'] as const){
+    saveHostTools(home,{approvalPolicy:policy})
+    const runs=bots.map(bot=>runtime.send(owner,direct(bot.id).id,{requestId:randomUUID(),content:'执行任务'}))
+    await Promise.all(runs.map(run=>finished(run.id)))
+    expect(requests.filter(f=>f.method==='approval.respond').slice(-3).map(f=>f.params.choice)).toEqual(Array(3).fill(policy==='allow'?'once':'deny'))
+  }
+  expect(requests.filter(f=>f.method==='approval.respond')).toHaveLength(6)
+})
+
+it('treats a legacy auto reply as one approval without altering global or other Bot policy', async () => {
+  const bot = agent('选择自动允许'), peer = agent('同一基础机器人')
+  reply = (socket, params) => socket.send(JSON.stringify({ method: 'event', params: { type: 'approval.request', session_id: params.session_id, payload: { request_id: 'first-approval', message: '生成图片' } } }))
+  server.on('connection', socket => socket.on('message', raw => {
+    const frame = JSON.parse(String(raw))
+    if (frame.method !== 'approval.respond') return
+    if (frame.params.request_id === 'first-approval') socket.send(JSON.stringify({ method: 'event', params: { type: 'approval.request', session_id: frame.params.session_id, payload: { request_id: 'next-approval', message: '保存图片' } } }))
+    else completeReply(socket, frame.params, '自动完成')
+  }))
+  const run = runtime.send(owner, direct(bot.id).id, { requestId: randomUUID(), content: '生成图片' })
+  await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction')).toHaveLength(1))
+  const request = store.list<WorkspaceInteraction>(owner, 'interaction')[0]!
+  await expect(runtime.respond(other, request.id, 'auto')).rejects.toThrow('记录不存在')
+  expect(store.require<any>(owner, 'agent', bot.id).approvalPolicy).toBe('ask')
+  await runtime.respond(owner, request.id, 'auto')
+  await vi.waitFor(()=>expect(store.list<WorkspaceInteraction>(owner,'interaction').filter(i=>!i.resolved)).toHaveLength(1))
+  const next=store.list<WorkspaceInteraction>(owner,'interaction').find(i=>!i.resolved)!
+  expect(readHostTools(home).approvalPolicy).toBe('ask')
+  await runtime.respond(owner,next.id,'once')
+  await finished(run.id)
+  expect(requests.filter(frame => frame.method === 'approval.respond').map(frame => frame.params.choice)).toEqual(['once', 'once'])
+  expect(store.agentSummary(store.require<any>(owner, 'agent', bot.id)).approvalPolicy).toBe('ask')
+  expect(store.require<any>(owner, 'agent', peer.id).approvalPolicy).toBe('ask')
+  store.updateAgent(owner, bot.id, { approvalPolicy: 'ask' })
+  await runtime.respond(owner, request.id, 'auto')
+  expect(store.require<any>(owner, 'agent', bot.id).approvalPolicy).toBe('ask')
+  expect(requests.filter(frame => frame.method === 'approval.respond')).toHaveLength(2)
+})
+
+it('preserves current team grants for approval-only edits without reviving revoked grants', () => {
+  const bot = agent('有效工具授权')
+  store.put(owner, 'turn', 'valid-grant', { id: 'valid-grant', agentId: bot.id, status: 'waiting', teamManagementRevision: bot.revision })
+  store.put(owner, 'turn', 'revoked-grant', { id: 'revoked-grant', agentId: bot.id, status: 'running', teamManagementRevision: bot.revision - 1 })
+  const updated = store.updateAgent(owner, bot.id, { approvalPolicy: 'allow' })
+  expect(store.require<any>(owner, 'turn', 'valid-grant').teamManagementRevision).toBe(updated.revision)
+  expect(store.require<any>(owner, 'turn', 'revoked-grant').teamManagementRevision).toBe(bot.revision - 1)
+  store.updateAgent(owner, bot.id, { instructions: '新规则' })
+  expect(store.require<any>(owner, 'turn', 'valid-grant').teamManagementRevision).toBe(updated.revision)
+})
+
+it('keeps an explicit automatic preference but reports an unconfirmed reply without retrying it', async () => {
+  const bot = agent('自动设置与答复状态')
+  reply = (socket, params) => socket.send(JSON.stringify({ method: 'event', params: { type: 'approval.request', session_id: params.session_id, payload: { request_id: 'uncertain-auto', message: '需要确认' } } }))
+  runtime.send(owner, direct(bot.id).id, { requestId: randomUUID(), content: '继续' })
+  await vi.waitFor(() => expect(store.list<WorkspaceInteraction>(owner, 'interaction')).toHaveLength(1))
+  const interaction = store.list<WorkspaceInteraction>(owner, 'interaction')[0]!
+  const rpc = WorkspaceGateway.prototype.rpc
+  const spy = vi.spyOn(WorkspaceGateway.prototype, 'rpc').mockImplementation(function (this: WorkspaceGateway, method, params) {
+    return method === 'approval.respond' ? Promise.reject(new Error('connection lost')) : rpc.call(this, method, params)
+  })
+  try {
+    await expect(runtime.respond(owner, interaction.id, 'auto')).rejects.toMatchObject({ code: 'approval_auto_response_failed' })
+    expect(store.agentSummary(store.require<any>(owner, 'agent', bot.id)).approvalPolicy).toBe('ask')
+    expect(store.require<any>(owner, 'interaction', interaction.id)).toMatchObject({ resolved: false, responseState: 'uncertain', answer: 'auto' })
+    await expect(runtime.respond(owner, interaction.id, 'auto')).rejects.toMatchObject({ code: 'interaction_uncertain' })
+    expect(spy.mock.calls.filter(call => call[0] === 'approval.respond')).toHaveLength(1)
+  } finally { spy.mockRestore() }
+})
+
+it('leaves clarifications and already pending approvals for the user after a policy change', async () => {
+  const bot = agent('更改审批')
+  let kind = 'approval'
+  server.on('connection', socket => socket.on('message', raw => {
+    const frame = JSON.parse(String(raw))
+    if (['approval.respond', 'clarify.respond'].includes(frame.method)) completeReply(socket, frame.params, '已答复')
+  }))
+  reply = (socket, params) => socket.send(JSON.stringify({ method: 'event', params: { type: `${kind}.request`, session_id: params.session_id, payload: { request_id: 'pending', message: '请确认' } } }))
+  for (kind of ['approval', 'clarify']) {
+    const run = runtime.send(owner, direct(bot.id).id, { requestId: randomUUID(), content: '继续任务' })
+    await vi.waitFor(() => expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('waiting'))
+    saveHostTools(home, { approvalPolicy: 'allow' })
+    const interaction = store.list<WorkspaceInteraction>(owner, 'interaction').find(item => !item.resolved)!
+    expect(requests.filter(frame => ['approval.respond', 'clarify.respond'].includes(frame.method))).toHaveLength(kind === 'approval' ? 0 : 1)
+    await runtime.respond(owner, interaction.id, kind === 'approval' ? 'once' : '下一步')
+    await finished(run.id)
+  }
+})
+
+it('defaults legacy and newly created Bots to manual approval and prevents autonomous grants', () => {
+  const parent = agent('创建者')
+  expect(parent.approvalPolicy).toBe('ask')
+  const child = store.createAgent(owner, { name: '子成员', profile: parent.profile, approvalPolicy: 'allow' }, { createdByAgentId: parent.id, createdFromRunId: randomUUID() })
+  expect(child.approvalPolicy).toBe('ask')
+  expect(() => store.updateAgent(owner, child.id, { approvalPolicy: 'always' })).toThrow('approvalPolicy')
+  store.put(owner, 'agent', child.id, { ...child, remoteAgentId: randomUUID() })
+  expect(store.agentSummary(store.updateAgent(owner, child.id, { approvalPolicy: 'deny' })).approvalPolicy).toBe('ask')
+  expect(() => store.updateAgent(owner, child.id, { name: '不能改远端资料' })).toThrow('远端管理')
+})
+
+it('keeps a failed automatic approval pending and does not retry a replayed request', async () => {
+  const bot = agent('审批失败')
+  saveHostTools(home,{approvalPolicy:'allow'})
+  const rpc = WorkspaceGateway.prototype.rpc
+  let attempts = 0
+  const spy = vi.spyOn(WorkspaceGateway.prototype, 'rpc').mockImplementation(function (this: WorkspaceGateway, method, params) {
+    if (method === 'approval.respond' && attempts++ === 0) return Promise.reject(new HttpError(409, '暂时拒绝答复', 'gateway_rejected'))
+    return rpc.call(this, method, params)
+  })
+  try {
+    const notify = vi.fn()
+    runtime.onNotify = notify
+    reply = (socket, params) => {
+      const frame = JSON.stringify({ method: 'event', params: { type: 'approval.request', session_id: params.session_id, payload: { request_id: 'failure', message: '确认操作' } } })
+      socket.send(frame); socket.send(frame)
+    }
+    server.on('connection', socket => socket.on('message', raw => {
+      const frame = JSON.parse(String(raw))
+      if (frame.method === 'approval.respond') completeReply(socket, frame.params, '手动处理完成')
+    }))
+    const run = runtime.send(owner, direct(bot.id).id, { requestId: randomUUID(), content: '继续' })
+    await vi.waitFor(() => expect(notify.mock.calls.some(call => call[4]?.kind === 'approval')).toBe(true))
+    expect(attempts).toBe(1)
+    const interaction = store.list<WorkspaceInteraction>(owner, 'interaction').find(item => !item.resolved)!
+    expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('waiting')
+    await runtime.respond(owner, interaction.id, 'deny')
+    await finished(run.id)
+  } finally { spy.mockRestore() }
 })
 
 it('keeps parallel approval cards scoped to their member and deduplicates replayed requests and answers', async () => {
@@ -1384,8 +1572,8 @@ it('retries a failed stop of a live task without falsely completing it or resubm
   await vi.waitFor(()=>expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1))
   rejectedInterrupts=1
   await runtime.stop(owner,root.id)
-  expect(store.require<WorkspaceRun>(owner,'run',root.id).status).toBe('uncertain')
-  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',root.id).status).toBe('interrupted'),{timeout:3000})
+  expect(store.require<WorkspaceRun>(owner,'run',root.id).status).toBe('interrupted')
+  await vi.waitFor(()=>expect(requests.filter(r=>r.method==='session.interrupt')).toHaveLength(2),{timeout:3000})
   expect(requests.filter(r=>r.method==='session.interrupt')).toHaveLength(2)
   expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1)
 })
@@ -1454,6 +1642,28 @@ it('queues an unsubmitted turn while computer capacity is unavailable and submit
   expect(requests.filter(request=>request.method==='prompt.submit')).toHaveLength(1)
 })
 
+it('keeps legacy VM Bots chatting on the server while their Runner is offline',async()=>{
+ const a=store.updateAgent(owner,agent('离线电脑').id,{execution:'computer',computer:'vm'}),c=direct(a.id)
+ nodes.targetForAgent=vi.fn(()=>{throw new HttpError(503,'节点未连接','runner_offline')})
+ const run=runtime.send(owner,c.id,{requestId:randomUUID(),content:'普通聊天不需要虚拟机'})
+ await finished(run.id)
+ expect(nodes.targetForAgent).not.toHaveBeenCalled()
+ expect(store.get<any>(owner,'binding',`${c.id}:${a.id}`)).toMatchObject({execution:'profile'})
+})
+
+it('can stop an unsubmitted turn that is waiting for computer capacity',async()=>{
+  const a=store.updateAgent(owner,agent('可停止等候').id,{execution:'computer',computer:'vm'}),c=direct(a.id)
+  vi.spyOn(nodes.target(owner,'local').session,'request').mockRejectedValue(new HttpError(429,'资源不足','computer_quota'))
+  const run=runtime.send(owner,c.id,{requestId:randomUUID(),content:'等待中停止'})
+  const work=await vi.waitFor(()=>{
+    const current=store.list<Work>(owner,'turn').find(work=>work.runId===run.id)
+    expect(current?.resourceWait).toBe(true)
+    return current!
+  })
+  await runtime.stop(owner,run.id)
+  await vi.waitFor(()=>expect(store.require<Work>(owner,'turn',work.id).status).toBe('interrupted'))
+})
+
 it('forwards a generated artifact to a new task without changing its original provenance',async()=>{
   const a=agent('产物接收者'),c=direct(a.id)
   const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'first'})
@@ -1471,34 +1681,24 @@ it('forwards a generated artifact to a new task without changing its original pr
 })
 
 
-it('migrates an old VM conversation into Hermes once, carries prior messages, and resumes the new session afterwards',async()=>{
-  const a=store.updateAgent(owner,agent('迁移测试').id,{execution:'computer',computer:'vm'}),c=direct(a.id)
-  const native=nodes.target(owner,'local')
-  const target:GatewayTarget={...native,runner:{id:'migration-runner',computer:true,hermesComputer:false,
-    open:async(onEvent,onDisconnect)=>{
-      const gateway=new WorkspaceGateway(native);gateway.onEvent=onEvent;gateway.onDisconnect=onDisconnect
-      await gateway.connect();return {rpc:(method,params)=>gateway.rpc(method,params),close:()=>gateway.close()}
-    },lease:async()=>{throw new Error('unexpected lease')},
-  }}
-  nodes.targetForAgent=()=>target
-  const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'已确认的原会话事实'})
-  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',first.id).status).toBe('complete'))
-  const key=`${c.id}:${a.id}`,old=store.get<any>(owner,'binding',key)!
-  target.runner!.hermesComputer=true
-  const second=runtime.send(owner,c.id,{requestId:randomUUID(),content:'继续这次任务'})
-  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',second.id).status).toBe('complete'))
-  const migrated=store.get<any>(owner,'binding',key)!
-  expect(migrated.hermesComputer).toBe(true);expect(migrated.storedId).not.toBe(old.storedId)
-  expect(requests.filter(r=>r.method==='session.create')).toHaveLength(2)
-  expect(requests.filter(r=>r.method==='session.resume')).toHaveLength(0)
-  expect(requests.filter(r=>r.method==='prompt.submit')[1].params.text).toContain('已确认的原会话事实')
-  const third=runtime.send(owner,c.id,{requestId:randomUUID(),content:'再次继续'})
-  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',third.id).status).toBe('complete'))
-  expect(requests.filter(r=>r.method==='session.resume')).toHaveLength(1)
-  expect(requests.filter(r=>r.method==='session.resume')[0].params.session_id).toBe(migrated.storedId)
-  expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(3)
+it('migrates a stored Worker binding to server Hermes once and preserves prior conversation',async()=>{
+ const a=store.updateAgent(owner,agent('迁移测试').id,{execution:'computer',computer:'vm',vmExecution:'profile'}),c=direct(a.id)
+ const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'已确认的原会话事实'})
+ await finished(first.id)
+ const key=`${c.id}:${a.id}`,old=store.get<any>(owner,'binding',key)!
+ store.put(owner,'binding',key,{...old,execution:'computer',runnerId:'old-runner',hermesComputer:true})
+ nodes.targetForAgent=vi.fn(()=>{throw new Error('旧 Runner 不应打开')})
+ const second=runtime.send(owner,c.id,{requestId:randomUUID(),content:'继续这次任务'})
+ await finished(second.id)
+ const migrated=store.get<any>(owner,'binding',key)!
+ expect(migrated.execution).toBe('profile');expect(migrated.storedId).not.toBe(old.storedId)
+ expect(requests.filter(r=>r.method==='session.create')).toHaveLength(2)
+ expect(requests.filter(r=>r.method==='prompt.submit')[1].params.text).toContain('已确认的原会话事实')
+ const third=runtime.send(owner,c.id,{requestId:randomUUID(),content:'再次继续'})
+ await finished(third.id)
+ expect(requests.filter(r=>r.method==='session.resume')).toHaveLength(1)
+ expect(nodes.targetForAgent).not.toHaveBeenCalled()
 })
-
 
 it('keeps memory flags out of session.create and grants scoped memory through the bridge',async()=>{
   const a=agent('独立记忆'),c=direct(a.id),target=nodes.target(owner,'local'),request=target.session.request.bind(target.session),bindings:any[]=[]
@@ -1513,4 +1713,181 @@ it('keeps memory flags out of session.create and grants scoped memory through th
   expect(create.params).not.toHaveProperty('skip_memory')
   expect(create.params).not.toHaveProperty('workspace_memory')
   expect(bindings).toContainEqual(expect.objectContaining({workspace_memory:true}))
+})
+
+it('snapshots each message origin and uses inherited provenance for internal dispatch only',async()=>{
+ const bot=agent('来源上下文'),c=direct(bot.id),a=randomUUID(),b=randomUUID()
+ runtime.desktopEnvironments=new DesktopEnvironments(store,{} as any,{localNodeID:'fixture',requireSource:()=>{}} as any)
+ const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'在本机工作',deviceHost:a})
+ await finished(first.id)
+ const second=runtime.send(owner,c.id,{requestId:randomUUID(),content:'切换设备',deviceHost:b})
+ await finished(second.id)
+ const delegated=runtime.dispatch(owner,c.id,{requestId:randomUUID(),content:'继续子任务',deviceHost:b},{agentId:bot.id,kind:'assignment',deviceHost:a})
+ await finished(delegated.id)
+ const unknown=runtime.send(owner,c.id,{requestId:randomUUID(),content:'浏览器消息',deviceHost:null})
+ await finished(unknown.id)
+ expect([first.deviceHost,second.deviceHost,delegated.deviceHost,unknown.deviceHost]).toEqual([a,b,a,undefined])
+ const prompts=requests.filter(r=>r.method==='prompt.submit').map(r=>r.params.text)
+ expect(prompts[0]).toContain(a);expect(prompts[1]).toContain(b);expect(prompts[2]).toContain(a)
+ expect(prompts[3]).toContain('历史消息的设备来源不适用于本轮')
+ expect(store.require<any>(owner,'message',delegated.messageId).deviceHost).toBe(a)
+})
+
+it('offers a direct host-to-host copy through the real Bot tool bridge without publishing chat files',async()=>{
+ const bot=agent('传文件'),c=direct(bot.id),target=nodes.target(owner,'local'),originalRequest=target.session.request.bind(target.session)
+ let binding:any,integrationError:unknown
+ vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>{
+  if(path.startsWith('/api/plugins/yaoyao-bot-bridge/')){
+   if(path.endsWith('/bind'))binding=options?.body
+   return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,native_tools:true,in_process:true}))}
+  }
+  return originalRequest(path,options)
+ })
+ const desktop=new DesktopEnvironments(store,{pushAuthorizationVersion:()=>0} as any,{localNodeID:'fixture',requireSource:()=>{}} as any)
+ runtime.desktopEnvironments=desktop
+ const payload=Buffer.alloc(300_000,123),sha256=createHash('sha256').update(payload).digest('hex'),clientId=randomUUID(),commands:Array<{host:string;op:string}>=[]
+ const info={platform:'darwin',screen:false,accessibility:false,approved:[],full:[createHash('sha256').update('fixture:'+owner).digest('hex')]}
+ const machines=[{key:'server',host:{...info,id:randomUUID(),name:'server'},exchange:(body:unknown)=>desktop.exchange(body)},
+  {key:'mac1',host:{...info,id:randomUUID(),name:'mac1'},exchange:(body:unknown)=>desktop.remoteExchange(clientId,body)}]
+ const timers=machines.map(machine=>{let results:any[]=[];machine.exchange({host:machine.host,results});return setInterval(()=>{
+  const response=machine.exchange({host:machine.host,results})
+  results=response.commands.map((command:any)=>{commands.push({host:machine.key,op:command.action.op});return {id:command.id,value:command.action.op==='read'
+   ? {size:payload.length,data:payload.toString('base64')}
+   : {path:command.action.path,size:Buffer.from(command.action.data,'base64').length,sha256:createHash('sha256').update(Buffer.from(command.action.data,'base64')).digest('hex')}}})
+ },5)})
+ const publish=vi.spyOn(runtime,'publishArtifact')
+ const http=async(path:string,body:unknown)=>{const response=await fetch(binding.bridge_url+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${binding.token}`},body:JSON.stringify(body)});expect(response.status).toBe(200);return response.json()}
+ reply=(socket,p)=>{void(async()=>{
+  try{
+   expect(p.text).toContain('电脑间传文件用 desktop_file_copy')
+   const catalog=await http('/tools/list',{}),tool=catalog.tools.find((tool:any)=>tool.name==='desktop_file_copy')
+   expect(tool.inputSchema.required).toEqual(['sourceHost','sourcePath','targetHost','targetPath'])
+   const call={toolId:tool.id,callId:randomUUID(),arguments:{sourceHost:'mac1',sourcePath:'Desktop/a.txt',targetHost:'server',targetPath:'Desktop/a.txt'}}
+   const result=await http('/tools/call',call)
+   expect(result.isError).not.toBe(true)
+   expect(result.structuredContent).toMatchObject({copied:true,source:{host:clientId},target:{host:'local'},size:payload.length,sha256})
+   expect(JSON.stringify(result).length).toBeLessThan(1500)
+   expect(await http('/tools/call',call)).toEqual(result)
+  }catch(error){integrationError=error}
+  socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'文件复制完成',status:'complete'}}}))
+ })()}
+ try{
+  await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'帮我把 mac1 桌面的 a.txt 放到服务器桌面'}).id)
+  if(integrationError)throw integrationError
+  expect(commands).toEqual([{host:'mac1',op:'read'},{host:'server',op:'receive'}])
+  expect(publish).not.toHaveBeenCalled();expect(store.list(owner,'file')).toEqual([])
+ }finally{timers.forEach(clearInterval);desktop.close()}
+})
+
+function modelBridge() {
+  const target = nodes.target(owner, 'local'), original = target.session.request.bind(target.session)
+  target.session.request = async (path, options) => {
+    if (path.endsWith('/model-settings/resolve')) {
+      const settings = (options?.body as any)?.settings ?? {}
+      return { status:200, headers:new Headers(), body:Buffer.from(JSON.stringify({version:1,confirmationMessage:null,effective:{provider:settings.provider??'base',model:settings.model??'base-model',reasoningEffort:settings.reasoningEffort??'medium',fastMode:settings.fastMode??'normal'}})) }
+    }
+    return original(path, options)
+  }
+}
+it.each([{value:'wrong'}, {confirm_required:true,confirm_message:'切换长上下文将增加费用'}])('stops before submission on a failed native model acknowledgement and keeps its confirmation in the profile: %j',async rejection=>{
+  modelBridge(); rejectedModelConfig=rejection
+  const a=agent('配置失败'),c=direct(a.id)
+  store.updateAgent(owner,a.id,{modelSettings:{provider:'openai',model:'model-a',reasoningEffort:'high',fastMode:'fast'}})
+  const record=vi.fn(); runtime.inspector={record} as any
+  const run=runtime.send(owner,c.id,{requestId:randomUUID(),content:'不能用旧模型执行'})
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',run.id).status).toBe('failed'))
+  expect(requests.some(r=>r.method==='prompt.submit')).toBe(false)
+  expect(record.mock.calls.some(([, , e])=>e.method==='bot.model-settings'&&e.data.applied===false&&e.data.revision===2)).toBe(true)
+  if('confirm_required' in rejection) expect(store.require<any>(owner,'agent',a.id).modelSettingsPendingConfirmation).toEqual({target:'["openai","model-a"]',message:rejection.confirm_message})
+})
+it('updates the same Bot across an existing direct chat and two groups without changing its Profile peers', async () => {
+  modelBridge()
+  const a=agent('模型甲'), b=agent('模型乙'), c=direct(a.id)
+  const groups=[1,2].map(n=>store.createGroup(owner,{name:`模型群${n}`,memberIds:[a.id,b.id],administratorId:a.id}))
+  const settings={provider:'openai',model:'model-a',reasoningEffort:'high',fastMode:'fast'}
+  store.updateAgent(owner,a.id,{modelSettings:settings})
+  await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'建立已有会话'}).id)
+  const before=requests.length
+  store.updateAgent(owner,a.id,{modelSettings:{...settings,model:'model-b',reasoningEffort:'none',fastMode:'cold'}})
+  for(const chat of [c,...groups]) await finished(runtime.send(owner,chat.id,{requestId:randomUUID(),content:'@模型甲 继续'}).id)
+  const updates=requests.slice(before).filter(r=>r.method==='config.set')
+  expect(updates.map(r=>[r.params.key,r.params.value])).toEqual(Array.from({length:3},()=>[
+    ['model','model-b --provider openai --session'],['reasoning','none'],['fast','cold'],
+  ]).flat())
+  expect(requests.slice(before).some(r=>r.method==='session.resume')).toBe(true)
+  expect(store.require<any>(owner,'agent',b.id).modelSettings).toBeUndefined()
+  store.updateAgent(owner,a.id,{modelSettings:null})
+  const reset=requests.length
+  await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'恢复继承'}).id)
+  expect(requests.slice(reset).filter(r=>r.method==='config.set').map(r=>r.params.value)).toEqual(['base-model --provider base --session','medium','normal'])
+})
+it('keeps a running reply on its snapshot and applies new settings to the queued reply', async () => {
+  modelBridge()
+  const a=agent('切换成员'), c=direct(a.id)
+  store.updateAgent(owner,a.id,{modelSettings:{provider:'openai',model:'model-a',reasoningEffort:'low',fastMode:'normal'}})
+  let release:()=>void=()=>{}
+  reply=(socket,p)=>{release=()=>socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'完成',status:'complete'}}}))}
+  const first=runtime.send(owner,c.id,{requestId:randomUUID(),content:'第一轮'})
+  await vi.waitFor(()=>expect(requests.some(r=>r.method==='prompt.submit')).toBe(true))
+  const before=requests.length
+  store.updateAgent(owner,a.id,{modelSettings:{provider:'openai',model:'model-b',reasoningEffort:'ultra',fastMode:'auto'}})
+  const queued=runtime.send(owner,c.id,{requestId:randomUUID(),content:'排队的新轮'})
+  expect(requests.length).toBe(before)
+  reply=(socket,p)=>socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'完成',status:'complete'}}}))
+  release(); await finished(first.id); await finished(queued.id)
+  expect(requests.slice(before).filter(r=>r.method==='config.set').map(r=>r.params.value)).toEqual(['model-b --provider openai --session','ultra','auto'])
+  expect(requests.filter(r=>r.method==='session.interrupt')).toHaveLength(0)
+})
+it('does not send a prompt when the model bridge cannot resolve the saved setting', async () => {
+  const a=agent('失败成员'),c=direct(a.id)
+  store.updateAgent(owner,a.id,{modelSettings:{provider:'openai',model:'gone',reasoningEffort:'high',fastMode:'fast'}})
+  const run=runtime.send(owner,c.id,{requestId:randomUUID(),content:'不能回退'})
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',run.id).status).toBe('failed'))
+  expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(0)
+})
+
+
+it('applies Bot settings to the live agent after a cold resume restores its persisted runtime during tool binding', async () => {
+  modelBridge()
+  const a = agent('冷启动模型切换'), c = direct(a.id)
+  const target = nodes.target(owner, 'local'), original = target.session.request.bind(target.session)
+  const models = new Map<string, Record<string, string>>()
+  const submitted: Array<Record<string, string>> = []
+  target.session.request = async (path, options) => {
+    if (path.endsWith('/capabilities')) return { status: 200, headers: new Headers(), body: Buffer.from(JSON.stringify({ version: 1, ready: true, in_process: true, native_tools: true })) }
+    if (path.endsWith('/bind')) {
+      // Hermes acknowledges config.set before a deferred resume builds the agent.
+      // That build restores the stored runtime, replacing any premature settings.
+      const sid = (options?.body as any).session_id
+      models.set(sid, { model: 'persisted-model', reasoning: 'medium', fast: 'normal' })
+      return { status: 200, headers: new Headers(), body: Buffer.from(JSON.stringify({ ok: true, native_tools: true })) }
+    }
+    if (path.endsWith('/unbind')) return { status: 200, headers: new Headers(), body: Buffer.from('{"ok":true}') }
+    return original(path, options)
+  }
+  observeGatewayRequest = frame => {
+    if (frame.method !== 'config.set') return
+    const sid = frame.params.session_id, current = models.get(sid) ?? {}
+    current[frame.params.key] = frame.params.value
+    models.set(sid, current)
+  }
+  reply = (socket, params) => {
+    submitted.push({ ...models.get(params.session_id) })
+    socket.send(JSON.stringify({ method: 'event', params: { type: 'message.complete', session_id: params.session_id, payload: { text: '完成', status: 'complete' } } }))
+  }
+  configuredCwds.set('default', '/profile/working-directory')
+  for (const settings of [
+    { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'fast' },
+    { provider: 'custom:provider', model: 'model-b', reasoningEffort: 'none', fastMode: 'cold' },
+    null,
+  ]) {
+    store.updateAgent(owner, a.id, { modelSettings: settings })
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '切换模型并保留上下文' }).id)
+  }
+  expect(submitted).toEqual([
+    { model: 'model-a --provider openai --session', reasoning: 'high', fast: 'fast' },
+    { model: 'model-b --provider custom:provider --session', reasoning: 'none', fast: 'cold' },
+    { model: 'base-model --provider base --session', reasoning: 'medium', fast: 'normal' },
+  ])
+  expect(requests.filter(r => r.method === 'session.resume')).toHaveLength(2)
 })

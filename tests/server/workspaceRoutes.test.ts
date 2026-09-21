@@ -11,6 +11,8 @@ import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth'
 import { WorkspaceAssets } from '../../src/server/workspaceAssets'
 import { WorkspaceTranscriptStore } from '../../src/client/components/workspace/transcriptStore'
+import { SharedComputers, type SharedComputer } from '../../src/server/sharedComputers'
+import type { WorkspaceAgent } from '../../src/shared/workspace'
 
 let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, upstream: string[], bridgeReady: boolean
 const first: LocalUser = {
@@ -48,6 +50,15 @@ function req(method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, 
     .set('Cookie', cookie)
     .set('X-CSRF-Token', csrf)
     .set('x-test-user', user)
+}
+function shareComputer(...agents: WorkspaceAgent[]): SharedComputer {
+  const store = runtime.workspace
+  const shared = new SharedComputers(store, runtime.auth, runtime.workspaceRuntime.nodes, runtime.runners)
+  for (const agent of agents) {
+    shared.attachLocalVm('first', agent, 'fixture-runner')
+    store.put('first', 'agent', agent.id, agent)
+  }
+  return store.require('first', 'shared-computer', agents[0]!.computerEnvironmentId!)
 }
 it('serves file-backed project and memory CRUD with revisions and account isolation', async () => {
   const a = runtime.workspace.createAgent('first', { name: '记忆甲', profile: 'default' })
@@ -112,6 +123,19 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it('does not advertise retired remote Bot references and preserves their existing history', async () => {
+    const store = runtime.workspace
+    const agent = store.createAgent('first', { name: '历史远程 Bot', profile: 'default' })
+    store.put('first', 'agent', agent.id, { ...agent, remoteAgentId: randomUUID() })
+    const conversation = store.list<import('../../src/shared/workspace').WorkspaceConversation>('first', 'conversation')[0]!
+    store.saveMessage('first', { id: randomUUID(), conversationId: conversation.id, seq: 0, role: 'assistant', content: '保留历史回复', reasoning: '', status: 'complete', tools: [], attachments: [], createdAt: Date.now() })
+    const capabilities = (await req('get', '/api/app/capabilities').expect(200)).body.features
+    expect(capabilities).not.toContain('remoteAgentReferences')
+    expect((await req('get', `/api/app/nodes/${randomUUID()}/agents`).expect(410)).body.code).toBe('remote_agent_removed')
+    expect((await req('post', '/api/app/agents/remote').send({ nodeId: randomUUID(), agentId: randomUUID() }).expect(410)).body.code).toBe('remote_agent_removed')
+    expect((await req('get', `/api/app/conversations/${conversation.id}`).expect(200)).body.messages.some((message: { content: string }) => message.content === '保留历史回复')).toBe(true)
+    expect(store.get('first', 'agent', agent.id)).toBeDefined()
+  })
   it('uses the same ordering for snapshots, list refreshes and pin/message events', async () => {
     const store = runtime.workspace
     store.createAgent('first', { name: '排序验证', profile: 'default' })
@@ -216,10 +240,69 @@ describe('application workspace HTTP contract', () => {
     expect(store.require<any>('first', 'agent', bot.id).archived).toBe(false)
     expect(store.cursor('first')).toBe(cursor)
   })
+  it.each(['archive', 'delete'] as const)('%s detaches only the selected Bot from its automatic shared computer', async action => {
+    const store = runtime.workspace
+    const bot = store.createAgent('first', { name: '待移除共享成员', profile: 'default' })
+    const other = store.createAgent('first', { name: '继续使用电脑', profile: 'default' })
+    const shared = shareComputer(bot, other)
+    const otherBefore = store.require('first', 'agent', other.id)
+    const direct = store.list<any>('first', 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === bot.id)
+    const path = `/api/app/conversations/${direct.id}/lifecycle`
+    const preview = (await req('get', path).expect(200)).body
+    // Another member's running task must not prevent removing this idle Bot.
+    store.put('first', 'turn', 'other-running', { id: 'other-running', agentId: other.id, status: 'running' })
+    await req('post', path).send({ action, confirmationToken: preview.confirmationToken }).expect(200)
+    expect(store.require('first', 'shared-computer', shared.id)).toEqual({ ...shared, memberIds: [other.id] })
+    expect(store.require('first', 'agent', other.id)).toEqual(otherBefore)
+    if (action === 'delete') expect(store.get('first', 'agent', bot.id)).toBeUndefined()
+    else {
+      const archived = store.require<WorkspaceAgent>('first', 'agent', bot.id)
+      expect(archived.archived).toBe(true)
+      expect(archived.computerEnvironmentId).toBeUndefined()
+      expect(archived.computerEnvironmentName).toBeUndefined()
+    }
+    store.remove('first', 'turn', 'other-running')
+  })
+  it('keeps shared membership intact while the Bot is busy or its computer is under human control', async () => {
+    const store = runtime.workspace
+    const bot = store.createAgent('first', { name: '电脑成员', profile: 'default' })
+    const shared = shareComputer(bot)
+    const direct = store.list<any>('first', 'conversation').find(c => c.memberIds[0] === bot.id)
+    const path = `/api/app/conversations/${direct.id}/lifecycle`
+    const preview = (await req('get', path).expect(200)).body
+    for (const status of ['queued', 'running', 'waiting', 'uncertain', 'cancelling']) {
+      store.put('first', 'turn', 'busy', { id: 'busy', agentId: bot.id, status })
+      expect((await req('post', path).send({ action: 'delete', confirmationToken: preview.confirmationToken }).expect(409)).body.code).toBe('agent_running')
+    }
+    store.remove('first', 'turn', 'busy')
+    store.put('_system', 'computer-control', 'human', { owner: 'first', agentId: randomUUID(), environmentId: shared.id, expiresAt: Date.now() + 30_000 })
+    expect((await req('post', path).send({ action: 'delete', confirmationToken: preview.confirmationToken }).expect(409)).body.code).toBe('agent_execution_busy')
+    expect(store.require('first', 'shared-computer', shared.id)).toEqual(shared)
+    expect(store.require('first', 'agent', bot.id)).toEqual(bot)
+    store.remove('_system', 'computer-control', 'human')
+    await req('patch', `/api/app/agents/${bot.id}`).send({ archived: true }).expect(200)
+    expect(store.require('first', 'shared-computer', shared.id)).toMatchObject({ archived: true, memberIds: [] })
+    expect(store.require<WorkspaceAgent>('first', 'agent', bot.id).computerEnvironmentId).toBeUndefined()
+  })
+  it.each(['manual', 'compose', 'missing'] as const)('deletes a legacy archived Bot with a %s computer binding', async mode => {
+    const store = runtime.workspace
+    const bot = store.createAgent('first', { name: '旧版归档成员', profile: 'default' })
+    const shared = shareComputer(bot)
+    const direct = store.list<any>('first', 'conversation').find(c => c.memberIds[0] === bot.id)
+    store.put('first', 'agent', bot.id, { ...bot, archived: true })
+    store.put('first', 'conversation', direct.id, { ...direct, archived: true })
+    if (mode === 'missing') store.remove('first', 'shared-computer', shared.id)
+    else store.put('first', 'shared-computer', shared.id, { ...shared, managedLocalVm: undefined, managedCompose: mode === 'compose' })
+    await req('delete', `/api/app/agents/${bot.id}`).expect(200)
+    expect(store.get('first', 'agent', bot.id)).toBeUndefined()
+    expect(store.get('first', 'conversation', direct.id)).toBeUndefined()
+    if (mode !== 'missing') expect(store.require('first', 'shared-computer', shared.id)).toMatchObject({ archived: true, memberIds: [] })
+  })
   it('rejects a stale group confirmation and rolls back membership on a later deletion failure', async () => {
     const store = runtime.workspace
     const lead = store.createAgent('first', { name: '负责人', profile: 'default' })
     const bot = store.createAgent('first', { name: '成员', profile: 'default' })
+    const shared = shareComputer(bot, lead)
     const direct = store.list<any>('first', 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === bot.id)
     const path = `/api/app/conversations/${direct.id}/lifecycle`
     const old = (await req('get', path).expect(200)).body
@@ -236,6 +319,8 @@ describe('application workspace HTTP contract', () => {
     expect(store.require<any>('first', 'conversation', group.id).memberIds).toContain(bot.id)
     expect(store.require<any>('first', 'agent', bot.id).archived).toBe(false)
     expect(store.require<any>('first', 'conversation', direct.id).archived).toBe(false)
+    expect(store.require('first', 'shared-computer', shared.id)).toEqual(shared)
+    expect(store.require<WorkspaceAgent>('first', 'agent', bot.id).computerEnvironmentId).toBe(shared.id)
     expect(store.cursor('first')).toBe(cursor)
   })
   it('deletes an unarchived group while preserving its member Bots', async () => {
@@ -357,21 +442,14 @@ describe('application workspace HTTP contract', () => {
     await req('patch',`${path}/tasks/${task.id}/plan`,'second').send({...update,requestId:randomUUID()}).expect(404)
     expect((await req('patch',`${path}/tasks/${task.id}/plan`).send({...update,requestId:randomUUID()}).expect(409)).body.code).toBe('goal_criteria_changed')
   })
-  it('grants team management only with a ready bridge and persists explicit revocation', async () => {
-    const denied = await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true}).expect(409)
-    expect(denied.body.code).toBe('team_tools_unavailable')
-    expect((await req('get','/api/app/agents')).body.agents).toEqual([])
-    bridgeReady = true
-    const created = await req('post','/api/app/agents').send({name:'老板',profile:'default',canManageTeam:true})
+  it('creates a bot with team tools on by default and does not require the bridge', async () => {
+    bridgeReady = false
+    const created = await req('post','/api/app/agents').send({name:'老板',profile:'default'})
     expect(created.status, JSON.stringify(created.body)).toBe(201)
     const agent = created.body.agent
     expect(agent.canManageTeam).toBe(true)
-    await req('patch',`/api/app/agents/${agent.id}`,'second').send({canManageTeam:false}).expect(404)
-    bridgeReady = false
-    const disabled = await req('patch',`/api/app/agents/${agent.id}`).send({canManageTeam:false}).expect(200)
-    expect(disabled.body.agent.canManageTeam).toBe(false)
-    expect((await req('get','/api/app/agents')).body.agents[0].canManageTeam).toBe(false)
-    await req('patch',`/api/app/agents/${agent.id}`).send({canManageTeam:true}).expect(409)
+    await req('patch',`/api/app/agents/${agent.id}`,'second').send({name:'别人改的'}).expect(404)
+    expect((await req('get','/api/app/agents')).body.agents[0].canManageTeam).toBe(true)
   })
   it('accepts only child pairing, hides credentials, and scopes address edits to the owner', async () => {
     const code = new URL('yaoyao://pair')
@@ -387,7 +465,8 @@ describe('application workspace HTTP contract', () => {
     const updated=(await req('get','/api/app/nodes').expect(200)).body.nodes[0]
     expect(updated.id).toBe(node.id); expect(updated.url).toBe('http://new-ip.test:15300/')
     const sources=(await req('get','/api/app/agents/sources').expect(200)).body.sources
-    expect(sources.some((s:any)=>s.nodeId===node.id && s.profile==='default')).toBe(true)
+    // Pairing still manages the node; retired remote Profiles are not Bot sources.
+    expect(sources.some((s:any)=>s.nodeId===node.id)).toBe(false)
   })
 
   it('archives native-chat uploads through the standard file API with user ownership', async () => {
@@ -594,4 +673,104 @@ it('prepares CSRF with capabilities and returns an idempotent committed send rec
   expect(b.message.id).toBe(a.message.id)
   expect(b.run.id).toBe(a.run.id)
   expect(store.messages('first', conversation.id).filter(m => m.role === 'user')).toHaveLength(1)
+})
+
+it('aggregates per-agent daily token usage for today, month and lifetime', async () => {
+  const store = runtime.workspace
+  const agent = store.createAgent('first', { name: '用量统计', profile: 'default' })
+  const other = store.createAgent('first', { name: '用量其他', profile: 'default' })
+  const now = new Date(),
+    pad = (n: number) => String(n).padStart(2, '0'),
+    today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    month = today.slice(0, 7),
+    older = `${month}-01`
+  const seed = (agentId: string, date: string, input: number, output: number) =>
+    store.put('first', 'agent-token-day', `${agentId}:${date}`, { agentId, date, input, output, total: input + output, updatedAt: 1 })
+  seed(agent.id, today, 300, 100)
+  seed(agent.id, older, 2000, 1000)
+  seed(other.id, today, 99999, 99999)
+  const usage = (await req('get', `/api/app/agents/${agent.id}/usage`).expect(200)).body
+  expect(usage.today).toBe(today)
+  expect(usage.todayUsage).toEqual({ input: 300, output: 100, total: 400 })
+  expect(usage.monthUsage).toEqual({ input: 2300, output: 1100, total: 3400 })
+  expect(usage.totalUsage).toEqual({ input: 2300, output: 1100, total: 3400 })
+  expect(usage.daily.map((d: any) => d.date)).toEqual([today, older])
+  await req('get', `/api/app/agents/${randomUUID()}/usage`).expect(404)
+})
+
+function stubBotModels(warning: string | null = null, duringResolve?: () => void) {
+  const original=runtime.upstreamSession.request.bind(runtime.upstreamSession)
+  return vi.spyOn(runtime.upstreamSession,'request').mockImplementation(async (path, options) => {
+    const defaults={provider:'openai',model:'model-a',reasoningEffort:'medium',fastMode:'normal'}
+    if(path.endsWith('/model-options'))return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({version:1,defaults,models:[{provider:'openai',model:'model-a',name:'A',reasoningEfforts:['none','medium','high'],reasoningKnown:true,fastModes:['normal','fast','auto','cold'],api_key:'must-not-leak'}]}))}
+    if(path.endsWith('/model-settings/resolve')){
+      duringResolve?.()
+      const settings=(options?.body as any)?.settings??{}
+      return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({version:1,effective:{...defaults,...Object.fromEntries(Object.entries(settings).filter(([,v])=>v!==null))},confirmationMessage:warning}))}
+    }
+    return original(path,options)
+  })
+}
+it('exposes owned Bot model capabilities and saves settings without altering its peers or Profile', async () => {
+  stubBotModels()
+  const a=runtime.workspace.createAgent('first',{name:'模型甲',profile:'default'}),b=runtime.workspace.createAgent('first',{name:'模型乙',profile:'default'})
+  const path=`/api/app/agents/${a.id}`
+  const options=(await req('get',`${path}/model-options`).expect(200)).body
+  expect(options).toMatchObject({revision:1,settings:null,defaults:{model:'model-a'}})
+  expect(JSON.stringify(options)).not.toContain('must-not-leak')
+  await req('get',`${path}/model-options`,'second').expect(404)
+  const modelSettings={provider:'openai',model:'model-a',reasoningEffort:'none',fastMode:'auto'}
+  const saved=(await req('patch',path).send({modelSettings,expectedRevision:1}).expect(200)).body.agent
+  expect(saved.modelSettings).toEqual(modelSettings)
+  expect(runtime.workspace.require<any>('first','agent',b.id).modelSettings).toBeUndefined()
+  await req('patch',path).send({name:'改名'}).expect(200)
+  expect(runtime.workspace.require<any>('first','agent',a.id).modelSettings).toEqual(modelSettings)
+  await req('patch',path).send({modelSettings:null,expectedRevision:1}).expect(409)
+  expect(upstream.some(p=>p.includes('/model/set'))).toBe(false)
+})
+it('requires model confirmation before saving and binds it to the resolved selection', async () => {
+  stubBotModels('费用较高，请确认')
+  const a=runtime.workspace.createAgent('first',{name:'确认模型',profile:'default'}),path=`/api/app/agents/${a.id}`
+  const body={expectedRevision:1,modelSettings:{provider:'openai',model:'model-a',reasoningEffort:null,fastMode:null}}
+  const confirmation=(await req('patch',path).send(body).expect(200)).body
+  expect(confirmation.confirmationRequired).toBe(true)
+  expect(runtime.workspace.require<any>('first','agent',a.id).revision).toBe(1)
+  const result=(await req('patch',path).send({...body,confirmedModel:confirmation.confirmationTarget}).expect(200)).body.agent
+  expect(result.modelSettingsConfirmation).toBe('["openai","model-a"]')
+  const changed=(await req('patch',path).send({...body,expectedRevision:2,modelSettings:{...body.modelSettings,model:'model-b'},confirmedModel:confirmation.confirmationTarget}).expect(200)).body
+  expect(changed.confirmationTarget).toBe('["openai","model-b"]')
+  expect(runtime.workspace.require<any>('first','agent',a.id).revision).toBe(2)
+})
+it('detects a concurrent edit after asynchronous model validation without overwriting the new record', async () => {
+  const a=runtime.workspace.createAgent('first',{name:'并发编辑',profile:'default'})
+  stubBotModels(null,()=>runtime.workspace.updateAgent('first',a.id,{name:'另一端的新名称'}))
+  await req('patch',`/api/app/agents/${a.id}`).send({expectedRevision:1,modelSettings:null}).expect(409)
+  expect(runtime.workspace.require<any>('first','agent',a.id)).toMatchObject({name:'另一端的新名称',revision:2})
+  expect(runtime.workspace.require<any>('first','agent',a.id).modelSettings).toBeUndefined()
+})
+it('preserves ordinary Bot editing when the installed bridge predates model settings', async () => {
+  const a=runtime.workspace.createAgent('first',{name:'旧工具桥',profile:'default'}),path=`/api/app/agents/${a.id}`
+  expect((await req('get',`${path}/model-options`).expect(409)).body.code).toBe('model_settings_upgrade_required')
+  await req('patch',path).send({instructions:'新规则'}).expect(200)
+  await req('patch',path).send({modelSettings:{provider:'openai',model:null,reasoningEffort:null,fastMode:null},expectedRevision:2}).expect(400)
+})
+it('confirms a session-dependent native warning in the profile save flow',async()=>{
+  stubBotModels()
+  const a=runtime.workspace.createAgent('first',{name:'长上下文切换',profile:'default'}),path=`/api/app/agents/${a.id}`
+  runtime.workspace.put('first','agent',a.id,{...a,modelSettingsPendingConfirmation:{target:'["openai","model-a"]',message:'切换长上下文将增加费用'}})
+  const body={expectedRevision:1,modelSettings:null}
+  const warning=(await req('patch',path).send(body).expect(200)).body
+  expect(warning.confirmationMessage).toContain('长上下文')
+  const saved=(await req('patch',path).send({...body,confirmedModel:warning.confirmationTarget}).expect(200)).body.agent
+  expect(saved.modelSettingsConfirmation).toBe('["openai","model-a"]')
+  expect(saved.modelSettingsPendingConfirmation).toBeUndefined()
+})
+it('saves a new base Profile before reloading and validating its model catalogue',async()=>{
+  const a=runtime.workspace.createAgent('first',{name:'换来源',profile:'other'}),path=`/api/app/agents/${a.id}`
+  runtime.workspace.updateAgent('first',a.id,{modelSettings:{provider:'old-provider',model:'old-model',reasoningEffort:'high',fastMode:'cold'}})
+  // Even an old bridge must allow source-only edits, preserving the draft values.
+  const saved=(await req('patch',path).send({profile:'default'}).expect(200)).body.agent
+  expect(saved.profile).toBe('default');expect(saved.modelSettings.model).toBe('old-model')
+  stubBotModels()
+  expect((await req('get',`${path}/model-options`).expect(200)).body).toMatchObject({revision:saved.revision,settings:saved.modelSettings})
 })

@@ -22,12 +22,13 @@ import urllib.parse
 import urllib.request
 import uuid
 from contextvars import ContextVar
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 VERSION = 1
-PLUGIN_VERSION = "1.2.3"
+PLUGIN_VERSION = "1.3.0"
 def _plugin_fingerprint():
     root = Path(__file__).parent
     digest = hashlib.sha256()
@@ -80,6 +81,17 @@ class Binding:
     computer_policy: dict | None = None
     workspace_memory: bool = False
     profile_memory_tools: set = field(default_factory=set)
+    transfer_namespaces: set = field(default_factory=set)
+
+
+def _cleanup_file_transfers(namespaces):
+    import subprocess
+    for namespace in namespaces:
+        try:
+            subprocess.run([sys.executable, str(Path(__file__).with_name('file_transfer.py')), namespace],
+                           input=json.dumps({'op': 'transfer-cleanup'}), text=True, capture_output=True, timeout=5)
+        except Exception:
+            pass
 
 
 def register_context(ctx):
@@ -93,6 +105,18 @@ def register_context(ctx):
 
 
 def _refresh_agent_tools(agent, binding):
+    # Dashboard /bind runs outside the session's Profile context. Hermes keys
+    # plugin registries and tool-definition caches by the active home; without
+    # this scope a named Profile silently receives the default Profile catalog.
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    context = set_hermes_home_override(binding.profile_home)
+    try:
+        _refresh_profile_agent_tools(agent, binding)
+    finally:
+        reset_hermes_home_override(context)
+
+
+def _refresh_profile_agent_tools(agent, binding):
     if binding.workspace_memory:
         _isolate_profile_memory(agent, binding)
     _isolate_profile_context(agent, binding)
@@ -123,6 +147,10 @@ def _refresh_agent_tools(agent, binding):
 
 
 def _retire(binding):
+    namespaces = tuple(binding.transfer_namespaces)
+    binding.transfer_namespaces.clear()
+    if namespaces:
+        threading.Thread(target=_cleanup_file_transfers, args=(namespaces,), daemon=True).start()
     for child_id, (owner, _) in list(_children.items()):
         if owner is binding:
             _children.pop(child_id, None)
@@ -174,12 +202,12 @@ def refresh_catalog(session_id=None, function_name=None, tool_name=None, **kwarg
         return
 
 
-def _mount_native_tools(binding):
+def _mount_native_tools(binding, *, timeout=10):
     """Register session-scoped schemas in Hermes' own searchable catalog."""
     ctx = _contexts.get(binding.profile_home)
     if ctx is None:
         raise BridgeError("请安装新版工具桥并重新打开 Hermes 会话", 409, "tools_unavailable")
-    catalog = _request(binding, "/tools/list")
+    catalog = _request(binding, "/tools/list", timeout=timeout)
     fingerprint = hashlib.sha256(json.dumps(catalog.get("tools", []), sort_keys=True).encode()).hexdigest()
     if fingerprint == binding.catalog_fingerprint:
         return
@@ -342,7 +370,7 @@ def capabilities(profile: str = "default") -> dict:
             return {"version": VERSION, "ready": True, "in_process": True, "profile": profile, "native_tools": True,
                     "computer_runtime_version": 2, "plugin_version": PLUGIN_VERSION, "plugin_fingerprint": PLUGIN_FINGERPRINT,
                     "memory_isolation": True, "memory_isolation_transport": "bridge-bind-v1", "memory_extraction": True,
-                    "isolated_context_files": True, "skill_learning": True}
+                    "isolated_context_files": True, "skill_learning": True, "model_settings_version": 1, "file_transfer_version": 1}
         finally:
             reset_hermes_home_override(context)
     except Exception as exc:
@@ -442,6 +470,22 @@ def _purge(server) -> None:
             _children.pop(sid, None)
 
 
+@contextmanager
+def _bind_locks(server, deadline):
+    # Lock contention is part of the binding deadline, not an unbounded wait
+    # outside it. In particular a stalled earlier bind must not trap retries.
+    acquired = []
+    try:
+        for lock in (server._sessions_lock, _lock):
+            if not lock.acquire(timeout=max(0, deadline - time.monotonic())):
+                raise BridgeError("Hermes 工具桥正在处理其他绑定，请稍后重试", 409, "binding_busy")
+            acquired.append(lock)
+        yield
+    finally:
+        for lock in reversed(acquired):
+            lock.release()
+
+
 def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dict:
     workspace_memory = body.get("workspace_memory", False)
     if type(workspace_memory) is not bool:
@@ -462,8 +506,9 @@ def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dic
         raise BridgeError("工具桥令牌长度不足", 400, "invalid_request")
     expiry = _expiry(body)
     deadline = time.monotonic() + wait_seconds
+    build_requested = False
     while True:
-        with server._sessions_lock, _lock:
+        with _bind_locks(server, deadline):
             session = server._sessions.get(sid)
             if not isinstance(session, dict):
                 raise BridgeError("Hermes 会话不存在", 404, "session_missing")
@@ -474,17 +519,29 @@ def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dic
             if session.get("_finalized"):
                 raise BridgeError("Hermes 会话已经结束", 409, "session_closed")
             agent = session.get("agent")
+            if session.get("agent_error"):
+                # Provider errors can contain credentials. Keep this response
+                # bounded and let Hermes retain its detailed initialization log.
+                raise BridgeError("Hermes Profile 初始化失败，工具桥尚未绑定", 409, "agent_initialization_failed")
             current = _bindings.get(sid)
             busy = bool(session.get("running")) and not (current and current.generation == generation)
             if agent is not None and not busy:
                 break
+            start_build = getattr(server, "_start_agent_build", None)
+            needs_build = agent is None and not busy and not build_requested and callable(start_build)
+        if needs_build:
+            # Native, idempotent startup also covers resumed lazy sessions.
+            # Never submit a prompt merely to trigger initialization: it would
+            # run the first turn before memory/tools have been bound.
+            build_requested = True
+            start_build(sid, session)
         if time.monotonic() >= deadline:
             if busy:
                 raise BridgeError("Hermes 会话正在运行，不能更换轮次授权", 409, "session_busy")
             raise BridgeError("Hermes 会话仍在初始化，请重试", 409, "initializing")
         time.sleep(0.1)
 
-    with server._sessions_lock, _lock:
+    with _bind_locks(server, deadline):
         _purge(server)
         expiry = _expiry(body)
         if server._sessions.get(sid) is not session or session.get("agent") is not agent:
@@ -533,7 +590,7 @@ def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dic
         _bindings[sid] = binding
         if body.get("native_tools") is True:
             try:
-                _mount_native_tools(binding)
+                _mount_native_tools(binding, timeout=max(0.1, min(10, deadline - time.monotonic())))
             except Exception:
                 _bindings.pop(sid, None)
                 _retire(binding)
@@ -602,7 +659,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise BridgeError("工具桥拒绝重定向", 502, "bridge_redirect")
 
 
-def _request(binding: Binding, path: str, body: dict | None = None) -> dict:
+def _request(binding: Binding, path: str, body: dict | None = None, *, timeout=600) -> dict:
     remaining = (binding.expires_at - time.time() * 1000) / 1000
     if remaining <= 0:
         raise BridgeError("本轮工具授权已过期")
@@ -615,7 +672,7 @@ def _request(binding: Binding, path: str, body: dict | None = None) -> dict:
     # Loopback never uses machine proxy settings; redirects must not leak token.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
-        with opener.open(request, timeout=min(remaining, 600)) as response:
+        with opener.open(request, timeout=min(remaining, timeout)) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
             raise BridgeError("工具结果过大，请改用文件附件", 502, "result_too_large")
@@ -627,6 +684,8 @@ def _request(binding: Binding, path: str, body: dict | None = None) -> dict:
         # Do not reflect upstream response/request objects: they can carry keys.
         raise BridgeError(f"工具桥拒绝请求（HTTP {exc.code}）", 502, "bridge_rejected") from None
     except (urllib.error.URLError, TimeoutError, OSError):
+        if path == "/tools/list":
+            raise BridgeError("Hermes 未能读取夭夭的本轮工具目录，尚未提交聊天消息", 502, "bridge_catalog_unreachable") from None
         raise BridgeError("工具桥连接中断；操作可能已执行，请先检查结果，不要自动重试", 502, "bridge_unreachable") from None
     except (ValueError, UnicodeError):
         raise BridgeError("工具桥返回了无效结果", 502, "invalid_result") from None
@@ -944,6 +1003,13 @@ def computer_file(owner, body):
     if binding.owner != owner or binding.generation != _string(body, "generation") or not binding.computer_policy:
         raise BridgeError("文件请求不属于当前电脑会话")
     action, raw = body.get("action"), _string(body, "path", 4096)
+    transfer = body.get("transfer") if action == "transfer" else None
+    if action == "transfer":
+        action = body.get("direction")
+        operations = {"read": {"transfer-read-open", "transfer-read", "transfer-status", "transfer-abort"},
+                      "write": {"transfer-write-open", "transfer-append", "transfer-finish", "transfer-status", "transfer-abort"}}
+        if not isinstance(transfer, dict) or transfer.get("op") not in operations.get(action, set()):
+            raise BridgeError("文件分块请求格式无效", 400)
     if action not in {"read", "write"} or "\0" in raw:
         raise BridgeError("文件请求格式无效", 400)
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
@@ -962,6 +1028,29 @@ def computer_file(owner, body):
                      or _check_approval_required_write([str(path)], str(binding.agent.session_id)))
         if error:
             raise BridgeError("该文件不在 Hermes 允许的文件访问范围内")
+        if transfer is not None:
+            import subprocess
+            namespace = hashlib.sha256(json.dumps([binding.owner, binding.session_id, binding.generation, action, str(path)]).encode()).hexdigest()
+            payload = dict(transfer)
+            if payload.get("op") in {"transfer-read-open", "transfer-write-open"}:
+                payload["path"] = str(path)
+            with _lock:
+                if _resolve(binding.session_id) is not binding:
+                    raise BridgeError("文件所属轮次已经结束")
+                binding.transfer_namespaces.add(namespace)
+            try:
+                completed = subprocess.run([sys.executable, str(Path(__file__).with_name("file_transfer.py")), namespace],
+                                           input=json.dumps(payload), text=True, capture_output=True, cwd=str(cwd), timeout=30)
+            finally:
+                if _bindings.get(binding.session_id) is not binding:
+                    _cleanup_file_transfers((namespace,))
+            if completed.returncode:
+                raise BridgeError("文件分块传输失败：" + completed.stderr.strip().split("\n")[-1][:300], 400)
+            if _resolve(binding.session_id) is not binding:
+                raise BridgeError("文件所属轮次已经结束")
+            result = json.loads(completed.stdout)
+            if "path" in result: result["path"] = raw
+            return {"ok": True, **result}
         limit = 25 * 1024 * 1024
         if action == "read":
             import stat

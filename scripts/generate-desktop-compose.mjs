@@ -37,8 +37,6 @@ ${recipe.platform?`    platform: ${recipe.platform}\n`:''}    build:
     mem_limit: 4g
     cpus: 2
     pids_limit: 512
-    security_opt:
-      - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:

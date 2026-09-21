@@ -1,6 +1,6 @@
 import { visibleMessageText, messageReasoningText } from '@shared/messageFiles'
 import { workspaceConversationTimestamp, workspaceHasUnread } from '@shared/workspace'
-import { toolResultFailed } from '@shared/chatTools'
+import { toolResultFailed, toolStatus } from '@shared/chatTools'
 import { serverFilePath, serverFileUrl } from '@shared/serverFiles'
 import type {
   ApprovalRequest,
@@ -132,6 +132,10 @@ export function chatMessageToUi(message: ChatMessage, agentNameFor?: (profile?: 
     status: message.isStreaming ? 'streaming' : message.stage,
     error: message.error,
     attachments,
+    // A later streaming string may replace an older structured body.
+    contentParts: message.contentParts?.filter(part => 'text' in part).map(part => (part as { text: string }).text).filter(Boolean).join('\n\n') === message.content
+      ? message.contentParts?.map(part => 'text' in part && message.role === 'assistant' ? { text: visibleMessageText(part.text) } : part)
+      : undefined,
     tools: message.toolCalls?.filter(tool => tool.id).map(tool => toolToUi(!message.isStreaming && ['pending', 'running'].includes(tool.status)
       ? { ...tool, status: 'interrupted' } : tool)),
     profile: message.profile,
@@ -385,6 +389,8 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
   return messages.filter(message => message.visible !== false).map(message => ({
     id: message.id, role: message.role, author: message.agentName,
     communication: message.communication,
+    taskReference: message.taskReference,
+    error: message.error, runId: message.runId,
     profile: message.agentId, createdAt: message.createdAt,
     content: (message.communication?.content ?? (message.role === 'assistant' ? visibleMessageText(message.content) : message.content)).replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
       const file = message.attachments.find(file => file.sourcePath === path)
@@ -399,11 +405,18 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
       kind: file.mimeType.startsWith('image/') ? 'image' : file.mimeType.startsWith('video/') ? 'video' : file.mimeType.startsWith('audio/') ? 'audio' : 'file',
       url: `/api/app/files/${file.id}/${file.mimeType.startsWith('image/') ? 'preview' : 'download'}`,
     })),
-    tools: message.tools.map((tool, index) => ({
-      id: String(tool.id || index), name: String(tool.name || tool.tool_name || '工具'),
-      status: String(tool.status).includes('error') ? 'error' : String(tool.status).includes('complete') ? 'success' : 'running',
-      input: tool.arguments ?? tool.input, output: tool.result ?? tool.output,
-    })),
+    tools: message.tools.map((tool, index) => {
+      let status = toolStatus(tool.status, tool.result ?? tool.output, tool.error)
+      // Match runtime finalization for older messages whose tools were not settled.
+      if (status === 'running' && ['complete', 'failed', 'interrupted'].includes(message.status)) {
+        status = message.status === 'complete' ? 'completed' : message.status === 'failed' ? 'failed' : 'interrupted'
+      }
+      return {
+        id: String(tool.id || index), name: String(tool.name || tool.tool_name || '工具'),
+        status: status === 'completed' ? 'success' : status === 'failed' ? 'error' : status,
+        input: tool.arguments ?? tool.args ?? tool.input, output: tool.error ?? tool.result ?? tool.output,
+      }
+    }),
   }))
 }
 
@@ -447,7 +460,7 @@ export function workspaceAgentActivity(conversations: import('@shared/workspace'
 export function workspaceConversationItem(c: import('@shared/workspace').WorkspaceConversation, agents: import('@shared/workspace').WorkspaceAgent[], agentActivity?: ReadonlyMap<string, WorkspaceAgentActivity>): SidebarItem {
   const activity = c.kind === 'direct' ? agentActivity?.get(c.memberIds[0] || '') : undefined
   return {
-    id: c.id, title: c.name, subtitle: c.preview || '开始聊天', pinned: c.pinned,
+    id: c.id, title: c.name, subtitle: c.preview || (c.kind === 'direct' ? agents.find(agent => agent.id === c.memberIds[0])?.job || '' : '') || '开始聊天', pinned: c.pinned,
     section: c.pinned ? '已置顶' : '聊天', avatar: c.kind === 'group' ? '' : c.avatar,
     avatarMembers: c.kind === 'group' ? workspaceAvatarMembers(c.memberIds, agents, c) : [],
     meta: formatConversationTime(workspaceConversationTimestamp(c)),

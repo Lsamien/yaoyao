@@ -238,6 +238,7 @@ export const EFFECTS: EffectsByState = {
   laughing: { confetti: { count: 7, period: 2400, life: 1000, origin: 70, spread: 38 } },
 
   // Work in flight — ribbons circling the body.
+  working: { trails: { count: 3, period: 2200, radius: 126 } },
   orbit: { trails: { count: 3, period: 2600, radius: 128 } },
   radar: { trails: { count: 2, period: 2000, radius: 132 } },
   progress: { trails: { count: 3, period: 1800, radius: 124 } },
@@ -371,6 +372,7 @@ export interface EffectFrame {
   paint: string
   showEffects: boolean
   showGlyphs: boolean
+  showTrails?: boolean
 }
 
 /** Called once per frame from the engine loop. */
@@ -380,7 +382,7 @@ export function updateEffects(frame: EffectFrame) {
   const strength = frame.strength
 
   if (frame.trails) {
-    if (spec?.trails && frame.showEffects && strength > 0) {
+    if (spec?.trails && frame.showEffects && frame.showTrails !== false && strength > 0) {
       drawTrails(frame.trails, spec.trails, frame.elapsed, strength, centre, centre)
     } else if (frame.trails.childNodes.length) {
       frame.trails.replaceChildren()
@@ -916,11 +918,15 @@ export interface CursorOptions {
   gaze?: { x?: number; y?: number }
   expression?: number
   fixedTime?: number
+  /** Live activity rings. A saved "working" face does not wear them. */
+  ribbons?: boolean
+  /** Draw activity around an uploaded avatar without drawing a replacement face. */
+  effectsOnly?: boolean
 }
 type Engine = ReturnType<typeof newEngine>
 function newEngine() {
   return { current: clone(EXPRESSIONS[0]), target: EXPRESSIONS[0], expression: 0, morph: 1, velocity: 0, blinkStart: noTimestamp(), spinStart: noTimestamp(), spinDuration: 900, last: 0, stateStart: 0, lastState: 'idle' as CursorState, lastBodyTransform: '',
-    props: {state: 'idle' as CursorState, expression: undefined as number | undefined, gaze: undefined as {x?:number;y?:number}|undefined, turn:0, spring:7, eyeScale:1, paused:true, motionStrength:0, effects:true, glyphs:true} }
+    props: {state: 'idle' as CursorState, expression: undefined as number | undefined, gaze: undefined as {x?:number;y?:number}|undefined, turn:0, spring:7, eyeScale:1, paused:true, motionStrength:0, effects:true, glyphs:true, ribbons:true} }
 }
 let nextId = 0
 export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
@@ -1000,6 +1006,7 @@ export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
           paint: paintRef.current,
           showEffects: p.effects !== false,
           showGlyphs: p.glyphs !== false,
+          showTrails: p.ribbons !== false,
         })
       }
 
@@ -1031,7 +1038,14 @@ export function mountCursorAvatar(svg: SVGSVGElement, initial: CursorOptions) {
     options=next
     svg.setAttribute('viewBox', next.silhouette.viewBox ?? VIEW_BOX)
     const e=engine.current, now=performance.now();paintRef.current=next.color
-    e.props={...e.props,state:next.state,expression:next.expression,gaze:next.gaze,paused:next.paused,motionStrength:next.paused?0:1}
+    e.props={...e.props,state:next.state,expression:next.expression,gaze:next.gaze,paused:next.paused,motionStrength:next.paused?0:1,ribbons:next.ribbons!==false}
+    const [vx,vy,vw,vh] = (next.silhouette.viewBox ?? VIEW_BOX).split(/\s+/).map(Number)
+    const cx = vx + vw / 2, cy = vy + vh / 2
+    const hasTrails = !next.paused && next.ribbons !== false && !!EFFECTS[next.state]?.trails
+    bodyGroup.current.style.visibility = next.effectsOnly ? 'hidden' : ''
+    // Leave room for live ribbons while keeping the saved silhouette and resting size.
+    bodyContent.current.setAttribute('transform', hasTrails ? `translate(${cx} ${cy}) scale(.72) translate(${-cx} ${-cy})` : '')
+    trailLayer.current.setAttribute('transform', `translate(${cx} ${cy}) scale(${Math.min(vw,vh) / FACE_BOX}) translate(${-FACE_BOX / 2} ${-FACE_BOX / 2})`)
     const outline=node<SVGGElement>('outline').current, clip=node<SVGClipPathElement>('clip').current, face=node<SVGGElement>('face').current
     const body=next.silhouette.body.replace(/\{\{GRADIENT\}\}/g,next.color)
     if(lastBody!==body){outline.innerHTML=body;lastBody=body}
@@ -1067,4 +1081,3 @@ function blinkScale(e: { blinkStart: number | null }, now: number) {
   // Fast close, slower open.
   return Math.max(t < 0.42 ? 1 - t / 0.42 : (t - 0.42) / 0.58, 0.04)
 }
-

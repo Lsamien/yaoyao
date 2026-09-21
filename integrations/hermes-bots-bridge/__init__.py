@@ -1,4 +1,4 @@
-"""Hermes plugin entry point. No core patch or native tool override."""
+"""Hermes plugin entry point; source compatibility repairs belong to the installer."""
 
 from .bootstrap import runtime
 
