@@ -28,15 +28,15 @@ async function switchMode() {
   try {
     const result = await desktop!.switchMode!(selected.value)
     if (!result.ok) throw new Error(result.error || '切换运行模式未完成，请重试。')
-    if (result.pendingLogin) notice.value = '请在弹出的窗口中登录服务器。'
+    if (result.pendingLogin) notice.value = '请在当前页面完成服务器连接与登录。'
     else await load()
   } catch (e) { error.value = e instanceof Error ? e.message : '切换运行模式未完成，请重试。' }
   finally { busy.value = false }
 }
 async function changeServer() {
   busy.value = true; error.value = ''; notice.value = ''
-  try { await desktop!.openRemoteLogin!(); notice.value = '请在弹出的窗口中填写服务器地址并登录。' }
-  catch (e) { error.value = e instanceof Error ? e.message : '无法打开服务器登录窗口。' }
+  try { await desktop!.openRemoteLogin!() }
+  catch (e) { error.value = e instanceof Error ? e.message : '无法打开服务器登录页面。' }
   finally { busy.value = false }
 }
 onMounted(load)

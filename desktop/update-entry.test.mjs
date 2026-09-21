@@ -17,6 +17,7 @@ test('only the main local app can open the native updater and repeated requests 
   const identityReady = new Promise(resolve => { releaseIdentity = resolve })
   const server = createServer(async (req, res) => {
     if (req.url === '/desktop/service') { await identityReady; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(identity)) }
+    else if(req.url==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
     else { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end('<title>Update entry fixture</title><button onclick="window.yaoyaoDesktop.openUpdates()">检测更新</button>') }
   })
   await new Promise(done => server.listen(0, '127.0.0.1', done))

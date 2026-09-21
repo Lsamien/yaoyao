@@ -31,7 +31,7 @@ const shell = resolve(out, 'shell')
 await mkdir(shell)
 await cp(resolve(root, 'bin/lib/data-home.mjs'), resolve(shell, 'data-home.mjs'))
 for (const file of await readdir(resolve(root, 'desktop'))) {
-  if (file === 'data-home.mjs' || file.endsWith('.test.mjs') || !/\.(js|mjs|cjs|html|css|png)$/.test(file)) continue
+  if (file === 'data-home.mjs' || file.endsWith('.test.mjs') || !/\.(js|mjs|cjs|html|css|png|svg)$/.test(file)) continue
   if(file==='file-transfer.mjs'){await build({entryPoints:[resolve(root,'desktop',file)],outfile:resolve(shell,file),bundle:true,platform:'node',format:'esm',target:'node24'});continue}
   if(/\.(js|mjs|cjs)$/.test(file))execFileSync(process.execPath,['--check',resolve(root,'desktop',file)],{stdio:'inherit'})
   await cp(resolve(root, 'desktop', file), resolve(shell, file))

@@ -11,7 +11,8 @@ import { synchronizeLocalService, stopLocalService, migrateLocalData } from './s
 import { resolveDataHome } from './data-home.mjs'
 import { DesktopEnvironmentHost, DesktopHostCore } from './environment-host.mjs'
 import { DesktopHostManager } from './host-manager.mjs'
-import { remoteSession, enrollDesktopHost, normalizeServerURL } from './remote-login.mjs'
+import { remoteRegistration, remoteSession, enrollDesktopHost, inspectServer } from './remote-login.mjs'
+import { DesktopOnboarding } from './onboarding.mjs'
 import { DesktopUpdateManager } from './update-manager.mjs'
 import { installComputerViewer } from './computer-viewer.mjs'
 
@@ -23,8 +24,9 @@ app.setName('夭夭')
 if (!app.requestSingleInstanceLock()) { app.quit() }
 else {
   let window, tray, manager, runnerManager, quitting = false, closing = false, timer
-  let updateWindow, updater, environmentHost, hostManager, loginWindow
+  let updateWindow, updater, environmentHost, hostManager, onboarding
   let remoteMode = false, remoteURL = '', serverModeActive = false, switchingMode = false
+  let recoveringService = false
   const serviceURL = () => remoteMode ? remoteURL : manager?.state.url
   const serviceOrigins = () => {
     try { return remoteMode && remoteURL ? [new URL(remoteURL).origin] : manager?.state.url ? [new URL(manager.state.url).origin] : [] }
@@ -46,15 +48,16 @@ else {
   const port = Number(process.env.HERMES_YAOYAO_DESKTOP_PORT || 15300)
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('桌面服务端口无效')
 
-  const trustedBoot = event => event.sender === window?.webContents && event.senderFrame?.url === bootURL
+  const trustedBoot = event => !closing && !quitting && event.sender === window?.webContents
+    && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === bootURL
   ipcMain.handle('desktop:status', event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面访问桌面服务')
-    return { phase: manager?.state.phase || 'starting', message: manager?.state.message || '正在启动…', canForceSync: manager?.state.canForceSync === true }
+    return onboarding.snapshot()
   })
   ipcMain.handle('desktop:retry', async event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面启动桌面服务')
     manager.restarts = []
-    try { await manager.start(); return true } catch { return false }
+    return onboarding.prepare()
   })
   ipcMain.handle('desktop:logs', event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面读取日志')
@@ -63,9 +66,14 @@ else {
   ipcMain.handle('desktop:force-sync', async event => {
     if (!trustedBoot(event) || event.senderFrame !== window.webContents.mainFrame || closing || quitting || !manager?.canForceSynchronization)
       throw new Error('不允许此页面覆盖本机 Web')
-    try { await manager.retrySynchronization({ force: true }); return true }
-    catch (error) { log(error.message); return false }
+    return onboarding.prepare({ force: true })
   })
+  for (const action of ['select', 'prepare', 'submit']) {
+    ipcMain.handle(`desktop:onboarding-${action}`, (event, input) => {
+      if (!trustedBoot(event)) throw new Error('不允许此页面操作安装与登录')
+      return onboarding[action](input)
+    })
+  }
   const trustedUpdate = event => event.sender === updateWindow?.webContents
     && event.senderFrame === updateWindow.webContents.mainFrame && event.senderFrame.url === updateURL
   ipcMain.handle('desktop:updates', async event => {
@@ -152,12 +160,14 @@ else {
     })
     window.on('close', event => { if (!quitting) { event.preventDefault(); window.hide() } })
     window.once('ready-to-show', () => { if (!startHidden) window.show() })
-    if (remoteMode && remoteURL) void window.loadURL(remoteURL)
-    else if (manager?.state.phase === 'ready') void window.loadURL(manager.state.url)
-    else void window.loadFile(join(desktopRoot, 'boot.html'))
+    if (onboarding?.state.active) return window.loadURL(bootURL)
+    if (remoteMode && remoteURL) return window.loadURL(remoteURL)
+    if (manager?.state.phase === 'ready') return window.loadURL(manager.state.url)
+    return window.loadFile(join(desktopRoot, 'boot.html'))
   }
   function stateChanged(state) {
     log(`${state.phase}: ${state.message}`)
+    onboarding?.serviceChanged(state)
     // Quit owns the window from this point on. A detached connection is not a
     // stopped server and must never navigate the closing window to boot.html.
     if (closing || quitting || remoteMode) return
@@ -173,10 +183,22 @@ else {
     if (forceSync) forceSync.enabled = !closing && !quitting && manager?.canForceSynchronization === true
     tray?.setToolTip(`夭夭 · ${state.message}`)
     if (!window || window.isDestroyed()) return
+    if (onboarding?.state.active) {
+      if (recoveringService && state.phase === 'ready') {
+        recoveringService = false
+        if (!onboarding.busy) void onboarding.prepare({ autoEnter: true }).catch(error => log(error.message))
+      }
+      return
+    }
     if (state.phase === 'ready') {
       const current = window.webContents.getURL()
       if (!current.startsWith(`${state.url}/`) && current !== state.url) void window.loadURL(state.url)
-    } else if (window.webContents.getURL() !== bootURL) void window.loadFile(join(desktopRoot, 'boot.html'))
+    } else if (window.webContents.getURL() !== bootURL) {
+      recoveringService = true
+      onboarding.open({ mode: 'local', remember: preferences.value.startupChoice === 'local' })
+      onboarding.serviceChanged(state)
+      void window.loadURL(bootURL)
+    }
   }
   app.on('second-instance', show)
   app.on('activate', show)
@@ -184,7 +206,7 @@ else {
   function requestQuit(stopBackground = false) {
     if (closing || quitting) return
     closing = true; clearInterval(timer)
-    updater?.cancel(); updateWindow?.close(); loginWindow?.close()
+    updater?.cancel(); updateWindow?.close()
     window?.hide()
     // Native Cmd+Q can enter before-quit from Cocoa's termination callback.
     // Both cleanup and the final quit must run after that callback unwinds.
@@ -303,12 +325,12 @@ else {
     ipcMain.handle('desktop:mode-switch',async(event,mode)=>{
       requireModePage(event)
       if(mode!=='client'&&mode!=='server')throw new Error('运行模式无效')
-      return switchMode(mode==='client'?'remote':'local',false)
+      return switchMode(mode==='client'?'remote':'local')
     })
     ipcMain.handle('desktop:remote-login',event=>{
       requireModePage(event)
       if(switchingMode)throw new Error('正在切换运行模式，请稍候')
-      openRemoteLogin()
+      return openRemoteLogin()
     })
     ipcMain.handle('desktop:computer-authorize',async(event,csrfToken)=>{
       requireModePage(event)
@@ -322,7 +344,6 @@ else {
       }catch(error){
         const message=error instanceof Error?error.message:'电脑授权恢复失败'
         hostManager.publish(`电脑授权未恢复：${message}`)
-        await appDialog({type:'warning',message:'账号已登录，但电脑授权未恢复',detail:`${message}\n\n请在“电脑”菜单中选择“重新授权…”。`})
         return {registered:false}
       }
     })
@@ -332,44 +353,82 @@ else {
         :await dialog.showOpenDialog({title:'导入电脑配置',properties:['openFile'],filters:[{name:'电脑配置',extensions:['json']}]})
       if(!selection.canceled&&selection.filePaths[0]&&!closing)await hostAction(()=>hostManager.importFile(selection.filePaths[0]))
     }
-    function openRemoteLogin(){
-      if(closing||quitting)return
-      if(loginWindow&&!loginWindow.isDestroyed()){loginWindow.show();loginWindow.focus();return}
-      loginWindow=new BrowserWindow({width:420,height:580,minWidth:360,minHeight:440,show:false,title:'登录远程',backgroundColor:'#f7f7f7',
-        webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,preload:join(desktopRoot,'remote-login-preload.cjs')}})
-      loginWindow.once('ready-to-show',()=>{if(loginWindow)loginWindow.show()})
-      loginWindow.on('closed',()=>{loginWindow=undefined})
-      const stored=preferences.value.remoteServer
-      void loginWindow.loadFile(join(desktopRoot,'remote-login.html'),stored?{query:{server:stored}}:undefined)
+    if (!preferences.value.remoteServer) {
+      const enrolled = await hostManager.read().catch(() => undefined)
+      if (enrolled?.serverURL) await preferences.setRemoteServer(enrolled.serverURL)
     }
-    async function enterRemoteMode(){
-      const enrolled=await hostManager.read().catch(error=>{log(error.message);return undefined})
-      let server=''
-      const candidate=preferences.value.remoteServer||enrolled?.serverURL
-      if(candidate){try{server=normalizeServerURL(candidate)}catch(error){log(error.message)}}
-      if(!server){openRemoteLogin();return false}
-      serverModeActive=false
-      await environmentHost?.close().catch(error=>log(error.message))
-      await runnerManager?.stop().catch(error=>log(error.message))
-      await manager?.stop().catch(error=>log(error.message))
-      remoteMode=true;remoteURL=server
-      await preferences.setRemoteServer(server).catch(error=>log(error.message))
-      await preferences.setStartupChoice('remote').catch(error=>log(error.message))
-      if(enrolled&&new URL(enrolled.serverURL).origin===new URL(server).origin)await hostManager.start().catch(error=>{hostManager.publish(error.message)})
-      const status=Menu.getApplicationMenu()?.getMenuItemById('desktop-service-status')
-      if(status)status.label=`已登录远程 · ${new URL(server).host}`
-      tray?.setToolTip(`夭夭 · 远程 ${new URL(server).host}`)
-      syncModeMenu()
-      log(`远程模式：${server}`)
-      if(!fixtureHome){
-        try{
-          const probe=await net.fetch(new URL('/api/app/bootstrap',server),{headers:{accept:'application/json'},redirect:'error'})
-          const info=await probe.json().catch(()=>undefined)
-          if(info?.authenticated!==true)openRemoteLogin()
-        }catch{openRemoteLogin()}
-      }
-      return true
+    onboarding = new DesktopOnboarding({
+      remoteServer: () => preferences.value.remoteServer,
+      inspect: server => inspectServer(server, (...args) => net.fetch(...args)),
+      prepareLocal: async ({ force }) => {
+        serverModeActive = true; remoteMode = false; remoteURL = ''
+        await hostManager.stop()
+        manager.restarts = []
+        if (force) await manager.retrySynchronization({ force: true })
+        else await manager.start()
+        if (manager.state.phase !== 'ready') throw new Error(manager.state.message)
+        if (!closing) environmentHost.start()
+        await runnerManager.start().catch(error => runnerManager.publish(error.message))
+        return manager.state.url
+      },
+      register: ({ serverURL, username, password }) => remoteRegistration(serverURL, { username, password }),
+      authenticate: async ({ mode, serverURL, setup, username, password }) => {
+        const auth = await remoteSession(serverURL, { setup, username, password })
+        for (const cookie of auth.cookieDetails) {
+          await electronSession.defaultSession.cookies.set({ url: serverURL, ...cookie,
+            httpOnly: true, secure: cookie.secure || serverURL.startsWith('https://') })
+        }
+        await electronSession.defaultSession.cookies.flushStore()
+        let warning
+        if (mode === 'remote' && auth.user.role === 'admin') {
+          try { await authorizeComputer(serverURL, auth) }
+          catch (error) { warning = `账号已登录，但电脑授权未恢复：${error.message}。可先进入夭夭，稍后在“电脑”菜单重新授权。` }
+        }
+        return { username: auth.user.username, warning }
+      },
+      activate: async ({ mode, serverURL, remember }) => {
+        if (closing || quitting) throw new Error('App 正在退出')
+        if (mode === 'remote') {
+          // Detach only; an independently installed local service keeps running.
+          serverModeActive = false
+          await environmentHost.close()
+          await runnerManager.stop()
+          await manager.stop()
+          remoteMode = true; remoteURL = serverURL
+          await preferences.setRemoteServer(serverURL)
+          const enrolled = await hostManager.read().catch(error => { log(error.message); return undefined })
+          if (enrolled && new URL(enrolled.serverURL).origin === new URL(serverURL).origin)
+            await hostManager.start().catch(error => hostManager.publish(error.message))
+        }
+        await preferences.setStartupChoice(remember ? mode : 'ask')
+        syncModeMenu()
+        const status = Menu.getApplicationMenu()?.getMenuItemById('desktop-service-status')
+        if (status) status.label = mode === 'remote' ? `已登录远程 · ${new URL(serverURL).host}` : '后台服务运行中'
+        tray?.setToolTip(mode === 'remote' ? `夭夭 · 远程 ${new URL(serverURL).host}` : '夭夭 · 本机运行')
+      },
+      navigate: url => {
+        if (closing || quitting) throw new Error('App 正在退出')
+        return window.loadURL(url)
+      },
+    })
+    async function openOnboarding(mode, { autoPrepare = false, remember = preferences.value.startupChoice !== 'ask', forceLogin = false } = {}) {
+      if (closing || quitting) throw new Error('App 正在退出')
+      onboarding.open({ mode, serverURL: preferences.value.remoteServer, remember, forceLogin })
+      if (!window || window.isDestroyed()) await createWindow()
+      else if (window.webContents.getURL() !== bootURL) await window.loadURL(bootURL)
+      window.show(); window.focus()
+      if (autoPrepare && (mode === 'local' || preferences.value.remoteServer))
+        await onboarding.prepare({ autoEnter: true })
+      return onboarding.snapshot()
     }
+    function openRemoteLogin() {
+      return openOnboarding('remote', { forceLogin: true })
+    }
+    ipcMain.handle('desktop:open-login', event => {
+      requireModePage(event)
+      // A session expiry returns to the same main-page flow for the active server.
+      return openOnboarding(remoteMode ? 'remote' : 'local', { autoPrepare: true })
+    })
     function syncModeMenu(){
       const menu=Menu.getApplicationMenu()
       const useRemote=menu?.getMenuItemById('desktop-host-use-remote'),useLocal=menu?.getMenuItemById('desktop-host-use-local'),ask=menu?.getMenuItemById('desktop-host-ask')
@@ -379,72 +438,16 @@ else {
       if(status)status.label=switchingMode?'正在切换运行模式…':remoteMode?'当前：客户端模式':serverModeActive?'当前：服务器模式':'请选择运行模式'
       if(ask)ask.checked=preferences.value.startupChoice==='ask'
     }
-    async function switchMode(mode,notify=true){
-      if(closing||quitting)return {ok:false,error:'App 正在退出'}
-      if(switchingMode)return {ok:false,error:'正在切换运行模式，请稍候'}
-      if(mode==='remote'&&remoteMode||mode==='local'&&serverModeActive)return {ok:true}
-      switchingMode=true;syncModeMenu()
-      try{
-        if(mode==='remote'){
-          if(await enterRemoteMode()){
-            if(window&&!window.isDestroyed())void window.loadURL(remoteURL)
-          }else return {ok:true,pendingLogin:true}
-        }else{
-          loginWindow?.close()
-          serverModeActive=true;remoteMode=false;remoteURL=''
-          await hostManager?.stop().catch(error=>log(error.message))
-          await preferences.setStartupChoice('local').catch(error=>log(error.message))
-          if(window&&!window.isDestroyed())void window.loadFile(join(desktopRoot,'boot.html'))
-          await manager?.start().catch(error=>log(error.message))
-          if(!closing)environmentHost?.start()
-        }
-        return {ok:true}
-      }catch(error){
-        if(notify)await appDialog({type:'error',message:'切换使用方式未完成',detail:error.message})
-        return {ok:false,error:error.message}
-      }finally{switchingMode=false;syncModeMenu()}
-    }
-    ipcMain.handle('desktop-remote-login:submit',async(_event,value)=>{
-      if(closing||quitting)return {ok:false,error:'App 正在退出'}
-      try{
-        const server=normalizeServerURL(value?.serverURL)
-        const auth=await remoteSession(server,{username:value?.username,password:value?.password})
-        let registered=false
-        if(auth.user?.role==='admin'){
-          await authorizeComputer(server,auth)
-          registered=true
-        }
-        try{
-          for(const [name,cookie] of auth.cookies)
-            await electronSession.defaultSession.cookies.set({url:server,name,value:cookie,httpOnly:true,secure:server.startsWith('https://')})
-        }catch(error){log(`远程会话 Cookie 写入失败：${error.message}`)}
-        await preferences.setRemoteServer(server)
-        await enterRemoteMode()
-        if(!window||window.isDestroyed())createWindow()
-        else void window.loadURL(server)
-        loginWindow?.close()
-        if(!registered)await appDialog({type:'info',message:'已登录远程服务器',detail:'当前账号不是管理员：窗口将使用远程夭夭。要把这台 Mac 注册为可远程控制的电脑，请使用管理员账号重新登录。'})
-        return {ok:true,hostRegistered:registered,user:{username:auth.user.username,role:auth.user.role}}
-      }catch(error){return {ok:false,error:error instanceof Error?error.message:'登录失败'}}
-    })
-    ipcMain.handle('desktop-remote-login:use-local',async()=>{
-      loginWindow?.close()
-      if(!serverModeActive){
-        if(!window||window.isDestroyed())createWindow()
-        await switchMode('local')
-      }
-      return {ok:true}
-    })
-    async function chooseStartupMode(){
-      if(fixtureHome)return 'local'
-      const stored=preferences.value.startupChoice
-      if(stored==='local'||stored==='remote')return stored
-      const choice=await dialog.showMessageBox({type:'question',title:'夭夭',message:'这台 Mac 如何使用夭夭？',
-        detail:'「登录远程」用夭夭服务器的地址和账号密码登录另一台电脑上的夭夭：本机不运行 Web 服务，窗口直接使用远程夭夭；管理员账号还会把这台 Mac 注册为可远程控制的电脑。只有「作为服务器运行」会启动这台 Mac 的服务，并使用服务器上的 Hermes。客户端不需要安装 Hermes。',
-        buttons:['连接服务器（客户端）','作为服务器运行'],defaultId:0,cancelId:0,checkboxLabel:'记住选择，之后启动不再询问',checkboxChecked:false,noLink:true})
-      const mode=choice.response===0?'remote':'local'
-      if(choice.checkboxChecked)await preferences.setStartupChoice(mode).catch(error=>log(error.message))
-      return mode
+    async function switchMode(mode) {
+      if (closing || quitting) return { ok: false, error: 'App 正在退出' }
+      if (switchingMode || onboarding.busy) return { ok: false, error: '当前步骤尚未完成，请稍候' }
+      switchingMode = true; syncModeMenu()
+      try {
+        const state = await openOnboarding(mode, { autoPrepare: true, remember: true })
+        return { ok: true, pendingLogin: state.active }
+      } catch (error) {
+        return { ok: false, error: error.message }
+      } finally { switchingMode = false; syncModeMenu() }
     }
     async function importRunner(){
       const selection=await dialog.showOpenDialog(window,{title:'导入执行节点配置',properties:['openFile'],filters:[{name:'Runner 配置',extensions:['json']}]})
@@ -480,11 +483,11 @@ else {
       {label:'运行模式',submenu:[{id:'desktop-mode-status',label:'请选择运行模式',enabled:false},{type:'separator'},
         {id:'desktop-host-use-remote',label:'客户端模式（连接服务器）',enabled:!remoteMode,click:()=>void switchMode('remote')},
         {id:'desktop-host-use-local',label:'服务器模式（本机运行）',enabled:!serverModeActive,click:()=>void switchMode('local')},
-        {label:'更换服务器…',click:openRemoteLogin},{type:'separator'},
+        {label:'更换服务器…',click:()=>{void openRemoteLogin().catch(error=>log(error.message))}},{type:'separator'},
         {id:'desktop-host-ask',label:'启动时询问运行模式',type:'checkbox',checked:preferences.value.startupChoice==='ask',
           click:item=>{void preferences.setStartupChoice(item.checked?'ask':remoteMode?'remote':'local').catch(async error=>{item.checked=preferences.value.startupChoice==='ask';await appDialog({type:'error',message:'无法保存启动偏好',detail:error.message})})}}]},
       {label:'电脑',submenu:[{id:'desktop-host-status',label:'未配置电脑',enabled:false},{type:'separator'},
-        {id:'desktop-host-authorize',label:'重新授权…',click:openRemoteLogin},
+        {id:'desktop-host-authorize',label:'重新授权…',click:()=>{void openRemoteLogin().catch(error=>log(error.message))}},
         {id:'desktop-host-import',label:'导入电脑配置…',click:importDesktopHost},
         {id:'desktop-host-reconnect',label:'重新连接',click:()=>hostAction(()=>hostManager.start())},
         {id:'desktop-host-forget',label:'断开并忘记配置',click:()=>hostAction(()=>hostManager.forget())}]},
@@ -496,22 +499,19 @@ else {
     tray.setToolTip('夭夭')
     tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开夭夭', click: show }, { label: '查看日志', click: () => shell.showItemInFolder(logFile) }, { type: 'separator' }, { label: '退出夭夭（后台继续运行）', click: () => requestQuit() }, { label: '停止后台服务并退出', click: () => requestQuit(true) }]))
     tray.on('click', show)
-    let startupRemote=false,startupLogin=false
-    serverModeActive=(await chooseStartupMode())==='local'
-    if(!serverModeActive){
-      const enrolled=await hostManager.read().catch(()=>undefined)
-      if(preferences.value.remoteServer||enrolled)startupRemote=await enterRemoteMode()
-      startupLogin=!startupRemote
-    }
-    if(!startupLogin)createWindow()
-    powerMonitor.on('resume', () => { if(!closing&&!quitting&&serverModeActive)void manager.check() })
-    timer = setInterval(() => { if(serverModeActive)void manager.check() }, 10_000); timer.unref()
-    if(startupLogin)openRemoteLogin()
-    else if(serverModeActive){
-      syncModeMenu()
-      await manager.start().catch(error => log(error.message))
-      if(!closing)environmentHost.start()
-    }
-    if(!startupLogin&&!startupRemote&&manager.state.phase==='ready')await runnerManager.start().catch(error=>{runnerManager.publish(error.message)})
+    // First launch stays in the main window. Remembered choices prepare in place
+    // and enter immediately only when that server already has a valid session.
+    const startupMode = preferences.value.startupChoice === 'ask'
+      ? (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_MODE !== 'ask' ? 'local' : null)
+      : preferences.value.startupChoice
+    onboarding.open({ mode: startupMode, serverURL: preferences.value.remoteServer,
+      remember: preferences.value.startupChoice !== 'ask' })
+    // Finish the initial navigation before a remembered session enters its server.
+    await createWindow()
+    powerMonitor.on('resume', () => { if (!closing && !quitting && serverModeActive) void manager.check() })
+    timer = setInterval(() => { if (serverModeActive) void manager.check() }, 10_000); timer.unref()
+    syncModeMenu()
+    if (startupMode && (startupMode === 'local' || preferences.value.remoteServer))
+      await onboarding.prepare({ autoEnter: true })
   }).catch(error => { log(error.stack || error.message); quitting = true; app.quit() })
 }

@@ -1,3 +1,4 @@
+import { enterLocal } from './test-support/onboarding.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile, stat, rm, mkdir, realpath } from 'node:fs/promises'
@@ -40,6 +41,7 @@ test('real desktop launches its bundled service, survives window close and recov
       HERMES_YAOYAO_UPSTREAM: `http://127.0.0.1:${upstreamPort}` }, timeout: 30000 })
     desktop.process().stderr.on('data', b => { if (process.env.DESKTOP_TEST_LOGS) process.stderr.write(b) })
     const page = await desktop.firstWindow()
+    await enterLocal(page)
     await page.waitForURL(`http://127.0.0.1:${port}/**`, { timeout: 30000 })
     const owner = await until(async () => JSON.parse(await readFile(join(home, 'service-instance.json'), 'utf8')), r => r.url)
     servicePID = owner.pid
@@ -54,7 +56,7 @@ test('real desktop launches its bundled service, survives window close and recov
     const registration=await page.evaluate(async()=>{
       const bootstrap=await (await fetch('/api/app/bootstrap')).json()
       const headers={'Content-Type':'application/json','X-CSRF-Token':bootstrap.csrfToken}
-      const setup=await fetch('/api/app/setup',{method:'POST',headers,body:JSON.stringify({username:'desktop-fixture',password:'desktop-fixture-password'})})
+      const setup=await fetch('/api/app/login',{method:'POST',headers,body:JSON.stringify({username:'desktop-fixture',password:'desktop-fixture-password'})})
       if(!setup.ok)throw new Error('fixture setup failed')
       headers['X-CSRF-Token']=(await (await fetch('/api/app/bootstrap')).json()).csrfToken
       const response=await fetch('/api/app/admin/runners',{method:'POST',headers,body:JSON.stringify({name:'桌面验收节点',allowedProfiles:['default']})})

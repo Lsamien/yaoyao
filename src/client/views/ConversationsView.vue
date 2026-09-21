@@ -521,6 +521,7 @@ async function hydrateWorkspace() {
 function connectEvents() {
   eventSource?.close()
   if (disposed) return
+  if (!navigator.onLine) { suspendEvents(); return }
   const source = new EventSource(`/api/app/events/stream?after=${cursor}${patchEvents ? '&format=patch-v1' : ''}`)
   eventSource = source
   source.addEventListener('workspace', event => {
@@ -540,11 +541,23 @@ function connectEvents() {
     if (disposed || eventSource !== source) return
     error.value = '连接中断，正在重连'
     void apiRequest('/api/app/capabilities').catch(cause => {
-      if (cause instanceof ApiError && cause.status === 401) source.close()
+      if (cause instanceof ApiError && [401, 403].includes(cause.status)) {
+        source.close()
+        error.value = cause.message
+      }
     })
   }
 }
+function suspendEvents() {
+  eventSource?.close(); eventSource = undefined
+  if (timer) clearTimeout(timer)
+  error.value = '网络已断开，恢复连接后将自动同步'
+}
+function resumeEvents() {
+  if (!disposed && auth.user?.id) void recoverEvents()
+}
 async function recoverEvents() {
+  if (!navigator.onLine) { suspendEvents(); return }
   eventSource?.close(); eventSource = undefined; eventQueue = []
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
   eventFrame = undefined
@@ -559,7 +572,9 @@ async function recoverEvents() {
   }
   catch (cause) {
     if (disposed) return
+    if (!navigator.onLine) { suspendEvents(); return }
     error.value = cause instanceof Error ? cause.message : '连接中断'
+    if (cause instanceof ApiError && [401, 403].includes(cause.status)) return
     timer = setTimeout(() => void recoverEvents(), 1500)
   }
 }
@@ -603,7 +618,8 @@ async function openDialog(kind: NonNullable<typeof dialog.value>, conversation =
   })
   try {
     if (kind === 'agent' || kind === 'editAgent') {
-      const s = await apiRequest<{ sources: Source[] }>('/api/app/agents/sources')
+      const s = await apiRequest<{ sources: Source[]; errors?: string[] }>('/api/app/agents/sources')
+      if (!s.sources.length && s.errors?.length) throw new Error('基础机器人服务暂不可用，请联系管理员检查 Hermes 连接后重试。')
       sources.value = s.sources
       form.source = s.sources[0] ? JSON.stringify([s.sources[0].nodeId, s.sources[0].profile]) : ''
     }
@@ -913,6 +929,9 @@ watch(() => auth.user?.id, (owner, previous) => {
   knowledgePanel.value?.close(); knowledgeEnabled.value = false; projects.value = []; knowledgeRevision.value++
   accountEpoch++; busy.value = false
   generation++
+  if (timer) clearTimeout(timer)
+  text.value = ''; files.value = []; mentions.value = []; quoted.value = null
+  pendingRequestId = undefined; pendingFingerprint = ''; uploadedSources = []; uploadedReferences = []
   eventSource?.close(); eventSource = undefined; eventQueue = []
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
   eventFrame = undefined; cursor = 0
@@ -924,6 +943,8 @@ watch(() => auth.user?.id, (owner, previous) => {
   if (owner) void recoverEvents()
 })
 onMounted(async () => {
+  window.addEventListener('offline', suspendEvents)
+  window.addEventListener('online', resumeEvents)
   void auth.refreshProfileAvatars().catch(() => undefined)
   try {
     await hydrateWorkspace()
@@ -934,6 +955,8 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('offline', suspendEvents)
+  window.removeEventListener('online', resumeEvents)
   for (const timer of sendRefreshes.values()) clearTimeout(timer)
   sendRefreshes.clear()
   disposed = true

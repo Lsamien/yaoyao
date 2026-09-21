@@ -28,8 +28,10 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
 const USERNAME_PATTERN = /^[^\u0000-\u001f\u007f\s/@\\]{1,100}$/u
 
 export type LocalRole = 'admin' | 'user'
+export type RegistrationStatus = 'pending' | 'approved'
 
 interface StoredUser {
+  registrationStatus?: RegistrationStatus
   id: string
   username: string
   avatar?: string
@@ -55,6 +57,7 @@ interface SessionRecord {
 interface StoredSessions { version: 1; sessions: Array<SessionRecord & { tokenHash: string }> }
 
 export interface LocalUser {
+  registrationStatus?: RegistrationStatus
   id: string
   username: string
   avatar?: string
@@ -95,6 +98,7 @@ function publicUser(user: StoredUser): LocalUser {
     username: user.username,
     ...(validAvatarImage(user.avatar) ? { avatar: user.avatar } : {}),
     role: user.role,
+    registrationStatus: user.registrationStatus ?? 'approved',
     assignedProfiles: [...(user.assignedProfiles ?? [])],
     enabled: user.enabled,
     mustChangePassword: user.mustChangePassword,
@@ -151,15 +155,17 @@ export class LocalAuthStore {
   login(ctx: Koa.Context, usernameValue: string, password: string): LocalUser {
     const normalized = usernameValue.trim().toLocaleLowerCase('en-US')
     const user = this.#users.find(candidate => candidate.normalizedUsername === normalized)
-    if (!user || !user.enabled || !this.#passwordMatches(user, password)) {
+    if (!user || !this.#passwordMatches(user, password)) {
       throw new HttpError(401, '用户名或密码错误', 'login_failed')
     }
+    if (user.registrationStatus === 'pending') throw new HttpError(403, '账号尚未开通，请等待管理员分配机器人并开通。', 'account_pending_approval')
+    if (!user.enabled) throw new HttpError(401, '用户名或密码错误', 'login_failed')
     return this.#issueSession(ctx, user)
   }
 
   issueSession(ctx: Koa.Context, userID: string): LocalUser {
     const user = this.#users.find(candidate => candidate.id === userID)
-    if (!user || !user.enabled) {
+    if (!user || !user.enabled || user.registrationStatus === 'pending') {
       throw new HttpError(401, '用户已失效', 'account_pairing_user_unavailable')
     }
     return this.#issueSession(ctx, user)
@@ -212,7 +218,7 @@ export class LocalAuthStore {
       return undefined
     }
     const user = this.#users.find(candidate => candidate.id === session.userID)
-    if (!user || !user.enabled || user.authVersion !== session.authVersion) {
+    if (!user || !user.enabled || user.registrationStatus === 'pending' || user.authVersion !== session.authVersion) {
       this.#sessions.delete(key)
       this.#saveSessions()
       return undefined
@@ -243,7 +249,7 @@ export class LocalAuthStore {
   }
 
   canUseSource(userID: string, nodeId: string, profile: string): boolean {
-    const user = this.#users.find(candidate => candidate.id === userID && candidate.enabled)
+    const user = this.#users.find(candidate => candidate.id === userID && candidate.enabled && candidate.registrationStatus !== 'pending')
     return Boolean(user && (user.role === 'admin' || (nodeId === 'local' && user.assignedProfiles?.includes(profile))))
   }
 
@@ -279,11 +285,38 @@ export class LocalAuthStore {
     return publicUser(user)
   }
 
+  register(usernameValue: string, passwordValue: string): void {
+    if (this.setupRequired) throw new HttpError(409, '服务器尚未初始化，请联系管理员。', 'registration_unavailable')
+    const username = canonicalUsername(usernameValue)
+    if (this.#users.some(user => user.normalizedUsername === username.toLocaleLowerCase('en-US'))) {
+      throw new HttpError(409, '用户名已存在', 'username_exists')
+    }
+    const user = this.#newUser(username, validatePassword(passwordValue), 'user', false, Date.now())
+    user.registrationStatus = 'pending'
+    user.enabled = false
+    user.assignedProfiles = []
+    this.#users.push(user)
+    this.#saveUsers()
+  }
+
+  approve(admin: LocalUser, userID: string, profiles: string[]): LocalUser {
+    if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
+    const user = this.#users.find(candidate => candidate.id === userID)
+    if (!user) throw new HttpError(404, '用户不存在', 'user_not_found')
+    if (user.role !== 'user' || user.registrationStatus !== 'pending') throw new HttpError(409, '该账号不在待开通状态，请刷新列表。', 'approval_not_pending')
+    const assigned = this.validateAssignedProfiles(profiles)
+    if (!assigned.length) throw new HttpError(400, '开通时必须分配至少一个基础机器人', 'assignment_required')
+    Object.assign(user, { assignedProfiles: assigned, registrationStatus: 'approved', enabled: true, updatedAt: Date.now(), authVersion: user.authVersion + 1 })
+    this.#saveUsers()
+    return publicUser(user)
+  }
+
   updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string; assignedProfiles?: unknown }): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const user = this.#users.find(candidate => candidate.id === userID)
     if (!user) throw new HttpError(404, '用户不存在', 'user_not_found')
     if (user.role === 'admin') throw new HttpError(409, '管理员账号请在账号设置中修改', 'admin_account_protected')
+    if (user.registrationStatus === 'pending' && input.enabled === true) throw new HttpError(409, '请使用“分配并开通”审核此账号', 'approval_required')
     const assigned = input.assignedProfiles === undefined ? undefined : this.validateAssignedProfiles(input.assignedProfiles)
     if (input.password !== undefined) validatePassword(input.password)
     if (assigned !== undefined) user.assignedProfiles = assigned

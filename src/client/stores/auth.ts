@@ -21,6 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref<string>()
   const authRequired = ref(true)
   const setupRequired = ref(false)
+  const registrationAvailable = ref(false)
   const insecureLan = ref(false)
   const groupUploadsEnabled = ref(false)
   const upstreamReady = ref(false)
@@ -54,6 +55,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (response.serverIdentity) acceptServerIdentity(response.serverIdentity)
     authRequired.value = response.authRequired
     setupRequired.value = Boolean(response.setupRequired)
+    registrationAvailable.value = response.registrationAvailable === true
     csrfToken.value = response.csrfToken
     insecureLan.value = Boolean(response.insecureLan)
     groupUploadsEnabled.value = Boolean(response.groupUploadsEnabled)
@@ -150,6 +152,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function refreshProfiles(): Promise<void> {
+    if (isBotOnly.value) return
     const nextProfiles = await authApi.fetchProfiles()
     profiles.value = nextProfiles
     if (!nextProfiles.some(profile => profile.name === activeProfileName.value)) {
@@ -158,6 +161,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function refreshProfileAvatars(): Promise<void> {
+    if (isBotOnly.value) return
     const identities = await authApi.fetchProfileIdentities(profiles.value)
     profiles.value = profiles.value.map(profile => ({
       ...profile,
@@ -178,7 +182,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   return {
     serverIdentity, acceptServerIdentity, refreshServerIdentity,
-    status, user, profiles, activeProfileName, activeProfile, csrfToken, error, authRequired, setupRequired, insecureLan, groupUploadsEnabled,
+    registrationAvailable, status, user, profiles, activeProfileName, activeProfile, csrfToken, error, authRequired, setupRequired, insecureLan, groupUploadsEnabled,
     upstreamReady, upstreamError, isAuthenticated, isBotOnly, bootstrap, login, setup, logout, selectProfile, refreshProfiles, refreshProfileAvatars,
     changeCredentials, updateAccountAvatar, expire,
   }

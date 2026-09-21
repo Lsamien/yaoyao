@@ -14,6 +14,7 @@ function normalizeBootstrap(payload: unknown): BootstrapResponse {
   const response: BootstrapResponse = {
     status: string(status.state ?? root.state) || undefined,
     authRequired,
+    registrationAvailable: bool(root.registrationAvailable),
     setupRequired: bool(root.setupRequired ?? root.setup_required),
     profiles,
     csrfToken,
@@ -93,4 +94,9 @@ export async function updateAccountAvatar(avatar: string | null): Promise<Curren
     method: 'PUT', body: { avatar } as unknown as JsonValue,
   })))
   return normalizeUser(payload.user ?? payload)
+}
+
+export async function register(input: LoginInput): Promise<void> {
+  await bootstrap()
+  await apiRequest('/api/app/register', { method: 'POST', body: { username: input.username, password: input.password }, notifyUnauthorized: false })
 }

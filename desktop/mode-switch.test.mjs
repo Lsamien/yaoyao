@@ -15,9 +15,10 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
   const identityReady=new Promise(resolve=>{releaseIdentity=resolve})
   const local=createServer(async(req,res)=>{
     if(req.url==='/desktop/service'){await identityReady;res.setHeader('Content-Type','application/json');res.end(JSON.stringify(identity))}
+    else if(req.url==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
     else {res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的本机页面</title>')}
   })
-  const remote=createServer((_req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的服务器页面</title>')})
+  const remote=createServer((_req,res)=>{if(_req.url==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}));return}res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的服务器页面</title>')})
   await new Promise(done=>local.listen(0,'127.0.0.1',done))
   await new Promise(done=>remote.listen(0,'127.0.0.1',done))
   const origin=`http://127.0.0.1:${local.address().port}`,remoteURL=`http://127.0.0.1:${remote.address().port}`
@@ -53,19 +54,22 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     assert.equal(JSON.parse(await readFile(join(home,'desktop-preferences.json'),'utf8')).startupChoice,'local')
     assert.equal(local.listening,true,'switching must leave an independent service running')
     assert.equal(remote.listening,true)
-    // The server picker remains available after either login/mode selection.
-    const opened=app.waitForEvent('window');await page.evaluate(()=>window.yaoyaoDesktop.openRemoteLogin())
-    const login=await opened;await login.waitForLoadState()
-    assert.equal(app.windows().length,2)
-    await page.evaluate(()=>window.yaoyaoDesktop.openRemoteLogin())
-    assert.equal(app.windows().length,2)
-    await login.evaluate(()=>{void window.yaoyaoRemoteLogin.useLocal()})
-    await expect.poll(()=>app.windows().length).toBe(1)
+    // Changing servers reuses the main page, including when opened repeatedly.
+    await page.evaluate(()=>{void window.yaoyaoDesktop.openRemoteLogin()})
+    await page.waitForURL('**/boot.html')
+    assert.equal(app.windows().length,1)
+    await page.getByRole('radio',{name:/本机运行/}).check()
+    await page.locator('#prepare-local').click()
+    await page.locator('#submit').click()
+    await page.waitForURL(origin+'/**')
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('client')})
     await page.waitForURL(remoteURL+'/**')
-    const pickerOpened=app.waitForEvent('window');await page.evaluate(()=>window.yaoyaoDesktop.openRemoteLogin())
-    const picker=await pickerOpened;await picker.waitForLoadState()
-    await picker.evaluate(()=>{void window.yaoyaoRemoteLogin.useLocal()})
+    await page.evaluate(()=>{void window.yaoyaoDesktop.openRemoteLogin()})
+    await page.waitForURL('**/boot.html')
+    assert.equal(app.windows().length,1)
+    await page.getByRole('radio',{name:/本机运行/}).check()
+    await page.locator('#prepare-local').click()
+    await page.locator('#submit').click()
     await page.waitForURL(origin+'/**')
     await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false})
   }finally{

@@ -75,3 +75,40 @@ test('wrong credentials and non-admin accounts surface clear errors',async()=>{
     fake.server.close();fake.server.closeAllConnections?.()
   }
 })
+
+test('native login preserves cookie expiry, scope and same-site policy', async () => {
+  let request = 0
+  const before = Date.now() / 1000
+  const auth = await remoteSession('https://server.test', { username: 'admin', password: 'password' }, async () => {
+    if (++request === 1) return new Response(JSON.stringify({ csrfToken: 'fixture' }), { headers: { 'set-cookie': 'csrf=one; Path=/; HttpOnly; Secure; SameSite=Strict' } })
+    return new Response(JSON.stringify({ user: { id: 'admin', role: 'admin' } }), { headers: { 'set-cookie': 'session=two; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Strict' } })
+  })
+  const session = auth.cookieDetails.find(cookie => cookie.name === 'session')
+  assert.equal(session.secure, true); assert.equal(session.httpOnly, true); assert.equal(session.sameSite, 'strict')
+  assert.equal(session.path, '/')
+  assert.ok(session.expirationDate >= before + 3600 && session.expirationDate <= Date.now() / 1000 + 3600)
+  assert.equal(auth.cookieDetails.find(cookie => cookie.name === 'csrf').expirationDate, undefined)
+})
+
+test('pending approval is not mislabeled as a bad password', async () => {
+  let calls = 0
+  await assert.rejects(() => remoteSession('https://server.test', { username: 'child', password: 'password' }, async () => {
+    if (++calls === 1) return Response.json({ csrfToken: 'csrf' })
+    return Response.json({ code: 'account_pending_approval', error: '账号尚未开通，请等待管理员开通。' }, { status: 403 })
+  }), /等待管理员开通/)
+})
+
+test('registration uses only anonymous bootstrap and does not return a session', async () => {
+  const { remoteRegistration } = await import('./remote-login.mjs')
+  const calls = []
+  await remoteRegistration('https://server.test', { username: ' child ', password: 'password' }, async (url, options) => {
+    calls.push(url.pathname)
+    if (url.pathname.endsWith('bootstrap')) return Response.json({ registrationAvailable: true, csrfToken: 'csrf' }, { headers: { 'set-cookie': 'csrf-cookie=value; Path=/; HttpOnly' } })
+    assert.equal(options.headers.origin, 'https://server.test')
+    assert.equal(options.headers['x-csrf-token'], 'csrf')
+    assert.match(options.headers.cookie, /csrf-cookie=value/)
+    assert.deepEqual(JSON.parse(options.body), { username: 'child', password: 'password' })
+    return Response.json({ registrationStatus: 'pending' }, { status: 201 })
+  })
+  assert.deepEqual(calls, ['/api/app/bootstrap', '/api/app/register'])
+})

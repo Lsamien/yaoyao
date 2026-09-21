@@ -7,6 +7,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import DesktopHostSettingsPanel from './DesktopHostSettingsPanel.vue'
 import RunnerSettingsPanel from './RunnerSettingsPanel.vue'
 import {
+  approveUser,
   createUser,
   deleteUser,
   getAllowedHostsSettings,
@@ -310,6 +311,10 @@ function saveAssignments(user: ManagedUser) {
   void run(async () => { await updateUser(user.id, { assignedProfiles: userAssignments.value[user.id] ?? [] }) })
 }
 
+function approve(user: ManagedUser) {
+  void run(async () => { await approveUser(user.id, userAssignments.value[user.id] ?? []) })
+}
+
 function toggle(user: ManagedUser) {
   void run(async () => { await updateUser(user.id, { enabled: !user.enabled }) })
 }
@@ -471,7 +476,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
       <div v-for="user in users" :key="user.id" class="user">
         <span>
           <b>{{ user.username }}</b>
-          <small>{{ user.role === 'admin' ? '管理员' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
+          <small>{{ user.role === 'admin' ? '管理员' : user.registrationStatus === 'pending' ? '待管理员开通' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
         </span>
         <template v-if="user.role !== 'admin'">
           <label class="user-assignment">基础机器人
@@ -479,9 +484,10 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
               <option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option>
             </select>
           </label>
-          <button type="button" :disabled="busy" @click="saveAssignments(user)">保存分配</button>
+          <button v-if="user.registrationStatus !== 'pending'" type="button" :disabled="busy" @click="saveAssignments(user)">保存分配</button>
           <button type="button" :aria-label="`为用户 ${user.username} 重置密码`" :disabled="busy" @click="reset(user)">重置密码</button>
-          <button type="button" :aria-label="`${user.enabled ? '禁用' : '启用'}用户 ${user.username}`" :disabled="busy" @click="toggle(user)">{{ user.enabled ? '禁用' : '启用' }}</button>
+          <button v-if="user.registrationStatus === 'pending'" type="button" :disabled="busy || !userAssignments[user.id]?.length" @click="approve(user)">分配并开通</button>
+          <button v-else type="button" :aria-label="`${user.enabled ? '禁用' : '启用'}用户 ${user.username}`" :disabled="busy" @click="toggle(user)">{{ user.enabled ? '禁用' : '启用' }}</button>
           <button class="danger" type="button" :aria-label="`删除用户 ${user.username}`" :disabled="busy" @click="remove(user)">删除</button>
         </template>
       </div>

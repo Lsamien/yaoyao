@@ -126,7 +126,8 @@ describe('Settings center dialog', () => {
     await wrapper.findAll('.mode-actions button').find(button => button.text() === '更换服务器…')!.trigger('click')
     await flushPromises()
     expect(openRemoteLogin).toHaveBeenCalledOnce()
-    expect(wrapper.get('[role="status"]').text()).toContain('服务器地址并登录')
+    expect(wrapper.text()).not.toContain('弹出的窗口')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     wrapper.unmount()
   })
   it.each(['agent-identity', 'agent-models'])('keeps %s and the Profile selector out of Bot-mode personal settings', initialPage => {

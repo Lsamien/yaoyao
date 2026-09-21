@@ -47,6 +47,7 @@ export interface BootstrapResponse {
   serverIdentity?: import('./serverIdentity.js').ServerIdentity
   status?: string
   authRequired: boolean
+  registrationAvailable?: boolean
   setupRequired?: boolean
   user?: CurrentUser
   profiles: Profile[]

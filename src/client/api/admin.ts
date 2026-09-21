@@ -5,6 +5,7 @@ export interface ManagedUser {
   id: string
   username: string
   role: 'admin' | 'user'
+  registrationStatus?: 'pending' | 'approved'
   assignedProfiles?: string[]
   enabled: boolean
   mustChangePassword: boolean
@@ -87,4 +88,8 @@ export function getOpenVikingSettings(): Promise<OpenVikingSettings> {
 
 export function saveOpenVikingSettings(input: Omit<OpenVikingSettings, 'keyConfigured' | 'source' | 'status' | 'error'> & { adminKey?: string }): Promise<OpenVikingSettings> {
   return apiRequest('/api/app/admin/openviking', { method: 'PUT', body: input as unknown as JsonValue })
+}
+
+export function approveUser(id: string, assignedProfiles: string[]): Promise<ManagedUser> {
+  return apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { assignedProfiles } })
 }

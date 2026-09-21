@@ -1,3 +1,4 @@
+import { enterLocal } from './test-support/onboarding.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, writeFile, rm, cp, realpath } from 'node:fs/promises'
@@ -75,6 +76,7 @@ test('App first launch installs an independent Web; Web remains up after quit an
     }
     app = await launch()
     const page = await app.firstWindow()
+    await enterLocal(page, { username: 'sync-fixture', password: 'sync-fixture-password' })
     await page.waitForURL(`http://127.0.0.1:${port}/**`, { timeout: 90000 })
     const record = JSON.parse(await readFile(join(home, 'service-instance.json'), 'utf8'))
     assert.equal(record.desktopOwned, false)
@@ -88,7 +90,7 @@ test('App first launch installs an independent Web; Web remains up after quit an
     }
     const support = await page.evaluate(async () => {
       const bootstrap = await (await fetch('/api/app/bootstrap')).json()
-      const setup = await fetch('/api/app/setup', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': bootstrap.csrfToken },
+      const setup = await fetch('/api/app/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': bootstrap.csrfToken },
         body: JSON.stringify({ username: 'sync-fixture', password: 'sync-fixture-password' }) })
       if (!setup.ok) throw new Error('验收账号创建失败')
       return (await fetch('/api/app/system/update/status')).json()

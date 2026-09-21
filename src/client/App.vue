@@ -45,7 +45,7 @@ watch(() => theme.resolvedTheme, value => {
 watch(pageTitle, value => { document.title = value }, { immediate: true })
 
 onMounted(() => {
-  if (!agentIdentityFixture) void auth.bootstrap()
+  if (!agentIdentityFixture) void router.isReady().then(() => auth.bootstrap())
 })
 </script>
 

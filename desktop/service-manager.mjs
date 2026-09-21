@@ -115,14 +115,14 @@ export class DesktopServiceManager {
   }
   async boot({ force = false } = {}) {
     const generation = ++this.generation
-    this.publish({ phase: 'starting', message: '正在启动本地服务…' })
+    this.publish({ phase: 'starting', stage: 'checking', message: '正在检查本地服务…' })
     try {
-      await this.options.prepareHome?.(message => this.publish({ phase: 'starting', message }))
+      await this.options.prepareHome?.(message => this.publish({ phase: 'starting', stage: 'checking', message }))
       await mkdir(this.options.home, { recursive: true, mode: 0o700 })
       this.root = await realpath(this.options.home)
       this.updateNotice = undefined
       if (this.options.synchronize) {
-        try { await this.options.synchronize(message => this.publish({ phase: 'starting', message }), { force }) }
+        try { await this.options.synchronize(message => this.publish({ phase: 'starting', stage: 'installing', message }), { force }) }
         catch (error) {
           // Busy is reported before stopping or switching. Other failures still
           // fail closed; the existing service must pass the usual identity checks.
@@ -131,6 +131,7 @@ export class DesktopServiceManager {
         }
         if (generation !== this.generation || this.stopping) return
       }
+      this.publish({ phase: 'starting', stage: 'starting', message: '正在启动并检查服务…' })
       let record = await this.readRecord()
       if (generation !== this.generation || this.stopping) return
       if (record?.url) {

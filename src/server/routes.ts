@@ -1,3 +1,4 @@
+import { RegistrationLimiter } from './subaccountAccess.js'
 import { readServerIdentity, updateServerIdentity } from './serverIdentity.js'
 import { authorizeFileRead, fileAccessWorkingDirectory, readFileAccess, saveFileAccess } from './fileAccess.js'
 import { readHostTools, saveHostTools } from './hostToolSettings.js'
@@ -809,6 +810,7 @@ async function bootstrap(
       authRequired: true,
       authenticated: false,
       setupRequired: dependencies.auth.setupRequired,
+      registrationAvailable: !dependencies.auth.setupRequired,
       profiles: [],
       csrfToken,
       insecureLan: dependencies.config.insecureLan,
@@ -856,6 +858,7 @@ async function bootstrap(
     status,
     authRequired: true,
     authenticated: true,
+    registrationAvailable: true,
     serverIdentity: readServerIdentity(dependencies.workspace),
     user,
     profiles,
@@ -1152,6 +1155,7 @@ function pairedLocalMediaPath(config: ServerConfig, rawPath: string): string {
 
 export function createApiRouter(dependencies: RouteDependencies): Router {
   const router = new Router()
+  const registrations = new RegistrationLimiter()
   const fileReadRequest = (ctx: Koa.Context, path: string) => ['GET', 'HEAD'].includes(ctx.method)
     && /^\/api\/(?:files(?:\/[^/]+)?|fs\/[^/]+|media|hermes\/download)$/.test(path)
   const authorizeFileQuery = async (ctx: Koa.Context, route: string, host: Pick<UpstreamServiceSession, 'request'> = dependencies.upstreamSession) => {
@@ -1709,6 +1713,18 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   router.post('/api/app/login', async (ctx) => {
     await login(ctx, dependencies)
   })
+  router.post('/api/app/register', ctx => {
+    const retry = registrations.take(ctx.req.socket.remoteAddress ?? 'unknown')
+    if (retry) {
+      ctx.set('Retry-After', String(retry))
+      throw new HttpError(429, '注册请求过于频繁，请稍后重试。', 'registration_rate_limited')
+    }
+    const request = body(ctx)
+    if (Object.keys(request).some(key => !['username', 'password'].includes(key)) || typeof request.username !== 'string' || typeof request.password !== 'string')
+      throw new HttpError(400, '请填写用户名和密码', 'invalid_registration')
+    dependencies.auth.register(request.username, request.password)
+    json(ctx, 201, { registrationStatus: 'pending', message: '注册成功，请等待管理员开通。' })
+  })
   router.post('/api/app/logout', async (ctx) => {
     dependencies.auth.logout(ctx)
     json(ctx, 200, { ok: true, csrfToken: dependencies.csrf.issue(ctx, true) })
@@ -1736,6 +1752,20 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const username = typeof request.username === 'string' ? request.username : ''
     const password = typeof request.password === 'string' ? request.password : ''
     json(ctx, 201, dependencies.auth.create(admin, username, password, request.assignedProfiles))
+  })
+  router.post('/api/app/admin/users/:userID/approve', async ctx => {
+    dependencies.auth.requireAdmin(ctx)
+    const userID = canonicalUUID(ctx.params.userID, 'user ID'), request = body(ctx)
+    if (Object.keys(request).some(key => key !== 'assignedProfiles')) throw new HttpError(400, '开通参数无效', 'invalid_approval')
+    const profiles = dependencies.auth.validateAssignedProfiles(request.assignedProfiles)
+    if (!profiles.length) throw new HttpError(400, '开通时必须分配至少一个基础机器人', 'assignment_required')
+    const response = await dependencies.upstreamSession.request('/api/profiles', { cache: 'reload' })
+    const available = new Set(normalizedProfiles(requireSuccess(response)).map(value => typeof value === 'string' ? value : (value as JsonObject).name))
+    if (profiles.some(profile => !available.has(profile))) throw new HttpError(409, '所选基础机器人当前不可用，请刷新后重新选择。', 'source_unavailable')
+    // Revalidate the administrator after the asynchronous catalogue lookup.
+    delete ctx.state.localUser
+    const admin = dependencies.auth.requireAdmin(ctx)
+    json(ctx, 200, dependencies.auth.approve(admin, userID, profiles))
   })
   router.patch('/api/app/admin/users/:userID', async (ctx) => {
     const admin = dependencies.auth.requireAdmin(ctx)

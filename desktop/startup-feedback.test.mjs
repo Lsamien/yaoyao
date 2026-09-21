@@ -1,3 +1,4 @@
+import { enterLocal } from './test-support/onboarding.mjs'
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,realpath,readFile,rm,mkdir,cp,writeFile,readdir} from 'node:fs/promises'
@@ -29,11 +30,13 @@ test('built startup page shows a real helper error and Retry recovers into the W
     await page.locator('#status[role="alert"]').waitFor({timeout:30000})
     assert.match(await page.locator('#status').textContent(),/已有服务未注册/)
     assert.equal(await page.getByRole('button',{name:'重试',exact:true}).isVisible(),true)
+    await page.locator('#install-details summary').click()
     assert.equal(await page.getByRole('button',{name:'查看日志',exact:true}).isVisible(),true)
     await mkdir(join(root,'test-results/desktop'),{recursive:true})
     await page.screenshot({path:join(root,'test-results/desktop/startup-error-retry.png')})
     await new Promise(done=>blocker.close(done))
     await page.getByRole('button',{name:'重试',exact:true}).click()
+    await enterLocal(page)
     await page.waitForURL(`http://127.0.0.1:${port}/**`,{timeout:45000})
     assert.equal((await localRequest(`http://127.0.0.1:${port}/healthz`)).body.ok,true)
     await page.screenshot({path:join(root,'test-results/desktop/startup-recovered.png')})
@@ -65,7 +68,7 @@ test('same-version unknown ancestry offers an explicit overwrite and preserves e
   assert.match(await page.locator('#status').textContent(),/构建先后关系无法确定/)
   assert.equal(verifyRuntimePackage(driver.snapshot().root).commit,'f'.repeat(40))
   await mkdir(join(root,'test-results/desktop'),{recursive:true});await page.screenshot({path:join(root,'test-results/desktop/same-version-force.png')})
-  await button.click();await page.waitForURL(`http://127.0.0.1:${port}/**`,{timeout:45000})
+  await button.click();await enterLocal(page);await page.waitForURL(`http://127.0.0.1:${port}/**`,{timeout:45000})
   const record=JSON.parse(await readFile(join(home,'service-instance.json'),'utf8'))
   const identity=await localRequest(`http://127.0.0.1:${port}/desktop/service`,record.token)
   assert.equal(identity.body.build.artifactDigest,original.artifactDigest)

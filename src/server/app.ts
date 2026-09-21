@@ -1,3 +1,4 @@
+import { isWorkspaceAccountPath } from './subaccountAccess.js'
 import { chatTranscriptRouter } from './chatTranscriptApi.js'
 import {DesktopEnvironments} from './desktopEnvironments.js'
 import {DesktopHostHub} from './desktopHosts.js'
@@ -403,7 +404,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
         && path !== '/api/app/agents/remote'
       const pushPath = /^\/api\/(?:app\/)?push\/v1\//.test(path)
       const identityRead = path === '/api/app/server-identity' && ['GET', 'HEAD'].includes(ctx.method)
-      if (!publicPath && !accountPath && !workspacePath && !pushPath && !identityRead)
+      if (!publicPath && !accountPath && !workspacePath && !isWorkspaceAccountPath(ctx.method, path) && !pushPath && !identityRead)
         throw new HttpError(403, '子账号只能使用 Bot 模式', 'bot_mode_required')
     }
     await next()
@@ -428,6 +429,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     const anonymous = ctx.path === '/api/app/bootstrap'
       || ctx.path === '/api/app/setup'
       || ctx.path === '/api/app/login'
+      || ctx.path === '/api/app/register'
       || ctx.path === '/api/status'
       || ctx.path === '/api/auth/providers'
       || ctx.path === '/auth/password-login'

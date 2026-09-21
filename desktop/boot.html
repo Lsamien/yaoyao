@@ -1,5 +1,66 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'">
-<title>夭夭</title><link rel="stylesheet" href="boot.css"></head>
-<body><main><img src="icon.png" alt="" width="72" height="72"><h1>夭夭</h1><p id="status" role="status" aria-live="polite">正在启动本地服务…</p><div id="actions" hidden><button id="force-sync" hidden>使用当前 App 覆盖同版本 Web</button><button id="retry">重试</button><button id="logs">查看日志</button></div></main><script src="boot.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'">
+  <title>开始使用夭夭</title><link rel="stylesheet" href="boot.css">
+</head>
+<body>
+<main class="page">
+  <header class="brand"><div><img src="icon.png" alt="" width="40" height="40"><strong>夭夭</strong></div><span>服务器与账号</span></header>
+  <div class="intro"><h1>开始使用夭夭</h1><p>选择服务器，完成准备后即可开始使用。</p></div>
+  <ol class="steps" aria-label="设置进度">
+    <li id="step-choice" aria-current="step"><span class="step-dot"><b>1</b><svg><use href="boot-icons.svg#check"/></svg></span>选择服务器</li>
+    <li id="step-prepare"><span class="step-dot"><b>2</b><svg><use href="boot-icons.svg#check"/></svg></span>准备服务</li>
+    <li id="step-account"><span class="step-dot"><b>3</b><svg><use href="boot-icons.svg#check"/></svg></span><span id="account-step-title">登录账号</span></li>
+  </ol>
+  <section class="section choice-section" aria-labelledby="choice-title">
+    <h2 id="choice-title"><span>01</span>选择服务器</h2>
+    <fieldset id="mode-options" class="mode-options"><legend class="sr-only">服务器运行方式</legend>
+      <label class="mode-option"><input type="radio" name="mode" value="local"><svg class="mode-icon"><use href="boot-icons.svg#monitor"/></svg><span><strong>本机运行</strong><small>在这台电脑准备并运行服务</small></span></label>
+      <label class="mode-option"><input type="radio" name="mode" value="remote"><svg class="mode-icon"><use href="boot-icons.svg#link"/></svg><span><strong>连接远程服务器</strong><small>使用已有服务器，本机无需安装</small></span></label>
+    </fieldset>
+  </section>
+  <section id="prepare-section" class="section pending" aria-labelledby="prepare-title">
+    <h2 id="prepare-title"><span>02</span><span id="prepare-heading">准备服务</span></h2>
+    <p id="choose-hint" class="muted inset">请先选择本机运行或连接远程服务器。</p>
+    <div id="local-panel" hidden>
+      <p class="muted inset">检测已有环境，按顺序准备缺少的组件。</p>
+      <div class="installation">
+        <ol class="install-steps">
+          <li data-stage="checking"><svg><use href="boot-icons.svg#circle"/></svg><span>检查运行环境</span><small>等待中</small></li>
+          <li data-stage="installing"><svg><use href="boot-icons.svg#circle"/></svg><span>准备服务组件</span><small>等待中</small></li>
+          <li data-stage="starting"><svg><use href="boot-icons.svg#circle"/></svg><span>启动并检查服务</span><small>等待中</small></li>
+        </ol>
+        <progress id="install-progress" aria-label="正在准备本机服务" hidden></progress>
+        <details id="install-details"><summary>查看安装详情<svg><use href="boot-icons.svg#chevron"/></svg></summary><pre id="install-log">准备开始</pre><button id="logs" class="text-button" type="button">查看日志</button></details>
+      </div>
+    </div>
+    <form id="connection-form" class="inset" hidden>
+      <label for="server">服务器地址</label>
+      <div class="connection-row"><input id="server" name="server" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="192.168.1.10:15300" required><button id="detect" class="secondary" type="submit">检测连接</button></div>
+    </form>
+    <p id="status" class="status inset" role="status" aria-live="polite"></p>
+    <div id="actions" class="actions inset" hidden><button id="retry" class="secondary" type="button">重试</button><button id="force-sync" class="secondary" type="button" hidden>使用当前 App 覆盖同版本 Web</button></div>
+    <button id="prepare-local" class="primary" type="button" hidden><span>检测并准备本机服务</span><svg><use href="boot-icons.svg#arrow"/></svg></button>
+  </section>
+  <section id="account-section" class="section pending" aria-labelledby="account-title">
+    <h2 id="account-title"><span>03</span><span id="account-heading">登录账号</span></h2>
+    <p id="account-hint" class="muted inset">服务准备完成后，在此登录账号。</p>
+    <form id="login-form" hidden>
+      <div id="credentials" class="inset">
+        <div class="field"><label for="username">账号</label><input id="username" name="username" autocomplete="username" spellcheck="false" placeholder="输入用户名" required maxlength="320"></div>
+        <div class="field"><label for="password">密码</label><div class="password-input"><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required maxlength="4096"><button id="toggle-password" class="eye-button" type="button" aria-label="显示密码" aria-pressed="false"><svg><use href="boot-icons.svg#eye"/></svg></button></div></div>
+        <div id="confirmation-field" class="field" hidden><label for="confirmation">确认密码</label><input id="confirmation" name="confirmation" type="password" autocomplete="new-password" placeholder="再次输入密码" maxlength="4096"></div>
+      </div>
+      <p id="registration-notice" class="muted inset" role="status" hidden></p>
+      <p id="login-error" class="error inset" role="alert" hidden></p>
+      <button id="submit" class="primary" type="submit"><span>登录并进入夭夭</span><svg><use href="boot-icons.svg#arrow"/></svg></button>
+    </form>
+    <button id="waiting" class="primary" type="button" disabled hidden>正在准备服务，请稍候</button>
+  </section>
+  <footer><label class="remember"><input id="remember" type="checkbox">记住本次选择</label><button id="register-toggle" class="text-button" type="button" hidden>没有账号？注册子账号</button><button id="help-button" class="text-button" type="button" aria-expanded="false" aria-controls="help">帮助</button></footer>
+  <div id="help" class="help" hidden><p><strong>本机运行：</strong>复用已有服务，或准备本机服务后创建管理员。机器人运行还需要本机的 Hermes 环境。</p><p><strong>远程连接：</strong>填写夭夭服务器地址，检测成功后使用该服务器的账号登录。管理员登录后会尝试将本机注册为可控制的电脑。</p><p>更换服务器不会迁移原服务器上的数据。遇到安装问题，可展开安装详情查看日志。</p></div>
+</main>
+<script src="boot.js"></script>
+</body></html>
