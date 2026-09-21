@@ -355,3 +355,82 @@ it('routes chunk copies from any connected computer to the Bot VM and snapshots 
  expect(actions.at(-1).op).toBe('transfer-abort')
  await expect(service.call('owner',agent.id,'desktop_file_copy',{sourceHost:HOST_A,sourcePath:'source.bin',targetHost:'vm',targetPath:'target.bin',maxBytes:100*1024*1024},new AbortController().signal,()=>{},'local',service.hostEpochs('owner',agent),HOST_A,vm)).rejects.toThrow()
 })
+
+it('lists stable tool targets and separate per-host capabilities without claiming browser availability', () => {
+ const filesOnly = { ...host, id: randomUUID(), name: '同名电脑', screen: false, accessibility: false, approved: [], full: [ownerKey('owner')] }
+ service.exchange({ host: { ...host, name: '同名电脑' }, results: [] })
+ service.remoteExchange(HOST_A, { host: filesOnly, results: [] })
+ service.remoteExchange(HOST_B, { host: { ...host, id: randomUUID(), name: 'Linux', platform: 'linux', full: [ownerKey('owner')] }, results: [] })
+ const text = service.onlineHostsLine('owner', HOST_A)
+ expect(text).toContain('host="server"')
+ expect(text).toContain(`host="${HOST_A}"`)
+ expect(text).toContain('电脑·本机')
+ expect(text).toContain('屏幕控制=就绪；文件与命令=未授权')
+ expect(text).toContain('屏幕控制=未授权；文件与命令=就绪')
+ expect(text).toContain('屏幕控制=不支持；文件与命令=不支持')
+ expect(text).not.toContain('浏览器可用')
+ const ungranted = service.onlineHostsLine('other', HOST_A)
+ expect(ungranted).not.toContain('=就绪')
+ saveHostTools(home, { scriptMachine: false })
+ expect(service.snapshot('owner', agent, HOST_A).hosts.find(host => host.id === HOST_A)?.capabilities.shell.status).toBe('disabled')
+ expect(service.onlineHostsLine('owner', HOST_A)).toContain('host="server"')
+})
+
+const environmentMetadata={version:1 as const,osRelease:'25.0.0',arch:'arm64',shell:'/bin/zsh',homeDirectory:'/Users/fixture',defaultCwd:'/Users/fixture',fileRoots:['/Users/fixture'],shellScope:'user' as const,timezone:'Asia/Shanghai'}
+it('snapshots negotiated host facts per owner without inventing paths for old clients',()=>{
+ const result=service.exchange({host:{...host,full:[ownerKey('owner')],fileTransferVersion:1,environment:environmentMetadata},results:[]})
+ expect(result.capabilities).toEqual({environmentMetadata:1})
+ service.remoteExchange(HOST_A,{host:{...host,id:randomUUID(),name:'旧客户端'},results:[]})
+ const snapshot=service.snapshot('owner',agent,'local'),server=snapshot.hosts.find(host=>host.id==='local')!
+ expect(server.metadata).toEqual(environmentMetadata)
+ expect(server.capabilities.shell).toEqual({enabled:true,status:'ready'})
+ expect(server.transfer).toEqual({protocol:'chunked',readMaxMiB:25,writeMaxMiB:25})
+ expect(snapshot.hosts.find(host=>host.id===HOST_A)?.metadata).toBeUndefined()
+ expect(JSON.stringify(service.snapshot('other',agent,'local'))).not.toContain('/Users/fixture')
+ expect(JSON.stringify(snapshot)).not.toContain(ownerKey('owner'))
+ server.metadata!.fileRoots!.push('/changed')
+ expect(service.snapshot('owner',agent).hosts.find(host=>host.id==='local')?.metadata?.fileRoots).toEqual(['/Users/fixture'])
+})
+
+it('keeps offline and disabled registered computers visible with actionable reasons',()=>{
+ store.put('_system','desktop-host',HOST_B,{id:HOST_B,name:'尚未连接',enabled:false,tokenHash:'private',createdAt:1})
+ service.remoteExchange(HOST_A,{host:{...host,id:randomUUID(),name:'连接电脑',full:[ownerKey('owner')],environment:environmentMetadata},results:[]})
+ const saved=service.snapshot('owner',agent,HOST_A)
+ vi.useFakeTimers();vi.advanceTimersByTime(16000)
+ const offline=service.snapshot('owner',agent,HOST_A)
+ expect(offline.hosts.find(host=>host.id===HOST_A)).toMatchObject({source:true,online:false,capabilities:{shell:{enabled:false,status:'offline'}}})
+ expect(offline.hosts.find(host=>host.id===HOST_A)?.metadata).toBeUndefined()
+ expect(offline.hosts.find(host=>host.id===HOST_B)).toMatchObject({name:'尚未连接',open:false,capabilities:{view:{enabled:false,status:'disabled'}}})
+ expect(saved.hosts.find(host=>host.id===HOST_A)?.capabilities.shell.status).toBe('ready')
+ expect(service.deviceContextLine('owner',HOST_A)).toContain('不能回退到服务器')
+ expect(JSON.stringify(offline)).not.toContain('private')
+})
+
+it('distinguishes human takeover from grants and rechecks revocation after collecting a snapshot',async()=>{
+ host.full=[ownerKey('owner')];drive()
+ const ticket=await take(),snapshot=service.snapshot('owner',agent,'local'),server=snapshot.hosts[0]!
+ expect(server.capabilities.shell).toEqual({enabled:true,status:'human_control'})
+ await request(app()).post(base()+'/computer/giveback').send({controlId:ticket.controlId,token:ticket.token}).expect(200)
+ expect(service.snapshot('owner',agent).hosts[0]?.capabilities.shell.status).toBe('ready')
+ host.full=[];service.exchange({host,results:[]})
+ const epochs=Object.fromEntries(snapshot.hosts.map(host=>[host.id,host.epoch!]))
+ await expect(service.call('owner',agent.id,'desktop_file_list',{host:'server',path:'.'},new AbortController().signal,()=>{},'local',epochs,'local')).rejects.toMatchObject({code:'desktop_full_required'})
+ expect(snapshot.hosts[0]?.capabilities.shell.enabled).toBe(true)
+ expect(service.snapshot('owner',agent).hosts[0]?.capabilities.shell).toEqual({enabled:false,status:'not_authorized'})
+})
+
+it('rejects malformed metadata without replacing the last admitted host state',()=>{
+ service.exchange({host,results:[]})
+ expect(()=>service.exchange({host:{...host,environment:{...environmentMetadata,homeDirectory:'bad\npath'}},results:[]})).toThrow()
+ expect(service.snapshot('owner',agent).hosts[0]?.epoch).toBe(host.id)
+ expect(service.snapshot('owner',agent).hosts[0]?.metadata).toBeUndefined()
+})
+
+it('does not dispatch to a newly connected target outside the captured host set',async()=>{
+ drive()
+ const snapshot=service.snapshot('owner',agent,'local'),epochs=Object.fromEntries(snapshot.hosts.map(host=>[host.id,host.epoch!]))
+ const commands:unknown[]=[]
+ driveRemote(HOST_A,{...host,id:randomUUID()},command=>{commands.push(command);return {ok:true}})
+ await expect(service.call('owner',agent.id,'desktop_environment_view',{host:HOST_A},new AbortController().signal,()=>{},'local',epochs,'local')).rejects.toMatchObject({code:'desktop_context_changed'})
+ expect(commands).toEqual([])
+})

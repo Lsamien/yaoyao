@@ -358,3 +358,13 @@ final result: passed
 - 未发布到服务器；浏览器预览和源代码已完成。
 
 final result: passed
+
+
+## 2026-09-21：文件名取消加粗，桌面文件块收紧
+
+- 按用户后续反馈覆盖上一稿的字号与字重：所有文件名使用400常规字重，桌面16px → 14px，文件块64px → 56px高、圆角20px → 16px，图标与内边距同步缩小；手机保留16px和64px点击高度。
+- 实际浏览器检查：桌面文件块184.4 × 56px、14px/400；390px手机为16px/400、64px高，无横向溢出。原有浅/深色语义、扩展名颜色和内容顺序不变。
+- 截图：`docs/media-qa/desktop-compact.png`（1280 × 720实际页面），`desktop-file-compact.png`（原图文件区域截图，未经重绘）。对照上一稿 `desktop.png` 检查，文件名和容器均已收紧。
+- 12项相关现有测试通过；iOS构建、Android core:ui编译通过。此次没有新增逻辑测试。
+
+final result: passed

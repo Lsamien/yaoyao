@@ -10,3 +10,7 @@ Avatar silhouette paths and original two-eye expressions from zhulin025/LaoA-Gro
 ## OpenMausBot MCP transport
 
 `src/server/botPlugins/stdioMcp.ts` is adapted from OpenMausBot `server/stdio-mcp.ts` at commit 8b9f1dbb (Apache-2.0). The local integration uses per-account configuration, explicit Bot grants, a minimal child-process environment and the Yaoyao client name. See `licenses/OpenMausBot/LICENSE` and `NOTICE`.
+
+## OpenMausBot macOS updater preparation
+
+`scripts/patch-mac-updater.mjs` is adapted from OpenMausBot commit 13c5005b (Apache-2.0), Copyright 2026 Milind Soni and OpenMausBot contributors. It waits for Squirrel.Mac's native readiness before allowing a restart. The packaged electron-updater bundle retains its dependencies' license comments. See `licenses/OpenMausBot/LICENSE` and `NOTICE`.

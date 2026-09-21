@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createServer} from 'node:http'
 import {randomUUID,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto'
+import {HostEnvironmentReporter} from './host-environment.mjs'
 import {DesktopHostManager} from './host-manager.mjs'
 import {parseDesktopHostConfiguration} from './host-config.mjs'
 
@@ -29,8 +30,9 @@ async function fixture(config){
  const cores=[],handled=[]
  const manager=new DesktopHostManager({home,root:'/app',dataRoot:home,
   encrypt,decrypt,
-  createCore:()=>{const core={id:randomUUID(),closed:false,results:[],exchanges:0,
-    info(){core.exchanges++;return {id:core.id,name:'测试 Mac',platform:'darwin',screen:true,accessibility:true,approved:[]}},
+  createCore:()=>{const reporter=new HostEnvironmentReporter('/Users/fixture');const core={id:randomUUID(),closed:false,results:[],exchanges:0,
+    info(){core.exchanges++;return {id:core.id,name:'测试 Mac',platform:'darwin',screen:true,accessibility:true,approved:[],...reporter.fields()}},
+    acceptCapabilities(capabilities){reporter.accept(capabilities)},
     takeResults(){return core.results.splice(0,core.results.length)},
     async handle(commands){handled.push(...commands??[])},
     async revoke(){core.id=randomUUID()},
@@ -132,4 +134,26 @@ test('network failures back off but keep retrying',async()=>{
  }finally{
   await rm(home,{recursive:true,force:true})
  }
+})
+
+test('negotiates metadata and retries in legacy format when the server stops supporting it',async()=>{
+ const exchanges=[]
+ const server=createServer((req,res)=>{let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{
+  exchanges.push(JSON.parse(body));res.setHeader('content-type','application/json')
+  if(exchanges.length===2){res.statusCode=400;res.end(JSON.stringify({error:'older server'}));return}
+  res.end(JSON.stringify(exchanges.length===1?{commands:[],capabilities:{environmentMetadata:1}}:{commands:[]}))
+ })})
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+ const f=await fixture({protocol:1,serverURL:`http://127.0.0.1:${server.address().port}`,hostId:randomUUID(),token:randomBytes(32).toString('base64url')})
+ try{
+  await f.manager.importFile(f.configPath)
+  clearTimeout(f.manager.timer)
+  for(let i=0;i<3;i++){await f.manager.cycle();clearTimeout(f.manager.timer)}
+  assert.equal(exchanges[0].host.environment,undefined)
+  assert.equal(exchanges[0].host.fileTransferVersion,undefined)
+  assert.equal(exchanges[1].host.environment.homeDirectory,'/Users/fixture')
+  assert.equal(exchanges[1].host.fileTransferVersion,1)
+  assert.equal(exchanges[2].host.environment,undefined)
+  assert.equal(exchanges[2].host.fileTransferVersion,undefined)
+ }finally{await f.manager.stop();await new Promise(resolve=>server.close(resolve));await rm(f.home,{recursive:true,force:true})}
 })

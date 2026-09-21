@@ -14,6 +14,8 @@ import { DesktopHostManager } from './host-manager.mjs'
 import { remoteRegistration, remoteSession, enrollDesktopHost, inspectServer } from './remote-login.mjs'
 import { DesktopOnboarding } from './onboarding.mjs'
 import { DesktopUpdateManager } from './update-manager.mjs'
+import { DesktopAutoUpdateManager } from './auto-update-manager.mjs'
+import { createRequire } from 'node:module'
 import { installComputerViewer } from './computer-viewer.mjs'
 
 const desktopRoot = dirname(fileURLToPath(import.meta.url))
@@ -80,17 +82,19 @@ else {
     let trusted = false
     try {
       trusted = event.sender === window?.webContents && event.senderFrame === window.webContents.mainFrame
-        && manager?.state.phase === 'ready' && new URL(event.senderFrame.url).origin === manager.state.url
-    } catch { /* Only the main local application page may open the updater. */ }
+        && serviceOrigins().includes(new URL(event.senderFrame.url).origin)
+    } catch { /* Only the active server's main page may open the local updater. */ }
     if (!trusted || closing || quitting || !updater) throw new Error('不允许此页面打开 App 更新')
     await showUpdates()
   })
-  for (const action of ['state', 'check', 'download', 'cancel', 'open', 'folder', 'release']) {
+  for (const action of ['state', 'check', 'download', 'cancel', 'install', 'open', 'folder', 'release']) {
     ipcMain.handle(`desktop-update:${action}`, async event => {
-      if (!trustedUpdate(event) || closing || quitting) throw new Error('不允许此页面操作 App 更新')
+      if (!trustedUpdate(event)) throw new Error('不允许此页面操作 App 更新')
       if (action === 'state') return updater.snapshot()
+      if (closing || quitting) throw new Error('App 正在重启或退出')
       if (action === 'check') return updater.check()
       if (action === 'download') return updater.download()
+      if (action === 'install') return updater.install()
       if (action === 'cancel') { updater.cancel(); return updater.snapshot() }
       if (action === 'release') { safeExternal(updater.snapshot().releasePageUrl || 'https://github.com/Lsamien/yaoyao/releases'); return }
       const path = await updater.verifiedFile()
@@ -109,7 +113,7 @@ else {
     updateWindow.webContents.on('will-navigate', event => event.preventDefault())
     updateWindow.webContents.on('will-redirect', event => event.preventDefault())
     updateWindow.webContents.on('will-attach-webview', event => event.preventDefault())
-    updateWindow.on('closed', () => { updater.cancel(); updateWindow = undefined })
+    updateWindow.on('closed', () => { updateWindow = undefined })
     updateWindow.once('ready-to-show', () => updateWindow?.show())
     await updateWindow.loadURL(updateURL)
   }
@@ -195,7 +199,7 @@ else {
       if (!current.startsWith(`${state.url}/`) && current !== state.url) void window.loadURL(state.url)
     } else if (window.webContents.getURL() !== bootURL) {
       recoveringService = true
-      onboarding.open({ mode: 'local', remember: preferences.value.startupChoice === 'local' })
+      onboarding.open({ mode: 'local', remember: preferences.value.startupChoice === 'local', restoring: true })
       onboarding.serviceChanged(state)
       void window.loadURL(bootURL)
     }
@@ -206,7 +210,7 @@ else {
   function requestQuit(stopBackground = false) {
     if (closing || quitting) return
     closing = true; clearInterval(timer)
-    updater?.cancel(); updateWindow?.close()
+    updater?.stopChecking?.(); updater?.cancel(); updateWindow?.close()
     window?.hide()
     // Native Cmd+Q can enter before-quit from Cocoa's termination callback.
     // Both cleanup and the final quit must run after that callback unwinds.
@@ -233,10 +237,36 @@ else {
           }
           stateChanged(manager.state)
           timer=setInterval(()=>{if(serverModeActive)void manager.check()},10000);timer.unref()
+          updater?.startChecking?.()
           show()
         }
       }
     })() })
+  }
+  async function prepareUpdateRestart() {
+    if (closing || quitting) throw new Error('App 正在退出，请稍后重试')
+    closing = true; clearInterval(timer)
+    await environmentHost?.close()
+    await hostManager?.stop()
+    await runnerManager?.stop()
+    await manager?.stop()
+    // Cleanup has completed before Squirrel begins quitting. Releasing the
+    // single-instance lock lets the newly installed app start immediately.
+    quitting = true
+    app.releaseSingleInstanceLock()
+  }
+  async function recoverUpdateRestart() {
+    quitting = false; closing = false
+    if (!app.requestSingleInstanceLock()) { quitting = true; app.quit(); return }
+    if (remoteMode) await hostManager?.start().catch(error => log(error.message))
+    else if (serverModeActive) {
+      await manager?.reconnect().catch(error => log(error.message))
+      environmentHost?.start()
+      await runnerManager?.start().catch(error => log(error.message))
+    }
+    clearInterval(timer)
+    timer = setInterval(() => { if (serverModeActive) void manager?.check() }, 10000); timer.unref()
+    window?.show(); updateWindow?.show()
   }
   app.on('before-quit', event => {
     if (quitting) return
@@ -249,9 +279,17 @@ else {
     const packageVersion = JSON.parse(readFileSync(join(root, 'release.json'), 'utf8')).webVersion
     const buildInfo=JSON.parse(readFileSync(join(root,'build-info.json'),'utf8'))
     const releases = await import(pathToFileURL(join(root, 'github-release.mjs')).href)
-    updater = new DesktopUpdateManager({ version: packageVersion, cacheRoot: join(home, 'updates', 'desktop-downloads'),
-      source: releases.DEFAULT_RELEASE_SOURCE, inspect: releases.inspectGitHubRelease, compare: releases.compareReleaseVersions,
-      fetchImpl: (...args) => net.fetch(...args) })
+    if ((app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_AUTO_UPDATE === '1')) {
+      const { autoUpdater } = createRequire(import.meta.url)(join(root, 'electron-updater.cjs'))
+      autoUpdater.logger = Object.fromEntries(['info', 'warn', 'error', 'debug'].map(level => [level, (...values) => log(`[更新:${level}] ${values.join(' ')}`)]))
+      updater = new DesktopAutoUpdateManager({ driver: autoUpdater, version: packageVersion,
+        prepareInstall: prepareUpdateRestart, recoverInstall: recoverUpdateRestart })
+      updater.startChecking()
+    } else {
+      updater = new DesktopUpdateManager({ version: packageVersion, cacheRoot: join(home, 'updates', 'desktop-downloads'),
+        source: releases.DEFAULT_RELEASE_SOURCE, inspect: releases.inspectGitHubRelease, compare: releases.compareReleaseVersions,
+        fetchImpl: (...args) => net.fetch(...args) })
+    }
     app.setAboutPanelOptions({applicationName:'夭夭',applicationVersion:packageVersion,version:`${String(buildInfo.commit).slice(0,12)}${buildInfo.dirty?' · 工作区快照':''}`})
     manager = new DesktopServiceManager({ home, port, version: packageVersion, log, onState: stateChanged,
       prepareHome: !fixtureHome ? onProgress => migrateLocalData({ home, port, root, onProgress }) : undefined,
@@ -413,11 +451,12 @@ else {
     })
     async function openOnboarding(mode, { autoPrepare = false, remember = preferences.value.startupChoice !== 'ask', forceLogin = false } = {}) {
       if (closing || quitting) throw new Error('App 正在退出')
-      onboarding.open({ mode, serverURL: preferences.value.remoteServer, remember, forceLogin })
+      const prepare = autoPrepare && (mode === 'local' || Boolean(preferences.value.remoteServer))
+      onboarding.open({ mode, serverURL: preferences.value.remoteServer, remember, forceLogin, restoring: prepare && !forceLogin })
       if (!window || window.isDestroyed()) await createWindow()
       else if (window.webContents.getURL() !== bootURL) await window.loadURL(bootURL)
       window.show(); window.focus()
-      if (autoPrepare && (mode === 'local' || preferences.value.remoteServer))
+      if (prepare)
         await onboarding.prepare({ autoEnter: true })
       return onboarding.snapshot()
     }
@@ -469,7 +508,7 @@ else {
         { id:'desktop-background', label:'登录启动时仅驻留菜单栏', type:'checkbox', checked:preferences.value.backgroundAtLogin,
           click:async item=>{try{await preferences.setBackgroundAtLogin(item.checked)}catch(error){item.checked=preferences.value.backgroundAtLogin;await dialog.showMessageBox(window,{type:'error',message:error.message})}} },
         { id:'desktop-update-check', label:'检查 App 更新…', click:showUpdates },
-        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n当前 Web：${manager.state.version||'尚未就绪'}${manager.state.build?.commit?' · '+manager.state.build.commit.slice(0,12):''}${manager.state.external?'（独立后台服务）':'（开发模式）'}\n\n通过“检查 App 更新”从 GitHub 下载并校验 DMG，手动拖入应用程序安装。开发签名包尚未公证，请遵循 macOS 的安装提示。\n\n安装后首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 可以独立升级，退出 App 保留独立后台服务。\n\n降级通过 Web 的回滚入口处理；数据库结构不兼容时不能直接降级。\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
+        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n\n通过“检查 App 更新”下载新版，准备完成后点击“重启更新”。此操作只更新当前电脑的 App，不升级远程服务器；独立后台服务继续运行。开发运行时提供手动安装包下载。\n\n服务器模式下，首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 降级通过服务器的回滚入口处理；数据库结构不兼容时不能直接降级。\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
         { type: 'separator' },
         { role: 'hide', label: '隐藏夭夭' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' },
         { type: 'separator' },
@@ -499,19 +538,20 @@ else {
     tray.setToolTip('夭夭')
     tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开夭夭', click: show }, { label: '查看日志', click: () => shell.showItemInFolder(logFile) }, { type: 'separator' }, { label: '退出夭夭（后台继续运行）', click: () => requestQuit() }, { label: '停止后台服务并退出', click: () => requestQuit(true) }]))
     tray.on('click', show)
-    // First launch stays in the main window. Remembered choices prepare in place
-    // and enter immediately only when that server already has a valid session.
+    // Restore a saved session behind neutral loading feedback. The guide only
+    // becomes visible if a connection or account actually needs attention.
     const startupMode = preferences.value.startupChoice === 'ask'
       ? (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_MODE !== 'ask' ? 'local' : null)
       : preferences.value.startupChoice
+    const restoreSession = Boolean(startupMode && (startupMode === 'local' || preferences.value.remoteServer))
     onboarding.open({ mode: startupMode, serverURL: preferences.value.remoteServer,
-      remember: preferences.value.startupChoice !== 'ask' })
+      remember: preferences.value.startupChoice !== 'ask', restoring: restoreSession })
     // Finish the initial navigation before a remembered session enters its server.
     await createWindow()
     powerMonitor.on('resume', () => { if (!closing && !quitting && serverModeActive) void manager.check() })
     timer = setInterval(() => { if (serverModeActive) void manager.check() }, 10_000); timer.unref()
     syncModeMenu()
-    if (startupMode && (startupMode === 'local' || preferences.value.remoteServer))
+    if (restoreSession)
       await onboarding.prepare({ autoEnter: true })
   }).catch(error => { log(error.stack || error.message); quitting = true; app.quit() })
 }

@@ -6,6 +6,7 @@ import { HttpError } from './errors.js'
 import { parse, type WorkspaceStore } from './workspaceStore.js'
 import type { LocalAuthStore } from './localAuth.js'
 import { DESKTOP_HOST_PROTOCOL, type DesktopHostExchange, type DesktopHostRecord, type DesktopHostSummary } from '../shared/desktopHost.js'
+import { desktopHostExchangeSchema } from './desktopHostProtocol.js'
 import { readComputerNames, saveComputerName } from './computerNames.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -13,10 +14,6 @@ const enrollInput = z.object({
   name: z.string().trim().min(1).max(100),
   installId: z.string().uuid().optional(),
   previousHostId: z.string().uuid().optional(),
-}).strict()
-const exchangeInput = z.object({
-  host: z.object({ id: z.string().uuid(), name: z.string().max(128), platform: z.string().max(16), screen: z.boolean(), accessibility: z.boolean(), approved: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(100), full: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(100).optional() }).strict(),
-  results: z.array(z.object({ id: z.string().uuid(), value: z.unknown().optional(), error: z.string().max(500).optional() }).strict()).max(20),
 }).strict()
 
 /** Outbound-only machine transport for remote computers. Browser auth and
@@ -94,7 +91,7 @@ export class DesktopHostHub {
       for await (const chunk of ctx.req) { bytes += chunk.length; if (bytes > 24 * 1024 * 1024) throw new HttpError(413, '电脑请求过大', 'desktop_limit'); chunks.push(Buffer.from(chunk)) }
       let json: unknown
       try { json = JSON.parse(Buffer.concat(chunks).toString()) } catch { throw new HttpError(400, '电脑请求格式无效', 'desktop_invalid') }
-      const value = parse(exchangeInput, json)
+      const value = parse(desktopHostExchangeSchema, json)
       this.online.set(record.id, { seen: Date.now(), name: value.host.name, platform: value.host.platform })
       ctx.set('Cache-Control', 'no-store')
       ctx.body = this.exchange(record.id, value)

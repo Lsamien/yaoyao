@@ -7,7 +7,7 @@ import { createServer } from 'node:http'
 import { _electron as electron, expect } from '@playwright/test'
 import { dataKey } from './service-manager.mjs'
 
-test('only the main local app can open the native updater and repeated requests reuse its window', { timeout: 60000 }, async () => {
+test('the main local app can open the native updater and repeated requests reuse its window', { timeout: 60000 }, async () => {
   const root = resolve(import.meta.dirname, '..')
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-update-entry-')))
   const version = JSON.parse(await readFile(join(root, '.desktop-build/release.json'), 'utf8')).webVersion
@@ -49,6 +49,43 @@ test('only the main local app can open the native updater and repeated requests 
     releaseIdentity()
     await app?.close().catch(() => {})
     await new Promise(done => server.close(done))
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('client mode opens local App updates without a local service or admin role', { timeout: 60000 }, async () => {
+  const root = resolve(import.meta.dirname, '..')
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-client-update-')))
+  const remote = createServer((req, res) => {
+    if (req.url === '/api/app/bootstrap') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ authenticated: true, csrfToken: 'fixture', user: { role: 'member' } })) }
+    else { res.setHeader('Content-Type', 'text/html'); res.end('<title>Remote member</title><button onclick="window.yaoyaoDesktop.openUpdates()">App update</button>') }
+  })
+  await new Promise(done => remote.listen(0, '127.0.0.1', done))
+  const origin = `http://127.0.0.1:${remote.address().port}`
+  await writeFile(join(home, 'desktop-preferences.json'), JSON.stringify({ startupChoice: 'remote', remoteServer: origin }))
+  let app
+  try {
+    app = await electron.launch({ args: [root], cwd: root, env: { ...process.env, HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_PORT: '1', HERMES_YAOYAO_DESKTOP_TEST_SYNC: '0' } })
+    const page = await app.firstWindow(); await page.waitForURL(origin + '/**')
+    assert.equal((await page.evaluate(() => window.yaoyaoDesktop.modeState())).mode, 'client')
+    assert.equal(await page.evaluate(() => typeof window.yaoyaoUpdate), 'undefined')
+    await app.evaluate(({ net }) => { net.fetch = async () => new Response('', { status: 403 }) })
+    const opened = app.waitForEvent('window'); await page.getByRole('button', { name: 'App update' }).click()
+    const updates = await opened
+    await expect(updates.getByRole('heading', { name: 'App 更新' })).toBeVisible()
+    await expect(updates.getByRole('alert')).toContainText('GitHub 请求受限')
+    const denied = await app.evaluate(async ({ BrowserWindow }, { origin, preload }) => {
+      const outsider = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, preload } })
+      try {
+        await outsider.loadURL(origin)
+        return await outsider.webContents.executeJavaScript('Promise.all([window.yaoyaoUpdate.check(),window.yaoyaoUpdate.download(),window.yaoyaoUpdate.install()].map(p=>p.then(()=>false,()=>true)))')
+      } finally { outsider.destroy() }
+    }, { origin, preload: join(root, 'desktop/update-preload.cjs') })
+    assert.deepEqual(denied, [true, true, true])
+    assert.equal(remote.listening, true)
+  } finally {
+    await app?.close().catch(() => {})
+    await new Promise(done => { remote.close(done); remote.closeAllConnections() })
     await rm(home, { recursive: true, force: true })
   }
 })

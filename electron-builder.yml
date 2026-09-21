@@ -28,6 +28,7 @@ extraResources:
       - release.json
       - build-info.json
       - github-release.mjs
+      - electron-updater.cjs
       - keychain-helper
       - computer-helper
       - ui/**/*
@@ -45,6 +46,8 @@ mac:
       arch: [arm64]
     - target: dmg
       arch: [arm64]
+    - target: zip
+      arch: [arm64]
   hardenedRuntime: true
   gatekeeperAssess: false
   extendInfo:
@@ -52,4 +55,8 @@ mac:
 dmg:
   title: 夭夭 ${version}
 artifactName: Yaoyao-${version}-${arch}.${ext}
-publish: null
+publish:
+  - provider: github
+    owner: Lsamien
+    repo: yaoyao
+    releaseType: release

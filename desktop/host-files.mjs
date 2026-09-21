@@ -4,6 +4,7 @@ import {join,resolve,sep} from 'node:path'
 import {homedir} from 'node:os'
 import {execFile} from 'node:child_process'
 
+export const HOST_SHELL='/bin/zsh'
 export const FILE_READ_LIMIT=12*1024*1024
 export const FILE_WRITE_LIMIT=10*1024*1024
 export const FILE_LIST_LIMIT=500
@@ -107,7 +108,7 @@ export async function execHostShell(root,input){
   let cwd
   try{cwd=resolve(String(root),String(input?.cwd??'').replace(/^~\//,'').replace(/^~$/,''))}catch{cwd=String(root)}
   return new Promise(done=>{
-    execFile('/bin/zsh',['-c',command],{cwd,timeout,killSignal:'SIGKILL',maxBuffer:1024*1024,env:{...process.env,TERM:'dumb'}},(error,stdout,stderr)=>{
+    execFile(HOST_SHELL,['-c',command],{cwd,timeout,killSignal:'SIGKILL',maxBuffer:1024*1024,env:{...process.env,TERM:'dumb'}},(error,stdout,stderr)=>{
       const clip=value=>Buffer.from(value??'','utf8').subarray(0,SHELL_OUTPUT_LIMIT).toString('utf8')
       done({command,exitCode:error?typeof error.code==='number'?error.code:1:0,timedOut:error?.killed===true&&error?.signal==='SIGKILL',stdout:clip(stdout),stderr:clip(stderr)})
     })

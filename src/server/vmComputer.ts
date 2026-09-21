@@ -13,7 +13,7 @@ export const VM_COMPUTER_TOOLS=[
   {id:'computer_export',name:'computer_export',description:'把虚拟环境里的文件作为附件回传到当前对话，最大 25 MiB。',inputSchema:schema({path:field,name:field},['path'])},
 ]
 
-export const VM_COMPUTER_RULES='已勾选虚拟环境。它是服务端上的隔离 Linux 电脑，不是这段对话本身。要跑命令用 computer_shell，要读写文件用 computer_read_file / computer_write_file，不要先截图。只有需要看窗口或点按输入时才用 computer_desktop_state，再 computer_action；坐标用刚看到的截图像素，页面变化后重新截图。禁止用截图目测代替文件列表。不要用服务器的终端或文件代替。已连接的电脑和云虚拟机是另外的工具，不要混用路径。'
+export const VM_COMPUTER_RULES='操作 Bot 虚拟环境时，使用 computer_*；它是隔离的 Linux 电脑。命令和文件用 computer_shell、computer_read_file、computer_write_file，无需先截图；窗口操作先 computer_desktop_state 再 computer_action，页面变化后重新截图。用 computer_export 回传产物。不能用 Hermes 原生工具代替虚拟机操作，不混用其他环境的路径。仅在任务需要时调用，普通聊天不启动虚拟机。'
 
 export class VmToolSession {
   private gateway?: WorkspaceGateway

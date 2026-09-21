@@ -7,16 +7,18 @@ import {execFile} from 'node:child_process'
 import {BrowserEnvironment} from './browser-environment.mjs'
 import {listHostFiles,readHostFile,writeHostFile,receiveHostFile,execHostShell} from './host-files.mjs'
 import {exchangeDesktopEnvironment as exchange} from './environment-exchange.mjs'
+import {HostEnvironmentReporter} from './host-environment.mjs'
 import {FileTransferFiles} from './file-transfer.mjs'
 
 /** Command execution shared by the loopback server and remote computers. */
 export class DesktopHostCore {
- constructor({root,dataRoot}){this.root=root;this.dataRoot=dataRoot;this.home=process.env.HOME||'/';this.id=randomUUID();this.results=[];this.running=new Set();this.closed=false;this.browser=new BrowserEnvironment(join(dataRoot,'bot-browsers'));this.approved=new Set();this.approvedFull=new Set();this.permissionsFile=join(dataRoot,'computer-permissions.json');try{const stored=JSON.parse(readFileSync(this.permissionsFile,'utf8'));const screen=Array.isArray(stored)?stored:stored.screen;const full=Array.isArray(stored)?[]:stored.full;if(Array.isArray(screen))for(const key of screen)if(/^[a-f0-9]{64}$/.test(key))this.approved.add(key);if(Array.isArray(full))for(const key of full)if(/^[a-f0-9]{64}$/.test(key))this.approvedFull.add(key)}catch{}this.frames=new Map()}
+ constructor({root,dataRoot}){this.root=root;this.dataRoot=dataRoot;this.home=process.env.HOME||'/';this.environmentReporter=new HostEnvironmentReporter(this.home);this.id=randomUUID();this.results=[];this.running=new Set();this.closed=false;this.browser=new BrowserEnvironment(join(dataRoot,'bot-browsers'));this.approved=new Set();this.approvedFull=new Set();this.permissionsFile=join(dataRoot,'computer-permissions.json');try{const stored=JSON.parse(readFileSync(this.permissionsFile,'utf8'));const screen=Array.isArray(stored)?stored:stored.screen;const full=Array.isArray(stored)?[]:stored.full;if(Array.isArray(screen))for(const key of screen)if(/^[a-f0-9]{64}$/.test(key))this.approved.add(key);if(Array.isArray(full))for(const key of full)if(/^[a-f0-9]{64}$/.test(key))this.approvedFull.add(key)}catch{}this.frames=new Map()}
  transfers=new Map()
- info(){return {id:this.id,name:hostname(),platform:process.platform,screen:process.platform==='darwin'&&systemPreferences.getMediaAccessStatus('screen')==='granted',accessibility:process.platform==='darwin'&&systemPreferences.isTrustedAccessibilityClient(false),approved:[...this.approved],full:[...this.approvedFull],fileTransferVersion:1}}
+ info(){return {id:this.id,name:hostname(),platform:process.platform,screen:process.platform==='darwin'&&systemPreferences.getMediaAccessStatus('screen')==='granted',accessibility:process.platform==='darwin'&&systemPreferences.isTrustedAccessibilityClient(false),approved:[...this.approved],full:[...this.approvedFull],...this.environmentReporter.fields()}}
+ acceptCapabilities(capabilities){this.environmentReporter.accept(capabilities)}
  async clearTransfers(){const transfers=[...this.transfers.values()];this.transfers.clear();await Promise.allSettled(transfers.map(transfer=>transfer.close()))}
  async revoke(){this.approved.clear();this.approvedFull.clear();this.save();this.frames.clear();this.id=randomUUID();await this.clearTransfers()}
- async recycle(){this.results=[];this.id=randomUUID();await this.clearTransfers();await this.browser.close()}
+ async recycle(){this.environmentReporter.reset();this.results=[];this.id=randomUUID();await this.clearTransfers();await this.browser.close()}
  save(){mkdirSync(this.dataRoot,{recursive:true,mode:0o700});writeFileSync(this.permissionsFile,JSON.stringify({screen:[...this.approved],full:[...this.approvedFull]}),{mode:0o600})}
  takeResults(){const sent=this.results.slice();this.results.splice(0,sent.length);return sent}
  async handle(commands){for(const c of commands??[]){if(this.running.has(c.id))continue;this.running.add(c.id);const epoch=this.id;void this.execute(c).then(value=>{if(epoch===this.id)this.results.push({id:c.id,value})},error=>{if(epoch===this.id)this.results.push({id:c.id,error:String(error.message).slice(0,500)})}).finally(()=>this.running.delete(c.id))}}
@@ -74,7 +76,7 @@ export class DesktopHostCore {
 export class DesktopEnvironmentHost {
  constructor({manager,root,dataRoot}){this.manager=manager;this.core=new DesktopHostCore({root,dataRoot});this.closed=false;this.timer=undefined;this.instance=undefined}
  revoke(){return this.core.revoke()}
- async cycle(){if(this.closed)return;try{const record=await this.manager.readRecord();if(record){const verified=await this.manager.verify(record);record.url=verified.url;if(this.instance&&this.instance!==record.instanceId)await this.core.recycle();this.instance=record.instanceId;const value=await exchange(record,{host:this.core.info(),results:this.core.takeResults()});await this.core.handle(value.commands??[])}}catch{}finally{if(!this.closed)this.timer=setTimeout(()=>void this.cycle(),400)}}
+ async cycle(){if(this.closed)return;try{const record=await this.manager.readRecord();if(record){const verified=await this.manager.verify(record);record.url=verified.url;if(this.instance&&this.instance!==record.instanceId)await this.core.recycle();this.instance=record.instanceId;const value=await exchange(record,{host:this.core.info(),results:this.core.takeResults()});this.core.acceptCapabilities(value.capabilities);await this.core.handle(value.commands??[])}}catch{this.core.acceptCapabilities(undefined)}finally{if(!this.closed)this.timer=setTimeout(()=>void this.cycle(),400)}}
  start(){this.closed=false;this.core.closed=false;void this.cycle()}
  async close(){this.closed=true;clearTimeout(this.timer);await this.core.close()}
 }

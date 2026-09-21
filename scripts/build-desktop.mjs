@@ -4,10 +4,12 @@ import { buildRunner } from './build-runner.mjs'
 import { cp, mkdir, rm, readdir, readFile, writeFile, realpath, chmod } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { sealRuntime } from '../bin/lib/runtime-release.mjs'
+import { bundleDesktopUpdater } from './bundle-desktop-updater.mjs'
 
 const root = resolve(import.meta.dirname, '..'), out = resolve(root, '.desktop-build')
 await rm(out, { recursive: true, force: true })
 await mkdir(out, { recursive: true })
+await bundleDesktopUpdater(resolve(out, 'electron-updater.cjs'))
 execFileSync('xcrun', ['swift', resolve(root, 'scripts/build-desktop-icon.swift'),
   resolve(root, 'public/brand/AppIcon-1024.png'), resolve(out, 'branding')], { stdio: 'inherit' })
 execFileSync('iconutil', ['-c', 'icns', resolve(out, 'branding/icon.iconset'),

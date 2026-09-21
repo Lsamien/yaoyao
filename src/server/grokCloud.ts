@@ -28,7 +28,7 @@ export const GROK_COMPUTER_TOOLS=[
   {id:'cloud_computer_desktop',name:'cloud_computer_desktop',description:'查看 Grok Bot 云端电脑桌面，返回真实截图。',inputSchema:schema({},[])},
   {id:'cloud_computer_action',name:'cloud_computer_action',description:'操作 Grok Bot 云端电脑。先查看桌面，再使用 click、text、key 或 scroll。',inputSchema:schema({kind:{enum:['click','text','key','scroll']},x:{type:'integer'},y:{type:'integer'},text:field,key:field,direction:{enum:['up','down','left','right']}},['kind'])},
 ]
-export const GROK_COMPUTER_RULES='当前环境是云虚拟机，也就是 Grok Bot 虚拟机，工作目录 /workspace。电脑操作、文件读写和命令必须使用 cloud_computer_*。已连接的电脑、服务器和虚拟环境都不属于这台云虚拟机。多个机器人共享工作文件和浏览器登录，避免覆盖其他机器人的工作；人工接管时等待交还。'
+export const GROK_COMPUTER_RULES='操作 Grok 云虚拟机时，使用 cloud_computer_*；其工作目录为 /workspace。它与 Hermes 运行环境、已连接电脑和 Bot 虚拟环境分别独立，不混用路径。多个机器人共享这台云电脑的工作文件和浏览器登录，避免覆盖他人的工作；人工接管时等待交还。'
 export function grokComputerRules(_allowHostEnvironment = false){
   return GROK_COMPUTER_RULES
 }

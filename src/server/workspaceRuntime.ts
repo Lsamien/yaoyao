@@ -1,6 +1,6 @@
-import {DESKTOP_ENVIRONMENT_TOOLS,DESKTOP_ENVIRONMENT_RULES,SERVER_COMPUTER_RULES,DESKTOP_FILE_TOOL_IDS,DESKTOP_FILE_TRANSFER_RULES,type DesktopEnvironments} from './desktopEnvironments.js'
-import {GROK_COMPUTER_TOOLS,grokComputerRules,type GrokCloud} from './grokCloud.js'
-import {VM_COMPUTER_TOOLS,VM_COMPUTER_RULES,VmToolSession} from './vmComputer.js'
+import {type DesktopEnvironments} from './desktopEnvironments.js'
+import {type GrokCloud} from './grokCloud.js'
+import {VmToolSession} from './vmComputer.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -18,7 +18,8 @@ import type {
   WorkspaceInteraction,
   WorkspaceAgentUsageSummary,
 } from '../shared/workspace.js'
-import { personaSection } from '../shared/workspace.js'
+import { buildWorkspacePrompt } from './workspacePrompt.js'
+import { buildWorkspaceEnvironment, workspaceEnvironmentTools } from './workspaceEnvironment.js'
 import { readHostTools } from './hostToolSettings.js'
 import { resolveBotModelSettings, applyBotModelSettings, botModelTarget, BotModelConfirmationError } from './botModelSettings.js'
 function globalComputers(home: string) {
@@ -30,17 +31,6 @@ function estimateTokens(text: string): number {
   let units = 0
   for (const ch of text) units += (ch.codePointAt(0) ?? 0) > 0xff ? 1 : 0.25
   return Math.ceil(units)
-}
-
-function environmentMentions(text: string, hostNames: string[]) {
-  const cloud = /云虚拟机|云电脑|云服务器|cloud_computer|Grok/i.test(text)
-  const vm = /虚拟环境|虚拟机|\bVM\b/i.test(text) || /computer_(desktop|shell|action|read_file|write_file)/.test(text)
-  const named = hostNames.some(name => name.length >= 2 && name !== '本机' && text.includes(name))
-  const physicalComputerText = text.replace(/云虚拟机|云电脑|云服务器/g, '')
-  const script = /电脑|客户端|本机/.test(physicalComputerText) || named
-  const server = /服务器|本机/.test(text) || (/desktop_/.test(text) && !script)
-  const desktop = server || script || /desktop_/.test(text)
-  return { desktop, server, script, vm, cloud }
 }
 
 import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK, WORKSPACE_CONCURRENCY_LIMIT, RESOURCE_WAIT_CODES } from './workspaceScheduler.js'
@@ -324,7 +314,6 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     }})
     gateway.onTrace=entry=>this.inspector?.record(owner,c.id,{...entry,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
     const botCapabilities = await this.botCapabilities(owner, agent, target)
-    const dispatchedVm = globalComputers(this.store.home).vm && botCapabilities.tools && !agent.remoteAgentId
     const root = this.store.require<Run>(owner, 'run', run.runId)
     if (root.peerMessageId && !recovering) {
       const peer = this.store.require<import('../shared/workspaceKnowledge.js').WorkspacePeerMessage>(owner, 'peer-message', root.peerMessageId)
@@ -709,11 +698,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         if (opened.running) throw new HttpError(409, '上游会话仍在运行', 'session_busy')
         this.nodes.requireSource(owner, agent)
         const team=botCapabilities.tools&&!agent.temporaryGoalId&&!agent.remoteAgentId&&!this.store.require<Run>(owner,'run',run.runId).assignmentId
-        const cloud=!!this.cloud?.selected(owner,agent)
-        const plugins=!!this.plugins?.selected(owner,agent)
-        const envTools=this.desktopEnvironments?.envTools(owner,agent)??{view:false,browser:false,file:false}
-        const desktop=envTools.view||envTools.file
-        const desktopEpochs=this.desktopEnvironments?.hostEpochs(owner,agent)??{}
+        const globals=globalComputers(this.store.home)
+        const desktopSnapshot=this.desktopEnvironments?.snapshot(owner,agent,root.deviceHost,{script:globals.scriptMachine,server:globals.serverComputer,maxMiB:globals.fileTransferMaxMiB})
+          ??{capturedAt:Date.now(),sourceHost:root.deviceHost,hosts:[]}
+        const environment=buildWorkspaceEnvironment({agent,globals,desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent)})
+        const {cloud,plugins,vm:dispatchedVm}=environment.tools
+        const desktop=environment.tools.desktopView||environment.tools.desktopFile
+        const desktopEpochs=Object.fromEntries(desktopSnapshot.hosts.map(host=>[host.id,host.epoch??'']))
+        const environmentCatalog=workspaceEnvironmentTools(environment)
         const knowledge = botCapabilities.tools && !agent.remoteAgentId
         const vmHolder:{session?:VmToolSession}={}
         const requireVm=()=>{if(!globalComputers(this.store.home).vm)throw new HttpError(403,'全局设置未开放虚拟机。','computer_disabled')}
@@ -751,13 +743,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             target,profile:agent.profile,workId:run.id,signal:toolController.signal,
             workspaceMemory:botCapabilities.memory,
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
-            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...(cloud?GROK_COMPUTER_TOOLS:[]),...(dispatchedVm?VM_COMPUTER_TOOLS:[]),...(desktop?DESKTOP_ENVIRONMENT_TOOLS.map(t=>t.id==='desktop_file_copy'?{...t,description:t.description.replace('25 MiB',`${globalComputers(this.store.home).fileTransferMaxMiB} MiB`)}:t).filter(t=>(envTools.view&&['desktop_environment_view','desktop_environment_action'].includes(t.id))||(envTools.file&&DESKTOP_FILE_TOOL_IDS.has(t.id))):[]),...(pluginLease?.catalog()??[])],
+            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...environmentCatalog,...(pluginLease?.catalog()??[])],
             call:async(toolId,args)=>{assertActive();return knowledge&&this.knowledgeTools.handles(toolId)?this.knowledgeTools.call(owner,run.id,toolId,args,botCapabilities.memory):toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,'local',desktopEpochs,root.deviceHost,dispatchedVm?action=>callVm('__file_transfer',action):undefined):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):toolId.startsWith('computer_')&&dispatchedVm?callVm(toolId,args):this.teamTools.call(owner,run.id,toolId,args)},
             onFailure:error=>{if(!settled)void gateway.rpc('session.interrupt',{session_id:runtimeId}).catch(()=>{}).finally(()=>finish(error))},
           })
           await toolLease.bind();if(settled)return await completion
         }
-        await applyWorkingDirectory((method, params) => gateway.rpc(method, params), runtimeId, cwd, undefined, opened.info?.cwd)
+        const workingDirectory = await applyWorkingDirectory((method, params) => gateway.rpc(method, params), runtimeId, cwd, undefined, opened.info?.cwd)
+        environment.cwd=workingDirectory?.resolved
         // Binding initializes cold Hermes sessions; its persisted runtime can overwrite
         // pre-build config acknowledgements. Apply Bot settings only after that boundary.
         if (agent.modelSettings !== undefined) {
@@ -803,54 +796,6 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         }
         const members = run.turnConfiguration!.members
         const goal = run.conversationTaskId ? this.store.get<import('../shared/agentTasks.js').AgentGoal>(owner, 'goal', run.conversationTaskId) : undefined
-        const assignmentId = this.store.require<Run>(owner, 'run', run.runId).assignmentId
-        const globals = globalComputers(this.store.home)
-        const eligible = !agent.remoteAgentId && !agent.archived
-        const open = [eligible && globals.scriptMachine ? '电脑' : '', eligible && globals.serverComputer ? '服务器' : '', eligible && globals.vm ? '虚拟环境' : '', eligible && globals.cloud ? '云虚拟机' : ''].filter(Boolean)
-        const hostNames = this.desktopEnvironments?.hostStates(owner).map(host => host.name).filter(Boolean) ?? []
-        const prior = this.store.messages(owner, c.id, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true, run.conversationTaskId)
-          .filter(message => message.id !== resultMessage.id && message.seq <= run.triggerSeq)
-          .map(message => `${message.content}\n${message.tools.map(tool => String(tool.name ?? tool.tool_name ?? '')).join(' ')}`)
-          .join('\n')
-        const hit = environmentMentions(`${trigger.content}\n${prior}`, hostNames)
-        const envDirective = `Hermes 只运行在服务器，其原生终端和文件工具始终操作服务器，不代表用户所说的「本机」。操作用户消息来源电脑必须使用带目标的 desktop_* 工具。Hermes 的网页、浏览器、终端和文件工具均可使用。不要使用 Hermes 的 memory 工具，长期记忆只用 Bot 自己的记忆。另外可以使用全局开放的电脑环境：${open.join('、') || '无'}。所有 Bot 使用同一套全局电脑权限，环境可同时使用。没开放的电脑环境不要用。这些环境是额外的桌面，不代替 Hermes 工具。`
-        const rules = [
-          envDirective,
-          `你是 ${agent.name}。${agent.description ? `描述：${agent.description}\n\n` : ''}${personaSection(agent) ? `用户为它设定的工作规范：\n${personaSection(agent)}\n\n` : ''}以下是用户为这个独立机器人配置的角色与规则（版本 ${agent.revision}）：\n${agent.remoteAgentId ? '配置由远端机器人管理。' : agent.instructions}`,
-          c.kind === 'group' && Object.keys(c.memberRoles ?? {}).length
-            ? `本群角色分工（仅在本群生效）：\n${members.flatMap(member => {
-                const role = c.memberRoles?.[member.id]
-                return role ? [`@${member.name}：${role.name}；${role.description}`] : []
-              }).join('\n')}\n协作时使用上面的真实成员名称进行 @，不要使用职责名称代替成员名称。`
-            : '',
-          this.store.require<Run>(owner, 'run', run.runId).discussion
-            ? `你正在群聊「${c.name}」平等讨论，第 ${run.depth + 1} 轮。你只代表自己，必须给出一条公开、有实质内容的回答，保留用户原始要求。不要代替其他成员发言，不要用私信或 @ 再次派发本轮工作。系统会安排其他成员。`
-            : c.kind === 'group'
-            ? `你正在群聊「${c.name}」发言。群成员：${members.map((a) => `@${a.name} (id=${a.id})`).join('、')}。\n群规则：${c.instructions}\n${c.mode === 'host' ? (agent.id === c.administratorId ? '你是管理员。必要时用精确 @成员名称 委派工作；收到结果后复核并给用户结论。任务完成时不要继续 @。' : '执行当前委派任务。公开给出结果，由管理员复核；不要安排其他成员。') : '按自己的职责回复，只在需要协作时 @成员。不要重复已完成的工作。'}`
-            : '',
-          c.kind === 'group' ? '只有安排具体的新工作时才用 @成员派工，并写明需要执行的动作。收到、感谢、审核通过、等待用户指令等确认不需要再次 @。任务收尾直接向用户报告结果；不要重复确认或把同一结果反复交回其他成员。' : '',
-          run.requiredReply ? '你必须公开处理本次消息，直接回答、委派或澄清；禁止静默。管理员可按依赖一次 @一人，也可同时 @多人并行执行，整批结束后系统统一交回复核。' : run.replyMode === 'automatic' ? `你按自动参与配置收到消息。若与职责无关或仅是已完成工作的重复确认，禁止调用工具、禁止 @，完整答复只能是 ${NO_REPLY}。有新工作或新结果时正常回答。` : '',
-          `本轮用户指定成员：${this.store.require<Run>(owner, 'run', run.runId).mentionIds.map(id => members.find(a => a.id === id)).filter(Boolean).map(a => '@' + a!.name).join('、') || '未指定'}`,
-          '角色规则不赋予额外工具权限；仍遵守基础 Hermes 的工具和安全约束。',
-          this.store.require<Run>(owner, 'run', run.runId).internalInstruction || '',
-          goal && ['running', 'review', 'waiting'].includes(goal.status) ? `当前团队目标 ID：${goal.id}。目标：${goal.objective.slice(0,8000)}\n验收要求（版本 ${goal.acceptanceRevision ?? 1}）：${goal.acceptanceCriteria.join('；')}\n${assignmentId ? `你在执行子任务 ${assignmentId}，请完成分派并提交结果，不要扩大团队或再次委派。` : '先从用户要求提炼少量具体、可核对的交付条件；若仍是默认验收要求，使用 workspace_update_team_goal 保存。尊重用户调整后的要求。能直接完成就直接完成，不必创建子任务；仅确实需要分工时使用 workspace_assign_task，成员结果通过 workspace_review_assignment 复核，不要再用 @ 重复派发同一工作。最终使用 workspace_finish_team_task 记录完成、受阻或等待用户，完成时提供实际依据。'}` : '',
-          agent.temporaryGoalId ? `你是当前任务的临时助手，任务 ID：${agent.temporaryGoalId}。仅处理分派工作，使用 computer_export 回传产物。任务结束后会退役；不要创建团队或改变自身权限。` : '',
-          team ? TEAM_TOOL_RULES : '',
-          knowledge ? BOT_KNOWLEDGE_RULES : '',
-          memory.text,
-          root.projectId ? `当前项目 ID：${root.projectId}。只能使用当前项目记忆。` : '',
-          `本次来源消息 ID：${run.messageId}；当前会话 ID：${c.id}。`,
-          plugins ? '本轮已挂载用户为当前 Bot 授权的插件工具，工具名以 plugin_ 开头，说明中包含实际服务和操作。仅按用户当前任务使用；连接或重新授权应用请让用户打开 Bot 模式的工具 → 已连接应用。不要索取 API Key 或在回复中展示凭据。' : '',
-          desktop && hit.server && globals.serverComputer ? SERVER_COMPUTER_RULES+(this.desktopEnvironments?.onlineHostsLine(owner,root.deviceHost)??'') : '',
-          desktop && hit.script && globals.scriptMachine ? DESKTOP_ENVIRONMENT_RULES+(this.desktopEnvironments?.onlineHostsLine(owner,root.deviceHost)??'') : '',
-          this.desktopEnvironments?.deviceContextLine(owner,root.deviceHost) ?? '本轮未提供来源电脑；操作电脑时必须明确目标。',
-          envTools.file ? DESKTOP_FILE_TRANSFER_RULES.replace('25 MiB',`${globalComputers(this.store.home).fileTransferMaxMiB} MiB`) : '',
-          cloud && hit.cloud ? grokComputerRules() : '',
-          dispatchedVm && hit.vm ? VM_COMPUTER_RULES : '',
-          `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
-        ]
-          .filter(Boolean)
-          .join('\n\n')
         const text = c.kind === 'group' ? this.contextText(owner, c, agent, run, binding.contextSeq ?? 0, movedRunner)
           : movedRunner ? `执行节点已切换。以下是原会话的近期记录，旧路径和执行状态需要在当前节点重新核实；不要重新执行已完成的操作。\n\n${this.contextText(owner,c,agent,run,0,true)}` : trigger.content
         const admission = this.getWork(owner, run.id)
@@ -866,7 +811,18 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         this.saveWork(owner, admission)
         submitted = true
         try {
-          submittedText = `${rules}\n\n${text}\n${attachmentRefs.join('\n')}`
+          submittedText = buildWorkspacePrompt({
+            agent, conversation: c, members, work: run,
+            run: this.store.require<Run>(owner, 'run', run.runId), goal,
+            environment,
+            teamRules: team ? TEAM_TOOL_RULES : undefined,
+            knowledgeRules: knowledge ? BOT_KNOWLEDGE_RULES : undefined,
+            memory: memory.text, noReply: NO_REPLY,
+            marker: `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
+            content: text, contentKind: c.kind === 'group' || movedRunner ? 'history' : 'user', attachmentRefs,
+          })
+          this.inspector?.record(owner,c.id,{method:'bot.environment',direction:'request',agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId,
+            data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id)}})
           await gateway.rpc('prompt.submit', {
             session_id: runtimeId,
             ...(target.runner?.computer?{workMarker:`[yaoyao-run:${run.runId}:${resultMessage.id}]`}:{}),

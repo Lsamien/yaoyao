@@ -13,6 +13,9 @@ import type {ComputerFrame,ComputerControlStatus} from '../shared/computerContro
 import {requireTeamToolBridge} from './workspaceToolLease.js'
 import {copyBetweenEndpoints} from './fileTransfer.js'
 import type {FileTransferEndpoint} from '../shared/fileTransfer.js'
+import {deviceSourceText,deviceInventoryText,type DesktopEnvironmentMetadata,type DesktopEnvironmentSnapshot,type BotDeviceSnapshot,type DeviceCapability,type DeviceCapabilityStatus} from '../shared/botEnvironment.js'
+
+import {desktopHostExchangeSchema} from './desktopHostProtocol.js'
 
 const digest=(s:string)=>createHash('sha256').update(s).digest('hex')
 const inputSchema=z.discriminatedUnion('kind',[
@@ -36,7 +39,7 @@ const fileSchema=z.discriminatedUnion('op',[
 const shellSchema=z.object({command:z.string().min(1).max(8000),cwd:z.string().max(2048).optional(),timeoutMs:z.number().int().min(1000).max(120000).optional()}).strict()
 const copySchema=z.object({sourceHost:z.string().trim().min(1).max(128),sourcePath:z.string().min(1).max(2048),targetHost:z.string().trim().min(1).max(128),targetPath:z.string().min(1).max(2048),overwrite:z.boolean().default(false)}).strict()
 type Mode='local'|'browser'
-interface NativeHost {id:string;name:string;platform:string;screen:boolean;accessibility:boolean;approved:string[];full?:string[];fileTransferVersion?:number}
+interface NativeHost {id:string;name:string;platform:string;screen:boolean;accessibility:boolean;approved:string[];full?:string[];fileTransferVersion?:number;environment?:DesktopEnvironmentMetadata}
 interface Pending {id:string;epoch:string;deadline:number;command:Record<string,unknown>;check:()=>void;resolve:(v:any)=>void;reject:(e:Error)=>void;sent:boolean;timer:ReturnType<typeof setTimeout>}
 interface Manual {ready?:boolean;id:string;token:string;requestId:string;owner:string;agentId:string;version:number;expiresAt:number;generation:number;epoch:string;pending?:Promise<unknown>;releasing?:boolean;actions:Map<string,{fingerprint:string;value:Promise<unknown>}>}
 /** All per-host state. The loopback App owns key 'local'; remote Macs each
@@ -68,9 +71,9 @@ export const DESKTOP_ENVIRONMENT_TOOLS=[
 export const DESKTOP_FILE_TOOL_IDS=new Set(['desktop_file_list','desktop_file_read','desktop_file_write','desktop_file_copy','desktop_shell'])
 export const DESKTOP_FILE_TRANSFER_RULES='电脑间传文件用 desktop_file_copy，一次指定 sourceHost、sourcePath、targetHost、targetPath；服务器用 server，当前 Bot 的虚拟机用 vm，设备名用设置里的名字，「本机」只指本轮消息来源电脑。例：把 mac1 桌面的 a.txt 放到 mac2 桌面，调用 {sourceHost:"mac1",sourcePath:"Desktop/a.txt",targetHost:"mac2",targetPath:"Desktop/a.txt"}。这是复制，保留原文件；只有用户明确要求覆盖时才传 overwrite:true。无需先截图，不要读取 base64 给模型、上传聊天附件或假设不同电脑共享文件路径。最大 25 MiB；工具返回已校验的成功结果后才报告完成。'
 /** Macs connected to the server as computers. */
-export const DESKTOP_ENVIRONMENT_RULES='当前环境是电脑，也就是连接服务器的 Mac。一律用 desktop_*，可用 host 写明设置里的电脑名称。省略 host 或写「本机」时：只使用本轮用户消息来源电脑；没有来源或来源离线时不得回退，必须明确目标。选工具：要列目录/读/写用 desktop_file_*；要跑命令用 desktop_shell；只有需要看窗口或点按输入时才用 desktop_environment_view，再 desktop_environment_action；页面变化后重新截图，不得猜测旧坐标。禁止用截图目测代替文件列表或目录统计。文件与 shell 在用户主目录范围内真实生效。服务器、虚拟环境和云虚拟机都不是这台电脑。人工接管时等待交还。电脑断开时报告原因，不得宣称操作成功。'
+export const DESKTOP_ENVIRONMENT_RULES='操作连接服务器的电脑时，使用本轮提供的 desktop_* 工具，并用 host 指定电脑名称或编号。Hermes 原生终端和文件工具不能代替该电脑上的操作。'
 /** Yaoyao host Mac — same look-then-act pattern as the cloud computer. */
-export const SERVER_COMPUTER_RULES='当前环境是服务器，也就是夭夭正在运行的这台电脑。电脑名称与设置里一致，可改名；点名用这个名字。一律用 desktop_*。省略 host 或写「本机」时：用户消息来自服务器就用这台；来自电脑则「本机」指那台电脑；没有来源时必须明确目标。明确操作服务器时使用 host="server"，不要省略 host。选工具：要列目录/读/写用 desktop_file_*；要跑命令用 desktop_shell；只有需要看窗口或点按输入时才用 desktop_environment_view，再 desktop_environment_action；页面变化后重新截图，不得猜测旧坐标。禁止用截图目测代替文件列表或目录统计。未授权文件与命令时如实说明，不要改用截图凑数。文件与 shell 在用户主目录范围内真实生效。已连接的电脑、虚拟环境和云虚拟机都不是这台服务器本身。人工接管时等待交还。电脑断开时报告原因，不得宣称操作成功。'
+export const SERVER_COMPUTER_RULES='操作服务器桌面时，使用本轮提供的 desktop_* 工具并明确指定 host="server"。处理 Hermes 运行环境内的文件与命令时，使用实际提供的原生工具；处理服务器桌面用户主目录内的文件时，使用已授权的 desktop_file_* 或 desktop_shell，不假定两者共享路径。'
 
 /** The loopback native transport is admitted only by serviceInstance's
  *  private capability; remote hosts are admitted by DesktopHostHub's bearer
@@ -128,9 +131,6 @@ export class DesktopEnvironments {
   if(!s)throw new HttpError(409,'消息来源电脑未连接；不会改用其他电脑。','desktop_offline')
   return this.requireHost(s)
  }
- private contextSession(deviceHost?:string):HostState|undefined{
-  return deviceHost?this.sessions.get(deviceHost):undefined
- }
  selected(_owner:string,agent:WorkspaceAgent):Mode|undefined {
   if(agent.archived||agent.remoteAgentId)return undefined
   const g=this.computers();return g.script||g.server?'local':undefined
@@ -138,9 +138,8 @@ export class DesktopEnvironments {
  toolMode(owner:string,agent:WorkspaceAgent):Mode|undefined{return this.selected(owner,agent)}
  modes(owner:string,agent:WorkspaceAgent):{desktop:boolean,browser:boolean}{return {desktop:!!this.selected(owner,agent),browser:false}}
  envTools(owner:string,agent:WorkspaceAgent):{view:boolean,browser:boolean,file:boolean}{
-  const wanted=this.modes(owner,agent)
-  const online=[...this.sessions.values()].filter(s=>this.hostOnline(s)&&this.hostOpen(s))
-  return {view:wanted.desktop&&online.some(s=>this.ready(s,owner)),browser:false,file:wanted.desktop&&online.some(s=>this.readyFull(s,owner))}
+  const snapshot=this.snapshot(owner,agent)
+  return {view:snapshot.hosts.some(host=>host.capabilities.view.enabled),browser:false,file:snapshot.hosts.some(host=>host.capabilities.fileRead.enabled)}
  }
  /** Viewer host ids are absolute; the wire id local identifies the server. */
  private takeoverSession(a:WorkspaceAgent,host:unknown):HostState|undefined{
@@ -150,28 +149,30 @@ export class DesktopEnvironments {
  private targetFor(_agent:WorkspaceAgent,host:unknown,deviceHost?:string):HostState{
   return typeof host==='string'&&host?this.namedHost(host,deviceHost):this.messageHost(deviceHost)
  }
- onlineHostsLine(owner:string,deviceHost?:string){
-  const names=[...this.sessions.values()].filter(s=>this.hostOnline(s)&&this.hostOpen(s)).map(s=>{
-   const label=s.key==='local'?(this.names()[s.key]||'服务器'):(this.label(s)||s.key)
-   const kind=s.key==='local'?'服务器':'电脑'
-   const mine=deviceHost&&(deviceHost==='local'?s.key==='local':s.key===deviceHost)
-   return mine?`${label}（${kind}·本机）`:`${label}（${kind}）`
-  })
-  const tip=deviceHost
-   ? '省略 host 或写「本机」只指本轮消息来源电脑；离线或未授权时不能改用其他电脑。指定服务器用 host="server"。'
-   : '本轮没有可控制的消息来源电脑，必须用 host 指定目标名称或编号；服务器用 host="server"。'
-  return names.length?`当前在线电脑：${names.join('、')}。desktop_* 工具可用 host 参数（名称或编号）选择目标电脑；${tip}`:''
+ /** Collect current state without connecting a host, launching a browser or starting a computer. */
+ snapshot(owner:string,agent?:WorkspaceAgent,deviceHost?:string,policy?:{script:boolean;server:boolean;maxMiB:number}):DesktopEnvironmentSnapshot {
+  const capturedAt=Date.now(),global=policy??{...this.computers(),maxMiB:(()=>{try{return readHostTools(this.store.home).fileTransferMaxMiB}catch{return 25}})()}
+  const records=this.store.list<import('../shared/desktopHost.js').DesktopHostRecord>('_system','desktop-host')
+  const states=[...this.sessions.values()]
+  for(const record of records)if(!states.some(host=>host.key===record.id))states.push(newHostState(record.id,true))
+  if(deviceHost&&!states.some(host=>host.key===deviceHost))states.push(newHostState(deviceHost,deviceHost!=='local'))
+  const hosts:BotDeviceSnapshot[]=states.map((s):BotDeviceSnapshot=>{
+   const info=s.info,online=this.hostOnline(s),record=records.find(record=>record.id===s.key),open=(s.key==='local'?global.server:global.script)&&record?.enabled!==false
+   const manual=this.current(s,'local'),waiting=manual?'human_control':s.paused.has('local')?'paused':'ready'
+   const base:DeviceCapabilityStatus|undefined=agent&&(agent.archived||agent.remoteAgentId)?'agent_unavailable':!open?'disabled':!online?'offline':info?.platform!=='darwin'?'unsupported':undefined
+   const capability=(reason?:DeviceCapabilityStatus):DeviceCapability=>({enabled:!reason,status:reason??waiting})
+   const screen=capability(base??(!info?.approved.includes(this.ownerKey(owner))?'not_authorized':!info.screen||!info.accessibility?'system_permission_required':undefined))
+   const files=capability(base??(!(info?.full??[]).includes(this.ownerKey(owner))?'not_authorized':undefined))
+   const metadata=online&&info?.environment?{version:info.environment.version,osRelease:info.environment.osRelease,arch:info.environment.arch,timezone:info.environment.timezone,...(files.enabled?structuredClone(info.environment):{})}:undefined
+   return {id:s.key,target:s.key==='local'?'server':s.key,name:this.label(s)||record?.name||s.key,kind:s.key==='local'?'server':'computer',source:s.key===deviceHost,online,open,
+    ...(info?{epoch:info.id,platform:info.platform}:{}),...(s.seen?{lastSeen:s.seen}:{}),...(metadata?{metadata}:{}),
+    capabilities:{view:{...screen},input:{...screen},fileRead:{...files},fileWrite:{...files},shell:{...files},fileTransfer:{...files}},
+    transfer:{protocol:!info?'unknown':info.fileTransferVersion===1?'chunked':'legacy',readMaxMiB:!info?null:info.fileTransferVersion===1?global.maxMiB:Math.min(global.maxMiB,12),writeMaxMiB:!info?null:info.fileTransferVersion===1?global.maxMiB:Math.min(global.maxMiB,10)}}
+  }).sort((a,b)=>a.id==='local'?-1:b.id==='local'?1:a.id.localeCompare(b.id))
+  return {capturedAt,...(deviceHost?{sourceHost:deviceHost}:{}),hosts}
  }
- deviceContextLine(owner:string,deviceHost?:string){
-  if(!deviceHost)return '本轮消息来自未绑定控制主机的客户端；「本机」无法确定，必须指定目标电脑。历史消息的设备来源不适用于本轮。'
-  const s=this.contextSession(deviceHost)
-  if(!s||!this.hostOnline(s)||!this.hostOpen(s)){
-   const named=this.names()[deviceHost==='local'?'local':deviceHost]
-   return `本轮用户消息来源设备：${named||deviceHost}（当前未在线或未开放）。「本机」仍指这台电脑，不能回退到服务器或其他电脑。`
-  }
-  const kind=s.key==='local'?'服务器':'电脑'
-  return `本轮用户消息来自${kind}「${this.label(s)}」。名字与设置里的电脑名称相同；对本轮而言，「本机」指这台电脑。`
- }
+ onlineHostsLine(owner:string,deviceHost?:string){return deviceInventoryText(this.snapshot(owner,undefined,deviceHost))}
+ deviceContextLine(owner:string,deviceHost?:string){return deviceSourceText(this.snapshot(owner,undefined,deviceHost))}
  private agent(owner:string,id:string){const a=this.store.require<WorkspaceAgent>(owner,'agent',id);this.nodes.requireSource(owner,a);if(a.archived||a.remoteAgentId)throw new HttpError(409,'此机器人无法使用桌面环境','computer_unavailable');return a}
  private resource(owner:string,agent:WorkspaceAgent,mode:Mode){return mode==='local'?'local':digest(this.ownerKey(owner)+':'+agent.id+':'+(agent.browserProfile??'persistent'))}
  hostStates(owner:string){return [...this.sessions.values()].map(s=>{const online=this.hostOnline(s),info=online?s.info!:undefined;return {id:s.key,name:this.label(s),platform:info?.platform??'',online,local:{supported:info?.platform==='darwin',authorized:!!info&&info.approved.includes(this.ownerKey(owner)),screen:info?.screen===true,accessibility:info?.accessibility===true,ready:!!info&&this.ready(s,owner),fullAuthorized:!!info&&(info.full??[]).includes(this.ownerKey(owner))},browser:{available:online}}}).sort((a,b)=>a.id==='local'?-1:b.id==='local'?1:a.name.localeCompare(b.name))}
@@ -199,14 +200,14 @@ export class DesktopEnvironments {
  /** Revocation or replacement of a paired host fences its live commands. */
  dropHost(id:string){const s=this.sessions.get(id);if(s){this.invalidate(s);this.sessions.delete(id)}}
  private exchangeFor(s:HostState,body:unknown){
-  const value=parse(z.object({host:z.object({id:z.string().uuid(),name:z.string().max(128),platform:z.string().max(16),screen:z.boolean(),accessibility:z.boolean(),approved:z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(100),full:z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(100).optional(),fileTransferVersion:z.literal(1).optional()}).strict(),results:z.array(z.object({id:z.string().uuid(),value:z.unknown().optional(),error:z.string().max(500).optional()}).strict()).max(20)}).strict(),body)
+  const value=parse(desktopHostExchangeSchema,body)
   if(this.closed)throw new HttpError(503,'服务已停止','desktop_closed')
   if(s.info&&(s.info.id!==value.host.id||!this.hostOnline(s)))this.invalidate(s)
   s.info=value.host;s.seen=Date.now()
   for(const result of value.results){const p=s.pending.get(result.id);if(!p||p.epoch!==value.host.id)continue;s.pending.delete(p.id);clearTimeout(p.timer);try{p.check();if(result.error)throw new HttpError(409,result.error,'desktop_command_failed');p.resolve(result.value)}catch(error){p.reject(error as Error)}}
   const commands:Record<string,unknown>[]=[]
   for(const p of s.pending.values()){if(p.sent)continue;try{p.check();p.sent=true;commands.push({id:p.id,deadline:p.deadline,...p.command})}catch(error){s.pending.delete(p.id);clearTimeout(p.timer);p.reject(error as Error)}if(commands.length>=8)break}
-  return {commands}
+  return {commands,capabilities:{environmentMetadata:1}}
  }
  private command(s:HostState,command:Record<string,unknown>,check:()=>void,timeout=30000):Promise<any>{
   check();if(!this.hostOnline(s))throw new HttpError(409,'桌面端未连接，请在电脑上打开夭夭。','desktop_offline')
@@ -235,7 +236,7 @@ export class DesktopEnvironments {
   const maxBytes=readHostTools(this.store.home).fileTransferMaxMiB*1024*1024
   const hosts=[...new Set([source,target].filter((host):host is HostState=>!!host))].sort((a,b)=>a.key.localeCompare(b.key))
   const contexts=hosts.map(host=>({host,context:this.context(host,owner,agent,'local',true),epoch:typeof epoch==='string'?(host===this.sessionFor(agent)?epoch:undefined):epoch?.[host.key]}))
-  const check=()=>{signal.throwIfAborted();assertActive();for(const item of contexts){item.context.check();if(this.sessions.get(item.host.key)!==item.host||(item.epoch!==undefined&&item.host.info?.id!==item.epoch))throw new HttpError(410,'传输中的电脑连接已改变，请核对文件后重试。','desktop_disconnected')}}
+  const check=()=>{signal.throwIfAborted();assertActive();for(const item of contexts){if(epoch&&typeof epoch==='object'&&!Object.hasOwn(epoch,item.host.key))throw new HttpError(410,'目标电脑不在本轮环境快照中，请发起新一轮对话。','desktop_context_changed');item.context.check();if(this.sessions.get(item.host.key)!==item.host||(item.epoch!==undefined&&item.host.info?.id!==item.epoch))throw new HttpError(410,'传输中的电脑连接已改变，请核对文件后重试。','desktop_disconnected')}}
   check()
   const command=async(host:HostState,action:Record<string,unknown>)=>{const context=contexts.find(item=>item.host===host)!.context;if(action.op!=='transfer-abort')await available();return this.command(host,{...context.command,operation:'file',action},action.op==='transfer-abort'?context.check:check,60000)}
   // A stable lock order prevents A→B and B→A transfers from deadlocking.
@@ -267,7 +268,7 @@ export class DesktopEnvironments {
   const s=this.targetFor(a,requestedHost,deviceHost)
   const c=this.context(s,owner,a,expected,DESKTOP_FILE_TOOL_IDS.has(id))
   const pinned=typeof epoch==='string'?(s===this.sessionFor(a)?epoch:undefined):epoch?.[s.key]
-  const check=()=>{signal.throwIfAborted();assertActive();c.check();if(pinned!==undefined&&s.info?.id!==pinned)throw new HttpError(410,'桌面连接已改变','desktop_disconnected')};check()
+  const check=()=>{signal.throwIfAborted();assertActive();if(epoch&&typeof epoch==='object'&&!Object.hasOwn(epoch,s.key))throw new HttpError(410,'目标电脑不在本轮环境快照中，请发起新一轮对话。','desktop_context_changed');c.check();if(pinned!==undefined&&s.info?.id!==pinned)throw new HttpError(410,'桌面连接已改变','desktop_disconnected')};check()
   s.activity.set(c.key,(s.activity.get(c.key)??0)+1)
   try{return await this.serial(s,c.key,async()=>{while(this.current(s,c.key)||s.paused.has(c.key)){check();await new Promise(resolve=>setTimeout(resolve,150))}check()
    let result:any

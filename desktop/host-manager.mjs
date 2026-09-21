@@ -118,9 +118,11 @@ export class DesktopHostManager {
    this.backoff=400
    if(this.config!==config||this.core!==core)return
    this.publish(`电脑已连接 ${new URL(config.serverURL).host}`)
+   core.acceptCapabilities?.(value.capabilities)
    await core.handle(value.commands??[])
   }catch(error){
    if(this.config!==config||this.core!==core)return
+   core.acceptCapabilities?.(undefined)
    if(error&&error[FATAL]){this.publish(error.message);await this.stopLoop();return}
    this.backoff=Math.min(this.backoff*2,5000)
    this.publish(`电脑连接中断，正在重试：${String(error.message).slice(0,120)}`)

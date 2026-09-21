@@ -63,6 +63,42 @@ test('valid remembered sessions skip credentials, but reauthorization requests a
   assert.equal(flow.snapshot().active, true); assert.equal(flow.snapshot().authenticated, false)
   assert.equal(calls.length, 2)
 })
+test('restoring sessions stays hidden through inspection and navigation for either server mode', async () => {
+  for (const mode of ['local', 'remote']) {
+    let inspected, navigated
+    const { flow } = fixture({
+      inspect: () => new Promise(resolve => { inspected = resolve }),
+      navigate: () => new Promise(resolve => { navigated = resolve }),
+    })
+    flow.open({ mode, serverURL: 'http://remote.test', restoring: true })
+    const checking = flow.prepare({ autoEnter: true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(flow.snapshot().restoring, true)
+    inspected({ authenticated: true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(flow.snapshot().restoring, true, 'the guide must not appear while the workspace loads')
+    navigated(); await checking
+    assert.equal(flow.snapshot().restoring, true)
+    assert.equal(flow.snapshot().active, false)
+  }
+})
+test('expired sessions and failed restoration reveal the guide with actionable state', async () => {
+  for (const overrides of [
+    { inspect: async () => ({ authenticated: false }) },
+    { inspect: async () => { throw new Error('服务器离线') } },
+    { inspect: async () => ({ authenticated: true }), navigate: async () => { throw new Error('工作区加载失败') } },
+  ]) {
+    const { flow } = fixture(overrides)
+    flow.open({ mode: 'remote', serverURL: 'http://remote.test', restoring: true })
+    await flow.prepare({ autoEnter: true })
+    assert.equal(flow.snapshot().restoring, false)
+    assert.equal(flow.snapshot().active, true)
+  }
+  const { flow } = fixture()
+  flow.open({ mode: 'local', restoring: true })
+  flow.serviceChanged({ phase: 'error', message: '服务恢复失败' })
+  assert.equal(flow.snapshot().restoring, false, 'background recovery errors must expose retry controls')
+})
 test('failed computer enrollment preserves login and offers inline continuation', async () => {
   const { flow, calls } = fixture({ inspect: async () => ({ authenticated: false }), authenticate: async () => ({ username: 'admin', warning: '电脑授权未恢复' }) })
   flow.select('remote'); await flow.prepare(); await flow.submit({ username: 'admin', password: 'password' })

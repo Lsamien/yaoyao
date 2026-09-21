@@ -1891,3 +1891,58 @@ it('applies Bot settings to the live agent after a cold resume restores its pers
   ])
   expect(requests.filter(r => r.method === 'session.resume')).toHaveLength(2)
 })
+
+it('submits capability-based Bot context with current origins, confirmed cwd and no keyword-selected environment', async () => {
+  const bot = agent('环境助手'), c = direct(bot.id), target = nodes.target(owner, 'local')
+  const originalRequest = target.session.request.bind(target.session)
+  vi.spyOn(target.session, 'request').mockImplementation(async (path, options) => path.startsWith('/api/plugins/yaoyao-bot-bridge/')
+    ? { status: 200, headers: new Headers(), body: Buffer.from(JSON.stringify({ ok: true, version: 1, ready: true, native_tools: true, in_process: true })) }
+    : originalRequest(path, options))
+  const record=vi.fn();runtime.inspector={record} as any
+  let binding:any,integrationError:unknown
+  const catalogs:string[][]=[]
+  const bridgeRequest=target.session.request.bind(target.session)
+  target.session.request=async(path,options)=>{if(path.endsWith('/bind'))binding=options?.body;return bridgeRequest(path,options)}
+  const originalReply=reply
+  reply=(socket,params)=>{void(async()=>{try{const response=await fetch(binding.bridge_url+'/tools/list',{method:'POST',headers:{Authorization:`Bearer ${binding.token}`,'Content-Type':'application/json'},body:'{}'});const result=await response.json() as any;catalogs.push(result.tools.filter((tool:any)=>/^(desktop_|computer_|cloud_computer_)/.test(tool.name)).map((tool:any)=>tool.name).sort())}catch(error){integrationError=error}originalReply(socket,params)})()}
+  configuredCwds.set('default', '/fixture/server-workspace')
+  saveHostTools(home, { vm: false, cloud: false })
+  const desktop = new DesktopEnvironments(store, { pushAuthorizationVersion: () => 0 } as any, { localNodeID: 'fixture', requireSource: () => {} } as any)
+  runtime.desktopEnvironments = desktop
+  const clientId = randomUUID(), grant = createHash('sha256').update('fixture:' + owner).digest('hex')
+  desktop.exchange({ host: { id: randomUUID(), name: '服务器', platform: 'darwin', screen: true, accessibility: true, approved: [grant] }, results: [] })
+  desktop.remoteExchange(clientId, { host: { id: randomUUID(), name: '工作 Mac', platform: 'darwin', screen: false, accessibility: false, approved: [], full: [grant], environment: {version:1,osRelease:'25.0.0',arch:'arm64',shell:'/bin/zsh',homeDirectory:'/Users/work',defaultCwd:'/Users/work',fileRoots:['/Users/work'],shellScope:'user',timezone:'Asia/Shanghai'} }, results: [] })
+  try {
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '读取本机目录，再解释 Grok 模型与虚拟机的区别', deviceHost: clientId }).id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '继续', deviceHost: clientId }).id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '读取本机目录', deviceHost: 'local' }).id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '读取本机目录', deviceHost: null }).id)
+    const prompts = requests.filter(r => r.method === 'prompt.submit').map(r => String(r.params.text))
+    if(integrationError)throw integrationError
+    expect(prompts).toHaveLength(4)
+    const inspections=record.mock.calls.map(([, , entry])=>entry).filter(entry=>entry.method==='bot.environment')
+    expect(inspections).toHaveLength(4)
+    expect(inspections.map(entry=>entry.data.computerToolIds.slice().sort())).toEqual(catalogs)
+    expect(inspections.map(entry=>entry.data.snapshot.desktop.sourceHost)).toEqual([clientId,clientId,'local',undefined])
+    expect(inspections.every(entry=>entry.data.snapshot.cwd==='/fixture/server-workspace')).toBe(true)
+    expect(inspections[0].data.snapshot.desktop.hosts.find((host:any)=>host.id===clientId).metadata.fileRoots).toEqual(['/Users/work'])
+    expect(JSON.stringify(inspections)).not.toContain(grant)
+    const environments = prompts.map(prompt => prompt.split('【本轮环境与设备】')[1]!.split('【Bot 记忆与相关事实】')[0])
+    expect(environments[0]).toBe(environments[1])
+    expect(environments[0]).toContain('本轮用户消息来自电脑「工作 Mac」')
+    expect(environments[2]).toContain('本轮用户消息来自服务器「服务器」')
+    expect(environments[3]).toContain('「本机」无法确定，必须指定目标电脑')
+    expect(environments[0]).toContain('Hermes 本轮工作目录（已确认）："/fixture/server-workspace"')
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain('当前环境是')
+      expect(prompt).not.toContain('cloud_computer_*')
+      expect(prompt).not.toContain('computer_shell')
+      expect(prompt.match(/本轮电脑清单/g)).toHaveLength(1)
+      expect(prompt).toContain('Shell="/bin/zsh"')
+      expect(prompt).toContain('文件工具允许根目录=["/Users/work"]')
+      expect(prompt).toContain(`host="${clientId}"`)
+      expect(prompt).toContain('屏幕控制=未授权；文件与命令=就绪')
+      expect(prompt).toContain('屏幕控制=就绪；文件与命令=未授权')
+    }
+  } finally { desktop.close() }
+})

@@ -25,6 +25,6 @@ export interface DesktopHostConfiguration {
 }
 /** Wire format exchanged between a remote computer and the server. */
 export interface DesktopHostExchange {
-  host: { id: string; name: string; platform: string; screen: boolean; accessibility: boolean; approved: string[]; full?: string[] }
+  host: { id: string; name: string; platform: string; screen: boolean; accessibility: boolean; approved: string[]; full?: string[]; fileTransferVersion?: 1; environment?: import('./botEnvironment.js').DesktopEnvironmentMetadata }
   results: { id: string; value?: unknown; error?: string }[]
 }

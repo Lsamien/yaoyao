@@ -37,9 +37,10 @@ export class DesktopUpdateManager {
   constructor({ version, arch = process.arch, platform = process.platform, cacheRoot, inspect, compare, source, fetchImpl = fetch,
     verifyImage = (path, signal) => promisify(execFile)('/usr/bin/hdiutil', ['verify', path], { timeout: 120000, signal, maxBuffer: 1024 * 1024 }) }) {
     Object.assign(this, { version, arch, platform, cacheRoot, inspect, compare, source, fetchImpl, verifyImage })
-    this.state = { phase: 'idle', currentVersion: version, arch, message: '点击检查更新', available: false, received: 0, total: 0 }
+    this.state = { phase: 'idle', installMode: 'manual', currentVersion: version, arch, message: '点击检查更新', available: false, received: 0, total: 0 }
   }
   snapshot() { return { ...this.state } }
+  install() { throw new Error('开发运行请下载并手动安装正式 App') }
   get busy() { return !!this.controller }
   cancel() { this.controller?.abort() }
   async check() {

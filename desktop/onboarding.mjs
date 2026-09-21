@@ -9,9 +9,9 @@ export class DesktopOnboarding {
   }
   get busy() { return ['preparing', 'authenticating', 'entering'].includes(this.state.phase) }
   snapshot() { return { ...this.state, history: [...this.state.history], busy: this.busy } }
-  open({ mode = null, serverURL = '', remember = false, forceLogin = false } = {}) {
+  open({ mode = null, serverURL = '', remember = false, forceLogin = false, restoring = false } = {}) {
     if (this.state && this.busy) throw new Error('当前步骤尚未完成，请稍候')
-    this.state = { active: true, mode, serverURL, remember, forceLogin, phase: 'idle', stage: 'checking',
+    this.state = { active: true, mode, serverURL, remember, forceLogin, restoring, phase: 'idle', stage: 'checking',
       setupRequired: false, registrationAvailable: false, registrationNotice: '', authenticated: false, username: '', message: '', error: '',
       canForceSync: false, history: [] }
     return this.snapshot()
@@ -32,7 +32,7 @@ export class DesktopOnboarding {
     if (service.phase === 'error') {
       this.state.error = service.message
       // Keep the action locked until the outstanding prepare operation settles.
-      if (!this.busy) this.state.phase = 'error'
+      if (!this.busy) { this.state.phase = 'error'; this.state.restoring = false }
     }
     if (['error', 'restarting', 'stopped', 'disconnected'].includes(service.phase)) {
       this.state.authenticated = false
@@ -58,6 +58,10 @@ export class DesktopOnboarding {
     } catch (error) {
       this.state.phase = 'error'
       this.state.error = error.message || '准备未完成，请重试'
+    } finally {
+      // Keep the guide hidden through successful navigation. Only reveal it
+      // when restoring needs user input, including connection/navigation errors.
+      if (this.state.active) this.state.restoring = false
     }
     return this.snapshot()
   }

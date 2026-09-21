@@ -100,3 +100,14 @@ it('re-enables the exact disabled legacy computer after an explicit administrato
     .send(body())
     .expect(403)
 })
+
+it('admits optional negotiated environment facts through the same remote transport schema',async()=>{
+ await enroll()
+ const input=body()
+ input.host.fileTransferVersion=1
+ input.host.environment={version:1,osRelease:'25.0.0',arch:'arm64',shell:'/bin/zsh',homeDirectory:'/Users/fixture',defaultCwd:'/Users/fixture',fileRoots:['/Users/fixture'],shellScope:'user',timezone:'Asia/Shanghai'}
+ await post(`/api/desktop-host/v1/${hostId}/exchange`).send(input).expect(200)
+ expect(exchanged[0]?.host.environment).toEqual(input.host.environment)
+ await post(`/api/desktop-host/v1/${hostId}/exchange`).send({...input,host:{...input.host,environment:{...input.host.environment,token:'must-not-be-metadata'}}}).expect(400)
+ expect(exchanged).toHaveLength(1)
+})

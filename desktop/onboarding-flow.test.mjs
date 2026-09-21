@@ -11,11 +11,14 @@ test('first launch, failed connection and remote login all stay in the only main
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-onboarding-')))
   let loginCount = 0
   let registrationCount = 0
+  let holdBootstrap = false, replyBootstrap, sessionValid = true
   const server = createServer((req, res) => {
     const json = (value, status = 200) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value)) }
     if (req.url === '/api/app/bootstrap') {
       res.setHeader('set-cookie', 'csrf=fixture; Path=/; HttpOnly')
-      return json({ authenticated: String(req.headers.cookie).includes('session=fixture'), setupRequired: false, registrationAvailable: true, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
+      const reply = () => json({ authenticated: sessionValid && String(req.headers.cookie).includes('session=fixture'), setupRequired: false, registrationAvailable: true, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
+      if (holdBootstrap) { replyBootstrap = reply; return }
+      return reply()
     }
     if (req.url === '/api/app/register') {
       let raw = ''; req.on('data', chunk => { raw += chunk }); req.on('end', () => {
@@ -112,9 +115,22 @@ test('first launch, failed connection and remote login all stay in the only main
     const firstProcess = app.process()
     const firstExit = firstProcess.exitCode === null ? new Promise(done => firstProcess.once('exit', done)) : Promise.resolve()
     await app.close(); await firstExit; app = undefined
+    holdBootstrap = true
     app = await electron.launch({ args: [root], cwd: root, env: { ...process.env,
       HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_MODE: 'ask', HERMES_YAOYAO_DESKTOP_TEST_SYNC: '0' } })
     const reopened = await app.firstWindow()
+    await expect.poll(() => Boolean(replyBootstrap)).toBe(true)
+    await expect(reopened.locator('#session-loading')).toBeVisible()
+    await expect(reopened.locator('#onboarding')).toBeHidden()
+    await mkdir(join(root, 'test-results/desktop'), { recursive: true })
+    await reopened.screenshot({ path: join(root, 'test-results/desktop/session-restoring.png') })
+    let guideFlashed = false
+    await reopened.exposeFunction('recordGuideVisibility', visible => { guideFlashed ||= visible })
+    await reopened.evaluate(() => {
+      const guide = document.getElementById('onboarding')
+      new MutationObserver(() => { void window.recordGuideVisibility(!guide.hidden) }).observe(guide, { attributes: true, attributeFilter: ['hidden'] })
+    })
+    holdBootstrap = false; replyBootstrap()
     try { await reopened.waitForURL(url + '/**', { timeout: 8000 }) }
     catch (error) {
       console.log('Reopened fixture URL:', reopened.url())
@@ -123,6 +139,13 @@ test('first launch, failed connection and remote login all stay in the only main
       throw error
     }
     assert.equal(loginCount, 2, 'a remembered session keeps the server-provided cookie expiry and is reused')
+    assert.equal(guideFlashed, false, 'restoring a valid session never displays the guide')
+    // An expired session still returns to the same page with usable login fields.
+    sessionValid = false
+    await reopened.evaluate(() => { void window.yaoyaoDesktop.openLogin() })
+    await expect(reopened.locator('#login-form')).toBeVisible()
+    await expect(reopened.locator('#session-loading')).toBeHidden()
+    assert.equal(app.windows().length, 1)
   } finally {
     await app?.close().catch(() => {})
     await new Promise(done => { server.close(done); server.closeAllConnections() })

@@ -3,10 +3,14 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'">
-  <title>开始使用夭夭</title><link rel="stylesheet" href="boot.css">
+  <title>夭夭</title><link rel="stylesheet" href="boot.css">
 </head>
 <body>
-<main class="page">
+<main id="session-loading" class="session-loading" role="status" aria-live="polite" aria-busy="true">
+  <img src="icon.png" alt="" width="48" height="48">
+  <p id="session-loading-message">正在打开夭夭…</p>
+</main>
+<main id="onboarding" class="page" hidden>
   <header class="brand"><div><img src="icon.png" alt="" width="40" height="40"><strong>夭夭</strong></div><span>服务器与账号</span></header>
   <div class="intro"><h1>开始使用夭夭</h1><p>选择服务器，完成准备后即可开始使用。</p></div>
   <ol class="steps" aria-label="设置进度">

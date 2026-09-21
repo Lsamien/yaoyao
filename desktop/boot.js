@@ -5,6 +5,11 @@ let state, initialized = false, pending = false, serverDirty = false, generation
 
 function display(next) {
   state = next
+  const restoring = state.restoring === true || state.phase === 'complete'
+  $('onboarding').hidden = restoring
+  $('session-loading').hidden = !restoring
+  document.title = restoring ? '夭夭' : '开始使用夭夭'
+  if (restoring) return
   if (!initialized) {
     $('server').value = state.serverURL || ''
     $('remember').checked = state.remember
@@ -169,7 +174,13 @@ $('help-button').onclick = () => {
 async function render() {
   const request = generation
   try { const next = await window.yaoyaoDesktop.status(); if (request === generation) display(next) }
-  catch { if (!state) { $('status').textContent = '无法读取启动状态，请重新打开应用。'; $('status').setAttribute('role', 'alert') } }
+  catch {
+    if (!state) {
+      $('session-loading-message').textContent = '无法读取启动状态，请重新打开应用。'
+      $('session-loading').setAttribute('role', 'alert')
+      $('session-loading').setAttribute('aria-busy', 'false')
+    }
+  }
 }
 void render()
 const poll = setInterval(() => { void render() }, 500)
