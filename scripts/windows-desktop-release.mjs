@@ -56,5 +56,6 @@ export async function packageWindowsDesktop() {
     'Windows 电脑操作需要服务器支持；更新清单随本次构建交付，尚未上传正式更新源。\n' +
     '完整验收步骤见 docs/windows-client.md。CI 构建不代表真实桌面控制已完成验收。\n')
   console.log(`Windows 安装包及更新清单已校验：${directory}（尚未发布）`)
+  console.log(await readFile(join(directory, 'SHA256SUMS-win-x64.txt'), 'utf8'))
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await packageWindowsDesktop()
