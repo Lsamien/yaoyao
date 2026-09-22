@@ -17,6 +17,16 @@ const showDesktop=computed(()=>computers.value.scriptMachine||computers.value.se
 const cloud=ref<{configured:boolean;running:boolean;connected:boolean;mode?:string}>(),connectionSettings=ref(false)
 const showCloud=computed(()=>computers.value.cloud)
 const showVm=computed(()=>computers.value.vm&&!!state.value)
+const composeDesktopId=ref('')
+const composeDesktop=computed(()=>state.value?.desktops?.find(d=>d.id===composeDesktopId.value))
+const composeConnected=computed(()=>!!state.value?.enabled&&state.value.desktopId===composeDesktopId.value)
+const canConnectCompose=computed(()=>state.value?.fixedCapacity&&!busy.value&&!state.value.inUse&&!agent.value?.temporaryGoalId&&!composeConnected.value&&composeDesktop.value?.online&&composeDesktop.value.ready&&composeDesktop.value.available!==false)
+watch(()=>state.value,value=>{
+ if(!value?.fixedCapacity){composeDesktopId.value='';return}
+ if(value.desktops?.some(d=>d.id===composeDesktopId.value))return
+ const available=value.desktops?.filter(d=>d.online&&d.ready&&d.available!==false)??[]
+ composeDesktopId.value=value.desktopId??(available.length===1?available[0]!.id:'')
+})
 const desktopHosts=computed(()=>(native.value?.hosts??[]).filter(host=>host.id==='local'?computers.value.serverComputer:computers.value.scriptMachine))
 const serverHost=computed(()=>desktopHosts.value.find(host=>host.id==='local'))
 const activeEnvLine=computed(()=>[
@@ -43,7 +53,7 @@ const previewEmptyText=computed(()=>{
  if(!target)return previewKey.value?'所选电脑已不可用，请重新选择':'暂无已开放的电脑'
  if(target.backend==='desktop'){const host=native.value?.hosts?.find(h=>h.id===target.host);return !host?.online?'这台电脑已离线':host.local.ready?'正在读取电脑画面…':'请完成这台电脑的屏幕控制授权'}
  if(target.backend==='cloud')return cloud.value?.configured?(cloud.value?.running?'正在连接桌面…':'打开云端电脑后可查看桌面'):'尚未连接 Grok Bot 账号'
- if(!state.value?.enabled)return '未使用电脑'
+ if(!state.value?.enabled)return state.value?.fixedCapacity?'请先连接下方的共享桌面':'未使用电脑'
  if(state.value.problem)return state.value.problem
  if(!state.value.image)return '本地虚拟机尚未准备'
  if(state.value.container==='missing')return '尚未创建虚拟机'
@@ -92,7 +102,12 @@ async function refresh(){
   error.value=''
  }catch(e){if(version===revision)error.value=e instanceof Error?e.message:'无法读取电脑画面'}finally{if(version===revision)loading.value=false}
 }
-async function run(work:()=>Promise<unknown>){let ok=true;if(busy.value)return false;busy.value=true;error.value='';try{await work();emit('changed')}catch(e){ok=false;error.value=e instanceof Error?e.message:'电脑操作未完成'}finally{busy.value=false;await refresh()}return ok}
+async function run(work:()=>Promise<unknown>){let failure='';if(busy.value)return false;busy.value=true;error.value='';try{await work();emit('changed')}catch(e){failure=e instanceof Error&&e.message?e.message:'电脑操作未完成'}finally{busy.value=false;await refresh();if(failure)error.value=failure}return !failure}
+async function connectCompose(){
+ if(!canConnectCompose.value)return
+ const id=selected.value,desktopId=composeDesktopId.value
+ if(await run(()=>apiRequest(`/api/app/agents/${encodeURIComponent(id)}/local-vm`,{method:'PUT',body:{enabled:true,desktopId}}))&&selected.value===id)previewKey.value='vm'
+}
 async function openDesktop(backend:'desktop'|'cloud'|'vm',host?:string){
  const selectedAgent=agent.value
  if(!selectedAgent||busy.value)return
@@ -110,7 +125,7 @@ function action(value:LocalVmAction){
 }
 async function cycle(){const version=revision;await refresh();if(!closed&&version===revision)timer=setTimeout(cycle,3000)}
 watch(()=>props.agents.map(a=>a.id).join(','),()=>{if(!props.agents.some(a=>a.id===selected.value))selected.value=props.agents[0]?.id??''},{immediate:true})
-watch(selected,()=>{revision++;previewRevision++;state.value=undefined;native.value=undefined;cloud.value=undefined;frame.value=undefined;error.value='';loading.value=true;previewKey.value='';clearTimeout(timer);void cycle()},{immediate:true})
+watch(selected,()=>{revision++;previewRevision++;state.value=undefined;composeDesktopId.value='';native.value=undefined;cloud.value=undefined;frame.value=undefined;error.value='';loading.value=true;previewKey.value='';clearTimeout(timer);void cycle()},{immediate:true})
 watch(()=>props.active,value=>{if(value)void refresh()})
 onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer)})
 </script>
@@ -149,13 +164,18 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
      <p v-if="!isAdmin&&!cloud?.configured" class="hint">请由管理员为当前账号配置 Grok Bot 连接。</p>
     </template>
     <template v-if="showVm&&state">
-     <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此机器人的独立虚拟机'}}</p>
+     <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.fixedCapacity||state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此机器人的独立虚拟机'}}</p>
      <p v-if="state.problem" class="problem" role="alert" aria-label="本地虚拟机状态">{{state.problem}}</p>
+     <template v-if="state.fixedCapacity&&!agent.temporaryGoalId">
+      <label>共享桌面<select v-model="composeDesktopId" aria-label="共享桌面" :disabled="busy||state.inUse"><option value="" disabled>请选择共享桌面</option><option v-for="desktop in state.desktops" :key="desktop.id" :value="desktop.id" :disabled="!desktop.online||!desktop.ready||desktop.available===false">{{desktop.name}}{{desktop.available===false?' · 不可用':!desktop.online?' · 离线':!desktop.ready?' · 正在启动':''}}</option></select></label>
+      <button class="primary" data-testid="connect-compose-desktop" :disabled="!canConnectCompose" @click="connectCompose">{{composeConnected?'已连接':'连接所选桌面'}}</button>
+      <p v-if="!state.desktops?.length" class="hint">暂无可连接的共享桌面，请检查本地虚拟机设置。</p>
+     </template>
      <template v-if="!state.fixedCapacity&&state.images?.length&&!agent.temporaryGoalId">
       <label>虚拟机镜像<select :value="state.imageKey??''" :disabled="busy||state.inUse||state.container!=='missing'" @change="run(()=>apiRequest(base()+'/image',{method:'PUT',body:{imageKey:($event.target as HTMLSelectElement).value}}))"><option v-if="!state.imageKey" value="" disabled>{{state.image?'当前保留的镜像':'请选择已准备的镜像'}}</option><option v-for="image in state.images" :key="image.key" :value="image.key" :disabled="!image.ready">{{image.name}}{{image.ready?'':' · 未准备'}}</option></select></label>
       <p class="hint">{{state.mode==='shared'?'同一共享桌面只能使用一个镜像，选择会对所有共享成员生效。':'此桌面的镜像、文件和浏览器资料与其他独立桌面分开。'}}{{state.container!=='missing'?'切换镜像前请先移除实例。':''}}</p>
      </template>
-     <button v-if="!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">设置本地虚拟机</button>
+     <button v-if="!state.fixedCapacity&&!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">设置本地虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='missing'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('create')">创建 {{agent.name}} 的虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='stopped'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动虚拟机</button>
      <template v-else-if="state.container==='running'">

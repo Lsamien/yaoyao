@@ -392,18 +392,40 @@ it('snapshots negotiated host facts per owner without inventing paths for old cl
  expect(service.snapshot('owner',agent).hosts.find(host=>host.id==='local')?.metadata?.fileRoots).toEqual(['/Users/fixture'])
 })
 
-it('keeps offline and disabled registered computers visible with actionable reasons',()=>{
- store.put('_system','desktop-host',HOST_B,{id:HOST_B,name:'尚未连接',enabled:false,tokenHash:'private',createdAt:1})
+it('keeps enabled offline registered computers visible with actionable reasons',()=>{
+ store.put('_system','desktop-host',HOST_B,{id:HOST_B,name:'尚未连接',enabled:true,tokenHash:'private',createdAt:1})
  service.remoteExchange(HOST_A,{host:{...host,id:randomUUID(),name:'连接电脑',full:[ownerKey('owner')],environment:environmentMetadata},results:[]})
  const saved=service.snapshot('owner',agent,HOST_A)
  vi.useFakeTimers();vi.advanceTimersByTime(16000)
  const offline=service.snapshot('owner',agent,HOST_A)
  expect(offline.hosts.find(host=>host.id===HOST_A)).toMatchObject({source:true,online:false,capabilities:{shell:{enabled:false,status:'offline'}}})
  expect(offline.hosts.find(host=>host.id===HOST_A)?.metadata).toBeUndefined()
- expect(offline.hosts.find(host=>host.id===HOST_B)).toMatchObject({name:'尚未连接',open:false,capabilities:{view:{enabled:false,status:'disabled'}}})
+ expect(offline.hosts.find(host=>host.id===HOST_B)).toMatchObject({name:'尚未连接',online:false,open:true,capabilities:{view:{enabled:false,status:'offline'}}})
  expect(saved.hosts.find(host=>host.id===HOST_A)?.capabilities.shell.status).toBe('ready')
  expect(service.deviceContextLine('owner',HOST_A)).toContain('不能回退到服务器')
  expect(JSON.stringify(offline)).not.toContain('private')
+})
+
+it.each([false,true])('excludes revoked computers from Bot inventory even with a stale session: %s',staleSession=>{
+ const record={id:HOST_B,name:'旧配对电脑',enabled:false,tokenHash:'private',createdAt:1}
+ store.put('_system','desktop-host',HOST_B,record)
+ service.exchange({host,results:[]})
+ service.remoteExchange(HOST_A,{host:{...host,id:randomUUID(),name:'studio'},results:[]})
+ if(staleSession)service.remoteExchange(HOST_B,{host:{...host,id:randomUUID(),name:record.name},results:[]})
+ for(const source of [HOST_A,HOST_B]){
+  const snapshot=service.snapshot('owner',agent,source)
+  expect(snapshot.hosts.map(host=>host.id)).toEqual(['local',HOST_A])
+  expect(snapshot.sourceHost).toBe(source)
+  const inventory=service.onlineHostsLine('owner',source)
+  expect(inventory).toContain('host="server"')
+  expect(inventory).toContain(`host="${HOST_A}"`)
+  expect(inventory).not.toContain(HOST_B)
+  expect(inventory).not.toContain(record.name)
+ }
+ expect(service.deviceContextLine('owner',HOST_B)).toContain('不能回退到服务器')
+ expect(store.get('_system','desktop-host',HOST_B)).toEqual(record)
+ store.put('_system','desktop-host',HOST_B,{...record,enabled:true})
+ expect(service.snapshot('owner',agent).hosts.map(host=>host.id)).toEqual(['local',HOST_A,HOST_B])
 })
 
 it('distinguishes human takeover from grants and rechecks revocation after collecting a snapshot',async()=>{

@@ -30,6 +30,9 @@ else {
   let remoteMode = false, remoteURL = '', serverModeActive = false, switchingMode = false
   let recoveringService = false
   const serviceURL = () => remoteMode ? remoteURL : manager?.state.url
+  // Use the same Chromium networking as server detection/navigation. Auth owns
+  // its cookie jar: do not send or overwrite another account's browser cookies.
+  const authFetch = (url, options) => net.fetch(url, { ...options, credentials: 'omit' })
   const serviceOrigins = () => {
     try { return remoteMode && remoteURL ? [new URL(remoteURL).origin] : manager?.state.url ? [new URL(manager.state.url).origin] : [] }
     catch { return [] }
@@ -346,7 +349,7 @@ else {
     async function authorizeComputer(server,session){
       const previous=await hostManager.read().catch(()=>undefined)
       const previousHostId=previous&&new URL(previous.serverURL).origin===new URL(server).origin?previous.hostId:undefined
-      const registration=await enrollDesktopHost(session,{name:hostname(),installId:await hostManager.installIdentity(),previousHostId})
+      const registration=await enrollDesktopHost(session,{name:hostname(),installId:await hostManager.installIdentity(),previousHostId},authFetch)
       await hostManager.adopt({protocol:1,serverURL:server,hostId:registration.host.id,token:registration.token,...(server.startsWith('http://')?{allowInsecureLan:true}:{})})
       return registration
     }
@@ -409,9 +412,9 @@ else {
         await runnerManager.start().catch(error => runnerManager.publish(error.message))
         return manager.state.url
       },
-      register: ({ serverURL, username, password }) => remoteRegistration(serverURL, { username, password }),
+      register: ({ serverURL, username, password }) => remoteRegistration(serverURL, { username, password }, authFetch),
       authenticate: async ({ mode, serverURL, setup, username, password }) => {
-        const auth = await remoteSession(serverURL, { setup, username, password })
+        const auth = await remoteSession(serverURL, { setup, username, password }, authFetch)
         for (const cookie of auth.cookieDetails) {
           await electronSession.defaultSession.cookies.set({ url: serverURL, ...cookie,
             httpOnly: true, secure: cookie.secure || serverURL.startsWith('https://') })

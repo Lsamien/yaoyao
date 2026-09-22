@@ -392,8 +392,14 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
     taskReference: message.taskReference,
     error: message.error, runId: message.runId,
     profile: message.agentId, createdAt: message.createdAt,
-    content: (message.communication?.content ?? (message.role === 'assistant' ? visibleMessageText(message.content) : message.content)).replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
-      const file = message.attachments.find(file => file.sourcePath === path)
+    // Resolve legacy MEDIA references before mapping paths to archived file URLs,
+    // so the renderer can identify body media and trailing attachments as one file.
+    content: (message.communication?.content ?? (message.role === 'assistant'
+      ? normalizeAssistantMediaMarkdown(visibleMessageText(message.content), message.status === 'streaming')
+      : message.content)).replace(/(!?\[[^\]]*\])\(<?([^)>]+)>?\)/g, (whole, label: string, path: string) => {
+      const sourcePath = serverFilePath(path)
+      const file = message.attachments.find(file => file.sourcePath === path
+        || (sourcePath && file.sourcePath && serverFilePath(file.sourcePath, false) === sourcePath))
       return file ? `${label}(/api/app/files/${file.id}/${label.startsWith('!') ? 'preview' : 'download'})` : whole
     }),
     reasoning: message.role === 'assistant' ? messageReasoningText(message.content, message.reasoning) : message.reasoning,

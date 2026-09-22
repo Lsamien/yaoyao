@@ -11,6 +11,7 @@ test('first launch, failed connection and remote login all stay in the only main
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-onboarding-')))
   let loginCount = 0
   let registrationCount = 0
+  let loginRole = 'user', enrollmentCount = 0
   let holdBootstrap = false, replyBootstrap, sessionValid = true
   const server = createServer((req, res) => {
     const json = (value, status = 200) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value)) }
@@ -26,7 +27,7 @@ test('first launch, failed connection and remote login all stay in the only main
         assert.deepEqual(JSON.parse(raw), { username: 'new-child', password: 'child-password' })
         assert.equal(req.headers['x-csrf-token'], 'fixture')
         assert.ok(String(req.headers.cookie).includes('csrf=fixture'))
-        assert.ok(!String(req.headers.cookie).includes('session=fixture'))
+        assert.ok(!String(req.headers.cookie).includes('session='))
         json({ registrationStatus: 'pending', message: '注册成功，请等待管理员开通' }, 201)
       }); return
     }
@@ -34,11 +35,20 @@ test('first launch, failed connection and remote login all stay in the only main
       let raw = ''; req.on('data', chunk => { raw += chunk }); req.on('end', () => {
         loginCount++
         const body = JSON.parse(raw)
+        assert.ok(!String(req.headers.cookie).includes('session='))
         if (body.username !== 'user' || body.password !== 'correct-password') return json({ error: 'wrong' }, 401)
         if (req.headers['x-csrf-token'] !== 'fixture' || !String(req.headers.cookie).includes('csrf=fixture')) return json({ error: 'csrf' }, 403)
         res.setHeader('set-cookie', 'session=fixture; Path=/; HttpOnly; Max-Age=3600; SameSite=Strict')
-        json({ user: { id: 'fixture-user', username: 'user', role: 'user' }, csrfToken: 'fixture' })
+        json({ user: { id: 'fixture-user', username: 'user', role: loginRole }, csrfToken: 'fixture' })
       }); return
+    }
+    if (req.url === '/api/app/admin/desktop-hosts') {
+      enrollmentCount++
+      assert.equal(req.headers.origin, url)
+      assert.equal(req.headers['x-csrf-token'], 'fixture')
+      assert.ok(String(req.headers.cookie).includes('session=fixture'))
+      // Exercise authorization without provisioning a real computer in the fixture.
+      return json({ error: 'enrollment unavailable' }, 503)
     }
     res.setHeader('content-type', 'text/html; charset=utf-8'); res.end('<title>已登录远程夭夭</title><h1>远程工作区</h1>')
   })
@@ -49,6 +59,12 @@ test('first launch, failed connection and remote login all stay in the only main
     app = await electron.launch({ args: [root], cwd: root, env: { ...process.env,
       HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_MODE: 'ask', HERMES_YAOYAO_DESKTOP_TEST_SYNC: '0' } })
     const page = await app.firstWindow()
+    // The connectivity check can succeed through Chromium while Node sockets
+    // are unavailable (for example, after a macOS local-network permission change).
+    await app.evaluate(({ session }, origin) => {
+      globalThis.fetch = async () => { throw new TypeError('fetch failed', { cause: { code: 'EHOSTUNREACH' } }) }
+      return session.defaultSession.cookies.set({ url: origin, name: 'session', value: 'previous-account', httpOnly: true })
+    }, url)
     const errors = []; page.on('pageerror', error => errors.push(error.message))
     await expect(page.getByRole('heading', { name: '开始使用夭夭' })).toBeVisible()
     assert.equal(app.windows().length, 1)
@@ -72,6 +88,9 @@ test('first launch, failed connection and remote login all stay in the only main
     await expect(page.locator('#confirmation-field')).toBeHidden()
     assert.equal(registrationCount, 1)
     assert.equal(loginCount, 0, 'registration never signs in or authorizes this computer')
+    assert.equal(await app.evaluate(async ({ session }, origin) =>
+      (await session.defaultSession.cookies.get({ url: origin, name: 'session' }))[0]?.value, url),
+    'previous-account', 'registration does not replace the active browser session')
     assert.match(page.url(), /boot.html$/)
     await page.locator('#username').fill('user')
     await page.locator('#password').fill('wrong-password')
@@ -146,6 +165,18 @@ test('first launch, failed connection and remote login all stay in the only main
     await expect(reopened.locator('#login-form')).toBeVisible()
     await expect(reopened.locator('#session-loading')).toBeHidden()
     assert.equal(app.windows().length, 1)
+    loginRole = 'admin'
+    await app.evaluate(() => {
+      globalThis.fetch = async () => { throw new TypeError('fetch failed', { cause: { code: 'EHOSTUNREACH' } }) }
+    })
+    await reopened.locator('#username').fill('user')
+    await reopened.locator('#password').fill('correct-password')
+    await reopened.locator('#submit').click()
+    await expect(reopened.locator('#login-error')).toContainText('账号已登录，但电脑授权未恢复')
+    assert.equal(enrollmentCount, 1, 'computer authorization also uses the reachable Chromium transport')
+    assert.equal((await reopened.evaluate(() => window.yaoyaoDesktop.status())).authenticated, true)
+    await reopened.locator('#submit').click()
+    await reopened.waitForURL(url + '/**')
   } finally {
     await app?.close().catch(() => {})
     await new Promise(done => { server.close(done); server.closeAllConnections() })

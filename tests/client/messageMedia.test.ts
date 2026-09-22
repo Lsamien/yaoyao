@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import MarkdownContent from '@/components/messages/MarkdownContent.vue'
 import { normalizeChatMessage } from '@/utils/normalize'
 import { chatMessageToUi, workspaceMessagesToUi } from '@/components/workspace/viewModels'
+import type { WorkspaceMessage } from '@shared/workspace'
 
 const attachments = [
   { id: 'doc', name: 'bamboo-sample.txt', size: 134, kind: 'file' as const, url: '/api/app/files/doc/download' },
@@ -42,5 +43,45 @@ describe('ordered message media', () => {
     const wrapper = mount(MarkdownContent, { props: { content: message.content, attachments: message.attachments, separateMedia: true, fileCards: true } })
     expect(wrapper.findAll('.message-file')).toHaveLength(1)
     expect(wrapper.text()).toBe('bamboo-sample.txt134 B')
+  })
+  it.each([
+    '/Users/samien/Agents/zhuer/2026-09-22/dingtalk-current-page.png',
+    '/tmp/截图 文件(1).png',
+    '/tmp/screenshot%20copy.png',
+  ])('renders a workspace MEDIA reference and its archived attachment once: %s', async sourcePath => {
+    const original: WorkspaceMessage = {
+      id: 'screenshot', conversationId: 'chat', seq: 1, role: 'assistant', agentId: 'bot',
+      content: `当前画面：\n\nMEDIA:${sourcePath}\n\n截图完成。`, reasoning: '',
+      status: 'complete', createdAt: 1, tools: [],
+      attachments: [{ id: 'screenshot-file', name: sourcePath.split('/').at(-1)!, sourcePath, mimeType: 'image/png', size: 3590111, sender: 'agent', createdAt: 1 }],
+    }
+    const message = workspaceMessagesToUi([original])[0]!
+    const wrapper = mount(MarkdownContent, { props: {
+      content: message.content, attachments: message.attachments, separateMedia: true, fileCards: true, legacyMedia: true,
+    } })
+    expect(wrapper.findAll('.message-media')).toHaveLength(1)
+    expect(wrapper.get('img').attributes('src')).toBe('/api/app/files/screenshot-file/preview')
+    expect([...wrapper.get('.message-parts').element.children].map(el => el.className)).toEqual(['message-prose', 'message-media', 'message-prose'])
+    await wrapper.get('.message-media__image').trigger('click')
+    expect(wrapper.emitted('preview')?.[0]?.[0]).toEqual(message.attachments![0])
+    expect(original.content).toContain(`MEDIA:${sourcePath}`)
+    wrapper.unmount()
+  })
+  it('reconciles a late workspace attachment without duplicating the streamed image or hiding a distinct same-name file', async () => {
+    const original: WorkspaceMessage = {
+      id: 'stream', conversationId: 'chat', seq: 1, role: 'assistant', agentId: 'bot',
+      content: 'MEDIA:/tmp/first/screenshot.png\n', reasoning: '', status: 'streaming', createdAt: 1, tools: [], attachments: [],
+    }
+    const props = () => {
+      const message = workspaceMessagesToUi([original])[0]!
+      return { content: message.content, attachments: message.attachments, streaming: message.status === 'streaming' }
+    }
+    const wrapper = mount(MarkdownContent, { props: { ...props(), separateMedia: true, fileCards: true, legacyMedia: true } })
+    expect(wrapper.findAll('img')).toHaveLength(1)
+    original.status = 'complete'
+    original.attachments = ['first', 'second'].map(id => ({ id, name: 'screenshot.png', sourcePath: `/tmp/${id}/screenshot.png`, mimeType: 'image/png', size: 123, sender: 'agent', createdAt: 1 }))
+    await wrapper.setProps(props())
+    expect(wrapper.findAll('img').map(image => image.attributes('src'))).toEqual(['/api/app/files/first/preview', '/api/app/files/second/preview'])
+    wrapper.unmount()
   })
 })

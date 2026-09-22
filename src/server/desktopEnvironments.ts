@@ -153,10 +153,13 @@ export class DesktopEnvironments {
  snapshot(owner:string,agent?:WorkspaceAgent,deviceHost?:string,policy?:{script:boolean;server:boolean;maxMiB:number}):DesktopEnvironmentSnapshot {
   const capturedAt=Date.now(),global=policy??{...this.computers(),maxMiB:(()=>{try{return readHostTools(this.store.home).fileTransferMaxMiB}catch{return 25}})()}
   const records=this.store.list<import('../shared/desktopHost.js').DesktopHostRecord>('_system','desktop-host')
+  const revoked=new Set(records.filter(record=>!record.enabled).map(record=>record.id))
   const states=[...this.sessions.values()]
   for(const record of records)if(!states.some(host=>host.key===record.id))states.push(newHostState(record.id,true))
   if(deviceHost&&!states.some(host=>host.key===deviceHost))states.push(newHostState(deviceHost,deviceHost!=='local'))
-  const hosts:BotDeviceSnapshot[]=states.map((s):BotDeviceSnapshot=>{
+  // Revoked pairings remain stored for reauthorization, not as offline computers.
+  // Filter after merging sessions and message origin so neither can resurrect them.
+  const hosts:BotDeviceSnapshot[]=states.filter(s=>!revoked.has(s.key)).map((s):BotDeviceSnapshot=>{
    const info=s.info,online=this.hostOnline(s),record=records.find(record=>record.id===s.key),open=(s.key==='local'?global.server:global.script)&&record?.enabled!==false
    const manual=this.current(s,'local'),waiting=manual?'human_control':s.paused.has('local')?'paused':'ready'
    const base:DeviceCapabilityStatus|undefined=agent&&(agent.archived||agent.remoteAgentId)?'agent_unavailable':!open?'disabled':!online?'offline':info?.platform!=='darwin'?'unsupported':undefined
