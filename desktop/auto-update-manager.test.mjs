@@ -9,7 +9,7 @@ function fixture(t, options = {}) {
   driver.checkForUpdates = async () => ({ isUpdateAvailable: true, updateInfo: { version: '0.4.63', releaseNotes: '<b>纯文本说明</b>' }, cancellationToken: { cancel() { calls.push('cancel') } } })
   driver.downloadUpdate = async () => { driver.emit('update-downloaded'); return ['update.zip'] }
   driver.quitAndInstall = () => calls.push('install')
-  const manager = new DesktopAutoUpdateManager({ driver, version: '0.4.62', ...options })
+  const manager = new DesktopAutoUpdateManager({ driver, platform: 'darwin', version: '0.4.62', ...options })
   t.after(() => { manager.stopChecking(); clearTimeout(manager.stagingTimer); clearTimeout(manager.restartTimer) })
   return { manager, driver, calls }
 }

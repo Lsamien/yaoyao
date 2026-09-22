@@ -1,6 +1,7 @@
 import { open, realpath, mkdir, mkdtemp, unlink, rename, link, rm } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { resolve, dirname, join, sep } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
+import { hostPathInput, pathInside } from './hostPaths.mjs'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 
@@ -16,8 +17,8 @@ export class FileTransferFiles {
   }
   async path(input, writing = false) {
     require(typeof input === 'string' && input.length > 0 && input.length <= 4096 && !input.includes('\0'), '文件路径无效')
-    const root = await realpath(this.root), raw = resolve(root, input.replace(/^~\//, '').replace(/^~$/, ''))
-    const inside = value => !this.confined || value === root || value.startsWith(root + sep)
+    const root = await realpath(this.root), raw = resolve(root, hostPathInput(input))
+    const inside = value => !this.confined || pathInside(root, value)
     require(inside(raw), '路径超出允许范围')
     if (!writing) { const file = await realpath(raw); require(inside(file), '路径超出允许范围'); return file }
     let parent = dirname(raw)

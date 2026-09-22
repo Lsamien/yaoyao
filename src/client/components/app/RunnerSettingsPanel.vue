@@ -57,7 +57,7 @@ onMounted(()=>{void action(refresh)})
 
 <template>
   <section class="runner-panel" aria-label="执行节点设置">
-    <p>执行节点只给虚拟环境用。聊天和 Mac 桌面不经过这里。节点要和 Hermes 装在同一台电脑上。</p>
+    <p>执行节点只给虚拟环境用。聊天和真实桌面不经过这里。节点要和 Hermes 装在同一台电脑上。</p>
     <p v-if="bundleAvailable"><a href="/api/app/admin/runners/bundle" download>下载配套执行节点程序</a>（包含桌面资源，需要 Node.js 24 或更高版本）。</p>
     <div class="runner-toolbar"><strong>已注册节点</strong><button type="button" :disabled="busy" @click="action(refresh)">刷新状态</button></div>
     <ul v-if="runners.length" class="runner-list">

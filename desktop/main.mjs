@@ -17,12 +17,16 @@ import { DesktopUpdateManager } from './update-manager.mjs'
 import { DesktopAutoUpdateManager } from './auto-update-manager.mjs'
 import { createRequire } from 'node:module'
 import { installComputerViewer } from './computer-viewer.mjs'
+import { desktopPlatform, desktopMenu, loginItemOptions } from './platform.mjs'
 
 const desktopRoot = dirname(fileURLToPath(import.meta.url))
 const fixtureHome = process.env.HERMES_YAOYAO_DESKTOP_TEST_HOME
+const platform = desktopPlatform()
+const loginOptions = loginItemOptions()
 // Fixture identity also isolates Chromium cookies, window state and the app lock.
 if (fixtureHome) app.setPath('userData', join(fixtureHome, 'desktop'))
 app.setName('夭夭')
+if (platform.windows) app.setAppUserModelId('cn.samien.yaoyao.desktop')
 if (!app.requestSingleInstanceLock()) { app.quit() }
 else {
   let window, tray, manager, runnerManager, quitting = false, closing = false, timer
@@ -61,6 +65,7 @@ else {
   })
   ipcMain.handle('desktop:retry', async event => {
     if (!trustedBoot(event)) throw new Error('不允许此页面启动桌面服务')
+    if (!platform.server) throw new Error('此客户端不支持在本机运行服务器')
     manager.restarts = []
     return onboarding.prepare()
   })
@@ -162,7 +167,8 @@ else {
       if (closeComputerViewer.owns(contents)) { callback(['fullscreen', 'clipboard-sanitized-write'].includes(permission)); return }
       if (!trustedService(contents, details.requestingUrl)) { callback(false); return }
       if (permission === 'media' && details.mediaTypes?.length && details.mediaTypes.every(type => type === 'audio')) {
-        void systemPreferences.askForMediaAccess('microphone').then(callback, () => callback(false))
+        if (platform.windows) callback(systemPreferences.getMediaAccessStatus('microphone') !== 'denied')
+        else void systemPreferences.askForMediaAccess('microphone').then(callback, () => callback(false))
       } else callback(['notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission))
     })
     window.on('close', event => { if (!quitting) { event.preventDefault(); window.hide() } })
@@ -238,7 +244,7 @@ else {
             await manager?.reconnect().catch(error=>log(error.message))
             await runnerManager?.start().catch(error=>log(error.message))
           }
-          stateChanged(manager.state)
+          if (manager) stateChanged(manager.state)
           timer=setInterval(()=>{if(serverModeActive)void manager.check()},10000);timer.unref()
           updater?.startChecking?.()
           show()
@@ -278,14 +284,16 @@ else {
   })
   app.whenReady().then(async () => {
     await preferences.load()
-    startHidden = preferences.value.backgroundAtLogin && app.getLoginItemSettings().wasOpenedAtLogin
+    startHidden = preferences.value.backgroundAtLogin && (platform.windows
+      ? process.argv.includes('--yaoyao-login') : app.getLoginItemSettings().wasOpenedAtLogin)
     const packageVersion = JSON.parse(readFileSync(join(root, 'release.json'), 'utf8')).webVersion
     const buildInfo=JSON.parse(readFileSync(join(root,'build-info.json'),'utf8'))
     const releases = await import(pathToFileURL(join(root, 'github-release.mjs')).href)
     if ((app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_AUTO_UPDATE === '1')) {
-      const { autoUpdater } = createRequire(import.meta.url)(join(root, 'electron-updater.cjs'))
+      const updateModule = createRequire(import.meta.url)(join(root, 'electron-updater.cjs'))
+      const autoUpdater = platform.windows ? new updateModule.NsisUpdater() : updateModule.autoUpdater
       autoUpdater.logger = Object.fromEntries(['info', 'warn', 'error', 'debug'].map(level => [level, (...values) => log(`[更新:${level}] ${values.join(' ')}`)]))
-      updater = new DesktopAutoUpdateManager({ driver: autoUpdater, version: packageVersion,
+      updater = new DesktopAutoUpdateManager({ driver: autoUpdater, version: packageVersion, platform: platform.platform,
         prepareInstall: prepareUpdateRestart, recoverInstall: recoverUpdateRestart })
       updater.startChecking()
     } else {
@@ -294,6 +302,8 @@ else {
         fetchImpl: (...args) => net.fetch(...args) })
     }
     app.setAboutPanelOptions({applicationName:'夭夭',applicationVersion:packageVersion,version:`${String(buildInfo.commit).slice(0,12)}${buildInfo.dirty?' · 工作区快照':''}`})
+    const credentials=new DesktopCredentials({home,platform:platform.platform,safeStorage,helper:join(root,app.isPackaged?'keychain-helper':'keychain-helper-dev'),legacyDecrypt:async bytes=>(await safeStorage.decryptStringAsync(bytes)).result})
+    if (platform.server) {
     manager = new DesktopServiceManager({ home, port, version: packageVersion, log, onState: stateChanged,
       prepareHome: !fixtureHome ? onProgress => migrateLocalData({ home, port, root, onProgress }) : undefined,
       stopBackground: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
@@ -316,13 +326,13 @@ else {
     })
     environmentHost=new DesktopEnvironmentHost({manager,root,dataRoot:app.getPath('userData')})
     const { parseRunnerConfiguration } = await import(pathToFileURL(join(root,'runner-config.mjs')).href)
-    const credentials=new DesktopCredentials({home,helper:join(root,app.isPackaged?'keychain-helper':'keychain-helper-dev'),legacyDecrypt:async bytes=>(await safeStorage.decryptStringAsync(bytes)).result})
     runnerManager = new DesktopRunnerManager({home,validate:parseRunnerConfiguration,
       encrypt:value=>credentials.encrypt(value),
       decrypt:bytes=>credentials.decrypt(bytes),
       onState:message=>{log(`Runner: ${message}`);const item=Menu.getApplicationMenu()?.getMenuItemById('runner-status');if(item)item.label=message},
       fork:()=>utilityProcess.fork(join(root,'runner.mjs'),['--desktop-ipc'],{cwd:root,stdio:'pipe',env:{HOME:homedir(),PATH:[join(homedir(),'.local/bin'),join(homedir(),'.orbstack/bin'),'/opt/homebrew/bin','/usr/local/bin',process.env.PATH||'/usr/bin:/bin'].join(':'),NODE_ENV:'production',NODE_USE_ENV_PROXY:'0'}}),
     })
+    }
     async function runnerAction(action){try{await action()}catch(error){await dialog.showMessageBox(window,{type:'error',message:'执行节点操作未完成',detail:error.message})}}
     hostManager=new DesktopHostManager({home,root,dataRoot:app.getPath('userData'),
       createCore:({root,dataRoot})=>new DesktopHostCore({root,dataRoot}),
@@ -361,7 +371,8 @@ else {
     }
     ipcMain.handle('desktop:mode-state',event=>{
       requireModePage(event)
-      return {mode:remoteMode?'client':'server',serverURL:serviceURL()||'',switching:switchingMode}
+      return {mode:remoteMode||!platform.server?'client':'server',serverURL:serviceURL()||'',switching:switchingMode,
+        platform:platform.platform,supportedModes:platform.supportedModes}
     })
     ipcMain.handle('desktop:mode-switch',async(event,mode)=>{
       requireModePage(event)
@@ -399,9 +410,11 @@ else {
       if (enrolled?.serverURL) await preferences.setRemoteServer(enrolled.serverURL)
     }
     onboarding = new DesktopOnboarding({
+      platform: platform.platform, supportedModes: platform.supportedModes,
       remoteServer: () => preferences.value.remoteServer,
       inspect: server => inspectServer(server, (...args) => net.fetch(...args)),
       prepareLocal: async ({ force }) => {
+        if (!platform.server) throw new Error('此客户端不支持在本机运行服务器')
         serverModeActive = true; remoteMode = false; remoteURL = ''
         await hostManager.stop()
         manager.restarts = []
@@ -432,9 +445,9 @@ else {
         if (mode === 'remote') {
           // Detach only; an independently installed local service keeps running.
           serverModeActive = false
-          await environmentHost.close()
-          await runnerManager.stop()
-          await manager.stop()
+          await environmentHost?.close()
+          await runnerManager?.stop()
+          await manager?.stop()
           remoteMode = true; remoteURL = serverURL
           await preferences.setRemoteServer(serverURL)
           const enrolled = await hostManager.read().catch(error => { log(error.message); return undefined })
@@ -481,6 +494,7 @@ else {
       if(ask)ask.checked=preferences.value.startupChoice==='ask'
     }
     async function switchMode(mode) {
+      if (mode === 'local' && !platform.server) return { ok: false, error: '此客户端不支持在本机运行服务器' }
       if (closing || quitting) return { ok: false, error: 'App 正在退出' }
       if (switchingMode || onboarding.busy) return { ok: false, error: '当前步骤尚未完成，请稍候' }
       switchingMode = true; syncModeMenu()
@@ -495,7 +509,7 @@ else {
       const selection=await dialog.showOpenDialog(window,{title:'导入执行节点配置',properties:['openFile'],filters:[{name:'Runner 配置',extensions:['json']}]})
       if(!selection.canceled&&selection.filePaths[0]&&!closing)await runnerAction(()=>runnerManager.importFile(selection.filePaths[0]))
     }
-    Menu.setApplicationMenu(Menu.buildFromTemplate([
+    Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenu([
       { label: '夭夭', submenu: [{ role: 'about', label: '关于夭夭' }, { type: 'separator' },
         { id:'desktop-service-status',label:'正在连接后台服务…',enabled:false },
         { label: '显示窗口', click: show }, { label: '在浏览器中打开', click: () => { const url = serviceURL(); if (url) safeExternal(url) } },
@@ -506,16 +520,16 @@ else {
           click:async()=>{try{await manager.retrySynchronization()}catch(error){log(error.message)}} },
         { id:'desktop-sync-force', label:'使用当前 App 覆盖同版本 Web', enabled:false,
           click:async()=>{if(closing||quitting||!manager.canForceSynchronization)return;try{await manager.retrySynchronization({force:true})}catch(error){log(error.message)}} },
-        { id:'desktop-login', label:'登录 macOS 时启动', type:'checkbox', enabled:app.isPackaged, checked:app.getLoginItemSettings().openAtLogin,
-          click:async item=>{try{app.setLoginItemSettings({openAtLogin:item.checked});item.checked=app.getLoginItemSettings().openAtLogin}catch(error){item.checked=app.getLoginItemSettings().openAtLogin;await dialog.showMessageBox(window,{type:'error',message:'无法修改登录启动设置',detail:error.message})}} },
+        { id:'desktop-login', label:'登录 macOS 时启动', type:'checkbox', enabled:app.isPackaged, checked:app.getLoginItemSettings(loginOptions).openAtLogin,
+          click:async item=>{try{app.setLoginItemSettings({...loginOptions,openAtLogin:item.checked});item.checked=app.getLoginItemSettings(loginOptions).openAtLogin}catch(error){item.checked=app.getLoginItemSettings(loginOptions).openAtLogin;await dialog.showMessageBox(window,{type:'error',message:'无法修改登录启动设置',detail:error.message})}} },
         { id:'desktop-background', label:'登录启动时仅驻留菜单栏', type:'checkbox', checked:preferences.value.backgroundAtLogin,
           click:async item=>{try{await preferences.setBackgroundAtLogin(item.checked)}catch(error){item.checked=preferences.value.backgroundAtLogin;await dialog.showMessageBox(window,{type:'error',message:error.message})}} },
         { id:'desktop-update-check', label:'检查 App 更新…', click:showUpdates },
-        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n\n通过“检查 App 更新”下载新版，准备完成后点击“重启更新”。此操作只更新当前电脑的 App，不升级远程服务器；独立后台服务继续运行。开发运行时提供手动安装包下载。\n\n服务器模式下，首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 降级通过服务器的回滚入口处理；数据库结构不兼容时不能直接降级。\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
+        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n\n通过“检查 App 更新”下载新版，准备完成后点击“重启更新”。此操作只更新当前电脑的 App，不升级远程服务器。开发运行时提供手动安装包下载。${platform.server ? "\n\n独立后台服务继续运行。服务器模式下，首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 降级通过服务器的回滚入口处理；数据库结构不兼容时不能直接降级。" : ""}\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
         { type: 'separator' },
         { role: 'hide', label: '隐藏夭夭' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' },
         { type: 'separator' },
-        {label:'撤销本机控制授权',click:()=>{void environmentHost.revoke();void hostManager?.revoke()}},
+        {label:'撤销本机控制授权',click:()=>{void environmentHost?.revoke();void hostManager?.revoke()}},
         { id:'desktop-quit',label:'退出夭夭（后台继续运行）',accelerator:'CommandOrControl+Q',click:()=>requestQuit() },
         { id:'desktop-stop-and-quit',label:'停止后台服务并退出',click:()=>requestQuit(true) }] },
       {label:'执行节点',submenu:[{id:'runner-status',label:'未配置执行节点',enabled:false},{type:'separator'},
@@ -534,19 +548,19 @@ else {
         {id:'desktop-host-reconnect',label:'重新连接',click:()=>hostAction(()=>hostManager.start())},
         {id:'desktop-host-forget',label:'断开并忘记配置',click:()=>hostAction(()=>hostManager.forget())}]},
       { role: 'editMenu', label: '编辑' }, { role: 'viewMenu', label: '显示' }, { role: 'windowMenu', label: '窗口' },
-    ]))
+    ])))
     const icon = nativeImage.createFromPath(join(desktopRoot, 'icon.png')).resize({ width: 20, height: 20 })
-    icon.setTemplateImage(true)
+    if (!platform.windows) icon.setTemplateImage(true)
     tray = new Tray(icon)
     tray.setToolTip('夭夭')
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开夭夭', click: show }, { label: '查看日志', click: () => shell.showItemInFolder(logFile) }, { type: 'separator' }, { label: '退出夭夭（后台继续运行）', click: () => requestQuit() }, { label: '停止后台服务并退出', click: () => requestQuit(true) }]))
+    tray.setContextMenu(Menu.buildFromTemplate(desktopMenu([{ label: '打开夭夭', click: show }, { label: '查看日志', click: () => shell.showItemInFolder(logFile) }, { type: 'separator' }, { label: '退出夭夭（后台继续运行）', click: () => requestQuit() }, { label: '停止后台服务并退出', click: () => requestQuit(true) }])))
     tray.on('click', show)
     // Restore a saved session behind neutral loading feedback. The guide only
     // becomes visible if a connection or account actually needs attention.
-    const startupMode = preferences.value.startupChoice === 'ask'
+    const startupMode = !platform.server ? 'remote' : preferences.value.startupChoice === 'ask'
       ? (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_MODE !== 'ask' ? 'local' : null)
       : preferences.value.startupChoice
-    const restoreSession = Boolean(startupMode && (startupMode === 'local' || preferences.value.remoteServer))
+    const restoreSession = Boolean(startupMode && (startupMode === 'local' || preferences.value.remoteServer)) && (platform.server || preferences.value.startupChoice !== 'ask')
     onboarding.open({ mode: startupMode, serverURL: preferences.value.remoteServer,
       remember: preferences.value.startupChoice !== 'ask', restoring: restoreSession })
     // Finish the initial navigation before a remembered session enters its server.

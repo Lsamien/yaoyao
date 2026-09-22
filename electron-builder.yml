@@ -31,10 +31,24 @@ extraResources:
       - electron-updater.cjs
       - keychain-helper
       - computer-helper
+      - computer-helper.exe
       - ui/**/*
       - web-service/**/*
 asar: true
 npmRebuild: false
+win:
+  executableName: Yaoyao
+  icon: .desktop-build/branding/icon.ico
+  requestedExecutionLevel: asInvoker
+  artifactName: Yaoyao-${version}-win-${arch}-setup.${ext}
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  deleteAppDataOnUninstall: false
 mac:
   # Keep the independently signed Node runtime byte-identical to its sealed manifest.
   signIgnore:

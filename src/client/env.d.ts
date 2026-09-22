@@ -13,7 +13,7 @@ interface Window {
   yaoyaoDesktop?: {
     openLogin?(): Promise<unknown>
     openUpdates?(): Promise<void>
-    modeState?(): Promise<{ mode: 'client' | 'server'; serverURL: string; switching: boolean }>
+    modeState?(): Promise<{ mode: 'client' | 'server'; serverURL: string; switching: boolean; platform?: string; supportedModes?: ('client' | 'server')[] }>
     switchMode?(mode: 'client' | 'server'): Promise<{ ok: boolean; error?: string; pendingLogin?: boolean }>
     openRemoteLogin?(): Promise<void>
     authorizeComputer?(csrfToken: string): Promise<{ registered: boolean; hostId?: string }>

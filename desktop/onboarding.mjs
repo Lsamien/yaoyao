@@ -8,9 +8,12 @@ export class DesktopOnboarding {
     this.open()
   }
   get busy() { return ['preparing', 'authenticating', 'entering'].includes(this.state.phase) }
-  snapshot() { return { ...this.state, history: [...this.state.history], busy: this.busy } }
+  snapshot() { return { ...this.state, history: [...this.state.history], busy: this.busy,
+    platform: this.options.platform ?? process.platform, supportedModes: this.options.supportedModes ?? ['client', 'server'] } }
   open({ mode = null, serverURL = '', remember = false, forceLogin = false, restoring = false } = {}) {
     if (this.state && this.busy) throw new Error('当前步骤尚未完成，请稍候')
+    if (mode === 'local' && !this.snapshotModes().includes('server')) throw new Error('此客户端不支持在本机运行服务器')
+    if (!mode && !this.snapshotModes().includes('server')) mode = 'remote'
     this.state = { active: true, mode, serverURL, remember, forceLogin, restoring, phase: 'idle', stage: 'checking',
       setupRequired: false, registrationAvailable: false, registrationNotice: '', authenticated: false, username: '', message: '', error: '',
       canForceSync: false, history: [] }
@@ -20,6 +23,7 @@ export class DesktopOnboarding {
     if (!['local', 'remote'].includes(mode)) throw new Error('请选择运行方式')
     return this.open({ mode, serverURL: this.options.remoteServer(), remember: this.state.remember })
   }
+  snapshotModes() { return this.options.supportedModes ?? ['client', 'server'] }
   serviceChanged(service) {
     if (!this.state.active || this.state.mode !== 'local') return
     this.state.stage = service.stage || this.state.stage

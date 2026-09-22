@@ -35,7 +35,10 @@
     "desktop:test": "node --test desktop/*.test.mjs",
     "runner": "node dist-server/runner/index.js",
     "runner:dev": "tsx src/runner/index.ts",
-    "runner:build": "node scripts/build-runner.mjs"
+    "runner:build": "node scripts/build-runner.mjs",
+    "desktop:build:win": "npm run build && node scripts/build-windows-desktop.mjs",
+    "desktop:pack:win": "npm run desktop:build:win && node scripts/windows-desktop-release.mjs",
+    "desktop:test:win": "node scripts/test-windows-desktop.mjs"
   },
   "dependencies": {
     "@koa/bodyparser": "^5.0.0",

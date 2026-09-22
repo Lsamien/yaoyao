@@ -67,7 +67,7 @@ export class DesktopHostManager {
   let encrypted
   try{encrypted=await readFile(this.path)}catch(error){if(error.code==='ENOENT')return;throw error}
   try{return parseDesktopHostConfiguration(JSON.parse(await this.options.decrypt(encrypted)))}
-  catch{throw new Error('无法解锁电脑配置，请检查钥匙串或重新导入')}
+  catch{throw new Error('无法解锁电脑配置，请使用原系统账号或重新登录授权')}
  }
  importFile(path){
   const generation=++this.generation
@@ -114,10 +114,14 @@ export class DesktopHostManager {
   const config=this.config,core=this.core
   if(!config||!core||this.core!==core)return
   try{
+   await core.prepareInfo?.()
+   if(this.config!==config||this.core!==core)return
    const value=await remoteExchange(config,{host:core.info(),results:core.takeResults()})
    this.backoff=400
    if(this.config!==config||this.core!==core)return
-   this.publish(`电脑已连接 ${new URL(config.serverURL).host}`)
+   this.publish(process.platform==='win32'&&!(Array.isArray(value.capabilities?.desktopPlatforms)&&value.capabilities.desktopPlatforms.includes('win32'))
+    ? '已连接；服务器尚不支持 Windows 电脑操作，请升级服务器（聊天可继续使用）'
+    : `电脑已连接 ${new URL(config.serverURL).host}`)
    core.acceptCapabilities?.(value.capabilities)
    await core.handle(value.commands??[])
   }catch(error){

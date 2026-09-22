@@ -35,7 +35,7 @@ function assertDigest(digest, actual) {
 
 export class DesktopUpdateManager {
   constructor({ version, arch = process.arch, platform = process.platform, cacheRoot, inspect, compare, source, fetchImpl = fetch,
-    verifyImage = (path, signal) => promisify(execFile)('/usr/bin/hdiutil', ['verify', path], { timeout: 120000, signal, maxBuffer: 1024 * 1024 }) }) {
+    verifyImage = (path, signal) => platform === 'win32' ? Promise.resolve() : promisify(execFile)('/usr/bin/hdiutil', ['verify', path], { timeout: 120000, signal, maxBuffer: 1024 * 1024 }) }) {
     Object.assign(this, { version, arch, platform, cacheRoot, inspect, compare, source, fetchImpl, verifyImage })
     this.state = { phase: 'idle', installMode: 'manual', currentVersion: version, arch, message: '点击检查更新', available: false, received: 0, total: 0 }
   }
@@ -53,10 +53,11 @@ export class DesktopUpdateManager {
       controller.signal.throwIfAborted()
       this.release = release
       const version = release.manifest.webVersion
-      this.asset = release.assets.find(asset => asset.name === `Yaoyao-${version}-${this.arch}.dmg`)
-      this.checksum = release.assets.find(asset => asset.name === 'SHA256SUMS.txt')
+      this.asset = release.assets.find(asset => asset.name === (this.platform === 'win32' ? `Yaoyao-${version}-win-${this.arch}-setup.exe` : `Yaoyao-${version}-${this.arch}.dmg`))
+      this.checksum = (this.platform === 'win32' && release.assets.find(asset => asset.name === `SHA256SUMS-win-${this.arch}.txt`))
+        || release.assets.find(asset => asset.name === 'SHA256SUMS.txt')
       const newer = this.compare(version, this.version) > 0
-      const supported = this.platform === 'darwin' && ['arm64', 'x64'].includes(this.arch)
+      const supported = (this.platform === 'darwin' && ['arm64', 'x64'].includes(this.arch) || this.platform === 'win32' && this.arch === 'x64')
         && this.asset?.size > 0 && this.asset.size <= 2 * 1024 ** 3 && this.checksum?.size <= 65536
       this.state = { ...this.state, phase: 'checked', latestVersion: version, notes: release.notes, releasePageUrl: release.releasePageUrl,
         available: Boolean(newer && supported), total: supported ? this.asset.size : 0,
@@ -111,7 +112,7 @@ export class DesktopUpdateManager {
           }
           if (received !== this.asset.size || hash.digest('hex') !== expected) throw new Error('安装包大小或 SHA-256 校验失败')
         } finally { await file.close() }
-        this.state = { ...this.state, phase: 'verifying', message: '正在验证 DMG 完整性…' }
+        this.state = { ...this.state, phase: 'verifying', message: '正在验证安装包完整性…' }
         await this.verifyImage(partial, signal); signal.throwIfAborted()
         await rename(partial, path)
       } else {
@@ -119,7 +120,7 @@ export class DesktopUpdateManager {
         await this.verifyImage(path, signal); signal.throwIfAborted()
       }
       this.file = { path, hash: expected, size: this.asset.size }
-      this.state = { ...this.state, phase: 'ready', received: this.asset.size, message: '校验通过。打开安装包后手动拖入“应用程序”完成安装。' }
+      this.state = { ...this.state, phase: 'ready', received: this.asset.size, message: this.platform === 'win32' ? '校验通过。打开 EXE 安装包完成安装。' : '校验通过。打开安装包后手动拖入“应用程序”完成安装。' }
     } catch (error) { this.failure(error, controller.signal) }
     finally { await rm(partial, { force: true }).catch(() => {}); this.controller = undefined }
     return this.snapshot()

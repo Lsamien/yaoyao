@@ -4,8 +4,9 @@ import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {homedir} from 'node:os'
 const prefix=Buffer.from('YAOYAO-RUNNER-KEYCHAIN-1\n')
+const windowsPrefix=Buffer.from('YAOYAO-WINDOWS-DPAPI-1\n')
 export class DesktopCredentials {
-  constructor({home,helper,legacyDecrypt}){this.home=home;this.helper=helper;this.legacyDecrypt=legacyDecrypt}
+  constructor({home,helper,legacyDecrypt,platform=process.platform,safeStorage}){Object.assign(this,{home,helper,legacyDecrypt,platform,safeStorage})}
   get account(){
     let identity=this.home
     try {
@@ -25,8 +26,20 @@ export class DesktopCredentials {
       child.stdin.on('error',()=>{});child.stdin.end(input)
     })
   }
-  async encrypt(value){return Buffer.concat([prefix,await this.invoke('encrypt',Buffer.from(value))])}
+  async encrypt(value){
+    if(this.platform==='win32'){
+      if(Buffer.byteLength(value)>1048576)throw new Error('电脑配置超过加密大小上限')
+      if(!await this.safeStorage?.isAsyncEncryptionAvailable())throw new Error('系统加密暂不可用，请稍后重试')
+      return Buffer.concat([windowsPrefix,await this.safeStorage.encryptStringAsync(value)])
+    }
+    return Buffer.concat([prefix,await this.invoke('encrypt',Buffer.from(value))])
+  }
   async decrypt(value){
+    if(this.platform==='win32'){
+      if(!value.subarray(0,windowsPrefix.length).equals(windowsPrefix))throw new Error('此电脑配置不属于 Windows，请重新登录授权')
+      try{return (await this.safeStorage.decryptStringAsync(value.subarray(windowsPrefix.length))).result}
+      catch{throw new Error('无法解锁电脑配置，请使用原 Windows 账号或重新登录授权')}
+    }
     if(value.subarray(0,prefix.length).equals(prefix))return (await this.invoke('decrypt',value.subarray(prefix.length))).toString('utf8')
     // Existing safeStorage files remain readable after the user grants normal OS access.
     let timer
