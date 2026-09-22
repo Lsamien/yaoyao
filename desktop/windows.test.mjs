@@ -29,8 +29,8 @@ test('Windows credentials use the asynchronous OS provider and reject foreign/co
 })
 test('PowerShell transports quoted Unicode as UTF-16 without shell interpolation', () => {
   const command = 'Write-Output "你好 $env:USERNAME"; exit 7', args = powershellArguments(command)
-  assert.equal(args[3], '-EncodedCommand')
-  const script = Buffer.from(args[4], 'base64').toString('utf16le')
+  assert.equal(args.at(-2), '-EncodedCommand')
+  const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
   assert.ok(script.includes(command)); assert.match(script, /UTF8Encoding/); assert.match(script, /LASTEXITCODE/)
 })
 test('Windows input invalidates screenshots after DPI, geometry or primary display changes', () => {

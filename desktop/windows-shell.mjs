@@ -2,8 +2,8 @@ import { spawn } from 'node:child_process'
 import { resolve as resolvePath } from 'node:path'
 
 export function powershellArguments(command) {
-  const script = `[Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n$global:LASTEXITCODE = 0\ntry {\n& {\n${command}\n}\n$ok = $?\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\nif (-not $ok) { exit 1 }\n} catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }`
-  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
+  const script = `$ProgressPreference = 'SilentlyContinue'\n[Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n$global:LASTEXITCODE = 0\ntry {\n& {\n${command}\n}\n$ok = $?\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\nif (-not $ok) { exit 1 }\n} catch { [Console]::Error.WriteLine($_.ToString()); exit 1 }`
+  return ['-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
 }
 
 /** Bound both output streams, and terminate the owned process tree before

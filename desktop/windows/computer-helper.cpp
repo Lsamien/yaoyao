@@ -82,7 +82,7 @@ static int runShell(const JsonObject& request) {
   wchar_t system[MAX_PATH]{};
   require(GetSystemDirectoryW(system, MAX_PATH), "无法定位 Windows PowerShell");
   auto shell = fs::path(system) / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
-  std::wstring command = L"\"" + shell.wstring() + L"\" -NoLogo -NoProfile -NonInteractive -EncodedCommand " + std::wstring(encoded);
+  std::wstring command = L"\"" + shell.wstring() + L"\" -NoLogo -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand " + std::wstring(encoded);
   Handle job(CreateJobObjectW(nullptr, nullptr)); require(job.value != nullptr, "无法创建命令进程组");
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
