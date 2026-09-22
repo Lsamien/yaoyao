@@ -25,13 +25,20 @@ npm run desktop:test:win
 
 GitHub Actions 工作流 `Windows client` 支持手动触发、相关 PR 和 `codex/windows-client*` 分支。CI 只上传 artifacts，不发布正式 Release。下载 `yaoyao-windows-x64-unsigned`，其中包含 EXE、blockmap、`latest.yml`、`SHA256SUMS-win-x64.txt` 和构建身份。生成目录为 `desktop-release/windows-x64`。
 
+安装前在下载目录用 PowerShell 核对校验值，EXE 的 SHA-256 应与清单中同名文件一致：
+
+```powershell
+Get-ChildItem *.exe | Get-FileHash -Algorithm SHA256
+Get-Content .\SHA256SUMS-win-x64.txt
+```
+
 默认构建为未签名测试包。正式签名构建设置 `YAOYAO_WINDOWS_SIGNED=1`、`CSC_LINK`、适用的 `CSC_KEY_PASSWORD` 和证书对应的 `YAOYAO_WINDOWS_PUBLISHER`；凭据仅通过 CI secret 或本机环境注入。正式构建强制签名和更新签名校验。
 
 Windows 更新使用 NSIS，只有用户点击“重启更新”才安装，先清理设备连接和自有操作。Windows 使用 `latest.yml`，Mac 继续使用 `latest-mac.yml`。更新附件必须来自同一次构建，并在清单引用的安装包和差分文件齐备后发布；测试包不写入正式更新源。
 
 ## 验证记录与人工验收
 
-自动测试覆盖平台模式、路径边界、凭据提供器、更新状态、设备权限与来源路由。Windows CI 另外编译并自检原生助手，测试真实 PowerShell，以及打包应用的登录、DPAPI 配置保存、会话恢复、菜单与托盘行为。测试证据位于 `test-results/windows-client`。
+自动测试覆盖平台模式、路径边界、凭据提供器、更新状态、设备权限与来源路由。Windows CI 另外编译并自检原生助手，测试真实 PowerShell 及子进程清理，以及打包应用的登录、DPAPI 配置保存、会话恢复、菜单与托盘行为。交互会话可用时，测试原生截图、点击、中文/emoji 输入、组合键、显示变化、授权撤销及独立浏览器。升级测试临时构建下一个版本，实际安装、拒绝损坏包、下载、重启替换，再检查设置、Cookie、DPAPI 数据保留与卸载。临时升级版本不会上传或发布。测试证据位于 `test-results/windows-client`，实际运行结果另见验证记录。
 
 以下项目需要真实 Windows 10 和 Windows 11 交互环境，不以 CI 编译或模拟响应代替：
 

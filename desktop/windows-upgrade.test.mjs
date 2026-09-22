@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readFile, writeFile, mkdir, rm, readdir, realpath, copyFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdtemp, readFile, writeFile, mkdir, rm, readdir, realpath, copyFile, access } from 'node:fs/promises'
+import { tmpdir, homedir } from 'node:os'
 import { join, resolve, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { _electron as electron, expect } from '@playwright/test'
@@ -16,12 +16,18 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
 }, async () => {
   const root = resolve(import.meta.dirname, '..'), output = join(root, 'desktop-release/windows-x64')
   const evidence = join(root, 'test-results/windows-client'), sandbox = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-upgrade-')))
-  const home = join(sandbox, '中文配置'), installed = join(sandbox, 'app'), feed = join(sandbox, 'feed')
+  // NSIS relaunches through Explorer, which correctly uses the user's normal
+  // environment instead of inheriting Playwright's fixture-only variables.
+  // This test may touch the normal profile only on a fresh disposable CI user.
+  assert.equal(process.env.GITHUB_ACTIONS, 'true', '安装升级验收只允许在一次性 GitHub Actions 用户下执行')
+  assert.ok(!process.env.YAOYAO_HOME && !process.env.HERMES_YAOYAO_HOME && !process.env.HERMES_YAOYAO_DESKTOP_TEST_HOME)
+  const home = join(homedir(), '.yaoyao'), installed = join(sandbox, 'app'), feed = join(sandbox, 'feed')
+  assert.equal(await access(home).then(() => true).catch(() => false), false, '拒绝覆盖已有用户数据')
   const executablePath = join(installed, 'Yaoyao.exe'), cacheName = 'yaoyao-upgrade-' + randomUUID()
   const originalManifest = await readFile(join(root, '.desktop-build/release.json'), 'utf8')
   const originalPackage = await readFile(join(root, '.desktop-build/shell/package.json'), 'utf8')
   const version = JSON.parse(originalPackage).version, nextVersion = version.replace(/\d+$/, value => String(Number(value) + 1))
-  let application, logs, corrupt = true, requireCookie = false, restored = 0
+  let application, logs, userData, corrupt = true, requireCookie = false, restored = 0
   const server = createServer(async (req, res) => {
     try {
       const path = new URL(req.url, 'http://localhost').pathname
@@ -67,10 +73,10 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
     await writeFile(join(home, 'desktop-preferences.json'), JSON.stringify(preferences))
     // This installed test copy alone uses the isolated HTTP update source.
     await writeFile(join(installed, 'resources/app-update.yml'), JSON.stringify({ provider: 'generic', url: origin + '/feed/', updaterCacheDirName: cacheName }))
-    const launch = () => electron.launch({ executablePath, env: { ...process.env,
-      HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_AUTO_UPDATE: '1' } })
+    const launch = () => electron.launch({ executablePath, env: { ...process.env } })
     application = await launch(); let page = await application.firstWindow(); await page.waitForURL(origin + '/**')
     logs = await application.evaluate(({ app }) => app.getPath('logs'))
+    userData = await application.evaluate(({ app }) => app.getPath('userData'))
     assert.equal(await application.evaluate(({ app }) => app.getVersion()), version)
     await application.evaluate(async ({ session, safeStorage }, { origin, home }) => {
       await session.defaultSession.cookies.set({ url: origin, name: 'session', value: 'upgrade-fixture', expirationDate: Date.now() / 1000 + 3600 })
@@ -119,9 +125,11 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
     throw error
   } finally {
     await application?.close().catch(() => {}); await stopInstalled()
-    if (logs) await copyFile(join(logs, 'verification/server.log'), join(evidence, 'upgrade-main.log')).catch(() => {})
+    if (logs) await copyFile(join(logs, 'service/server.log'), join(evidence, 'upgrade-main.log')).catch(() => {})
     server.closeAllConnections(); await new Promise(done => server.close(done))
     await rm(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
+    await rm(home, { recursive: true, force: true })
+    if (userData) await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
     await rm(join(process.env.LOCALAPPDATA, cacheName), { recursive: true, force: true }).catch(() => {})
   }
 })

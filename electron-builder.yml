@@ -37,6 +37,9 @@ extraResources:
 asar: true
 npmRebuild: false
 win:
+  files:
+    - '**/*'
+    - '!**/node_modules/**'
   executableName: Yaoyao
   icon: .desktop-build/branding/icon.ico
   requestedExecutionLevel: asInvoker

@@ -42,6 +42,8 @@ export async function packageWindowsDesktop() {
   await build({ projectDir: root, targets: Platform.WINDOWS.createTarget(['nsis'], Arch.x64), publish: 'never',
     config: { ...signing, directories: { output: directory }, electronUpdaterCompatibility: '>=2.16' } })
   await verifyWindowsArtifacts(directory, version)
+  const { listPackage } = await import('@electron/asar')
+  if (listPackage(join(directory, 'win-unpacked/resources/app.asar')).some(name => /[\\/]node_modules[\\/]/.test(name))) throw new Error('Windows 客户端意外包含服务器或开发依赖')
   const feed = load(await readFile(join(directory, 'win-unpacked/resources/app-update.yml'), 'utf8'))
   if (feed.provider !== 'github' || feed.owner !== 'Lsamien' || feed.repo !== 'yaoyao') throw new Error('Windows 更新源配置无效')
   if (process.env.YAOYAO_WINDOWS_SIGNED === '1' && ![feed.publisherName].flat().includes(process.env.YAOYAO_WINDOWS_PUBLISHER.trim())) throw new Error('正式 Windows 更新配置缺少发布者签名校验')
