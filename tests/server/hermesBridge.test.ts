@@ -250,9 +250,12 @@ it('uses explicitly mapped Hermes storage and the container interpreter with an 
   const status=await manager.status()
   expect(status.mapped).toBe(true);expect(status.local).toBe(true);expect(status.profiles[0].canInstall).toBe(true)
   expect(status.message).toContain(home)
-  await manager.install({profile:'default'})
+  const installed=await manager.install({profile:'default'})
   const call=f.run.mock.calls.find(([,args])=>args.includes('--profile'))!
   expect(call[0]).toBe(process.execPath)
   expect(call[1]).toContain(home)
   expect(call[1].join(' ')).not.toContain('/hermes-agent/venv/')
+  expect(call[1]).not.toContain('--repair-profile-runtime')
+  expect(installed.message).toContain('Profile 模型兼容修复需在 Hermes 所在容器或节点单独执行')
+  expect(installed.message).not.toContain('已备份并应用 Profile 模型兼容修复')
 })

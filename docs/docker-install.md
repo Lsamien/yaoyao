@@ -12,14 +12,14 @@
 
 | 标签 | 架构 |
 | --- | --- |
-| `v0.4.67-amd` | `linux/amd64` |
-| `v0.4.67` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
-| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.67` 相同的镜像 |
+| `v0.4.68-amd` | `linux/amd64` |
+| `v0.4.68` | `linux/amd64`、`linux/arm64`，拉取时自动匹配 |
+| `latest` | 最新稳定通用镜像，当前指向与 `v0.4.68` 相同的镜像 |
 
 ```sh
-docker pull samienluo/yaoyao:v0.4.67
+docker pull samienluo/yaoyao:v0.4.68
 # 需要固定 AMD64 时：
-docker pull samienluo/yaoyao:v0.4.67-amd
+docker pull samienluo/yaoyao:v0.4.68-amd
 ```
 
 每次新版本发布都会更新 `latest`，旧版本标签继续保留。需要固定部署版本时使用具体版本标签。
@@ -34,7 +34,7 @@ cp docker.env.example docker.env
 
 | 配置 | 用途 |
 | --- | --- |
-| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.67` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
+| `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.68` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
 | `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址，默认 `http://host.docker.internal:9119` |
 | `HERMES_YAOYAO_BIND_ADDRESS` | Web 的宿主机发布地址，默认 `127.0.0.1`；局域网访问可设为 `0.0.0.0` |
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
@@ -86,6 +86,7 @@ docker compose --env-file docker.env -f compose.yaml -f compose.hermes-bridge.ya
 - 选择与 `HERMES_YAOYAO_UPSTREAM` 对应实例相同的数据目录。远程主机的目录需要先以共享存储等方式提供给 Docker 宿主机。
 - Web 仍使用非 root 用户，默认 UID/GID 为 `1000:1000`。映射目录需要允许该用户读取配置，并写入 `config.yaml`、`plugins/`、`profiles/` 和 `backups/`。权限不匹配时应在宿主机配置对应用户或 ACL；Web 页面会报告读取或安装失败。
 - 镜像自带 Linux Python 3 和 PyYAML。安装器只使用容器 `/usr/bin/python3`，宿主机的 `venv` 和 Hermes 程序不会被执行。
+- 映射模式只安装共享数据目录中的工具桥，不执行 `--repair-profile-runtime`。Profile 模型兼容修复必须在实际运行 Hermes 的容器或节点，使用其 Python 单独执行；页面会明确提示这一点。
 - 安装前备份插件与配置，先安装默认 Profile 的后台入口，再处理命名 Profile。安装后在 Hermes 所在节点重启服务，再在 Web 点击“重新检查”。
 - 映射不会赋予 Web 管理 Docker 或 Hermes 进程的能力；既有 Compose 桌面数量、隔离设置及生命周期继续按原配置管理。
 
@@ -100,6 +101,25 @@ docker compose --env-file docker.env -f compose.yaml -f compose.hermes-bridge.ya
 | `HERMES_YAOYAO_BRIDGE_PYTHON=/usr/bin/python3` | 容器自身的 Python 路径 |
 
 仅设置目录但没有开启 `BRIDGE_MOUNTED` 时，外部 Hermes 仍只提供状态检查，不开放目录安装。
+
+### Docker 安装报 Profile 模型兼容修复失败
+
+旧版 Web 安装接口会无条件添加 `--repair-profile-runtime`。当 Hermes 与夭夭运行在不同容器、仅共享数据目录时，夭夭容器的 Python 找不到 `tui_gateway`，即使目录可写也会报“工具桥或 Profile 模型兼容修复安装失败”。应更新到包含修复的 Web 镜像，或从当前源码构建；添加目录映射、反复重启不会修复旧版接口。
+
+暂未更新镜像时，可直接调用镜像内的安装器，仅安装工具桥。以下假设容器名为 `yaoyao`、`hermes-agent`，共享目录在夭夭中为 `/hermes`：
+
+```sh
+docker exec yaoyao /usr/bin/python3 /app/dist-server/runner/install-hermes-bridge.py \
+  --hermes-home /hermes --profile default --enable
+```
+
+每个使用中的命名 Profile 也需安装，将 `default` 替换为对应名称；先完成默认 Profile。命令会备份配置和旧插件，失败会直接显示具体原因。安装成功后，在空闲时执行 `docker restart hermes-agent`，再回 Web 重新检查。
+
+此命令不修复 Hermes 核心模型解析。需要该修复时，将同一 Web 镜像中的安装器和插件包复制到 Hermes 容器，使用运行 Hermes 的 Python 执行安装器并添加 `--repair-profile-runtime`。修复需要 Hermes 源码写入权限，并会先验证兼容性；验证失败时不修改核心文件。Hermes 程序位于容器自身文件系统时，核心修复不会随共享数据目录持久化，重建或升级 Hermes 容器后需重新检查。
+
+共享数据目录还需要匹配两个服务的运行 UID/GID。可用 `docker exec yaoyao id` 和 Hermes 容器中实际服务用户的 `id` 核对。安装器会原子替换配置文件，只有旧文件的写权限并不足够，新的配置也必须能由 Hermes 服务用户读取；优先对齐两端运行 UID/GID，不要仅放宽旧文件权限。
+
+若两个服务在同一 Compose 网络，直接设置 `HERMES_YAOYAO_UPSTREAM: http://hermes-agent:9119`。宿主机发布的 `9120:9119` 用于从宿主机访问；不需要把 `hermes-agent` 通过 `extra_hosts` 覆盖成宿主机网关。
 
 ## 验证
 
@@ -191,7 +211,7 @@ curl --fail http://127.0.0.1:15300/healthz
 使用 Docker Hub 发布镜像时，在 `docker.env` 设置：
 
 ```dotenv
-HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.67
+HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.68
 YAOYAO_CURSOR_DESKTOP_IMAGE=samienluo/yaoyao-desktop:v0.4.12-cursor-amd
 ```
 

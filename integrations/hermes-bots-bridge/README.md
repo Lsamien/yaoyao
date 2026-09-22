@@ -18,7 +18,7 @@ Yaoyao 的虚拟机模式和本机协作模式都使用真实 Hermes Profile 会
 
 ## 安装
 
-Yaoyao 管理员可从“设置 → Hermes 连接 → 工具桥插件”执行检查和安装。安装会同时备份并修复 Hermes 的 Profile 模型解析与会话元信息。默认 Profile 提供共享后台入口，应先安装默认入口，再处理命名 Profile。界面依据磁盘与已加载插件代码的指纹区分待重启与已就绪。
+Yaoyao 管理员可从“设置 → Hermes 连接 → 工具桥插件”执行检查和安装。本机安装会同时备份并修复 Hermes 的 Profile 模型解析与会话元信息；Docker 映射模式只安装共享数据目录中的插件，模型兼容修复需在运行 Hermes 的容器或节点单独执行，见 [Docker 安装说明](../../docs/docker-install.md#docker-安装报-profile-模型兼容修复失败)。默认 Profile 提供共享后台入口，应先安装默认入口，再处理命名 Profile。界面依据磁盘与已加载插件代码的指纹区分待重启与已就绪。
 
 
 使用 Hermes 的 Python，从 Yaoyao 仓库运行：

@@ -113,7 +113,7 @@ export class HermesBridgeManager {
         !this.available?{message:this.mapped?`映射目录 ${this.home} 或容器 Python 不可用，请检查目录映射和读取权限。`:'当前服务环境未找到本机 Hermes 安装目录和 Python，无法直接安装。'}:
         disk.status==='rejected'?{message:'插件检查失败，请核对 Hermes 目录权限和运行环境。'}:
         this.options.isIdle&&!this.options.isIdle()?{message:'当前仍有任务运行，请结束任务后安装。'}:
-        this.mapped?{message:`已映射 Hermes 目录：${this.home}。安装会写入此目录；完成后请在 Hermes 所在节点重启服务。`}:{})}
+        this.mapped?{message:`已映射 Hermes 目录：${this.home}。此处仅安装工具桥；Profile 模型兼容修复需在 Hermes 所在容器或节点单独执行。完成后请重启 Hermes 服务。`}:{})}
   }
   async install(value:unknown):Promise<HermesBridgeInstallResult>{
     const parsed=installInput.safeParse(value)
@@ -130,15 +130,17 @@ export class HermesBridgeManager {
       const hostEntry=disk.find(item=>item.profile==='default')
       if(parsed.data.profile!=='default'&&(!hostEntry?.filesCurrent||!hostEntry.enabled||hostEntry.disabled))
         throw new HttpError(409,'请先安装或更新默认 Profile 的工具桥入口，再安装这个 Profile。','hermes_bridge_host_entry_required')
-      const output=await this.run(this.python,[this.script,'--hermes-home',this.home,'--profile',parsed.data.profile,'--repair-profile-runtime',...(parsed.data.enable?['--enable']:[])])
+      // A mapped data directory does not expose the upstream Hermes runtime.
+      // Repair core files only with the local Hermes interpreter.
+      const output=await this.run(this.python,[this.script,'--hermes-home',this.home,'--profile',parsed.data.profile,...(this.mapped?[]:['--repair-profile-runtime']),...(parsed.data.enable?['--enable']:[])])
       result=JSON.parse(output.trim())
       if(result.profile!==parsed.data.profile||typeof result.backup!=='string')throw new Error('invalid installer result')
     }catch(error){
       if(error instanceof HttpError)throw error
-      throw new HttpError(409,'工具桥或 Profile 模型兼容修复安装失败，请检查 Hermes 版本兼容性与目录权限后重新检查状态。','hermes_bridge_install_failed')
+      throw new HttpError(409,this.mapped?'工具桥安装失败，请检查共享 Hermes 目录的读写权限及 Profile 配置后重新检查状态。':'工具桥或 Profile 模型兼容修复安装失败，请检查 Hermes 版本兼容性与目录权限后重新检查状态。','hermes_bridge_install_failed')
     }finally{this.installing=undefined}
     const message=(result.disabled?'插件文件已更新，保留了禁用设置。':'工具桥已安装并启用。')
-      +(result.profileRuntimeRepaired?'已备份并应用 Profile 模型兼容修复。':'')
+      +(this.mapped?'此处仅安装工具桥；Profile 模型兼容修复需在 Hermes 所在容器或节点单独执行。':result.profileRuntimeRepaired?'已备份并应用 Profile 模型兼容修复。':'')
       +'请在空闲时重启 Hermes Dashboard 服务，然后重新检查。'
     return {profile:parsed.data.profile,backup:result.backup,message,status:await this.status()}
   }
