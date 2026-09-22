@@ -93,7 +93,7 @@ test('native Windows PowerShell preserves Chinese, exit status and cancellation'
     const result = await execHostShell(root, { command: childCommand + (wait ? '; Start-Sleep -Seconds 60' : ''), timeoutMs: 3000 })
     assert.equal(result.timedOut, wait)
     const pid = Number(result.stdout.trim()); assert.ok(pid > 0, result.stderr)
-    const alive = await execHostShell(root, { command: `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 1 }` })
+    const alive = await execHostShell(root, { command: `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }` })
     assert.equal(alive.exitCode, 0, 'PowerShell 子进程在结束或超时后必须退出')
   }
 })

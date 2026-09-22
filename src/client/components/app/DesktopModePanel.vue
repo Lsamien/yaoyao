@@ -13,7 +13,7 @@ const options = computed(() => ([
   { mode: 'client', title: '客户端模式', description: '连接另一台电脑上的夭夭服务器。本机无需安装 Hermes。', icon: 'link' },
   { mode: 'server', title: '服务器模式', description: '在这台电脑上运行夭夭服务，使用本机 Hermes，并供其他客户端连接。', icon: 'monitor' },
 ] as const).filter(option => !state.value?.supportedModes || state.value.supportedModes.includes(option.mode)))
-const canSwitch = computed(() => options.value.length > 1)
+const canSwitch = computed(() => !!state.value && options.value.length > 1)
 
 async function load() {
   busy.value = true; error.value = ''

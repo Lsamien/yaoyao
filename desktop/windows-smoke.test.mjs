@@ -28,7 +28,7 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
         exchanges++; json({ commands: [], capabilities: { environmentMetadata: 1, desktopPlatforms: ['darwin', 'win32'] } })
       }); return
     }
-    res.setHeader('content-type', 'text/html; charset=utf-8'); res.end('<title>Windows 登录验证</title><h1>远程工作区</h1>')
+    res.setHeader('content-type', 'text/html; charset=utf-8'); res.end('<title>Windows 登录验证</title><h1>远程工作区</h1><textarea id="native-input" style="width:400px;height:140px"></textarea>')
   })
   await new Promise(done => server.listen(0, '127.0.0.1', done))
   const url = `http://127.0.0.1:${server.address().port}`
@@ -55,6 +55,51 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
     assert.equal((await readdir(home)).includes('service-instance.json'), false)
     const menu = await app.evaluate(({ Menu }) => ['desktop-host-use-local', 'desktop-stop-and-quit', 'runner-import'].map(id => Boolean(Menu.getApplicationMenu().getMenuItemById(id))))
     assert.deepEqual(menu, [false, false, false])
+    const native = await app.evaluate(async ({ app, BrowserWindow, screen }, { home, url }) => {
+      const { pathToFileURL } = process.getBuiltinModule('node:url')
+      const { join } = process.getBuiltinModule('node:path')
+      const { DesktopHostCore } = await import(pathToFileURL(join(app.getAppPath(), 'environment-host.mjs')).href)
+      const core = new DesktopHostCore({ root: join(process.resourcesPath, 'runtime'), dataRoot: join(home, 'native-acceptance') })
+      const owner = 'a'.repeat(64), resource = 'b'.repeat(64)
+      const command = { owner, resource, mode: 'local', profile: 'temporary', deadline: Date.now() + 30000 }
+      core.approved.add(owner); core.approvedFull.add(owner)
+      try {
+        const shell = await core.execute({ ...command, operation: 'shell', action: { command: "[Console]::WriteLine('原生命令')" } })
+        if (shell.exitCode !== 0 || shell.stdout.trim() !== '原生命令') throw new Error('打包后的 PowerShell 助手执行失败：' + shell.stderr)
+        await core.execute({ ...command, mode: 'browser', operation: 'open' })
+        await core.execute({ ...command, mode: 'browser', operation: 'browser', action: { kind: 'navigate', url } })
+        const browserFrame = await core.execute({ ...command, mode: 'browser', operation: 'view' })
+        if (!browserFrame.data || (await core.browser.sessions.get(resource).cookies.get({ url })).some(cookie => cookie.name === 'session')) throw new Error('独立浏览器画面或会话隔离失败')
+        let unavailable
+        try { await core.native.call({ operation: 'probe' }) } catch (error) { unavailable = error.message }
+        if (unavailable) return { shell: true, isolatedBrowser: true, screenInput: 'unavailable in CI session', reason: unavailable }
+        const frame = await core.execute({ ...command, operation: 'view' }), display = screen.getPrimaryDisplay()
+        const target = BrowserWindow.getAllWindows().find(w => w.isVisible() && w.webContents.getURL().startsWith(url)), bounds = target.getContentBounds()
+        target.show(); target.focus()
+        const rect = await target.webContents.executeJavaScript('(()=>{const r=document.querySelector("textarea").getBoundingClientRect();return {x:r.x+30,y:r.y+30}})()')
+        const physical = screen.dipToScreenPoint({ x: Math.round(bounds.x + rect.x), y: Math.round(bounds.y + rect.y) })
+        const primary = screen.dipToScreenRect(null, display.bounds)
+        await core.execute({ ...command, operation: 'input', frame, action: { kind: 'click', x: Math.floor(physical.x * frame.width / primary.width), y: Math.floor(physical.y * frame.height / primary.height) } })
+        await core.execute({ ...command, operation: 'input', frame, action: { kind: 'text', text: '你好，Windows🙂' } })
+        for (let i = 0; i < 30; i++) {
+          if (await target.webContents.executeJavaScript('document.querySelector("textarea").value') === '你好，Windows🙂') break
+          await new Promise(done => setTimeout(done, 100))
+        }
+        if (await target.webContents.executeJavaScript('document.querySelector("textarea").value') !== '你好，Windows🙂') throw new Error('原生鼠标点击或 Unicode 输入失败')
+        await core.execute({ ...command, operation: 'input', frame, action: { kind: 'key', key: 'a', modifiers: ['ctrl'] } })
+        await core.execute({ ...command, operation: 'input', frame, action: { kind: 'text', text: '组合键已验证' } })
+        if (await target.webContents.executeJavaScript('document.querySelector("textarea").value') !== '组合键已验证') throw new Error('原生 Ctrl+A 输入失败')
+        screen.emit('display-metrics-changed', {}, display, ['scaleFactor'])
+        let staleRejected = false
+        try { await core.execute({ ...command, operation: 'input', frame, action: { kind: 'key', key: 'Tab' } }) } catch (error) { staleRejected = /刷新画面/.test(error.message) }
+        if (!staleRejected) throw new Error('显示器变化后必须重新截图')
+        await core.revoke()
+        let revoked = false
+        try { await core.execute({ ...command, operation: 'shell', action: { command: 'exit 0' } }) } catch { revoked = true }
+        if (!revoked) throw new Error('撤销后仍允许命令执行')
+        return { shell: true, isolatedBrowser: true, screenshot: true, click: true, unicodeInput: true, ctrlA: true, displayInvalidation: true, revoked: true, scaleFactor: display.scaleFactor }
+      } finally { await core.close() }
+    }, { home, url })
     await mkdir(evidence, { recursive: true }); await page.screenshot({ path: join(evidence, 'remote-login.png') })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
     assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false)
@@ -62,6 +107,6 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
     const before = exchanges; app = await launch(); page = await app.firstWindow()
     await page.waitForURL(url + '/**'); await expect.poll(() => exchanges).toBeGreaterThan(before)
     await writeFile(join(evidence, 'smoke.json'), JSON.stringify({ platform: 'win32', login: true, encryptedPairing: true, sessionRestored: true,
-      clientOnly: true, nativeDesktopControl: 'requires interactive Windows 10/11 acceptance', upgradeReplacement: 'requires two-version installed-app acceptance' }, null, 2))
+      clientOnly: true, native, windows10and11Matrix: 'requires Windows 10/11 acceptance; CI runs Windows Server 2022' }, null, 2))
   } finally { await app?.close().catch(() => {}); await new Promise(done => server.close(done)); await rm(home, { recursive: true, force: true }) }
 })

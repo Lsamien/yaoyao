@@ -14,7 +14,8 @@ export function windowsShell(shell, command, { cwd, timeout, signal, helper = re
     const output = { stdout: [], stderr: [] }, sizes = { stdout: 0, stderr: 0 }
     const capture = (key, bytes) => {
       const kept = bytes.subarray(0, Math.max(0, limit - sizes[key]))
-      output[key].push(kept); sizes[key] += kept.length
+      if (kept.length) output[key].push(kept)
+      sizes[key] += kept.length
     }
     const finish = async (code, error) => {
       if (finished) return

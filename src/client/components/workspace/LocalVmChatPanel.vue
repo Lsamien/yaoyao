@@ -153,7 +153,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
        <button v-if="host.online&&!host.local.ready" class="primary" :disabled="busy||!isAdmin" @click="authorizeHost(host.id)">在桌面端授权</button>
        <p v-if="host.online&&!host.local.ready" class="hint">{{host.platform==='win32'?'在 Windows 客户端确认授权，并解锁电脑、保持桌面会话连接。':'在目标 Mac 上确认授权，并按系统提示开启屏幕录制和辅助功能；可能需要重新打开 App。'}}</p>
        <button v-if="host.online&&!host.local.fullAuthorized" :disabled="busy||!isAdmin" @click="authorizeHost(host.id,'full')">授权文件与命令</button>
-       <p v-if="host.online&&!host.local.fullAuthorized" class="hint">授权后，机器人可以在这台电脑 的用户主目录内读写文件，并以当前用户权限执行命令；每台电脑单独授权，可随时撤销。</p>
+       <p v-if="host.online&&!host.local.fullAuthorized" class="hint">授权后，机器人可以在这台电脑的用户主目录内读写文件，并以当前用户权限执行命令；每台电脑单独授权，可随时撤销。</p>
       </div>
       <button v-if="serverHost" class="primary" :disabled="busy||!serverHost.online||!serverHost.local.ready" @click="openDesktop('desktop','local')">接管服务器</button>
     </template>
