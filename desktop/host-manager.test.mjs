@@ -52,7 +52,7 @@ test('concurrent first logins share one persistent installation identity',async(
   assert.equal(await readFile(join(home,'desktop-install-id'),'utf8'),ids[0])
   await manager.forget()
   assert.equal(await new DesktopHostManager(manager.options).installIdentity(),ids[0])
-  assert.equal((await stat(join(home,'desktop-install-id'))).mode&0o077,0)
+  if(process.platform!=='win32')assert.equal((await stat(join(home,'desktop-install-id'))).mode&0o077,0)
  }finally{await rm(home,{recursive:true,force:true})}
 })
 
@@ -74,7 +74,7 @@ test('imports an encrypted config, exchanges with the paired server and stops on
   let body='';req.on('data',chunk=>{body+=chunk});req.on('end',()=>{
    exchanges.push(JSON.parse(body))
    res.setHeader('content-type','application/json')
-   res.end(JSON.stringify(exchanges.length===1?{commands:[{id:randomUUID(),deadline:Date.now()+30000,mode:'local',owner:'a'.repeat(64),resource:'local',profile:'persistent',operation:'open'}]}:{commands:[]}))
+   res.end(JSON.stringify({capabilities:{desktopPlatforms:['darwin','win32']},...(exchanges.length===1?{commands:[{id:randomUUID(),deadline:Date.now()+30000,mode:'local',owner:'a'.repeat(64),resource:'local',profile:'persistent',operation:'open'}]}:{commands:[]})}))
   })
  })
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
@@ -82,7 +82,7 @@ test('imports an encrypted config, exchanges with the paired server and stops on
  try{
   await manager.importFile(configPath)
   const mode=await stat(join(home,'desktop-host.enc'))
-  assert.equal(mode.mode&0o077,0)
+  if(process.platform!=='win32')assert.equal(mode.mode&0o077,0)
   await sleep(1500)
   assert.ok(cores.length>=1)
   assert.equal(cores[0].closed,false)

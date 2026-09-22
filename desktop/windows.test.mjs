@@ -88,6 +88,14 @@ test('native Windows PowerShell preserves Chinese, exit status and cancellation'
   const pending = execHostShell(root, { command: 'Start-Sleep -Seconds 60' }, { signal: controller.signal })
   setTimeout(() => controller.abort(), 500)
   assert.equal((await pending).cancelled, true)
+  const childCommand = "$p = Start-Process -FilePath $env:ComSpec -ArgumentList '/c ping -n 60 127.0.0.1 > nul' -WindowStyle Hidden -PassThru; [Console]::WriteLine($p.Id)"
+  for (const wait of [false, true]) {
+    const result = await execHostShell(root, { command: childCommand + (wait ? '; Start-Sleep -Seconds 60' : ''), timeoutMs: 3000 })
+    assert.equal(result.timedOut, wait)
+    const pid = Number(result.stdout.trim()); assert.ok(pid > 0, result.stderr)
+    const alive = await execHostShell(root, { command: `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 1 }` })
+    assert.equal(alive.exitCode, 0, 'PowerShell 子进程在结束或超时后必须退出')
+  }
 })
 test('chunked file writes preserve contents and reject directory links outside the root', async t => {
   const root = await mkdtemp(join(tmpdir(), 'yaoyao-win-files-')), outside = await mkdtemp(join(tmpdir(), 'yaoyao-win-outside-'))

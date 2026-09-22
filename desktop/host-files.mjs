@@ -103,13 +103,13 @@ export async function receiveHostFile(root,input){
   }finally{await handle.close();await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error})}
 }
 
-export async function execHostShell(root,input,{signal}={}){
+export async function execHostShell(root,input,{signal,helper}={}){
   const command=String(input?.command??'')
   if(!command.trim())throw new Error('命令为空')
   const timeout=Math.min(Math.max(Number(input?.timeoutMs)||60000,1000),SHELL_TIMEOUT_MAX)
   let cwd
   try{cwd=resolve(String(root),String(input?.cwd??'').replace(process.platform==='win32'?/^~[\\/]/:/^~\//,'').replace(/^~$/,''))}catch{cwd=String(root)}
-  if(process.platform==='win32')return windowsShell(HOST_SHELL,command,{cwd,timeout,signal,limit:SHELL_OUTPUT_LIMIT})
+  if(process.platform==='win32')return windowsShell(HOST_SHELL,command,{cwd,timeout,signal,helper,limit:SHELL_OUTPUT_LIMIT})
   return new Promise(done=>{
     execFile(HOST_SHELL,['-c',command],{cwd,timeout,signal,killSignal:'SIGKILL',maxBuffer:1024*1024,env:{...process.env,TERM:'dumb'}},(error,stdout,stderr)=>{
       const clip=value=>Buffer.from(value??'','utf8').subarray(0,SHELL_OUTPUT_LIMIT).toString('utf8')

@@ -26,6 +26,9 @@ jobs:
       - run: npm run desktop:test:win
         env:
           DESKTOP_TEST_EXECUTABLE: ${{ github.workspace }}\desktop-release\windows-x64\win-unpacked\Yaoyao.exe
+      - run: node --test desktop/windows-upgrade.test.mjs
+        env:
+          DESKTOP_TEST_UPGRADE: '1'
       - uses: actions/upload-artifact@v4
         with:
           name: yaoyao-windows-x64-unsigned

@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,readdir,symlink,rm} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,readdir,symlink,rm,realpath} from 'node:fs/promises'
 import {createHash} from 'node:crypto'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -76,7 +76,7 @@ test('shell execution reports stdout, exit codes, timeouts and cwd stays in root
   await mkdir(join(root,'work'))
   const ok=await execHostShell(root,{command:process.platform==='win32'?'(Get-Location).Path':'pwd',cwd:'work'})
   assert.equal(ok.exitCode,0)
-  assert.ok(ok.stdout.toLowerCase().includes(join(root,'work').toLowerCase()),ok.stdout)
+  assert.equal((await realpath(ok.stdout.trim())).toLowerCase(),(await realpath(join(root,'work'))).toLowerCase())
   const failing=await execHostShell(root,{command:process.platform==='win32'?"[Console]::Error.WriteLine('boom'); exit 7":'echo boom >&2; exit 7'})
   assert.equal(failing.exitCode,7);assert.equal(failing.stderr.trim(),'boom')
   const timed=await execHostShell(root,{command:process.platform==='win32'?'Start-Sleep -Seconds 5':'sleep 5',timeoutMs:1000})

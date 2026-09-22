@@ -65,11 +65,41 @@ static DWORD integrity(HANDLE process) {
   auto label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(bytes.data());
   return *GetSidSubAuthority(label->Label.Sid, *GetSidSubAuthorityCount(label->Label.Sid) - 1);
 }
-static void checkForeground() {
-  DWORD pid = 0; GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+static void checkWindow(HWND window) {
+  DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
   if (!pid) return;
   Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
   require(process.value && integrity(process.value) <= integrity(GetCurrentProcess()), "无法操作管理员或受保护窗口，请在电脑上手动操作");
+}
+static void checkForeground() { checkWindow(GetForegroundWindow()); }
+// The non-inheritable job owns PowerShell and every normally spawned child.
+// Killing this helper, timeout, cancellation, or normal completion closes the
+// job and terminates descendants, even when PowerShell has already exited.
+static int runShell(const JsonObject& request) {
+  auto encoded = request.GetNamedString(L"encoded"), cwd = request.GetNamedString(L"cwd");
+  require(encoded.size() > 0 && encoded.size() < 30000, "PowerShell 命令超过长度限制");
+  for (wchar_t ch : encoded) require(iswalnum(ch) || ch == L'+' || ch == L'/' || ch == L'=', "PowerShell 编码无效");
+  wchar_t system[MAX_PATH]{};
+  require(GetSystemDirectoryW(system, MAX_PATH), "无法定位 Windows PowerShell");
+  auto shell = fs::path(system) / L"WindowsPowerShell" / L"v1.0" / L"powershell.exe";
+  std::wstring command = L"\"" + shell.wstring() + L"\" -NoLogo -NoProfile -NonInteractive -EncodedCommand " + std::wstring(encoded);
+  Handle job(CreateJobObjectW(nullptr, nullptr)); require(job.value != nullptr, "无法创建命令进程组");
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  require(SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)), "无法设置命令进程组");
+  STARTUPINFOW startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE); startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE); startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  for (HANDLE handle : {startup.hStdInput, startup.hStdOutput, startup.hStdError})
+    require(SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "无法连接命令输入输出");
+  PROCESS_INFORMATION created{};
+  require(CreateProcessW(shell.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+    nullptr, cwd.c_str(), &startup, &created), "无法启动 Windows PowerShell");
+  Handle process(created.hProcess), thread(created.hThread);
+  if (!AssignProcessToJobObject(job.value, process.value)) { TerminateProcess(process.value, 1); throw std::runtime_error("无法接管命令进程组"); }
+  require(ResumeThread(thread.value) != static_cast<DWORD>(-1), "无法启动命令线程");
+  require(WaitForSingleObject(process.value, INFINITE) == WAIT_OBJECT_0, "等待命令失败");
+  DWORD code = 1; require(GetExitCodeProcess(process.value, &code), "无法读取命令退出码");
+  return static_cast<int>(code);
 }
 static double number(const JsonObject& object, const wchar_t* key) {
   require(object.HasKey(key) && object.GetNamedValue(key).ValueType() == JsonValueType::Number, "电脑输入缺少数值参数");
@@ -114,6 +144,7 @@ static void input(const JsonObject& request) {
   auto kind = action.GetNamedString(L"kind");
   if (kind == L"click") {
     auto p = point(action, frame, L"x", L"y"); auto button = action.GetNamedString(L"button", L"left");
+    checkWindow(GetAncestor(WindowFromPoint(p), GA_ROOT));
     require(button == L"left" || button == L"right" || button == L"middle", "鼠标按键无效");
     DWORD down = button == L"right" ? MOUSEEVENTF_RIGHTDOWN : button == L"middle" ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_LEFTDOWN;
     DWORD up = button == L"right" ? MOUSEEVENTF_RIGHTUP : button == L"middle" ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_LEFTUP;
@@ -122,6 +153,8 @@ static void input(const JsonObject& request) {
     for (int i = 0; i < count; ++i) { send({mouse(down), mouse(up)}); Sleep(50); }
   } else if (kind == L"drag") {
     auto start = point(action, frame, L"fromX", L"fromY"), end = point(action, frame, L"toX", L"toY");
+    checkWindow(GetAncestor(WindowFromPoint(start), GA_ROOT));
+    checkWindow(GetAncestor(WindowFromPoint(end), GA_ROOT));
     send({move(start), mouse(MOUSEEVENTF_LEFTDOWN)});
     try { for (int i = 1; i <= 12; ++i) { send({move({start.x + (end.x - start.x) * i / 12, start.y + (end.y - start.y) * i / 12})}); Sleep(12); } }
     catch (...) { auto up = mouse(MOUSEEVENTF_LEFTUP); SendInput(1, &up, sizeof(INPUT)); throw; }
@@ -169,8 +202,11 @@ int main(int argc, char** argv) {
     std::string bytes; char chunk[4096];
     while (std::cin.read(chunk, sizeof(chunk)) || std::cin.gcount()) { bytes.append(chunk, static_cast<size_t>(std::cin.gcount())); require(bytes.size() <= 131072, "电脑输入过长"); }
     auto request = JsonObject::Parse(winrt::to_hstring(bytes));
+    if (argc == 2 && std::string(argv[1]) == "--shell") return runShell(request);
     checkDesktop();
-    if (request.GetNamedString(L"operation", L"input") != L"probe") input(request);
+    auto operation = request.GetNamedString(L"operation", L"input");
+    if (operation == L"release-drag") { auto up = mouse(MOUSEEVENTF_LEFTUP); SendInput(1, &up, sizeof(INPUT)); }
+    else if (operation != L"probe") input(request);
     std::cout << "{\"ok\":true}"; return 0;
   } catch (const winrt::hresult_error&) { std::cerr << "电脑输入格式无效或 Windows 组件不可用\n"; }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; }

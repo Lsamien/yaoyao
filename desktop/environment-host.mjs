@@ -41,8 +41,8 @@ export class DesktopHostCore {
    if(!this.platform.computer)throw new Error('此电脑暂不支持本机控制')
    const full=c.scope==='full'
    const {response}=await dialog.showMessageBox({type:'question',title:full?'授权文件与命令':'授权本机控制',
-    message:`允许夭夭账号「${String(c.account??'当前账号').slice(0,100)}」的机器人${full?'使用这台电脑 的文件并执行命令':'查看和操作这台电脑'}？`,
-    detail:full?'机器人可以列出、读取和写入你用户主目录内的文件，并在这台电脑 上执行 shell 命令。仅对信任的机器人开启；可随时在夭夭菜单中撤销。':'授权后，机器人和该账号的 Web、手机端可以查看屏幕，并在接管时操作鼠标和键盘。你可以在夭夭菜单中撤销。',
+    message:`允许夭夭账号「${String(c.account??'当前账号').slice(0,100)}」的机器人${full?'使用这台电脑的文件并执行命令':'查看和操作这台电脑'}？`,
+    detail:full?'机器人可以列出、读取和写入你用户主目录内的文件，并在这台电脑上执行 shell 命令。仅对信任的机器人开启；可随时在夭夭菜单中撤销。':'授权后，机器人和该账号的 Web、手机端可以查看屏幕，并在接管时操作鼠标和键盘。你可以在夭夭菜单中撤销。',
     buttons:full?['取消','允许文件与命令']:['取消','允许并检查系统权限'],defaultId:0,cancelId:0})
    if(response!==1||Date.now()>c.deadline||this.closed||epoch!==this.id)throw new Error(full?'文件与命令授权已取消':'本机控制授权已取消')
    if(full)this.approvedFull.add(c.owner);else this.approved.add(c.owner);this.save()
@@ -55,7 +55,7 @@ export class DesktopHostCore {
   if(c.operation==='file'||c.operation==='shell'){
    if(!this.platform.computer)throw new Error('此电脑暂不支持文件与命令')
    if(!this.approvedFull.has(c.owner))throw new Error('请在桌面端授权文件与命令访问')
-   if(c.operation==='shell'){const controller=new AbortController();const task={controller,promise:execHostShell(this.home,c.action,{signal:controller.signal})};this.shells.add(task);try{return await task.promise}finally{this.shells.delete(task)}}
+   if(c.operation==='shell'){const controller=new AbortController();const task={controller,promise:execHostShell(this.home,c.action,{signal:controller.signal,helper:this.native?.helper})};this.shells.add(task);try{return await task.promise}finally{this.shells.delete(task)}}
    const action=c.action??{}
    if(typeof action.op==='string'&&action.op.startsWith('transfer-')){
     const key=c.owner+':'+c.resource
