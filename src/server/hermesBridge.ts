@@ -8,14 +8,14 @@ import {z} from 'zod'
 import {HttpError} from './errors.js'
 import {isLoopbackHost,type ServerConfig} from './config.js'
 import type {UpstreamServiceSession} from './localAuth.js'
-import type {DashboardSupervisor} from './dashboardSupervisor.js'
+import type {DashboardController} from './dashboardController.js'
 import type {HermesBridgeStatus,HermesBridgeProfileStatus,HermesBridgeInstallResult,HermesDashboardRestartResult} from '../shared/hermesBridge.js'
 
 const execFileAsync=promisify(execFile)
 const profileName=z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/)
 const installInput=z.object({profile:profileName,enable:z.boolean().default(false)}).strict()
 interface LocalProfile {profile:string;exists:boolean;valid:boolean;installedVersion?:string;enabled?:boolean;disabled?:boolean;fingerprint?:string;filesCurrent?:boolean;message?:string}
-interface Options {home?:string;python?:string;assetsRoot?:string;isIdle?:()=>boolean;isRestartIdle?:()=>boolean;dashboard?:Pick<DashboardSupervisor,'canRestart'|'restart'>;run?:(python:string,args:string[])=>Promise<string>}
+interface Options {home?:string;python?:string;assetsRoot?:string;isIdle?:()=>boolean;isRestartIdle?:()=>boolean;dashboard?:DashboardController;run?:(python:string,args:string[])=>Promise<string>}
 
 function assetRoot(){
   const base=dirname(fileURLToPath(import.meta.url))
@@ -49,15 +49,18 @@ export class HermesBridgeManager {
   get idleForUpdate(){return !this.installing&&!this.restarting}
   get dashboardRestarting(){return this.restarting}
   assertDashboardAvailable(){if(this.restarting)throw new HttpError(409,'Hermes Dashboard 正在重启，请稍后再提交任务。','hermes_dashboard_restarting')}
+  private get serverDashboard(){return this.local&&!this.mapped&&this.config.upstream.origin==='http://127.0.0.1:9119'}
+  private get dashboardManaged(){return this.serverDashboard&&!!this.options.dashboard?.canRestart}
+  private get restartUnavailable(){return !this.serverDashboard?'此 Hermes 不在夭夭服务端可管理的本机地址，请在 Hermes 所在节点重启。':this.options.dashboard?.unavailableReason??'夭夭服务端未识别到可管理的 Hermes Dashboard 服务，请在 Hermes 所在节点重启。'}
   private dashboardStatus(restartComplete=false):NonNullable<HermesBridgeStatus['dashboard']>{
     const restarting=this.restarting&&!restartComplete
-    const managed=this.local&&!this.mapped&&this.config.upstream.origin==='http://127.0.0.1:9119'&&!!this.options.dashboard?.canRestart
+    const managed=this.dashboardManaged
     const busy=!(this.options.isIdle?.()??true)
     return {managed:managed||restarting,restarting,canRestart:managed&&!restarting&&!this.installing&&!busy,
       message:restarting?'正在重启 Hermes Dashboard 并检查工具桥加载状态…':
-        !managed?'仅支持重启由 Yaoyao 自己启动并管理的本机 Hermes Dashboard。':
+        !managed?this.restartUnavailable:
         this.installing?'工具桥正在安装，请等待完成后重启。':busy?'当前仍有任务运行，请结束任务后重启。':
-        '重启会短暂断开此 Dashboard 下所有 Profile 的连接，完成后自动检查工具桥。'}
+        '重启在夭夭服务端执行，会短暂断开此 Dashboard 下所有 Profile 的连接，完成后自动检查工具桥。'}
   }
   private get available(){return this.local&&this.bundled&&existsSync(this.python)&&existsSync(join(this.home,'config.yaml'))}
   private async disk():Promise<LocalProfile[]>{
@@ -69,6 +72,7 @@ export class HermesBridgeManager {
   }
   async status():Promise<HermesBridgeStatus>{return this.snapshot()}
   private async snapshot(restartComplete=false):Promise<HermesBridgeStatus>{
+    if(this.serverDashboard&&(!this.restarting||restartComplete))await this.options.dashboard?.refresh?.()
     const [disk,remote]=await Promise.allSettled([this.disk(),this.session.request('/api/profiles',{cache:'reload'})])
     const localProfiles=disk.status==='fulfilled'?disk.value:[]
     const connected=remote.status==='fulfilled'&&remote.value.status===200
@@ -138,20 +142,24 @@ export class HermesBridgeManager {
       +'请在空闲时重启 Hermes Dashboard 服务，然后重新检查。'
     return {profile:parsed.data.profile,backup:result.backup,message,status:await this.status()}
   }
-  async restartDashboard():Promise<HermesDashboardRestartResult>{
+  async restartDashboard(value:unknown={}):Promise<HermesDashboardRestartResult>{
+    if(!z.object({}).strict().safeParse(value).success)throw new HttpError(400,'重启目标由夭夭服务端确定，不接受客户端指定目标或命令。','invalid_dashboard_restart_request')
     this.assertDashboardAvailable()
-    if(!this.dashboardStatus().managed)throw new HttpError(409,'只能重启由 Yaoyao 自己启动并管理的本机 Hermes Dashboard。','hermes_dashboard_restart_unavailable')
+    if(!this.serverDashboard||!this.options.dashboard)throw new HttpError(409,this.restartUnavailable,'hermes_dashboard_restart_unavailable')
     if(this.installing)throw new HttpError(409,'工具桥正在安装，请等待完成。','hermes_bridge_install_busy')
     if(!(this.options.isIdle?.()??true)||!(this.options.isRestartIdle?.()??true))throw new HttpError(409,'当前仍有任务运行，请结束任务后重启。','hermes_bridge_tasks_running')
     this.restarting=true
     try{
+      await this.options.dashboard.refresh?.()
+      if(!this.dashboardManaged)throw new HttpError(409,this.restartUnavailable,'hermes_dashboard_restart_unavailable')
       await this.options.dashboard!.restart()
       this.session.invalidateAuthentication?.()
       const status=await this.snapshot(true)
-      if(!status.dashboard?.managed)throw new Error('Dashboard ownership lost during verification')
+      if(!this.dashboardManaged)throw new Error('Dashboard ownership lost during verification')
       const ready=status.profiles.every(profile=>profile.state==='ready')
       return {message:ready?'Hermes Dashboard 已重启，工具桥已就绪。':'Hermes Dashboard 已重启。部分 Profile 的工具桥尚未就绪，请查看各 Profile 状态。',status}
-    }catch{
+    }catch(error){
+      if(error instanceof HttpError)throw error
       throw new HttpError(409,'Hermes Dashboard 重启或状态检查失败，请重新检查连接和工具桥状态。','hermes_dashboard_restart_failed')
     }finally{this.restarting=false}
   }

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { MEMORY_CONTEXT_MAX_CHARS, WorkspaceKnowledge } from '../../src/server/workspaceKnowledge'
+import { acknowledgeMemory, memoryResetReason, memoryDelta, emptyMemoryContext } from '../../src/server/workspaceMemoryContext'
 import type { WorkspaceAgent, WorkspaceMessage } from '../../src/shared/workspace'
 
 let home: string, store: WorkspaceStore, knowledge: WorkspaceKnowledge, a: WorkspaceAgent, b: WorkspaceAgent
@@ -29,6 +30,33 @@ describe('Bot file memory', () => {
     await knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: a.id, content: '用户偏爱低糖饮食', tier: 'profile' })
     expect((await knowledge.memories(owner, { scope: 'agent', agentId: a.id, search: 'json' })).map(memory => memory.content)).toEqual(['API uses JSON'])
     expect(await knowledge.memories(owner, { scope: 'agent', agentId: a.id, search: '饮食习惯' })).toEqual([])
+  })
+  it('does not change the injected version for unselected notes or source metadata', async () => {
+    const input = { scope: 'agent' as const, agentId: a.id, content: '稳定事实', tier: 'profile' as const }
+    const fact = await knowledge.writeMemory(owner, { ...input, requestId: randomUUID() })
+    const before = await knowledge.context(owner, a.id), state = acknowledgeMemory(before)
+    await knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), id: fact.id, expectedRevision: fact.revision, topic: '仅更新主题' })
+    await knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), content: '未注入的短暂信息', tier: 'note' })
+    const after = await knowledge.context(owner, a.id)
+    expect(after.version).toBe(before.version)
+    expect(memoryDelta(after, state)).toBe('')
+    expect(memoryResetReason(after, state)).toBeUndefined()
+    expect(memoryResetReason(await knowledge.context(owner, b.id), state)).toBe('memory_scope_changed')
+    expect(memoryResetReason(emptyMemoryContext('unsupported'), state)).toBe('memory_scope_changed')
+    expect(memoryResetReason(after, undefined, 'old-version')).toBe('memory_baseline_missing')
+  })
+  it('keeps reuse safe when bounded context evicts old facts, including later deletion of an evicted fact', async () => {
+    const input = { scope: 'agent' as const, agentId: a.id, tier: 'profile' as const }
+    const old = await knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), content: '原先注入的事实'.padEnd(2000, '旧') })
+    const state = acknowledgeMemory(await knowledge.context(owner, a.id))
+    for (let index = 0; index < 8; index++) await knowledge.writeMemory(owner, { ...input, requestId: randomUUID(), content: `新增事实-${index}`.padEnd(2000, '新') })
+    const current = await knowledge.context(owner, a.id)
+    expect(current.text).not.toContain('原先注入的事实')
+    expect(memoryResetReason(current, state)).toBeUndefined()
+    expect(memoryDelta(current, state)).toContain('新增事实')
+    const next = acknowledgeMemory(current, state)
+    await knowledge.forget(owner, { ...input, requestId: randomUUID(), id: old.id, expectedRevision: old.revision })
+    expect(memoryResetReason(await knowledge.context(owner, a.id), next)).toBe('memory_changed_or_removed')
   })
   it('bounds all three scopes together without truncating or deleting long profile facts', async () => {
     const project = knowledge.saveProject(owner, { requestId: randomUUID(), name: '长记忆项目', description: '', memberIds: [a.id], groupIds: [] })

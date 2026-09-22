@@ -42,8 +42,9 @@
 - 每个 Profile 单独显示安装版本、实际加载版本和状态。缺少后台入口时，先安装或更新默认 Profile，再安装命名 Profile。
 - “安装并启用”只启用选中的工具桥及其工具集，保留其他插件、禁用项和模型配置。每次安装保留原插件与配置备份，界面可查看备份位置。
 - 检查会比较插件文件指纹与 Hermes 启动时加载的指纹；同版本修复后未重启也会显示“待重启”，不会仅凭安装文件判断就绪。
-- 安装不会自动重启 Hermes。由 Yaoyao 桌面服务自己启动并持有进程的本机 Dashboard（`127.0.0.1:9119`），可在此页面点击“重启 Hermes Dashboard”，完成后自动检查各 Profile 的实际加载状态。重启影响整个 Dashboard，而非单个 Profile。
-- 正在执行任务、安装工具桥或已有重启操作时不可重启；重启期间暂不接受新任务，定时任务等待下一次检查。外部启动的 Dashboard、Docker 目录映射与远程 Hermes 仍需在所在节点重启，再点击“重新检查”。正在执行任务时暂不可安装。
+- 安装不会自动重启 Hermes。页面中的“重启服务端 Hermes Dashboard”始终通过当前连接的 Yaoyao 服务端执行；页面显示的 `127.0.0.1:9119` 指服务端本机，手机、浏览器或桌面客户端不会在自己的电脑上执行重启。重启影响整个 Dashboard，而非单个 Profile，完成后自动检查各 Profile 的实际加载状态。
+- 支持 Yaoyao 服务端自己持有的 Dashboard 子进程，以及 macOS 服务端的 `com.samien.hermes.dashboard.local` / `ai.hermes.dashboard` LaunchAgent。系统服务须使用 Hermes 启动命令，且其运行 PID 必须与服务端 9119 的唯一监听进程匹配；重启前重新核对，重启后确认新 PID 和 HTTP 健康状态。无需开启桌面模式或 Dashboard 自动拉起。
+- 正在执行任务、安装工具桥或已有重启操作时不可重启；重启期间暂不接受新任务，定时任务等待下一次检查。无法确认归属的外部进程、其他系统的外部服务、Docker 目录映射与远程 Hermes 会保留禁用按钮并显示原因，需在 Hermes 所在节点重启，再点击“重新检查”。正在执行任务时暂不可安装。
 - 本机安装用于当前服务可访问的本机 Hermes。Docker 可显式映射对应 Hermes 数据目录以安装工具桥，详见 [Docker 目录映射](docker-install.md#映射-hermes-目录以安装工具桥)；其他远程节点支持状态检查，需在对应节点安装。
 
 管理员 API：`GET /api/app/admin/hermes-bridge`、`POST /api/app/admin/hermes-bridge/install` 与 `POST /api/app/admin/hermes-bridge/restart`。重启接口无需参数，状态中的 `dashboard` 提供托管状态、是否可重启及原因；安装参数仅为 `profile` 和可选的 `enable`。不接受客户端指定重启目标或执行命令。

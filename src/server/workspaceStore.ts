@@ -638,6 +638,10 @@ export class WorkspaceStore {
       for (const conversation of conversations.filter(c => c.kind === 'direct' && c.memberIds[0] === id))
         this.deleteConversation(owner, conversation.id, true)
       for(const kind of ['routine','routine-run'])for(const item of this.list<{id:string;agentId:string}>(owner,kind).filter(item=>item.agentId===id))this.remove(owner,kind,item.id)
+      for (const plugin of this.list<{ id: string; agentIds: string[]; revision: number }>(owner, 'bot-mcp-plugin')) {
+        if (!plugin.agentIds.includes(id)) continue
+        this.put(owner, 'bot-mcp-plugin', plugin.id, { ...plugin, agentIds: plugin.agentIds.filter(agentId => agentId !== id), revision: plugin.revision + 1 })
+      }
       this.remove(owner, 'agent', id)
       this.event(owner, 'agent.deleted', { id })
     })

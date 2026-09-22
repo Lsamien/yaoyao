@@ -12,6 +12,7 @@ import {HttpError} from '../../src/server/errors'
 import {WorkspaceAssets} from '../../src/server/workspaceAssets'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { WorkspaceRuntime, mentionedAgents } from '../../src/server/workspaceRuntime'
+import type { WorkspacePlugins } from '../../src/server/botPlugins/workspacePlugins'
 import type { Work } from '../../src/server/workspaceScheduler'
 import { REPEATED_RELAY_NOTICE } from '../../src/server/workspaceRelay'
 import { WorkspaceNodes, WorkspaceGateway, type GatewayTarget } from '../../src/server/workspaceGateway'
@@ -121,6 +122,26 @@ afterEach(async () => {
 function agent(name: string, user = owner) {
   return store.createAgent(user, { name, profile: 'default', instructions: `规则：你是${name}` })
 }
+it('includes only the connected per-turn MCP inventory in the submitted Bot prompt', async () => {
+  const bot = agent('MCP 检查助手'), conversation = direct(bot.id)
+  const target = nodes.target(owner, 'local'), request = target.session.request.bind(target.session)
+  vi.spyOn(target.session, 'request').mockImplementation(async (path, options) => path.startsWith('/api/plugins/yaoyao-bot-bridge/')
+    ? { status: 200, body: Buffer.from(JSON.stringify({ ok: true, version: 1, ready: true, in_process: true, native_tools: true })), headers: new Headers() }
+    : request(path, options))
+  const services = vi.fn(() => [{ name: 'vaultwarden', transport: 'stdio' as const, toolCount: 59 }])
+  const open = vi.fn(async () => ({ services, catalog: () => [], call: vi.fn(), dispose: async () => {} }))
+  runtime.plugins = { selected: () => true, open } as unknown as WorkspacePlugins
+  const run = runtime.send(owner, conversation.id, { requestId: randomUUID(), content: '查看 vaultwarden mcp 是否正常使用' })
+  await vi.waitFor(() => expect(['complete', 'failed']).toContain(store.require<WorkspaceRun>(owner, 'run', run.id).status))
+  const settled = store.require<WorkspaceRun>(owner, 'run', run.id)
+  expect(settled.status, settled.error).toBe('complete')
+  expect(open).toHaveBeenCalledOnce()
+  expect(services).toHaveBeenCalledOnce()
+  const prompt = requests.find(frame => frame.method === 'prompt.submit')!.params.text
+  expect(prompt).toContain('"name":"vaultwarden","transport":"stdio","toolCount":59')
+  expect(prompt).toContain('yaoyao_tools')
+  expect(prompt).toContain('不能根据 hermes mcp list/test 的结果判断这些服务不存在')
+})
 it('executes a structured assignment on its actual worker and leaves acceptance to its coordinator', async () => {
   const lead = store.updateAgent(owner, agent('负责人').id, { canManageTeam: true })
   const worker = agent('研究成员')
@@ -1713,6 +1734,76 @@ it('keeps memory flags out of session.create and grants scoped memory through th
   expect(create.params).not.toHaveProperty('skip_memory')
   expect(create.params).not.toHaveProperty('workspace_memory')
   expect(bindings).toContainEqual(expect.objectContaining({workspace_memory:true}))
+})
+
+describe('Bot memory session reuse', () => {
+  beforeEach(() => {
+    const target = nodes.target(owner, 'local'), request = target.session.request.bind(target.session)
+    vi.spyOn(target.session, 'request').mockImplementation(async (path, options) => {
+      if (path.endsWith('/capabilities')) return { status: 200, headers: new Headers(), body: Buffer.from(JSON.stringify({ ready: true, native_tools: true, in_process: true, memory_isolation: true })) }
+      if (path.endsWith('/bind')) return { status: 200, headers: new Headers(), body: Buffer.from(JSON.stringify({ ok: true, native_tools: true, workspace_memory: true })) }
+      if (path.endsWith('/unbind')) return { status: 200, headers: new Headers(), body: Buffer.from('{"ok":true}') }
+      return request(path, options)
+    })
+  })
+  it('reuses persisted sessions for added facts and submits only new memory after restart', async () => {
+    const bot = agent('记忆复用'), c = direct(bot.id)
+    await runtime.knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: bot.id, tier: 'profile', content: '偏好内容甲' })
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+    const original = store.list<any>(owner, 'binding')[0].storedId
+    await runtime.knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: bot.id, tier: 'profile', content: '新增内容乙' })
+    runtime.close(); runtime = new WorkspaceRuntime(store, nodes, uploads)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第二轮' }).id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第三轮' }).id)
+    expect(store.list<any>(owner, 'binding')[0].storedId).toBe(original)
+    expect(requests.filter(r => r.method === 'session.create')).toHaveLength(1)
+    expect(requests.filter(r => r.method === 'session.resume')).toHaveLength(2)
+    const prompts = requests.filter(r => r.method === 'prompt.submit').map(r => String(r.params.text))
+    expect(prompts[1]).toContain('新增内容乙'); expect(prompts[1]).not.toContain('偏好内容甲')
+    expect(prompts[2]).not.toContain('新增内容乙'); expect(prompts[2]).not.toContain('偏好内容甲')
+  })
+  it.each(['edit', 'forget'] as const)('rebuilds after %s and records the reason without restoring the old memory', async operation => {
+    const bot = agent('记忆失效'), c = direct(bot.id), record = vi.fn()
+    runtime.inspector = { record } as any
+    const input = { scope: 'agent' as const, agentId: bot.id, tier: 'profile' as const, content: '旧的长期事实' }
+    const fact = await runtime.knowledge.writeMemory(owner, { ...input, requestId: randomUUID() })
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+    const revision = { ...input, id: fact.id, expectedRevision: fact.revision, requestId: randomUUID() }
+    if (operation === 'forget') await runtime.knowledge.forget(owner, revision)
+    else await runtime.knowledge.writeMemory(owner, { ...revision, content: '修正后的事实' })
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第二轮' }).id)
+    expect(requests.filter(r => r.method === 'session.create')).toHaveLength(2)
+    const prompt = requests.filter(r => r.method === 'prompt.submit').at(-1)!.params.text
+    expect(prompt).not.toContain('旧的长期事实')
+    if (operation === 'edit') expect(prompt).toContain('修正后的事实')
+    expect(record.mock.calls.some(([, , entry]) => entry.method === 'bot.session-reset' && entry.data.reason === 'memory_changed_or_removed')).toBe(true)
+  })
+  it('does not acknowledge an added fact when prompt admission is rejected', async () => {
+    const bot = agent('记忆提交'), c = direct(bot.id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+    await runtime.knowledge.writeMemory(owner, { requestId: randomUUID(), scope: 'agent', agentId: bot.id, tier: 'profile', content: '尚未确认的注入' })
+    rejectPrompt = '拒绝本次提交'
+    const rejected = runtime.send(owner, c.id, { requestId: randomUUID(), content: '第二轮' })
+    await vi.waitFor(() => expect(store.require<WorkspaceRun>(owner, 'run', rejected.id).status).toBe('failed'))
+    rejectPrompt = undefined
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第三轮' }).id)
+    expect(requests.filter(r => r.method === 'prompt.submit').at(-1)!.params.text).toContain('尚未确认的注入')
+    expect(requests.filter(r => r.method === 'session.create')).toHaveLength(1)
+  })
+  it('rebuilds once when an old or unconfirmed memory baseline cannot prove which facts were admitted', async () => {
+    const bot = agent('记忆基线'), c = direct(bot.id)
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+    for (const state of ['legacy', 'pending']) {
+      const binding = store.list<any>(owner, 'binding')[0]
+      store.put(owner, 'binding', binding.id, state === 'legacy'
+        ? { ...binding, memoryState: undefined, memoryVersion: 'legacy' }
+        : { ...binding, memoryState: undefined, memoryVersion: undefined, memoryPending: true })
+      await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: state }).id)
+    }
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '已恢复正常复用' }).id)
+    expect(requests.filter(r => r.method === 'session.create')).toHaveLength(3)
+    expect(requests.filter(r => r.method === 'session.resume')).toHaveLength(1)
+  })
 })
 
 it('snapshots each message origin and uses inherited provenance for internal dispatch only',async()=>{

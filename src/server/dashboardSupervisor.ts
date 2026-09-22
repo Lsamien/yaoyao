@@ -62,6 +62,7 @@ export class DashboardSupervisor {
   private readonly intervalMs: number
   private timer: NodeJS.Timeout | undefined
   private checking = false
+  private suspendedChecks = 0
   private owned: ChildProcess | undefined
   private stopped = false
   private readonly managed: boolean
@@ -99,6 +100,13 @@ export class DashboardSupervisor {
     this.timer = undefined
   }
 
+  /** Keep legacy availability checks from racing a system service restart. */
+  suspendChecks(): () => void {
+    this.suspendedChecks++
+    let resumed = false
+    return () => { if (!resumed) { resumed = true; this.suspendedChecks-- } }
+  }
+
   async restart(): Promise<void> {
     if (this.restarting) throw new Error('Hermes Dashboard 正在重启，请等待完成。')
     this.restarting = true
@@ -126,7 +134,7 @@ export class DashboardSupervisor {
   }
 
   async checkNow(): Promise<void> {
-    if (this.checking || this.restarting) return
+    if (this.checking || this.restarting || this.suspendedChecks) return
     this.checking = true
     try {
       await this.ensureRunning()
@@ -141,7 +149,7 @@ export class DashboardSupervisor {
     // Installation must not rewrite credentials or restart/rebind an existing
     // upstream. Only a missing managed service is started on loopback.
     const running = await this.probe('127.0.0.1', DASHBOARD_PORT)
-    if (running || this.stopped || this.owned) return
+    if (running || this.stopped || this.owned || this.suspendedChecks) return
     this.log(`Hermes Dashboard is unavailable on 9119; starting it on ${this.dashboardHost}.`)
     if (this.managed) {
       const env: NodeJS.ProcessEnv = { ...process.env, HERMES_PARENT_PID: String(process.pid) }

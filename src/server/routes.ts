@@ -1826,7 +1826,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   })
   router.post('/api/app/admin/hermes-bridge/restart', async ctx => {
     dependencies.auth.requireAdmin(ctx)
-    json(ctx,200,await dependencies.hermesBridge.restartDashboard())
+    json(ctx,200,await dependencies.hermesBridge.restartDashboard(body(ctx)))
   })
   router.get('/api/app/admin/model-services', async (ctx) => {
     await proxyAdminFeature(ctx, dependencies, '/api/providers/custom-endpoints', {

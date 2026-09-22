@@ -82,6 +82,28 @@ describe('Bot environment routing', () => {
 })
 
 describe('Bot prompt composition', () => {
+  it('routes configured MCP discovery through the current Bot catalog instead of Hermes CLI configuration', () => {
+    const fixture = input()
+    fixture.environment.tools.plugins = true
+    fixture.pluginServices = [{ name: 'vaultwarden', transport: 'stdio', toolCount: 59 }, { name: '远程服务', transport: 'http', toolCount: 2 }]
+    const text = buildWorkspacePrompt(fixture)
+    expect(text).toContain('"name":"vaultwarden","transport":"stdio","toolCount":59')
+    expect(text).toContain('"name":"远程服务","transport":"http","toolCount":2')
+    expect(text).toContain('tool_search')
+    expect(text).toContain('yaoyao_tools')
+    expect(text).toContain('yaoyao_call')
+    expect(text).toContain('按 service（服务名）或 query')
+    expect(text).toContain('不要在拿到参数后重复搜索')
+    expect(text).toContain('普通 Bot 对话不是 Hermes 看板任务')
+    expect(text).toContain('不重复相同的无效调用')
+    expect(text).toContain('yaoyao_plugin_')
+    expect(text).not.toContain('工具名以 plugin_ 开头')
+    expect(text).toContain('不能根据 hermes mcp list/test 的结果判断这些服务不存在')
+    expect(text).toContain('工具发现成功不代表账号已登录')
+    fixture.environment.tools.plugins = false
+    expect(buildWorkspacePrompt(fixture)).not.toContain('vaultwarden')
+  })
+
   it('keeps persona, provenance, user content and attachments in their own sections', () => {
     const fixture = input(), text = buildWorkspacePrompt(fixture)
     expect(text).toContain(`版本 7）：\n${fixture.agent.instructions}`)

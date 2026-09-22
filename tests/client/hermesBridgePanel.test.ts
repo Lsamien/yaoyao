@@ -69,16 +69,19 @@ it('shows one instance-wide restart action with progress and the verified result
   wrapper.unmount()
 })
 
-it('hides restart for unmanaged instances and disables it while tasks or installs are active',async()=>{
+it('keeps the server restart action visible with its unavailable reason and target',async()=>{
   const state=managedSnapshot();state.dashboard!.canRestart=false;state.dashboard!.message='当前仍有任务运行，请结束任务后重启。'
   vi.mocked(getHermesBridgeStatus).mockResolvedValue(state)
   const wrapper=mount(HermesBridgePanel);await flushPromises()
   expect(wrapper.get('.restart').attributes('disabled')).toBeDefined()
   expect(wrapper.text()).toContain('当前仍有任务运行')
   await wrapper.get('.restart').trigger('click');expect(restartHermesDashboard).not.toHaveBeenCalled()
-  state.dashboard!.managed=false
+  state.dashboard!.managed=false;state.dashboard!.message='服务端未识别到可管理的 Hermes Dashboard 系统服务。'
   await wrapper.findAll('button').find(b=>b.text()==='重新检查')!.trigger('click');await flushPromises()
-  expect(wrapper.find('.restart').exists()).toBe(false)
+  expect(wrapper.get('.restart').attributes('disabled')).toBeDefined()
+  expect(wrapper.get('.restart').text()).toBe('重启服务端 Hermes Dashboard')
+  expect(wrapper.text()).toContain('服务端未识别到')
+  expect(wrapper.text()).toContain('http://127.0.0.1:9119')
   expect(wrapper.text()).toContain('Hermes 所在节点')
   wrapper.unmount()
 })
@@ -91,7 +94,7 @@ it('refreshes capabilities after failure and preserves the restart error',async(
   vi.mocked(getHermesBridgeStatus).mockResolvedValue(state)
   await wrapper.get('.restart').trigger('click');await flushPromises()
   expect(wrapper.get('[role="alert"]').text()).toContain('重启失败')
-  expect(wrapper.find('.restart').exists()).toBe(false)
+  expect(wrapper.get('.restart').attributes('disabled')).toBeDefined()
   expect(wrapper.text()).not.toContain('工具桥已就绪')
   wrapper.unmount()
 })

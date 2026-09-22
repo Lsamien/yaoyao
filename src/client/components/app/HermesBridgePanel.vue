@@ -76,19 +76,19 @@ onBeforeUnmount(()=>{disposed=true;++generation;clearTimeout(timer)})
           </button>
         </article>
       </div>
-      <div v-if="status.dashboard?.managed || restarting" class="dashboard-action">
-        <p id="hermes-dashboard-restart-hint">{{ restarting ? '正在重启 Hermes Dashboard 并检查工具桥加载状态…' : status.dashboard?.message }}</p>
-        <button type="button" class="restart" aria-describedby="hermes-dashboard-restart-hint" :disabled="checking || !!installing || restarting || !status.dashboard?.canRestart" @click="restart">{{ restarting || status.dashboard?.restarting ? '重启中…' : '重启 Hermes Dashboard' }}</button>
+      <div v-if="status.dashboard || restarting" class="dashboard-action">
+        <div><p id="hermes-dashboard-restart-hint">{{ restarting ? '正在重启服务端 Hermes Dashboard 并检查工具桥加载状态…' : status.dashboard?.message }}</p><small>服务端 Hermes 地址：{{ status.endpoint }}</small></div>
+        <button type="button" class="restart" aria-describedby="hermes-dashboard-restart-hint" :disabled="checking || !!installing || restarting || !status.dashboard?.canRestart" @click="restart">{{ restarting || status.dashboard?.restarting ? '重启中…' : '重启服务端 Hermes Dashboard' }}</button>
       </div>
     </template>
     <div v-if="notice" class="result" role="status"><p>{{ notice }}</p><details v-if="backup"><summary>查看备份位置</summary><code>{{ backup }}</code></details></div>
-    <p class="footnote">安装前会备份原插件与配置。{{ status?.dashboard?.managed ? '安装完成后，可在空闲时点击重启 Hermes Dashboard，完成后自动检查。' : '安装完成后，请在 Hermes 所在节点重启 Dashboard 服务，再点击重新检查。' }}</p>
+    <p class="footnote">安装前会备份原插件与配置。{{ status?.dashboard?.managed ? '安装完成后，可在空闲时点击重启服务端 Hermes Dashboard，完成后自动检查。' : '安装完成后，请在 Hermes 所在节点重启 Dashboard 服务，再点击重新检查。' }}</p>
   </section>
 </template>
 
 <style scoped>
 .hermes-bridge{display:grid;gap:14px;margin-top:22px;padding-top:22px;border-top:1px solid var(--line);color:var(--text-primary);font-size:13px;line-height:1.65}
-.dashboard-action{display:flex;align-items:center;justify-content:space-between;gap:16px}.dashboard-action p{min-width:0}.restart{color:var(--accent);white-space:normal}
+.dashboard-action{display:flex;align-items:center;justify-content:space-between;gap:16px}.dashboard-action>div{min-width:0;overflow-wrap:anywhere}.restart{color:var(--accent);white-space:normal}
 @media(max-width:600px){.dashboard-action{align-items:stretch;flex-direction:column;gap:12px}.restart{align-self:flex-start;max-width:100%}}
 header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}h4{margin:0 0 5px;font-size:15px}p{margin:0;color:var(--text-secondary)}button{flex-shrink:0;min-height:44px;padding:8px 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text-primary);font:inherit;cursor:pointer}button:hover:not(:disabled){background:var(--surface-soft)}button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button:disabled{opacity:.55;cursor:default}.profiles{display:grid;border:1px solid var(--line);border-radius:12px;overflow:hidden}.profile{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px;background:var(--surface-soft)}.profile+.profile{border-top:1px solid var(--line)}.profile-detail{min-width:0;display:grid;gap:5px;overflow-wrap:anywhere}.profile-heading{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.profile-heading strong{font-size:14px}.badge{border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px;color:var(--text-secondary);background:var(--surface)}.badge.ready{color:var(--success,var(--accent))}.badge.outdated,.badge.restart-required{color:var(--accent)}small,.footnote{font-size:12px;color:var(--text-secondary)}.error{color:var(--danger)}.result{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.result details{margin-top:8px}.result summary{cursor:pointer}.result code{display:block;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}.install{color:var(--accent)}
 @media(max-width:600px){header{flex-wrap:wrap}.profile{align-items:stretch;flex-direction:column;gap:12px}.install{align-self:flex-start}header button{margin-left:auto}}

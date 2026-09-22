@@ -11,8 +11,10 @@ const base = '/api/app/bot-tools'
 const surface = ref<'apps' | 'mcp'>('apps'), view = ref('marketplace')
 const settings = ref<BotPluginSettings>({ configured: false, revision: 0 }), canManage = ref(false)
 const plugins = ref<BotMcpPlugin[]>([]), cards = ref<BotAppCard[]>([]), connections = ref<BotAppConnection[]>([]), agents = ref<WorkspaceAgent[]>([])
+const agentsLoaded = ref(false)
 const loading = ref(true), busy = ref(false), error = ref(''), notice = ref(''), search = ref(''), apiKey = ref(''), authConfigs = ref('{}')
 const editing = ref<string | null>(null), editorOpen = ref(false), grantSlug = ref(''), grantIds = ref<string[]>([]), aliasSlug = ref(''), alias = ref('')
+const mcpGrantId = ref(''), mcpGrantIds = ref<string[]>([]), mcpGrantRevision = ref(0)
 const form = reactive({ name: '', transport: 'stdio' as 'stdio' | 'http', command: 'npx', args: '[]', url: '', env: '{}', headers: '{}', agentIds: [] as string[], revision: 0 })
 const pendingUrls = ref<Record<string, string>>({})
 const visibleCount = ref(40)
@@ -20,6 +22,7 @@ watch([search, view], () => { visibleCount.value = 40 })
 let closed = false, generation = 0, timer: ReturnType<typeof setTimeout> | undefined
 const call = <T,>(path: string, method: string, body?: unknown) => apiRequest<T>(base + path, { method, ...(body === undefined ? {} : { body: body as JsonValue }) })
 const selectable = computed(() => agents.value.filter(a => !a.archived && !a.remoteAgentId && !a.temporaryGoalId))
+const validAgentIds = (ids: string[]) => ids.filter(id => selectable.value.some(agent => agent.id === id))
 const filtered = computed(() => {
   const all = new Map(cards.value.map(c => [c.slug, c]))
   for (const c of connections.value) if (!all.has(c.slug)) all.set(c.slug, { slug: c.slug, name: c.slug, description: '' })
@@ -28,7 +31,7 @@ const filtered = computed(() => {
 })
 const connected = (slug: string) => connections.value.find(c => c.slug === slug)
 const stateLabel = (status: string) => ({ ACTIVE: '已连接', INITIATED: '待授权', INITIALIZING: '连接中', PENDING: '待授权', EXPIRED: '已过期', FAILED: '连接失败', INACTIVE: '未启用' }[status.toUpperCase()] ?? status)
-const grantNames = (ids: string[]) => ids.map(id => agents.value.find(a => a.id === id)?.name).filter(Boolean).join('、') || '尚未授权 Bot'
+const grantNames = (ids: string[]) => !agentsLoaded.value ? 'Bot 授权暂不可读' : ids.map(id => selectable.value.find(a => a.id === id)?.name).filter(Boolean).join('、') || '尚未授权 Bot'
 async function load() {
   const version = ++generation
   const results = await Promise.allSettled([
@@ -44,6 +47,7 @@ async function load() {
   if (m.status === 'fulfilled') plugins.value = m.value.plugins
   if (c.status === 'fulfilled') cards.value = c.value.cards
   if (a.status === 'fulfilled' && a.value.authoritative) connections.value = a.value.connections
+  agentsLoaded.value = bots.status === 'fulfilled'
   if (bots.status === 'fulfilled') agents.value = bots.value.agents
   error.value = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map(r => r.reason instanceof Error ? r.reason.message : '读取失败，请重试').join('；')
   loading.value = false
@@ -55,8 +59,9 @@ async function action(fn: () => Promise<void>) {
   finally { busy.value = false }
 }
 function edit(plugin?: BotMcpPlugin) {
+  mcpGrantId.value = ''
   editing.value = plugin?.id ?? null
-  Object.assign(form, { name: plugin?.name ?? '', transport: plugin?.transport ?? 'stdio', command: plugin?.command ?? 'npx', args: JSON.stringify(plugin?.args ?? [], null, 2), url: plugin?.url ?? '', env: JSON.stringify(Object.fromEntries((plugin?.envKeys ?? []).map(k => [k, true])), null, 2), headers: JSON.stringify(Object.fromEntries((plugin?.headerKeys ?? []).map(k => [k, true])), null, 2), agentIds: [...(plugin?.agentIds ?? [])], revision: plugin?.revision ?? 0 })
+  Object.assign(form, { name: plugin?.name ?? '', transport: plugin?.transport ?? 'stdio', command: plugin?.command ?? 'npx', args: JSON.stringify(plugin?.args ?? [], null, 2), url: plugin?.url ?? '', env: JSON.stringify(Object.fromEntries((plugin?.envKeys ?? []).map(k => [k, true])), null, 2), headers: JSON.stringify(Object.fromEntries((plugin?.headerKeys ?? []).map(k => [k, true])), null, 2), agentIds: validAgentIds(plugin?.agentIds ?? []), revision: plugin?.revision ?? 0 })
   editorOpen.value = true; emit('dirty-change', false)
 }
 function closeEditor() { editorOpen.value = false; emit('dirty-change', false) }
@@ -69,9 +74,20 @@ async function save() {
     closeEditor(); notice.value = '已保存。测试连接成功后即可启用。'
   })
 }
-async function test(plugin: BotMcpPlugin) { await action(async () => { const result = await call<{ plugin: BotMcpPlugin }>('/mcp/' + plugin.id + '/test', 'POST', {}); notice.value = `连接成功，发现 ${result.plugin.toolCount} 个工具。` }) }
+async function test(plugin: BotMcpPlugin) { await action(async () => { const result = await call<{ plugin: BotMcpPlugin }>('/mcp/' + plugin.id + '/test', 'POST', {}); notice.value = `服务器连接成功，发现 ${result.plugin.toolCount} 个工具。服务登录状态需另行确认。` }) }
 async function toggle(plugin: BotMcpPlugin) { await action(async () => { await call('/mcp/' + plugin.id, 'PATCH', { enabled: !plugin.enabled, revision: plugin.revision }) }) }
-async function remove(plugin: BotMcpPlugin) { if (window.confirm(`移除插件“${plugin.name}”？此插件将不再提供给 Bot。`)) await action(async () => { await call('/mcp/' + plugin.id, 'DELETE') }) }
+async function remove(plugin: BotMcpPlugin) { if (window.confirm(`移除插件“${plugin.name}”？此插件将不再提供给 Bot。`)) await action(async () => { await call('/mcp/' + plugin.id, 'DELETE'); if (mcpGrantId.value === plugin.id) closeMcpGrant() }) }
+function openMcpGrant(plugin: BotMcpPlugin) {
+  closeEditor()
+  mcpGrantId.value = plugin.id; mcpGrantIds.value = validAgentIds(plugin.agentIds); mcpGrantRevision.value = plugin.revision
+}
+function closeMcpGrant() { mcpGrantId.value = ''; emit('dirty-change', false) }
+async function saveMcpGrant() {
+  await action(async () => {
+    await call('/mcp/' + mcpGrantId.value, 'PATCH', { agentIds: mcpGrantIds.value, revision: mcpGrantRevision.value })
+    closeMcpGrant(); notice.value = 'Bot 授权已保存，将用于下一轮对话。'
+  })
+}
 async function configure(clear = false) {
   if (clear && !window.confirm('清除当前账号的应用连接服务配置？Bot 将暂时无法使用这些应用。')) return
   await action(async () => {
@@ -123,25 +139,32 @@ onBeforeUnmount(() => { closed = true; generation++; clearTimeout(timer) })
     <p v-if="notice" class="plugin-notice" role="status">{{ notice }}</p>
     <p v-if="loading" role="status">正在读取插件…</p>
     <template v-else-if="surface === 'mcp'">
-      <div class="plugin-toolbar"><p>自定义 MCP 服务</p><button :disabled="!canManage || busy" @click="edit()"><AppIcon name="plus" :size="16" />添加服务</button></div>
-      <p class="hint">本机程序在 Web 服务所在主机运行。新增或修改后需重新测试并启用，仅向所选 Bot 提供工具。</p>
+      <div class="plugin-toolbar"><p>自定义 MCP 服务</p><button :disabled="!canManage || busy || !agentsLoaded" @click="edit()"><AppIcon name="plus" :size="16" />添加服务</button></div>
+      <p class="hint">stdio 程序及其路径在当前连接的夭夭服务器上运行和读取；HTTP / HTTPS 地址也由服务器连接。客户端通过服务器使用已授权的工具，无需安装 MCP 程序。</p>
       <p v-if="!canManage" class="hint">自定义 MCP 服务由管理员管理。</p>
       <form v-if="editorOpen" class="plugin-editor" aria-label="MCP 服务配置" @submit.prevent="save" @input="emit('dirty-change', true)" @change="emit('dirty-change', true)">
         <h4>{{ editing ? '编辑 MCP 服务' : '添加 MCP 服务' }}</h4>
         <label>名称<input v-model="form.name" required maxlength="80" /></label>
-        <label>连接方式<select v-model="form.transport"><option value="stdio">本机程序（stdio）</option><option value="http">远程地址（HTTP）</option></select></label>
-        <template v-if="form.transport === 'stdio'"><label>程序<input v-model="form.command" required placeholder="npx 或程序的完整路径" /></label><label>参数（JSON 数组）<textarea v-model="form.args" rows="3" spellcheck="false" /></label><label>环境变量（JSON）<textarea v-model="form.env" rows="3" spellcheck="false" autocomplete="off" /></label></template>
+        <label>连接方式<select v-model="form.transport"><option value="stdio">服务器程序（stdio）</option><option value="http">远程地址（HTTP / HTTPS）</option></select></label>
+        <template v-if="form.transport === 'stdio'"><label>服务器程序<input v-model="form.command" required placeholder="服务器上的 npx 或程序完整路径" /></label><label>参数（JSON 数组）<textarea v-model="form.args" rows="3" spellcheck="false" /></label><label>环境变量（JSON）<textarea v-model="form.env" rows="3" spellcheck="false" autocomplete="off" /></label><p class="hint">程序和参数中的文件路径须在服务器上可用。所需账号配置和环境变量也须提供给服务器上的 MCP 进程。</p></template>
         <template v-else><label>MCP 地址<input v-model="form.url" type="url" required placeholder="https://example.com/mcp" /></label><label>请求头（JSON）<textarea v-model="form.headers" rows="3" spellcheck="false" autocomplete="off" /></label></template>
         <p class="hint">凭据请放在环境变量或请求头中。已保存的值用 true 表示保留，不会回显。</p>
         <fieldset><legend>允许使用的 Bot</legend><label v-for="agent in selectable" :key="agent.id" class="check-row"><input v-model="form.agentIds" type="checkbox" :value="agent.id" />{{ agent.name }}</label><p v-if="!selectable.length" class="hint">创建 Bot 后可在这里授权。</p></fieldset>
-        <div class="editor-actions"><button type="button" :disabled="busy" @click="closeEditor">取消</button><button type="submit" class="primary" :disabled="busy">{{ busy ? '保存中…' : '保存服务' }}</button></div>
+        <div class="editor-actions"><button type="button" :disabled="busy" @click="closeEditor">取消</button><button type="submit" class="primary" :disabled="busy || !agentsLoaded">{{ busy ? '保存中…' : '保存服务' }}</button></div>
       </form>
       <p v-if="!plugins.length && !editorOpen" class="plugin-empty">还没有 MCP 服务。添加服务并测试连接后，即可授权 Bot 使用。</p>
       <article v-for="plugin in plugins" :key="plugin.id" class="mcp-card">
         <div class="card-heading"><AppIcon name="tools" :size="20" /><h4>{{ plugin.name }}</h4><span class="badge" :class="{ enabled: plugin.enabled }">{{ plugin.enabled ? '已启用' : '未启用' }}</span></div>
         <p class="hint endpoint">{{ plugin.transport === 'stdio' ? plugin.command : plugin.url }}</p>
-        <p class="hint">{{ plugin.testedAt ? `已验证 · ${plugin.toolCount} 个工具` : '尚未测试连接' }} · {{ grantNames(plugin.agentIds) }}</p>
-        <div class="card-actions"><button :disabled="busy || !canManage" @click="test(plugin)">测试连接</button><button :disabled="busy || !canManage || (!plugin.enabled && !plugin.testedAt)" @click="toggle(plugin)">{{ plugin.enabled ? '停用' : '启用' }}</button><button :disabled="busy || !canManage" @click="edit(plugin)">编辑</button><button class="danger" :disabled="busy || !canManage" @click="remove(plugin)">移除</button></div>
+        <p class="hint">{{ plugin.transport === 'stdio' ? '运行于夭夭服务器' : '由夭夭服务器连接' }} · {{ plugin.testedAt ? `已发现 ${plugin.toolCount} 个工具` : '尚未测试连接' }} · {{ grantNames(plugin.agentIds) }}</p>
+        <p v-if="agentsLoaded && validAgentIds(plugin.agentIds).length !== plugin.agentIds.length" class="hint">部分 Bot 授权已失效，请重新选择可使用此服务的 Bot。</p>
+        <p v-if="agentsLoaded && plugin.enabled && !validAgentIds(plugin.agentIds).length" class="hint">服务已启用，尚无可使用它的 Bot。请先授权 Bot。</p>
+        <div class="card-actions"><button :disabled="busy || !canManage" @click="test(plugin)">测试连接</button><button :disabled="busy || !canManage || (!plugin.enabled && !plugin.testedAt)" @click="toggle(plugin)">{{ plugin.enabled ? '停用' : '启用' }}</button><button :disabled="busy || !canManage || !agentsLoaded" @click="openMcpGrant(plugin)">授权 Bot</button><button :disabled="busy || !canManage || !agentsLoaded" @click="edit(plugin)">编辑</button><button class="danger" :disabled="busy || !canManage" @click="remove(plugin)">移除</button></div>
+        <form v-if="mcpGrantId === plugin.id" class="grant-editor" aria-label="MCP Bot 授权" @submit.prevent="saveMcpGrant" @change="emit('dirty-change', true)">
+          <fieldset><legend>允许使用的 Bot</legend><label v-for="agent in selectable" :key="agent.id" class="check-row"><input v-model="mcpGrantIds" type="checkbox" :value="agent.id" :disabled="busy" />{{ agent.name }}</label><p v-if="!selectable.length" class="hint">创建 Bot 后可在这里授权。</p></fieldset>
+          <p class="hint">授权按 Bot 保存，同一账号在各客户端均可使用。更改授权后，连接验证结果和服务启用状态会保留。</p>
+          <div class="card-actions"><button type="button" :disabled="busy" @click="closeMcpGrant">取消</button><button type="submit" :disabled="busy || !canManage || !agentsLoaded">保存授权</button></div>
+        </form>
       </article>
     </template>
     <template v-else-if="!loading">

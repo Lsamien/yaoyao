@@ -9,16 +9,22 @@
 3. 构建 Web 源码包、macOS 桌面安装包和适用的 Android 正式签名 APK，验证签名、架构、启动及完整性，生成 `SHA256SUMS.txt`。
 4. 推送源码与版本标签，上传 GitHub Release 附件，核对远端附件状态、大小和 SHA-256。已发布的 Git 标签与旧附件保持不变。
 
-### macOS 自动更新产物
+### macOS 手动安装包
 
-`npm run desktop:pack` 用于本地打包；正式发布使用 `npm run desktop:release`，其上传行为固定为 `never`，先生成可检查的本地产物。需要：
+当前发布沿用 Apple Silicon 开发签名 DMG，供用户手动安装；不做 Apple 公证。缺少正式分发证书或公证配置，不阻塞这种安装包的 GitHub 发布，也不需要重复确认已确定的发布方式。
+
+从干净的发布源码快照构建，并明确指定 DMG 和开发签名：`npm run desktop:build`，然后执行 `npx electron-builder --mac dmg --arm64 --publish never --config.mac.type=development`。验证签名完整性、架构、内置服务的版本与构建身份、实际启动以及 DMG 完整性，再上传 DMG、源码包和 `SHA256SUMS.txt`。发布说明明确写明开发签名、未公证、手动安装；不上传自动升级 ZIP、差分文件或 `latest-mac.yml`，不宣称已支持自动安装更新。
+
+### macOS 自动更新产物（具备正式分发条件时）
+
+`npm run desktop:pack` 用于本地打包；发布支持自动升级的正式分发包时使用 `npm run desktop:release`，其上传行为固定为 `never`，先生成可检查的本地产物。需要：
 
 - `CSC_NAME` 指定 `Developer ID Application: ...` 分发签名身份。
 - 配置 `APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`，或 `APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID` 供公证使用。凭据通过环境注入，不写入仓库或发布说明。
 
 正式命令启用强制签名与公证，并校验包内 `app-update.yml` 指向 `Lsamien/yaoyao`、签名完整性、公证票据，以及 `latest-mac.yml` 的版本、附件名、大小和 SHA-512。当前仍只发布 Apple Silicon 桌面包；不要上传指向不存在的 Intel 包的清单。
 
-GitHub Release 必须同时上传同一次构建生成的 `Yaoyao-{版本}-arm64.dmg`、`Yaoyao-{版本}-arm64.zip`、各自 `.blockmap`、`latest-mac.yml` 和 `SHA256SUMS.txt`。ZIP 是自动更新载荷，DMG 是首次安装与旧客户端迁移载荷。命令生成的 SHA-256 清单包含桌面附件；本次有源码包等其他附件时，发布前一并补入清单。不能在生成 ZIP 和更新摘要之后再修改应用或重新签名。
+支持自动升级的 GitHub Release 必须同时上传同一次构建生成的 `Yaoyao-{版本}-arm64.dmg`、`Yaoyao-{版本}-arm64.zip`、各自 `.blockmap`、`latest-mac.yml` 和 `SHA256SUMS.txt`。ZIP 是自动更新载荷，DMG 是首次安装与旧客户端迁移载荷。命令生成的 SHA-256 清单包含桌面附件；本次有源码包等其他附件时，发布前一并补入清单。不能在生成 ZIP 和更新摘要之后再修改应用或重新签名。
 
 既有手动安装版客户端需先手动安装一次正式包，之后才能使用“下载更新 → 重启更新”。发布前应使用同一签名身份的两个版本，在隔离机器上验证实际替换与重新启动；单元测试或未签名包的打包成功不能代替这项验收。
 

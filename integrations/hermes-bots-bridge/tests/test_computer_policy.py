@@ -155,6 +155,62 @@ class ComputerPolicyTests(unittest.TestCase):
                 bridge._refresh_agent_tools(self.agent, self.binding)
         self.assertEqual(current.get(), self.home)
 
+    def test_filtered_catalog_returns_current_ids_and_schemas_in_one_call(self):
+        tools = [
+            {'id': f'team_{i}', 'name': f'plugin_{i}', 'description': f'Gmail · list_{i}：读取邮件',
+             'inputSchema': {'type': 'object', 'properties': {'limit': {'type': 'integer'}}}}
+            for i in range(3)
+        ] + [{'id': 'other', 'name': 'plugin_other', 'description': 'Vault · status：状态', 'inputSchema': {}}]
+        with patch.object(bridge, '_request', return_value={'tools': tools, 'warnings': []}) as request:
+            result = json.loads(bridge.list_tools({'service': 'gmail', 'query': 'list', 'limit': 2}, session_id='stored'))
+            self.assertEqual(result['tools'], tools[:2])
+            self.assertEqual(result['total'], 3)
+            self.assertEqual(result['nextOffset'], 2)
+            request.assert_called_once_with(self.binding, '/tools/list')
+            page = json.loads(bridge.list_tools({'service': 'gmail', 'offset': 2, 'limit': 2}, session_id='stored'))
+            self.assertEqual(page['tools'], tools[2:3])
+            self.assertIsNone(page['nextOffset'])
+            self.assertEqual(json.loads(bridge.list_tools({}, session_id='stored'))['tools'], tools)
+            self.assertEqual(json.loads(bridge.list_tools({'service': 'missing'}, session_id='stored'))['tools'], [])
+
+    def test_catalog_filter_cannot_override_identity_or_release_a_revoked_catalog(self):
+        with patch.object(bridge, '_request') as request:
+            for args in [{'session_id': 'other'}, {'limit': True}, {'offset': -1}, {'query': []}, {'limit': 1000}]:
+                self.assertEqual(json.loads(bridge.list_tools(args, session_id='stored'))['code'], 'invalid_request')
+            request.assert_not_called()
+        with patch.object(bridge, '_resolve', side_effect=[self.binding, bridge.BridgeError('expired')]), \
+             patch.object(bridge, '_request', return_value={'tools': [{'id': 'private'}]}):
+            result = json.loads(bridge.list_tools({'query': 'private'}, session_id='stored'))
+            self.assertNotIn('tools', result)
+
+    def test_task_bound_kanban_tools_need_a_real_task_id_but_listing_remains_available(self):
+        with patch.dict('os.environ', {}, clear=True):
+            for name in ['kanban_show', 'kanban_comment', 'kanban_heartbeat']:
+                result = bridge.computer_directive(session_id='stored', tool_name=name, args={})
+                self.assertEqual(result['action'], 'block')
+                self.assertIn('task_id', result['message'])
+                self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name=name, args={'task_id': 'real-task'}))
+            self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name='kanban_list', args={}))
+            self.assertIsNone(bridge.computer_directive(session_id='unmanaged', tool_name='kanban_show', args={}))
+        with patch.dict('os.environ', {'HERMES_KANBAN_TASK': 'real-task'}):
+            self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name='kanban_show', args={}))
+
+    def test_bot_catalog_removes_false_kanban_worker_guidance_without_disabling_board_tools(self):
+        self.binding.computer_policy = None
+        definitions = [{'function': {'name': 'kanban_show'}}]
+        model_tools = SimpleNamespace(get_tool_definitions=lambda **kw: definitions, get_toolset_for_tool=lambda name: 'kanban')
+        other = SimpleNamespace(_kanban_worker_guidance='keep other session')
+        with patch.dict(sys.modules, {'model_tools': model_tools}), patch.dict('os.environ', {}, clear=True):
+            self.agent._kanban_worker_guidance = 'Call kanban_show first'
+            bridge._refresh_agent_tools(self.agent, self.binding)
+            self.assertEqual(self.agent._kanban_worker_guidance, '')
+            self.assertIn('kanban_show', self.agent.valid_tool_names)
+            self.assertEqual(other._kanban_worker_guidance, 'keep other session')
+        with patch.dict(sys.modules, {'model_tools': model_tools}), patch.dict('os.environ', {'HERMES_KANBAN_TASK': 'real-task'}):
+            self.agent._kanban_worker_guidance = 'real worker guidance'
+            bridge._refresh_agent_tools(self.agent, self.binding)
+            self.assertEqual(self.agent._kanban_worker_guidance, 'real worker guidance')
+
     def test_isolated_skills_and_vm_tools_use_native_catalog_but_host_operations_require_approval(self):
         for name in ['skills_list', 'skill_view', 'vision_analyze', 'yaoyao_computer_shell_aabbcc']:
             self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name=name, args={}))

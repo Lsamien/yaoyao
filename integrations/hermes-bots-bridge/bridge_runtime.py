@@ -120,6 +120,11 @@ def _refresh_profile_agent_tools(agent, binding):
     if binding.workspace_memory:
         _isolate_profile_memory(agent, binding)
     _isolate_profile_context(agent, binding)
+    # Hermes currently injects worker guidance when kanban_show is merely
+    # available in a Profile. A Bot session is not a dispatched Kanban worker.
+    # Keep the tools for explicit board requests, but remove the false mandate.
+    if not os.getenv("HERMES_KANBAN_TASK", "").strip():
+        agent._kanban_worker_guidance = ""
     from model_tools import get_tool_definitions, get_toolset_for_tool
     if not hasattr(agent, "_yaoyao_base_toolsets"):
         agent._yaoyao_base_toolsets = getattr(agent, "enabled_toolsets", None)
@@ -791,12 +796,29 @@ def normalize_result(result: dict, binding: Binding) -> str | dict:
 
 def list_tools(args: dict, **kwargs) -> str:
     try:
-        if args:
-            raise BridgeError("查询工具不接受身份或其他参数", 400, "invalid_request")
+        if not isinstance(args, dict) or set(args) - {"service", "query", "offset", "limit"}:
+            raise BridgeError("查询工具仅接受 service、query、offset 和 limit", 400, "invalid_request")
+        for key in ("service", "query"):
+            if key in args and (not isinstance(args[key], str) or len(args[key]) > 200):
+                raise BridgeError("工具筛选必须是最多 200 字符的文本", 400, "invalid_request")
+        for key, maximum in (("offset", 10000), ("limit", 50)):
+            if key in args and (type(args[key]) is not int or not (0 if key == "offset" else 1) <= args[key] <= maximum):
+                raise BridgeError("工具目录分页参数无效", 400, "invalid_request")
         binding = _resolve(kwargs.get("session_id", ""))
         result = _request(binding, "/tools/list")
         if _resolve(kwargs.get("session_id", "")) is not binding:
             raise BridgeError("本轮工具授权已经更换")
+        if args:
+            service = args.get("service", "").strip().casefold()
+            terms = args.get("query", "").casefold().split()
+            # Plugin descriptions start with the server-owned service label.
+            # Keep the actual lease IDs and schemas; filtering grants no tools.
+            tools = [tool for tool in result.get("tools", [])
+                     if (not service or service in str(tool.get("description", "")).partition(" · ")[0].casefold())
+                     and all(term in (str(tool.get("name", "")) + " " + str(tool.get("description", ""))).casefold() for term in terms)]
+            offset, limit = args.get("offset", 0), args.get("limit", 20)
+            result = {**result, "tools": tools[offset:offset + limit], "total": len(tools),
+                      "nextOffset": offset + limit if offset + limit < len(tools) else None}
         return json.dumps(result, ensure_ascii=False)
     except BridgeError as exc:
         return json.dumps({"error": str(exc), "code": exc.code}, ensure_ascii=False)
@@ -975,6 +997,10 @@ def computer_directive(session_id=None, tool_name=None, args=None, **kwargs):
     except BridgeError:
         return {"action": "block", "message": "电脑会话授权已经结束，请在当前 Bot 中发起新一轮。"}
     policy = binding.computer_policy
+    if tool_name in {"kanban_show", "kanban_comment", "kanban_heartbeat"}:
+        task_id = args.get("task_id") if isinstance(args, dict) else None
+        if not (isinstance(task_id, str) and task_id.strip()) and not os.getenv("HERMES_KANBAN_TASK", "").strip():
+            return {"action": "block", "message": "当前 Bot 对话没有 Hermes 看板 task_id；跳过看板步骤，继续用户原始任务。仅当用户需要看板操作时查询真实任务 ID，不要重试相同缺参调用，也不要用夭夭 run/task ID 代替。"}
     if binding.workspace_memory and tool_name in binding.profile_memory_tools:
         return {"action": "block", "message": "此 Bot 使用独立记忆，请使用本轮授权的 workspace 记忆工具。"}
     if not policy:

@@ -46,6 +46,25 @@ describe('DashboardSupervisor', () => {
     await Promise.all([f.instance.checkNow(), f.instance.checkNow()])
     expect(f.launches).toHaveLength(1)
   })
+  it('does not launch a competing process while a system service is being restarted', async () => {
+    const f = supervisor()
+    const resume = f.instance.suspendChecks()
+    await f.instance.checkNow()
+    expect(f.launches).toEqual([])
+    resume(); resume()
+    await f.instance.checkNow()
+    expect(f.launches).toHaveLength(1)
+  })
+  it('also suspends a check that was already waiting for its listener probe', async () => {
+    let probeDone!: (running: boolean) => void
+    const launch = vi.fn()
+    const instance = new DashboardSupervisor({ launch, probe: () => new Promise(done => { probeDone = done }) })
+    const pending = instance.checkNow()
+    const resume = instance.suspendChecks()
+    probeDone(false); await pending
+    expect(launch).not.toHaveBeenCalled()
+    resume()
+  })
 })
 
 function managedSupervisor(initiallyRunning=false, readyTimeoutMs=1000) {

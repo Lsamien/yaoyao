@@ -6,6 +6,7 @@ import {join,resolve} from 'node:path'
 import request from 'supertest'
 import {HermesBridgeManager} from '../../src/server/hermesBridge'
 import type {ServerConfig} from '../../src/server/config'
+import type {DashboardController} from '../../src/server/dashboardController'
 import {createAuthenticatedApplication,createUserAuthenticatedApplication} from './authenticatedApplication'
 
 let home:string,config:ServerConfig
@@ -14,7 +15,7 @@ beforeEach(()=>{
   config={host:'127.0.0.1',port:15300,upstream:new URL('http://127.0.0.1:9119'),home,allowedHosts:new Set(),mediaRoot:home,attachmentsRoot:home,imagesRoot:home,mediaOwner:'fixture',allowInsecureLan:false,insecureLan:false,production:false}
 })
 afterEach(()=>{rmSync(home,{recursive:true,force:true});vi.restoreAllMocks();vi.unstubAllEnvs()})
-function fixture(dashboard?:{canRestart:boolean;restart:()=>Promise<void>}){
+function fixture(dashboard?:DashboardController){
   let disk:any[]=[{profile:'default',exists:true,valid:true,enabled:true,installedVersion:'1.1.0',fingerprint:'old',filesCurrent:false},{profile:'writer',exists:true,valid:true,enabled:false,disabled:true,installedVersion:'1.2.0',fingerprint:'new',filesCurrent:true}]
   let live:any={ready:true,native_tools:true,in_process:true,computer_runtime_version:2,plugin_version:'1.1.0',plugin_fingerprint:'old'}
   let idle=true,gate:Promise<void>|undefined
@@ -54,6 +55,28 @@ it('restarts the managed Dashboard and verifies every Profile using fresh loaded
   expect(result.status.profiles.every(p=>p.state==='ready'&&p.canInstall)).toBe(true)
   expect(result.status.dashboard).toMatchObject({canRestart:true,restarting:false})
   expect(result.message).toContain('工具桥已就绪')
+})
+
+it('discovers a server-managed Dashboard without desktop ownership and locks task admission while discovering',async()=>{
+  let release!:()=>void
+  const dashboard={canRestart:false,refresh:vi.fn(async()=>{await new Promise<void>(done=>{release=done});dashboard.canRestart=true}),restart:vi.fn(async()=>{})}
+  const f=fixture(dashboard)
+  const pending=f.manager.restartDashboard()
+  expect(()=>f.manager.assertDashboardAvailable()).toThrow('正在重启')
+  await expect(f.manager.restartDashboard()).rejects.toMatchObject({code:'hermes_dashboard_restarting'})
+  await expect(f.manager.install({profile:'default'})).rejects.toMatchObject({code:'hermes_dashboard_restarting'})
+  dashboard.refresh.mockImplementation(async()=>{})
+  release();await pending
+  expect(dashboard.restart).toHaveBeenCalledTimes(1)
+  expect(f.manager.dashboardRestarting).toBe(false)
+})
+
+it('rejects client-supplied hosts, processes and commands before accessing a server service',async()=>{
+  const dashboard={canRestart:true,refresh:vi.fn(async()=>{}),restart:vi.fn(async()=>{})},f=fixture(dashboard)
+  for(const body of [{host:'client'},{pid:123},{command:'killall python'},{target:'gui/501/other'},{profile:'writer'}]){
+    await expect(f.manager.restartDashboard(body)).rejects.toMatchObject({status:400,code:'invalid_dashboard_restart_request'})
+  }
+  expect(dashboard.refresh).not.toHaveBeenCalled();expect(dashboard.restart).not.toHaveBeenCalled()
 })
 
 it('keeps an unverified bridge pending after restart and releases the lock after failure',async()=>{
@@ -123,6 +146,7 @@ it('requires admin and CSRF for restart, and blocks API and websocket task entry
     const api=request.agent(admin.app.callback()),host='127.0.0.1:15300',path='/api/app/admin/hermes-bridge/restart'
     await api.post(path).set('Host',host).send({}).expect(403)
     const csrf=(await api.get('/api/app/bootstrap?csrfOnly=1').set('Host',host).expect(200)).body.csrfToken
+    await api.post(path).set('Host',host).set('Origin','http://'+host).set('X-CSRF-Token',csrf).send({target:'client'}).expect(400)
     const post=(url:string)=>api.post(url).set('Host',host).set('Origin','http://'+host).set('X-CSRF-Token',csrf).send({})
     const pending=post(path).expect(200).then(response=>response)
     await vi.waitFor(()=>expect(dashboard.restart).toHaveBeenCalledTimes(1))

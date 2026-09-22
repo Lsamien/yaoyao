@@ -12,6 +12,7 @@ import { readBuildIdentity } from './buildIdentity.js'
 import { migrateDataHome } from '../../bin/lib/data-migration.mjs'
 import { legacyDataHome, resolveDataHome } from '../../bin/lib/data-home.mjs'
 import { spawn } from 'node:child_process'
+import { ServerDashboardController } from './dashboardController.js'
 
 migrateDataHome(resolveDataHome(process.env.YAOYAO_HOME || process.env.HERMES_YAOYAO_HOME, { preserveActiveUpdate: true }))
 const config = loadServerConfig()
@@ -27,7 +28,8 @@ const dashboardSupervisor = config.superviseDashboard
   && config.upstream.protocol === 'http:' && config.upstream.port === '9119'
   ? new DashboardSupervisor({ managed: process.env.HERMES_YAOYAO_DESKTOP === '1' })
   : undefined
-const runtime = createApplication({config, dashboardSupervisor})
+const dashboardController = new ServerDashboardController(config.upstream, dashboardSupervisor)
+const runtime = createApplication({config, dashboardSupervisor: dashboardController})
 const nodeRuntime = createNodeServer(runtime)
 let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).
@@ -101,6 +103,7 @@ async function shutdown(): Promise<void> {
   if (closing) return
   closing = true
   instance.beginShutdown()
+  dashboardController.stop()
   try {
     dashboardSupervisor?.stop()
     await closeFrontend()

@@ -68,10 +68,10 @@ import {SharedComputers} from './sharedComputers.js'
 import {ComputerControlService} from './computerControls.js'
 import { RunnerHub } from './runnerHub.js'
 import { HermesBridgeManager } from './hermesBridge.js'
-import type { DashboardSupervisor } from './dashboardSupervisor.js'
+import type { DashboardController } from './dashboardController.js'
 
 export interface ApplicationOptions {
-  dashboardSupervisor?: Pick<DashboardSupervisor,'canRestart'|'restart'>
+  dashboardSupervisor?: DashboardController
   hermesBridge?: HermesBridgeManager
   config?: ServerConfig
   fetchImpl?: typeof fetch

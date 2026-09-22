@@ -7,7 +7,7 @@ test('checks and installs the selected Profile bridge and displays its actual ac
   let phase=0,managed=true,finishInstall!:(value:void)=>void,finishRestart!:(value:void)=>void
   const installations:unknown[]=[],restarts:unknown[]=[]
   const status=()=>({endpoint:'http://127.0.0.1:9119',local:true,bundledVersion:'1.2.0',checkedAt:Date.now(),
-    dashboard:{managed,canRestart:managed,restarting:false,message:'重启会短暂断开此 Dashboard 下所有 Profile 的连接，完成后自动检查工具桥。'},profiles:[
+    dashboard:{managed,canRestart:managed,restarting:false,message:managed?'重启在夭夭服务端执行，会短暂断开此 Dashboard 下所有 Profile 的连接，完成后自动检查工具桥。':'夭夭服务端未识别到可管理的 Hermes Dashboard 服务，请在 Hermes 所在节点重启。'},profiles:[
     {profile:'default',state:'ready',message:'Hermes 已加载当前工具桥，可以使用',installedVersion:'1.2.0',loadedVersion:'1.2.0',canInstall:true},
     {profile:'server',state:phase===0?'missing':phase===1?'restart-required':'ready',message:phase===0?'尚未安装工具桥插件':phase===1?'插件文件已就位；请在空闲时重启 Hermes 后重新检查':'Hermes 已加载当前工具桥，可以使用',installedVersion:phase?'1.2.0':undefined,loadedVersion:phase===2?'1.2.0':undefined,canInstall:true},
   ]})
@@ -43,10 +43,11 @@ test('checks and installs the selected Profile bridge and displays its actual ac
   expect(installations).toEqual([{profile:'server',enable:true}])
   await page.screenshot({path:evidence+'/desktop-installed.png'})
   await page.setViewportSize({width:375,height:812})
-  await panel.getByRole('button',{name:'重启 Hermes Dashboard',exact:true}).scrollIntoViewIfNeeded()
+  await panel.getByRole('button',{name:'重启服务端 Hermes Dashboard',exact:true}).scrollIntoViewIfNeeded()
+  await expect(panel.getByText('服务端 Hermes 地址：http://127.0.0.1:9119',{exact:true})).toBeVisible()
   expect(await panel.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true)
   await page.screenshot({path:evidence+'/mobile-restart.png'})
-  await panel.getByRole('button',{name:'重启 Hermes Dashboard',exact:true}).click()
+  await panel.getByRole('button',{name:'重启服务端 Hermes Dashboard',exact:true}).click()
   await expect(panel.getByRole('button',{name:'重启中…',exact:true})).toBeDisabled()
   await expect(panel.getByRole('button',{name:'重新检查',exact:true})).toBeDisabled()
   await expect(panel).toHaveAttribute('aria-busy','true')
@@ -70,5 +71,6 @@ test('checks and installs the selected Profile bridge and displays its actual ac
   await page.screenshot({path:evidence+'/dark-ready.png'})
   managed=false
   await panel.getByRole('button',{name:'重新检查',exact:true}).click()
-  await expect(panel.getByRole('button',{name:'重启 Hermes Dashboard',exact:true})).toHaveCount(0)
+  await expect(panel.getByRole('button',{name:'重启服务端 Hermes Dashboard',exact:true})).toBeDisabled()
+  await expect(panel.getByText(/夭夭服务端未识别到/)).toBeVisible()
 })

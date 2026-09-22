@@ -24,8 +24,10 @@ const definition = z.object({
 }).strict()
 type Definition = Omit<z.infer<typeof definition>, 'env' | 'headers'> & { env: Record<string, string>; headers: Record<string, string> }
 interface StoredPlugin { id: string; sealed: string; enabled: boolean; agentIds: string[]; revision: number; testedAt?: number; tools: McpTool[] }
+export interface BotPluginService { name: string; transport: 'stdio' | 'http'; toolCount: number }
 export interface OpenBotPlugins {
   catalog(): Array<{ id: string; name: string; description: string; inputSchema: unknown }>
+  services(): BotPluginService[]
   call(id: string, args: unknown): Promise<unknown>
   dispose(): Promise<void>
 }
@@ -125,12 +127,14 @@ export class WorkspacePlugins {
     authorize(); if(signal.aborted)throw new HttpError(403,'本轮插件授权已结束','plugin_grant_revoked')
     const connections: Array<{ client: PluginClient; owner: string; pluginId: string }> = []
     const tools = new Map<string, { client: PluginClient; tool: McpTool; name: string; check: () => void }>()
+    const services: Array<{ summary: BotPluginService; check: () => void }> = []
     const dispose = async () => { for (const entry of connections) entry.client.dispose(); await Promise.all(connections.map(async entry => { await entry.client.waitClosed(); this.live.delete(entry) })); signal.removeEventListener('abort', abort) }
     const abort = () => { void dispose() }; signal.addEventListener('abort', abort, { once: true })
-    const add = async (id: string, name: string, client: PluginClient, check: () => void) => {
+    const add = async (id: string, name: string, transport: 'stdio' | 'http', client: PluginClient, check: () => void) => {
       const entry = { client, owner, pluginId: id }; connections.push(entry); this.live.add(entry)
       await client.init(signal)
       const list = validateTools(await client.listTools(signal)); authorize(); check()
+      services.push({ summary: { name, transport, toolCount: list.length }, check })
       for (const tool of list) {
         const key = 'plugin_' + createHash('sha256').update(id + ':' + tool.name).digest('hex').slice(0, 32)
         tools.set(key, { client, tool, name, check })
@@ -145,7 +149,7 @@ export class WorkspacePlugins {
           if (!current?.enabled || current.revision !== plugin.revision || !current.agentIds.includes(agent.id)) throw new HttpError(403, '该插件的本轮授权已结束', 'plugin_grant_revoked')
         }
         check(); const value = this.value(owner, plugin)
-        await add(plugin.id, value.name, this.client(owner, value), check)
+        await add(plugin.id, value.name, value.transport, this.client(owner, value), check)
       }
       const grants = this.store.db.prepare("SELECT id,data FROM workspace_entities WHERE owner=? AND kind='bot-app-grant'").all(owner)
         .map(row => ({ slug: String(row.id), ...JSON.parse(String(row.data)) as { agentIds: string[]; revision: number } })).filter(g => g.agentIds.includes(agent.id))
@@ -155,10 +159,11 @@ export class WorkspacePlugins {
           this.assertOwner(owner)
           if (this.apps.status(owner).revision !== session.revision || grants.some(g => { const current = this.apps.grant(owner, g.slug); return current.revision !== g.revision || !current.agentIds.includes(agent.id) })) throw new HttpError(403, '应用连接的本轮授权已结束', 'plugin_grant_revoked')
         }
-        await add('connected-apps', '已连接应用', new HttpMcp(session.url, session.headers, this.fetchImpl), check)
+        await add('connected-apps', '已连接应用', 'http', new HttpMcp(session.url, session.headers, this.fetchImpl), check)
       }
       return {
         catalog: () => [...tools].flatMap(([id, entry]) => { try { authorize(); entry.check(); return [{ id, name: id, description: `${entry.name} · ${entry.tool.name}：${entry.tool.description ?? ''}`, inputSchema: entry.tool.inputSchema ?? { type: 'object', properties: {} } }] } catch { return [] } }),
+        services: () => services.flatMap(entry => { try { authorize(); entry.check(); return [{ ...entry.summary }] } catch { return [] } }),
         call: async (id, args) => {
           authorize(); const entry = tools.get(id)
           if (!entry) throw new HttpError(404, '插件工具不存在', 'plugin_tool_not_found')

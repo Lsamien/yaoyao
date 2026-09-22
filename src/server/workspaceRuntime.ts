@@ -41,6 +41,7 @@ import { createWorkspaceToolLease, type WorkspaceToolLease } from './workspaceTo
 import { WorkspaceTaskCoordinator } from './taskCoordinator.js'
 import { isDiscussion, discussionRounds } from './workspaceDiscussion.js'
 import { WorkspaceKnowledge } from './workspaceKnowledge.js'
+import { emptyMemoryContext, memoryResetReason, memoryDelta, acknowledgeMemory, type MemoryContextState } from './workspaceMemoryContext.js'
 import type { OpenVikingService } from './openVikingService.js'
 import { WorkspaceCollaboration } from './workspaceCollaboration.js'
 import { WorkspaceKnowledgeTools, BOT_KNOWLEDGE_RULES } from './workspaceKnowledgeTools.js'
@@ -49,6 +50,8 @@ type Run = WorkspaceRun
 
 export interface WorkspaceBinding {
   memoryVersion?: string
+  memoryState?: MemoryContextState
+  memoryPending?: boolean
   runnerId?: string
   execution?:string
   vmExecution?:Agent["vmExecution"]
@@ -321,7 +324,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       if (sender.archived || peer.status === 'stopped') throw new HttpError(403, 'Bot 协作权限已撤销', 'collaboration_forbidden')
       this.nodes.requireSource(owner, sender)
     }
-    const memory = botCapabilities.memory && !recovering ? await this.knowledge.context(owner, agent.id, root.projectId) : { text: '', version: 'unsupported' }
+    const memory = botCapabilities.memory && !recovering ? await this.knowledge.context(owner, agent.id, root.projectId) : emptyMemoryContext('unsupported')
     const memoryStatus = botCapabilities.memory ? 'ready' : 'upgrade_required'
     if (agent.memoryStatus !== memoryStatus) {
       agent = { ...agent, memoryStatus }
@@ -329,10 +332,16 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       this.store.event(owner, 'agent.changed', this.store.agentSummary(agent))
     }
     let binding = this.store.get<WorkspaceBinding>(owner, 'binding', key)
-    const memoryChanged = !recovering && !!binding?.memoryVersion && binding.memoryVersion !== memory.version
-    const movedRunner=memoryChanged||!!this.store.get(owner,'binding-reset',key)||!!binding&&(binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==chatExecution||!!binding.hermesComputer!==!!target.runner?.hermesComputer)
-    if(movedRunner) {
+    const memoryReset = !recovering && binding
+      ? binding.memoryPending ? 'memory_admission_uncertain' : memoryResetReason(memory, binding.memoryState, binding.memoryVersion)
+      : undefined
+    const sourceReset = !!this.store.get(owner,'binding-reset',key)
+    const movedRunner=sourceReset||!!binding&&(binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==chatExecution||!!binding.hermesComputer!==!!target.runner?.hermesComputer)
+    const resetReason = memoryReset ?? (sourceReset ? 'source_changed' : movedRunner ? 'runner_changed' : undefined)
+    if(resetReason) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
+      this.inspector?.record(owner, c.id, { method: 'bot.session-reset', direction: 'event', agentId: agent.id, runId: run.runId, taskId: run.conversationTaskId,
+        data: { reason: resetReason } })
       binding=undefined
     }
     let message =
@@ -629,7 +638,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       )
         throw new Error('Hermes 会话身份不匹配')
       binding = {
-        memoryVersion: recovering ? binding?.memoryVersion : memory.version,
+        memoryVersion: binding?.memoryVersion,
+        memoryState: binding?.memoryState,
+        memoryPending: binding?.memoryPending,
         runnerId: target.runner?.id,
         execution:chatExecution,
         vmExecution:undefined,
@@ -796,8 +807,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         }
         const members = run.turnConfiguration!.members
         const goal = run.conversationTaskId ? this.store.get<import('../shared/agentTasks.js').AgentGoal>(owner, 'goal', run.conversationTaskId) : undefined
-        const text = c.kind === 'group' ? this.contextText(owner, c, agent, run, binding.contextSeq ?? 0, movedRunner)
-          : movedRunner ? `执行节点已切换。以下是原会话的近期记录，旧路径和执行状态需要在当前节点重新核实；不要重新执行已完成的操作。\n\n${this.contextText(owner,c,agent,run,0,true)}` : trigger.content
+        const text = c.kind === 'group' ? this.contextText(owner, c, agent, run, binding.contextSeq ?? 0, !!resetReason)
+          : resetReason ? `${movedRunner ? '执行节点已切换' : '记忆或授权范围已变化，会话已重新建立'}。以下是原会话的近期记录，旧路径和执行状态需要在当前节点重新核实；不要重新执行已完成的操作。\n\n${this.contextText(owner,c,agent,run,0,true)}` : trigger.content
         const admission = this.getWork(owner, run.id)
         if (!this.store.taskMemberIds(owner,this.store.require<Conversation>(owner,'conversation',c.id),run.conversationTaskId).includes(agent.id)) {
           admission.status = 'interrupted'; admission.error = '执行前成员已移除'; this.saveWork(owner, admission)
@@ -811,29 +822,40 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         this.saveWork(owner, admission)
         submitted = true
         try {
+          const pluginServices = pluginLease?.services() ?? []
           submittedText = buildWorkspacePrompt({
             agent, conversation: c, members, work: run,
             run: this.store.require<Run>(owner, 'run', run.runId), goal,
-            environment,
+            environment, pluginServices,
             teamRules: team ? TEAM_TOOL_RULES : undefined,
             knowledgeRules: knowledge ? BOT_KNOWLEDGE_RULES : undefined,
-            memory: memory.text, noReply: NO_REPLY,
+            memory: memoryDelta(memory, binding.memoryState), noReply: NO_REPLY,
             marker: `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
-            content: text, contentKind: c.kind === 'group' || movedRunner ? 'history' : 'user', attachmentRefs,
+            content: text, contentKind: c.kind === 'group' || !!resetReason ? 'history' : 'user', attachmentRefs,
           })
           this.inspector?.record(owner,c.id,{method:'bot.environment',direction:'request',agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId,
-            data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id)}})
+            data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id),pluginServices}})
+          binding.memoryPending = true
+          this.store.put(owner, 'binding', key, binding)
           await gateway.rpc('prompt.submit', {
             session_id: runtimeId,
             ...(target.runner?.computer?{workMarker:`[yaoyao-run:${run.runId}:${resultMessage.id}]`}:{}),
             text: submittedText,
           })
           this.store.remove(owner,'binding-reset',key)
+          // Only an admitted prompt may advance the durable injection baseline.
+          // A rejected/lost receipt must not make the next turn omit new facts.
+          binding.memoryVersion = memory.version
+          binding.memoryState = acknowledgeMemory(memory, binding.memoryState)
+          binding.memoryPending = undefined
           binding.contextSeq = Math.max(binding.contextSeq ?? 0, admission.contextThroughSeq)
           this.store.put(owner, 'binding', key, binding)
         } catch (error) {
           // A JSON-RPC error is a definitive rejection, not a lost receipt.
-          if (error instanceof HttpError && ['gateway_rejected','runner_command_not_admitted'].includes(error.code??'')) { submitted = false; const current = this.getWork(owner, run.id); current.submitted = false; this.saveWork(owner, current) }
+          if (error instanceof HttpError && ['gateway_rejected','runner_command_not_admitted'].includes(error.code??'')) {
+            submitted = false; const current = this.getWork(owner, run.id); current.submitted = false; this.saveWork(owner, current)
+            binding.memoryPending = undefined; this.store.put(owner, 'binding', key, binding)
+          }
           throw error
         }
       }

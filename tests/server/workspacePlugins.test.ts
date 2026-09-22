@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, afterEach, describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -118,6 +118,7 @@ describe('Bot-only plugin management', () => {
     } } }
     const controller = new AbortController()
     const tools = await runtime.workspacePlugins.open('owner', agent, target, controller.signal, () => {})
+    expect(tools.services()).toEqual([{ name: '测试服务', transport: 'http', toolCount: 1 }])
     const originalToolId = tools.catalog()[0]!.id
     const lease = await createWorkspaceToolLease({ target, profile: 'default', workId: randomUUID(), signal: controller.signal, session: () => ({ runtimeId: 'live-fixture', storedId: 'stored-fixture' }), assertActive() {}, catalog: () => tools.catalog(), call: (id, args) => tools.call(id, args), onFailure() {} })
     try {
@@ -130,12 +131,70 @@ describe('Bot-only plugin management', () => {
       expect(result.structuredContent.value).toBe('native bridge verified')
       await api('patch', '/mcp/' + plugin.id).send({ enabled: false, revision: 2 }).expect(200)
       expect(tools.catalog()).toEqual([])
+      expect(tools.services()).toEqual([])
       const count = requests.length
       await expect(tools.call(originalToolId, {})).rejects.toMatchObject({ code: 'plugin_grant_revoked' })
       expect(requests).toHaveLength(count)
     } finally { controller.abort(); await tools.dispose(); await lease.dispose() }
     const notGranted = runtime.workspace.createAgent('owner', { name: '未授权 Bot', profile: 'default' })
     expect(runtime.workspacePlugins.selected('owner', notGranted)).toBe(false)
+  })
+  it('runs a server stdio program through the tool bridge without a client filesystem', async () => {
+    const agent = runtime.workspace.createAgent('owner', { name: '远端客户端使用的 Bot', profile: 'default' })
+    const script = join(home, 'server-mcp.cjs'), data = join(home, 'server-only.txt')
+    writeFileSync(data, '服务器文件内容')
+    writeFileSync(script, `const fs = require('node:fs');
+require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  const r = JSON.parse(line); if (!r.id) return;
+  const result = r.method === 'initialize' ? { protocolVersion: '2025-06-18', capabilities: { tools: {} } }
+    : r.method === 'tools/list' ? { tools: [{ name: 'read_server_file', inputSchema: { type: 'object' } }] }
+    : { content: [{ type: 'text', text: fs.readFileSync(process.argv[2], 'utf8') }] };
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: r.id, result }) + '\\n');
+});`)
+    const added = await api('post', '/mcp').send({ name: '服务器程序', transport: 'stdio', command: process.execPath, args: [script, data], agentIds: [agent.id] }).expect(201)
+    const id = added.body.plugin.id
+    await api('post', '/mcp/' + id + '/test').send({}).expect(200)
+    await api('patch', '/mcp/' + id).send({ enabled: true, revision: 1 }).expect(200)
+    let binding: any
+    const target: any = { url: new URL('http://127.0.0.1:19119'), session: { request: async (path: string, options: any) => {
+      if (path.endsWith('/bind')) binding = options.body
+      return { status: 200, body: Buffer.from(JSON.stringify(path.endsWith('/capabilities') ? { version: 1, ready: true, native_tools: true, in_process: true } : { ok: true, native_tools: true })) }
+    } } }
+    const controller = new AbortController()
+    const tools = await runtime.workspacePlugins.open('owner', agent, target, controller.signal, () => {})
+    expect(tools.services()).toEqual([{ name: '服务器程序', transport: 'stdio', toolCount: 1 }])
+    const lease = await createWorkspaceToolLease({ target, profile: 'default', workId: randomUUID(), signal: controller.signal, session: () => ({ runtimeId: 'server-stdio', storedId: 'server-stdio-stored' }), assertActive() {}, catalog: () => tools.catalog(), call: (id, args) => tools.call(id, args), onFailure() {} })
+    try {
+      await lease.bind()
+      const bridge = async (path: string, body: unknown) => (await fetch(binding.bridge_url + path, { method: 'POST', headers: { Authorization: 'Bearer ' + binding.token, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as Promise<any>
+      const catalog = await bridge('/tools/list', {})
+      expect(catalog.tools).toHaveLength(1)
+      expect(JSON.stringify(catalog)).not.toContain(home)
+      const result = await bridge('/tools/call', { toolId: catalog.tools[0].id, arguments: {}, callId: randomUUID() })
+      expect(result.content).toEqual([{ type: 'text', text: '服务器文件内容' }])
+    } finally { controller.abort(); await tools.dispose(); await lease.dispose() }
+  })
+  it('removes deleted Bot grants without changing the service or granting a replacement by name', async () => {
+    const old = runtime.workspace.createAgent('owner', { name: '小夭', profile: 'default' })
+    const other = runtime.workspace.createAgent('owner', { name: '保留的 Bot', profile: 'default' })
+    const plugin = await addPlugin([old.id, other.id])
+    await api('post', '/mcp/' + plugin.id + '/test').send({}).expect(200)
+    await api('patch', '/mcp/' + plugin.id).send({ enabled: true, revision: 1 }).expect(200)
+    const unrelated = await api('post', '/mcp').send({ name: '其他服务', transport: 'http', url: 'https://other.example.test/mcp', agentIds: [other.id] }).expect(201)
+    const unrelatedBefore = runtime.workspace.require<any>('owner', 'bot-mcp-plugin', unrelated.body.plugin.id)
+    const before = runtime.workspace.require<any>('owner', 'bot-mcp-plugin', plugin.id)
+    runtime.workspace.updateAgent('owner', old.id, { archived: true })
+    runtime.workspace.deleteAgent('owner', old.id)
+    const after = runtime.workspace.require<any>('owner', 'bot-mcp-plugin', plugin.id)
+    expect(after).toEqual({ ...before, agentIds: [other.id], revision: before.revision + 1 })
+    expect(runtime.workspace.require('owner', 'bot-mcp-plugin', unrelated.body.plugin.id)).toEqual(unrelatedBefore)
+    const replacement = runtime.workspace.createAgent('owner', { name: '小夭', profile: 'default' })
+    expect(runtime.workspacePlugins.selected('owner', replacement)).toBe(false)
+    expect(runtime.workspacePlugins.selected('owner', other)).toBe(true)
+    await api('patch', '/mcp/' + plugin.id).send({ agentIds: [replacement.id, other.id], revision: after.revision }).expect(200)
+    const rebound = runtime.workspace.require<any>('owner', 'bot-mcp-plugin', plugin.id)
+    expect(rebound).toMatchObject({ enabled: true, testedAt: before.testedAt, sealed: before.sealed, tools: before.tools })
+    expect(runtime.workspacePlugins.selected('owner', replacement)).toBe(true)
   })
 })
 
