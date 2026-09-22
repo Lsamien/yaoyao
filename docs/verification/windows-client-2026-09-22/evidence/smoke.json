@@ -1,0 +1,19 @@
+{
+  "platform": "win32",
+  "login": true,
+  "encryptedPairing": true,
+  "sessionRestored": true,
+  "clientOnly": true,
+  "native": {
+    "shell": true,
+    "isolatedBrowser": true,
+    "screenshot": true,
+    "click": true,
+    "unicodeInput": true,
+    "ctrlA": true,
+    "displayInvalidation": true,
+    "revoked": true,
+    "scaleFactor": 1
+  },
+  "windows10and11Matrix": "requires Windows 10/11 acceptance; CI runs Windows Server 2022"
+}

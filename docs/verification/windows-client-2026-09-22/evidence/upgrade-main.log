@@ -1,0 +1,37 @@
+2026-09-22T15:59:14.252Z [更新:info] Checking for update
+2026-09-22T15:59:14.256Z [更新:info] Generated new staging user ID: 50f9de12-833b-58a5-be79-f3145335ef85
+2026-09-22T15:59:14.267Z [更新:info] Found version 0.4.71 (url: Yaoyao-0.4.71-win-x64-setup.exe)
+2026-09-22T15:59:14.319Z [更新:info] Downloading update from Yaoyao-0.4.71-win-x64-setup.exe
+2026-09-22T15:59:14.320Z [更新:debug] updater cache dir: C:\Users\runneradmin\AppData\Local\yaoyao-upgrade-d1acfd91-cbfd-4fa8-adfa-853f5711e481
+2026-09-22T15:59:14.321Z [更新:warn] disableWebInstaller is set to false, you should set it to true if you do not plan on using a web installer. This will default to true in a future version.
+2026-09-22T15:59:14.322Z [更新:info] Download block maps (old: "http://127.0.0.1:60116/feed/Yaoyao-0.4.70-win-x64-setup.exe.blockmap", new: http://127.0.0.1:60116/feed/Yaoyao-0.4.71-win-x64-setup.exe.blockmap)
+2026-09-22T15:59:14.338Z [更新:error] Cannot download differentially, fallback to full download: Error: Cannot download "http://127.0.0.1/feed/Yaoyao-0.4.70-win-x64-setup.exe.blockmap", status 404: Not Found
+    at ClientRequest.<anonymous> (C:\Users\runneradmin\AppData\Local\Temp\yaoyao-upgrade-KUczhi\app\resources\runtime\electron-updater.cjs:3643:30)
+    at ClientRequest.emit (node:events:509:28)
+    at SimpleURLLoaderWrapper.<anonymous> (node:electron/js2c/browser_init:2:138237)
+    at SimpleURLLoaderWrapper.emit (node:events:509:28)
+2026-09-22T15:59:14.344Z [更新:error] Error: Error: sha512 checksum mismatch, expected ZP3MT8+w1DN8TweOLwTzNUuTpf0V7mWjx+AH95PWQrsfnLvCI8WhjKWjhQLK5+UhQhLmX6voBhVyJhGBvwSReg==, got gYvvGCo6Vo/XWRQyghY1fV1xKKL9IVWA3Vo2+eXxgR2Z1unrcEb4ebb7w2C1Vz3IKicvPdDFiOHthn3A7IgxOg==
+    at newError (C:\Users\runneradmin\AppData\Local\Temp\yaoyao-upgrade-KUczhi\app\resources\runtime\electron-updater.cjs:2597:21)
+    at DigestTransform.validate (C:\Users\runneradmin\AppData\Local\Temp\yaoyao-upgrade-KUczhi\app\resources\runtime\electron-updater.cjs:3804:38)
+    at DigestTransform._flush (C:\Users\runneradmin\AppData\Local\Temp\yaoyao-upgrade-KUczhi\app\resources\runtime\electron-updater.cjs:3791:18)
+    at DigestTransform.final [as _final] (node:internal/streams/transform:128:10)
+    at prefinish (node:internal/streams/writable:914:14)
+    at finishMaybe (node:internal/streams/writable:928:5)
+    at Writable.end (node:internal/streams/writable:843:5)
+    at ProgressCallbackTransform.onend (node:internal/streams/readable:950:10)
+    at Object.onceWrapper (node:events:630:28)
+    at ProgressCallbackTransform.emit (node:events:509:28)
+2026-09-22T15:59:14.410Z [更新:info] Checking for update
+2026-09-22T15:59:14.414Z [更新:info] Found version 0.4.71 (url: Yaoyao-0.4.71-win-x64-setup.exe)
+2026-09-22T15:59:14.441Z [更新:info] Downloading update from Yaoyao-0.4.71-win-x64-setup.exe
+2026-09-22T15:59:14.443Z [更新:warn] disableWebInstaller is set to false, you should set it to true if you do not plan on using a web installer. This will default to true in a future version.
+2026-09-22T15:59:14.443Z [更新:info] Download block maps (old: "http://127.0.0.1:60116/feed/Yaoyao-0.4.70-win-x64-setup.exe.blockmap", new: http://127.0.0.1:60116/feed/Yaoyao-0.4.71-win-x64-setup.exe.blockmap)
+2026-09-22T15:59:14.477Z [更新:error] Cannot download differentially, fallback to full download: Error: Cannot download "http://127.0.0.1/feed/Yaoyao-0.4.70-win-x64-setup.exe.blockmap", status 404: Not Found
+    at ClientRequest.<anonymous> (C:\Users\runneradmin\AppData\Local\Temp\yaoyao-upgrade-KUczhi\app\resources\runtime\electron-updater.cjs:3643:30)
+    at ClientRequest.emit (node:events:509:28)
+    at SimpleURLLoaderWrapper.<anonymous> (node:electron/js2c/browser_init:2:138237)
+    at SimpleURLLoaderWrapper.emit (node:events:509:28)
+2026-09-22T15:59:14.980Z [更新:info] New version 0.4.71 has been downloaded to C:\Users\runneradmin\AppData\Local\yaoyao-upgrade-d1acfd91-cbfd-4fa8-adfa-853f5711e481\pending\Yaoyao-0.4.71-win-x64-setup.exe
+2026-09-22T15:59:15.363Z [更新:info] Install on explicit quitAndInstall
+2026-09-22T15:59:15.364Z [更新:info] Install: isSilent: false, isForceRunAfter: true
+2026-09-22T15:59:15.364Z [更新:info] Executing: C:\Users\runneradmin\AppData\Local\yaoyao-upgrade-d1acfd91-cbfd-4fa8-adfa-853f5711e481\pending\Yaoyao-0.4.71-win-x64-setup.exe with args: --updated,--force-run

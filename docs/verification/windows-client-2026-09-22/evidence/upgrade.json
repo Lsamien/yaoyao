@@ -1,0 +1,14 @@
+{
+  "platform": "win32",
+  "from": "0.4.70",
+  "to": "0.4.71",
+  "installed": true,
+  "corruptDownloadRejected": true,
+  "nsisReplacement": true,
+  "automaticRestart": true,
+  "cookieRestored": true,
+  "settingsPreserved": true,
+  "dpapiPreserved": true,
+  "uninstalled": true,
+  "dataRetained": true
+}
