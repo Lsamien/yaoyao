@@ -64,11 +64,16 @@ test('NSIS errors before install can retry, while dispatched installs stay fence
   manager.nativeStarted = true; manager.installAttempted = true; manager.failure(new Error('installer failed'))
   assert.equal(manager.snapshot().retryable, false)
 })
-test('signed Windows builds fail closed without a certificate and publisher', () => {
-  assert.equal(windowsSigningOptions({}).forceCodeSigning, false)
+test('signed Windows builds fail closed without a certificate and publisher', async () => {
+  const { validateConfiguration } = await import('app-builder-lib/out/util/config/config.js')
+  const unsigned = windowsSigningOptions({})
+  assert.equal(unsigned.forceCodeSigning, false); assert.equal(unsigned.win.signExecutable, false)
+  await validateConfiguration(unsigned)
   assert.throws(() => windowsSigningOptions({ YAOYAO_WINDOWS_SIGNED: '1' }), /CSC_LINK/)
   const result = windowsSigningOptions({ YAOYAO_WINDOWS_SIGNED: '1', CSC_LINK: 'fixture.pfx', YAOYAO_WINDOWS_PUBLISHER: 'Fixture publisher' })
   assert.equal(result.forceCodeSigning, true); assert.equal(result.win.verifyUpdateCodeSignature, true)
+  assert.equal(result.win.signExecutable, true); assert.equal(result.win.signtoolOptions.publisherName, 'Fixture publisher')
+  await validateConfiguration(result)
 })
 test('Windows artifact verification detects corruption before delivery', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'yaoyao-win-release-')); t.after(() => rm(dir, { recursive: true, force: true }))

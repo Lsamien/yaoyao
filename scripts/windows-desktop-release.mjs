@@ -11,9 +11,10 @@ async function hash(path, algorithm, encoding) {
   return result.digest(encoding)
 }
 export function windowsSigningOptions(env = process.env) {
-  if (env.YAOYAO_WINDOWS_SIGNED !== '1') return { forceCodeSigning: false, win: { signAndEditExecutable: true } }
+  if (env.YAOYAO_WINDOWS_SIGNED !== '1') return { forceCodeSigning: false, win: { signAndEditExecutable: true, signExecutable: false } }
   if (!env.CSC_LINK || !env.YAOYAO_WINDOWS_PUBLISHER?.trim()) throw new Error('正式 Windows 包需要 CSC_LINK、CSC_KEY_PASSWORD（如适用）和 YAOYAO_WINDOWS_PUBLISHER')
-  return { forceCodeSigning: true, win: { publisherName: env.YAOYAO_WINDOWS_PUBLISHER.trim(), verifyUpdateCodeSignature: true } }
+  return { forceCodeSigning: true, win: { signExecutable: true,
+    signtoolOptions: { publisherName: env.YAOYAO_WINDOWS_PUBLISHER.trim() }, verifyUpdateCodeSignature: true } }
 }
 export async function verifyWindowsArtifacts(directory, version) {
   const name = `Yaoyao-${version}-win-x64-setup.exe`
@@ -43,6 +44,7 @@ export async function packageWindowsDesktop() {
   await verifyWindowsArtifacts(directory, version)
   const feed = load(await readFile(join(directory, 'win-unpacked/resources/app-update.yml'), 'utf8'))
   if (feed.provider !== 'github' || feed.owner !== 'Lsamien' || feed.repo !== 'yaoyao') throw new Error('Windows 更新源配置无效')
+  if (process.env.YAOYAO_WINDOWS_SIGNED === '1' && ![feed.publisherName].flat().includes(process.env.YAOYAO_WINDOWS_PUBLISHER.trim())) throw new Error('正式 Windows 更新配置缺少发布者签名校验')
   const info = JSON.parse(await readFile(join(root, 'build-info.json'), 'utf8'))
   await writeFile(join(directory, 'BUILD-INFO.json'), JSON.stringify({ version, platform: 'win32', arch: 'x64',
     signing: process.env.YAOYAO_WINDOWS_SIGNED === '1' ? 'signed' : 'unsigned-test', ...info }, null, 2) + '\n')

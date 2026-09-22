@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, mkdir, rm, readdir, realpath, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -15,13 +15,13 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
   skip: process.platform !== 'win32' || process.env.DESKTOP_TEST_UPGRADE !== '1', timeout: 600000,
 }, async () => {
   const root = resolve(import.meta.dirname, '..'), output = join(root, 'desktop-release/windows-x64')
-  const evidence = join(root, 'test-results/windows-client'), sandbox = await mkdtemp(join(tmpdir(), 'yaoyao-upgrade-'))
+  const evidence = join(root, 'test-results/windows-client'), sandbox = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-upgrade-')))
   const home = join(sandbox, '中文配置'), installed = join(sandbox, 'app'), feed = join(sandbox, 'feed')
   const executablePath = join(installed, 'Yaoyao.exe'), cacheName = 'yaoyao-upgrade-' + randomUUID()
   const originalManifest = await readFile(join(root, '.desktop-build/release.json'), 'utf8')
   const originalPackage = await readFile(join(root, '.desktop-build/shell/package.json'), 'utf8')
   const version = JSON.parse(originalPackage).version, nextVersion = version.replace(/\d+$/, value => String(Number(value) + 1))
-  let application, corrupt = true, requireCookie = false, restored = 0
+  let application, logs, corrupt = true, requireCookie = false, restored = 0
   const server = createServer(async (req, res) => {
     try {
       const path = new URL(req.url, 'http://localhost').pathname
@@ -56,12 +56,13 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
       await writeFile(join(root, '.desktop-build/shell/package.json'), JSON.stringify({ ...JSON.parse(originalPackage), version: nextVersion }))
       process.env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
       await build({ projectDir: root, targets: Platform.WINDOWS.createTarget(['nsis'], Arch.x64), publish: 'never',
-        config: { directories: { output: feed }, forceCodeSigning: false } })
+        config: { directories: { output: feed }, forceCodeSigning: false, win: { signExecutable: false } } })
     } finally {
       await writeFile(join(root, '.desktop-build/release.json'), originalManifest)
       await writeFile(join(root, '.desktop-build/shell/package.json'), originalPackage)
     }
     await execute(join(output, `Yaoyao-${version}-win-x64-setup.exe`), ['/S', `/D=${installed}`], { timeout: 120000 })
+    console.log('NSIS 安装完成，开始测试隔离更新源')
     const preferences = { startupChoice: 'remote', remoteServer: origin, backgroundAtLogin: true }
     await writeFile(join(home, 'desktop-preferences.json'), JSON.stringify(preferences))
     // This installed test copy alone uses the isolated HTTP update source.
@@ -69,6 +70,7 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
     const launch = () => electron.launch({ executablePath, env: { ...process.env,
       HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_AUTO_UPDATE: '1' } })
     application = await launch(); let page = await application.firstWindow(); await page.waitForURL(origin + '/**')
+    logs = await application.evaluate(({ app }) => app.getPath('logs'))
     assert.equal(await application.evaluate(({ app }) => app.getVersion()), version)
     await application.evaluate(async ({ session, safeStorage }, { origin, home }) => {
       await session.defaultSession.cookies.set({ url: origin, name: 'session', value: 'upgrade-fixture', expirationDate: Date.now() / 1000 + 3600 })
@@ -83,15 +85,18 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
     await updates.locator('#download').click()
     await expect(updates.locator('#error')).toBeVisible({ timeout: 120000 })
     assert.equal(await updates.evaluate(async () => (await window.yaoyaoUpdate.state()).phase), 'failed')
+    console.log('已拒绝损坏安装包，重试完整下载')
     corrupt = false
     await updates.locator('#check').click(); await expect(updates.locator('#download')).toBeEnabled()
     await updates.locator('#download').click(); await expect(updates.locator('#install')).toBeEnabled({ timeout: 120000 })
     await updates.screenshot({ path: join(evidence, 'upgrade-ready.png') })
+    console.log('完整更新包已就绪，开始重启替换')
     const closed = application.waitForEvent('close'); await updates.locator('#install').click().catch(error => { if (!updates.isClosed()) throw error })
     await closed; application = undefined
-    await expect.poll(async () => JSON.parse(await readFile(join(installed, 'resources/runtime/release.json'), 'utf8')).webVersion,
+    await expect.poll(async () => readFile(join(installed, 'resources/runtime/release.json'), 'utf8').then(text => JSON.parse(text).webVersion).catch(() => ''),
       { timeout: 120000 }).toBe(nextVersion)
     await expect.poll(() => restored, { timeout: 60000 }).toBeGreaterThan(0)
+    console.log('新版本已自动启动，登录 Cookie 保留')
     await stopInstalled()
     application = await launch(); page = await application.firstWindow(); await page.waitForURL(origin + '/**')
     assert.equal(await application.evaluate(({ app }) => app.getVersion()), nextVersion)
@@ -109,8 +114,12 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
     await writeFile(join(evidence, 'upgrade.json'), JSON.stringify({ platform: 'win32', from: version, to: nextVersion,
       installed: true, corruptDownloadRejected: true, nsisReplacement: true, automaticRestart: true,
       cookieRestored: true, settingsPreserved: true, dpapiPreserved: true, uninstalled: true, dataRetained: true }, null, 2))
+  } catch (error) {
+    for (const [index, page] of (application?.windows() || []).entries()) await page.screenshot({ path: join(evidence, `upgrade-failed-${index}.png`) }).catch(() => {})
+    throw error
   } finally {
     await application?.close().catch(() => {}); await stopInstalled()
+    if (logs) await copyFile(join(logs, 'verification/server.log'), join(evidence, 'upgrade-main.log')).catch(() => {})
     server.closeAllConnections(); await new Promise(done => server.close(done))
     await rm(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
     await rm(join(process.env.LOCALAPPDATA, cacheName), { recursive: true, force: true }).catch(() => {})

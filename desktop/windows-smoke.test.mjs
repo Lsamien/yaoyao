@@ -56,9 +56,9 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
     const menu = await app.evaluate(({ Menu }) => ['desktop-host-use-local', 'desktop-stop-and-quit', 'runner-import'].map(id => Boolean(Menu.getApplicationMenu().getMenuItemById(id))))
     assert.deepEqual(menu, [false, false, false])
     const native = await app.evaluate(async ({ app, BrowserWindow, screen }, { home, url }) => {
-      const { pathToFileURL } = process.getBuiltinModule('node:url')
+      const { createRequire } = process.getBuiltinModule('node:module')
       const { join } = process.getBuiltinModule('node:path')
-      const { DesktopHostCore } = await import(pathToFileURL(join(app.getAppPath(), 'environment-host.mjs')).href)
+      const { DesktopHostCore } = createRequire(join(app.getAppPath(), 'main.mjs'))('./environment-host.mjs')
       const core = new DesktopHostCore({ root: join(process.resourcesPath, 'runtime'), dataRoot: join(home, 'native-acceptance') })
       const owner = 'a'.repeat(64), resource = 'b'.repeat(64)
       const command = { owner, resource, mode: 'local', profile: 'temporary', deadline: Date.now() + 30000 }
