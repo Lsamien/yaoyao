@@ -47,6 +47,7 @@ Runner 包内可直接运行同目录的 `install-hermes-bridge.py`。安装器�
 - `GET /capabilities?profile=...`：检查对应 Profile 及托管能力。
 - `GET /model-options?profile=...`：读取 Profile 的模型目录、默认值、思考能力与速度能力；只返回公开配置，不返回凭据。
 - `POST /model-settings/resolve`：接收 `profile` 与 `settings`，通过 Hermes 原生解析器校验完整组合，返回版本 1 的有效配置和模型确认提示；不写 Profile 配置。
+- 模型目录与配置解析均使用 Hermes 原生配置作用域，同时绑定 Profile 目录和凭据；多 Profile Dashboard 不会因缺少凭据作用域而报错，也不会借用其他 Profile 的环境变量。默认 Profile 保留 Hermes 自身的启动凭据规则。
 - `POST /bind`：绑定真实 Hermes 会话、Profile 和当前轮次；最多 30 分钟，支持同轮续租。
 - `POST /unbind`：只撤销匹配的会话与轮次。
 - `POST /computer-file`：当前运行轮次的文件传输；验证 HTTP 身份、会话、轮次、Profile、文件保护规则，最多 25 MiB。请求不能选择其他 Profile。

@@ -1,6 +1,9 @@
 import importlib.util
 import json
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -34,6 +37,89 @@ class BotModelSettingsTests(unittest.TestCase):
         self.modules = patch.dict('sys.modules', modules)
         self.scoped.start(); self.modules.start()
         self.addCleanup(self.scoped.stop); self.addCleanup(self.modules.stop)
+
+    def native_scope_fixture(self):
+        self.scoped.stop()
+        home = ContextVar('test_model_home', default='caller')
+        secret = ContextVar('test_model_secret', default=None)
+        calls = []
+
+        @contextmanager
+        def scope(profile):
+            calls.append(profile)
+            home_token = home.set(profile)
+            secret_token = secret.set(profile + '-credential')
+            try:
+                yield
+            finally:
+                secret.reset(secret_token)
+                home.reset(home_token)
+
+        def picker():
+            if secret.get() != home.get() + '-credential':
+                raise RuntimeError('UnscopedSecretError: missing Profile secret scope')
+            return self.ctx
+
+        import sys
+        constants = sys.modules['hermes_constants']
+        constants.set_hermes_home_override = home.set
+        constants.reset_hermes_home_override = home.reset
+        sys.modules['hermes_cli.inventory'].load_picker_context = picker
+        modules = {
+            'hermes_cli.profiles': SimpleNamespace(profile_exists=lambda p: p in ('default', 'writer'), get_profile_dir=lambda p: p),
+            'hermes_cli.web_server_profiles': SimpleNamespace(_config_profile_scope=scope),
+        }
+        patcher = patch.dict('sys.modules', modules)
+        patcher.start(); self.addCleanup(patcher.stop)
+        return home, secret, calls
+
+    def test_catalogue_and_resolution_bind_profile_secrets_in_multiplex_mode(self):
+        home, secret, calls = self.native_scope_fixture()
+        for profile in ('default', 'writer'):
+            self.assertEqual(models.options(profile)['version'], 1)
+            self.assertEqual(models.resolve(profile, None)['version'], 1)
+        self.assertEqual(calls, ['default', 'default', 'writer', 'writer'])
+        self.assertEqual(home.get(), 'caller')
+        self.assertIsNone(secret.get())
+
+    def test_scopes_are_thread_local_and_restore_the_caller_even_on_error(self):
+        home, secret, _ = self.native_scope_fixture()
+        barrier = Barrier(2)
+
+        def read(profile):
+            with models.profile_scope(profile):
+                barrier.wait(timeout=5)
+                self.assertEqual(home.get(), profile)
+                self.assertEqual(secret.get(), profile + '-credential')
+                with models.profile_scope('default'):
+                    self.assertEqual(secret.get(), 'default-credential')
+                self.assertEqual(secret.get(), profile + '-credential')
+            return home.get(), secret.get()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(list(pool.map(read, ('default', 'writer'))), [('caller', None), ('caller', None)])
+        with self.assertRaisesRegex(ValueError, 'fixture failure'):
+            with models.profile_scope('writer'):
+                raise ValueError('fixture failure')
+        self.assertEqual(home.get(), 'caller')
+        self.assertIsNone(secret.get())
+
+    def test_invalid_profiles_never_enter_a_credential_scope(self):
+        _, _, calls = self.native_scope_fixture()
+        for profile in ('../writer', 'missing', None, ''):
+            with self.subTest(profile=profile), self.assertRaises(models.ModelSettingsError):
+                models.options(profile)
+        self.assertEqual(calls, [])
+
+    def test_older_hermes_uses_its_native_scope_without_home_only_fallback(self):
+        home, secret, calls = self.native_scope_fixture()
+        import sys
+        native = sys.modules['hermes_cli.web_server_profiles']
+        with patch.dict('sys.modules', {'hermes_cli.web_server_profiles': None, 'hermes_cli.web_server': native}):
+            self.assertEqual(models.options('writer')['version'], 1)
+        self.assertEqual(calls, ['writer'])
+        self.assertEqual(home.get(), 'caller')
+        self.assertIsNone(secret.get())
 
     def test_catalogue_preserves_defaults_modes_and_does_not_disclose_credentials(self):
         value = models.options('default')

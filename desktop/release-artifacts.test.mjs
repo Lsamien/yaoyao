@@ -14,6 +14,9 @@ test('formal desktop releases require a distribution identity and notarization c
   const options = releaseSigningOptions({ CSC_NAME: 'Developer ID Application: Test', APPLE_API_KEY: '/fixture/key.p8', APPLE_API_KEY_ID: 'key', APPLE_API_ISSUER: 'issuer' })
   assert.equal(options.forceCodeSigning, true); assert.equal(options.mac.notarize, true)
   assert.equal(options.mac.identity, 'Test'); assert.equal(options.mac.type, 'distribution')
+  assert.deepEqual(releaseSigningOptions({ CSC_NAME: 'Developer ID Application: Test', APPLE_KEYCHAIN_PROFILE: 'yaoyao-notary' }), options)
+  assert.throws(() => releaseSigningOptions({ CSC_NAME: 'Developer ID Application: Test', APPLE_KEYCHAIN: '/fixture/login.keychain-db' }), /公证/)
+  assert.throws(() => releaseSigningOptions({ CSC_NAME: 'Developer ID Application: Test', APPLE_KEYCHAIN_PROFILE: '  ' }), /公证/)
 })
 
 test('release verification rejects incomplete, mixed-version and corrupt updater artifacts', async () => {

@@ -9,15 +9,22 @@ class ModelSettingsError(Exception):
 
 @contextmanager
 def profile_scope(profile):
-    from hermes_cli.profiles import get_profile_dir, profile_exists
-    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    from hermes_cli.profiles import profile_exists
     if not isinstance(profile, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", profile) or not profile_exists(profile):
         raise ModelSettingsError("基础机器人不存在")
-    token = set_hermes_home_override(get_profile_dir(profile))
+    # Match Hermes' own model picker: home AND credentials must be scoped.
+    # A home-only override raises UnscopedSecretError under multi-profile hosting.
+    # The native scope also preserves launch credentials and hydrates named profiles
+    # without borrowing process-global credentials or taking the skills lock.
     try:
+        from hermes_cli.web_server_profiles import _config_profile_scope
+    except ModuleNotFoundError as exc:
+        if exc.name != "hermes_cli.web_server_profiles":
+            raise
+        # Older Hermes versions kept the same helper in the monolithic server.
+        from hermes_cli.web_server import _config_profile_scope
+    with _config_profile_scope(profile):
         yield
-    finally:
-        reset_hermes_home_override(token)
 
 
 def defaults(ctx, config):

@@ -11,7 +11,8 @@ export function releaseSigningOptions(env = process.env) {
     throw new Error('正式自动更新包需要 CSC_NAME 指定 Developer ID Application 签名身份')
   const apiKey = env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER
   const appleId = env.APPLE_ID && env.APPLE_APP_SPECIFIC_PASSWORD && env.APPLE_TEAM_ID
-  if (!apiKey && !appleId) throw new Error('请配置 Apple 公证凭据：APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER，或 APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID')
+  const keychainProfile = env.APPLE_KEYCHAIN_PROFILE?.trim()
+  if (!apiKey && !appleId && !keychainProfile) throw new Error('请配置 Apple 公证凭据：APPLE_KEYCHAIN_PROFILE，APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER，或 APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID')
   // electron-builder selects the certificate type itself and rejects its prefix
   // in the identity qualifier. Enforce a distribution identity, then strip it.
   const identity = env.CSC_NAME.slice('Developer ID Application:'.length).trim()
