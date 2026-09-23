@@ -30,6 +30,8 @@ async function bridgeRequest(target: GatewayTarget, path: string, body: unknown)
       && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(body.profile) ? ` Profile「${body.profile}」` : ''
     if (path === '/bind' && Object.hasOwn(failures, code))
       throw new HttpError(response.status >= 500 ? 502 : 409, `Hermes${profile}${failures[code]}。`, `hermes_bridge_${code}`)
+    if (response.status >= 500 || response.status === 408 || response.status === 429)
+      throw new HttpError(502, 'Hermes 工具桥暂时不可用，正在重试原授权。', 'team_tools_bridge_unavailable')
     throw new HttpError(409, 'Hermes 工具桥绑定失败，请确认该 Profile 已启用工具桥，并新建会话后重试。', 'team_tools_bind_failed')
   }
   return value
@@ -73,6 +75,7 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
   const token = randomBytes(32).toString('base64url'), tokenHash = createHash('sha256').update(token).digest()
   const generation = `${input.workId}:${randomUUID()}`
   let expiresAt = Date.now() + TTL, closed = false, url = ''
+  let renewAfter = Date.now() + 5 * 60_000
   let timer: ReturnType<typeof setInterval> | undefined
   let binding: Promise<void> | undefined, cleanup: Promise<void> | undefined
   let boundRuntimeId = ''
@@ -181,8 +184,9 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
     binding = (async () => {
       const bindSession = async () => {
         const current = input.session()
+        const requestedExpiry = Date.now() + TTL
         const result = await bridgeRequest(input.target, '/bind', { native_tools: true, session_id: current.runtimeId,
-          stored_session_id: current.storedId, profile: input.profile, generation, bridge_url: url, token, expires_at: expiresAt,
+          stored_session_id: current.storedId, profile: input.profile, generation, bridge_url: url, token, expires_at: requestedExpiry,
           ...(input.computerPolicy ? {computer_policy: input.computerPolicy} : {}),
           ...(input.workspaceMemory ? {workspace_memory: true} : {}) })
         if(input.workspaceMemory&&result.workspace_memory!==true)
@@ -191,6 +195,10 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
           throw new HttpError(409, '请更新 Hermes 的夭夭工具桥，当前版本尚未接管隔离电脑会话。', 'computer_bridge_upgrade_required')
         if (!bound && result.native_tools !== true)
           throw new HttpError(409, 'Hermes 未挂载本轮原生团队工具，请升级或修复工具桥。', 'team_tools_unavailable')
+        // A lost renewal receipt cannot extend the original local grant.
+        assertActive()
+        expiresAt = requestedExpiry
+        renewAfter = Date.now() + 5 * 60_000
         bound = true
       }
       try { await bindSession() }
@@ -214,11 +222,17 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
     input.signal.addEventListener('abort', abort, { once: true })
     assertActive()
     timer = setInterval(() => {
-      if (binding) return
       try { assertActive() } catch (error) { void dispose(); input.onFailure(error as Error); return }
-      expiresAt = Date.now() + TTL
-      void bind().catch(error => { void dispose(); input.onFailure(error as Error) })
-    }, 5 * 60_000)
+      if (binding || Date.now() < renewAfter) return
+      void bind().catch(error => {
+        if (closed) return
+        const rejected = error instanceof HttpError && ['team_tools_bind_failed', 'hermes_bridge_session_busy', 'hermes_bridge_agent_initialization_failed'].includes(error.code)
+        const transient = !(error instanceof HttpError) || !rejected && (error.status >= 500 || [408, 429].includes(error.status)
+          || ['hermes_bridge_initializing', 'hermes_bridge_binding_busy', 'hermes_bridge_bridge_catalog_unreachable'].includes(error.code))
+        if (transient && Date.now() < expiresAt) return
+        void dispose(); input.onFailure(error as Error)
+      })
+    }, 30_000)
     timer.unref()
     return { bind, dispose, async profileRequest(path, body) {
       assertActive()

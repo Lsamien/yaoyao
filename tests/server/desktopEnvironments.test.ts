@@ -36,6 +36,27 @@ it('uses global desktop capabilities for legacy, modern and temporary Bots',asyn
 
 function drive(handle:(c:any)=>unknown=c=>c.operation==='view'?{data:Buffer.from('fixture frame').toString('base64'),width:1280,height:800}:{ok:true}){let results:any[]=[];service.exchange({host,results});const p=setInterval(()=>{const value=service.exchange({host,results});results=value.commands.map(c=>({id:c.id,value:handle(c)}))},5);pollers.add(p);poller=p}
 const HOST_A='11111111-aaaa-4bbb-8ccc-111111111111',HOST_B='22222222-aaaa-4bbb-8ccc-222222222222'
+it('admits Windows computers with independent screen and file grants and preserves source routing',async()=>{
+ const seen:any[]=[]
+ const win={...host,platform:'win32',name:'Windows 工作电脑',full:[ownerKey('owner')],screen:false,accessibility:false}
+ driveRemote(HOST_A,win,c=>{seen.push(c);return {entries:[],path:c.action?.path}})
+ const status=service.hostStates('owner').find(h=>h.id===HOST_A)!
+ expect(status.local).toMatchObject({supported:true,ready:false,fullAuthorized:true})
+ const listing=await service.call('owner',agent.id,'desktop_file_list',{path:'C:\\Users\\测试\\Documents'},new AbortController().signal,()=>{},'local',service.hostEpochs('owner',agent),HOST_A)
+ expect(listing.entries).toEqual([])
+ expect(seen[0].action.path).toBe('C:\\Users\\测试\\Documents')
+ win.screen=true;win.accessibility=true
+ service.remoteExchange(HOST_A,{host:win,results:[]})
+ expect(service.hostStates('owner').find(h=>h.id===HOST_A)!.local.ready).toBe(true)
+ win.full=[];win.approved=[]
+ service.remoteExchange(HOST_A,{host:win,results:[]})
+ expect(service.hostStates('owner').find(h=>h.id===HOST_A)!.local).toMatchObject({ready:false,fullAuthorized:false})
+ await expect(service.call('owner',agent.id,'desktop_file_list',{},new AbortController().signal,()=>{},'local',service.hostEpochs('owner',agent),HOST_A)).rejects.toMatchObject({code:'desktop_full_required'})
+})
+it('unrecognized desktop platforms remain unsupported',()=>{
+ service.remoteExchange(HOST_A,{host:{...host,platform:'unknown',full:[ownerKey('owner')]},results:[]})
+ expect(service.hostStates('owner').find(h=>h.id===HOST_A)!.local).toMatchObject({supported:false,ready:false})
+})
 function driveRemote(id:string,hostInfo:any,handle:(c:any)=>unknown=c=>c.operation==='view'?{data:Buffer.from('remote frame').toString('base64'),width:1280,height:800}:{ok:true}){let results:any[]=[];service.remoteExchange(id,{host:hostInfo,results});const p=setInterval(()=>{const value=service.remoteExchange(id,{host:hostInfo,results});results=value.commands.map(c=>({id:c.id,value:handle(c)}))},5);pollers.add(p);poller=p}
 it('defaults bot work to the customer machine and uses that binding while the server desktop is also online',async()=>{
  agent=store.updateAgent('owner',agent.id,{computer:'local',desktopHost:HOST_A})
@@ -379,7 +400,7 @@ it('lists stable tool targets and separate per-host capabilities without claimin
 const environmentMetadata={version:1 as const,osRelease:'25.0.0',arch:'arm64',shell:'/bin/zsh',homeDirectory:'/Users/fixture',defaultCwd:'/Users/fixture',fileRoots:['/Users/fixture'],shellScope:'user' as const,timezone:'Asia/Shanghai'}
 it('snapshots negotiated host facts per owner without inventing paths for old clients',()=>{
  const result=service.exchange({host:{...host,full:[ownerKey('owner')],fileTransferVersion:1,environment:environmentMetadata},results:[]})
- expect(result.capabilities).toEqual({environmentMetadata:1})
+ expect(result.capabilities).toEqual({environmentMetadata:1,desktopPlatforms:['darwin','win32']})
  service.remoteExchange(HOST_A,{host:{...host,id:randomUUID(),name:'旧客户端'},results:[]})
  const snapshot=service.snapshot('owner',agent,'local'),server=snapshot.hosts.find(host=>host.id==='local')!
  expect(server.metadata).toEqual(environmentMetadata)

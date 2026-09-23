@@ -267,13 +267,13 @@ describe('Bot self rules', () => {
   })
 })
 
-async function mount(signal = new AbortController().signal) {
+async function mount(signal = new AbortController().signal, onFailure: (error: Error) => void = () => {}) {
   const lease = await createWorkspaceToolLease({
     target, profile:manager.profile, workId:work.id,
     session:()=>({runtimeId:'runtime',storedId:'stored'}),signal,
     assertActive:()=>{runtime.teamTools.assertTurn(owner,work.id)},
     catalog:()=>[...runtime.teamTools.catalog(owner,work.id),...runtime.knowledgeTools.catalog(owner,work.id,false)],
-    call:(id,args)=>runtime.knowledgeTools.handles(id)?runtime.knowledgeTools.call(owner,work.id,id,args,false):runtime.teamTools.call(owner,work.id,id,args),onFailure:()=>{},
+    call:(id,args)=>runtime.knowledgeTools.handles(id)?runtime.knowledgeTools.call(owner,work.id,id,args,false):runtime.teamTools.call(owner,work.id,id,args),onFailure,
   })
   leases.push(lease); await lease.bind()
   return lease
@@ -283,6 +283,46 @@ function http(path:string, body:unknown, options:RequestInit={}) {
 }
 
 describe('loopback tool lease', () => {
+  it.each(['503', 'upstream_unavailable'])('retains the original grant through %s renewal failures, then renews after recovery', async failure => {
+    vi.useFakeTimers({toFake: ['Date', 'setInterval', 'clearInterval']})
+    try {
+      const failed = vi.fn()
+      await mount(undefined, failed)
+      const original = {...binding}, request = vi.mocked(target.session.request).getMockImplementation()!
+      let unavailable = true
+      vi.mocked(target.session.request).mockImplementation(async (path, options) => {
+        if (path.endsWith('/bind') && unavailable) {
+          if (failure === 'upstream_unavailable') throw new HttpError(502, 'Unable to reach Hermes', 'upstream_unavailable')
+          return {status: 503, body: Buffer.from('{}'), headers: new Headers()}
+        }
+        return request(path, options)
+      })
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(failed).not.toHaveBeenCalled()
+      expect((await http('/tools/list', {})).status).toBe(200)
+      unavailable = false
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(binding).toMatchObject({generation: original.generation, token: original.token, bridge_url: original.bridge_url})
+      expect(binding!.expires_at).toBeGreaterThan(original.expires_at)
+      expect(failed).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each([401, 503])('retires a lease on rejected renewal or its original expiry (HTTP %s)', async status => {
+    vi.useFakeTimers({toFake: ['Date', 'setInterval', 'clearInterval']})
+    try {
+      const failed = vi.fn()
+      await mount(undefined, failed)
+      const request = vi.mocked(target.session.request).getMockImplementation()!
+      vi.mocked(target.session.request).mockImplementation(async (path, options) => path.endsWith('/bind')
+        ? {status, body: Buffer.from('{}'), headers: new Headers()} : request(path, options))
+      await vi.advanceTimersByTimeAsync((status === 401 ? 5 : 30) * 60_000)
+      expect(failed).toHaveBeenCalledOnce()
+      expect(failed.mock.calls[0]![0]).toMatchObject({code: status === 401 ? 'team_tools_bind_failed' : 'team_tools_expired'})
+      await expect(http('/tools/list', {})).rejects.toThrow()
+    } finally { vi.useRealTimers() }
+  })
+
   it('updates self rules through the bridge without ending the current tool lease', async () => {
     await mount()
     const catalog = await (await http('/tools/list',{})).json()

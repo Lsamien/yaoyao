@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,readdir,symlink,rm} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,readdir,symlink,rm,realpath} from 'node:fs/promises'
 import {createHash} from 'node:crypto'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -30,7 +30,7 @@ test('path escapes are refused for every operation',async()=>{
  const outside=await mkdtemp(join(tmpdir(),'yaoyao-host-files-out-'))
  try{
   await writeFile(join(outside,'secret.txt'),'secret','utf8')
-  await symlink(outside,join(root,'escape'))
+  await symlink(outside,join(root,'escape'),process.platform==='win32'?'junction':'dir')
   await writeFile(join(root,'keep.txt'),'keep','utf8')
   await assert.rejects(()=>resolveWithin(root,'../x'),/超出允许范围/)
   await assert.rejects(()=>resolveWithin(root,'/etc/passwd'),/超出允许范围/)
@@ -64,7 +64,7 @@ test('receives verified binary and empty files atomically and preserves existing
   const empty={...input,path:'Desktop/empty',data:'',sha256:createHash('sha256').update('').digest('hex')}
   assert.equal((await receiveHostFile(target,empty)).size,0)
   assert.equal((await readFile(join(target,'Desktop','empty'))).length,0)
-  await symlink(source,join(target,'escape'))
+  await symlink(source,join(target,'escape'),process.platform==='win32'?'junction':'dir')
   await assert.rejects(()=>receiveHostFile(target,{...input,path:'escape/evil.bin'}),/超出允许范围/)
   assert.deepEqual((await readdir(join(target,'Desktop'))).sort(),['a.bin','empty'])
  }finally{await rm(source,{recursive:true,force:true});await rm(target,{recursive:true,force:true})}
@@ -74,14 +74,14 @@ test('shell execution reports stdout, exit codes, timeouts and cwd stays in root
  const root=await mkdtemp(join(tmpdir(),'yaoyao-host-files-'))
  try{
   await mkdir(join(root,'work'))
-  const ok=await execHostShell(root,{command:'pwd',cwd:'work'})
+  const ok=await execHostShell(root,{command:process.platform==='win32'?'(Get-Location).Path':'pwd',cwd:'work'})
   assert.equal(ok.exitCode,0)
-  assert.ok(ok.stdout.includes(`${root}/work`),ok.stdout)
-  const failing=await execHostShell(root,{command:'echo boom >&2; exit 7'})
+  assert.equal((await realpath(ok.stdout.trim())).toLowerCase(),(await realpath(join(root,'work'))).toLowerCase())
+  const failing=await execHostShell(root,{command:process.platform==='win32'?"[Console]::Error.WriteLine('boom'); exit 7":'echo boom >&2; exit 7'})
   assert.equal(failing.exitCode,7);assert.equal(failing.stderr.trim(),'boom')
-  const timed=await execHostShell(root,{command:'sleep 5',timeoutMs:1000})
+  const timed=await execHostShell(root,{command:process.platform==='win32'?'Start-Sleep -Seconds 5':'sleep 5',timeoutMs:1000})
   assert.equal(timed.timedOut,true);assert.notEqual(timed.exitCode,0)
-  const escaped=await execHostShell(root,{command:'cd / && pwd'})
+  const escaped=await execHostShell(root,{command:process.platform==='win32'?'Set-Location $env:SystemRoot; (Get-Location).Path':'cd / && pwd'})
   assert.equal(escaped.exitCode,0)
   await assert.rejects(()=>execHostShell(root,{command:'  '}),/命令为空/)
  }finally{await rm(root,{recursive:true,force:true})}

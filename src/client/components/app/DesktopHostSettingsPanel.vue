@@ -27,7 +27,7 @@ async function register() {
     if(web.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(web.hostname)&&!insecure.value)throw new Error('远程电脑请使用 HTTPS，或勾选可信局域网 HTTP')
     const result = await apiRequest<{host:DesktopHostSummary;token:string}>('/api/app/admin/desktop-hosts', {method:'POST',body:{name:name.value.trim()}})
     configuration.value = {protocol:1,serverURL:web.origin,hostId:result.host.id,token:result.token,...(insecure.value?{allowInsecureLan:true}:{})}
-    notice.value = '电脑已注册，请下载配置并在那台 Mac 的夭夭 App 中导入。'
+    notice.value = '电脑已注册，请下载配置并在那台电脑的夭夭 App 中导入。'
     await refresh()
   })
 }
@@ -49,11 +49,11 @@ onMounted(()=>{void action(refresh)})
 
 <template>
   <section class="desktop-host-panel" aria-label="电脑设置">
-    <p>在其他 Mac 上安装夭夭 App 并导入电脑配置后，那台电脑会主动连接服务器，机器人即可操作它的真实桌面。每台电脑单独授权，配置凭据仅注册时下发一次。</p>
+    <p>在其他电脑上安装夭夭 App 并导入电脑配置后，那台电脑会主动连接服务器，机器人即可操作它的真实桌面。每台电脑单独授权，配置凭据仅注册时下发一次。</p>
     <div class="host-toolbar"><strong>已注册电脑</strong><button type="button" :disabled="busy" @click="action(refresh)">刷新状态</button></div>
     <ul v-if="hosts.length" class="host-list">
       <li v-for="host in hosts" :key="host.id">
-        <div><strong>{{ host.name }}</strong><span>{{ !host.enabled ? '已停用' : host.online ? `已连接 · ${host.hostName || host.platform || 'Mac'}` : '待连接' }}</span></div>
+        <div><strong>{{ host.name }}</strong><span>{{ !host.enabled ? '已停用' : host.online ? `已连接 · ${host.hostName || host.platform || '电脑'}` : '待连接' }}</span></div>
         <button v-if="host.enabled" type="button" :disabled="busy" :aria-label="`停用 ${host.name}`" @click="disable(host)">停用</button>
       </li>
     </ul>
@@ -62,13 +62,13 @@ onMounted(()=>{void action(refresh)})
       <label>电脑名称<input v-model="name" required maxlength="100" autocomplete="off" placeholder="书房 iMac" :disabled="busy"></label>
       <small>用于在电脑面板中区分各台机器。</small>
       <label>夭夭服务地址<input v-model="serverURL" type="url" required :disabled="busy"></label>
-      <small>必须能从那台 Mac 访问。</small>
+      <small>必须能从那台电脑访问。</small>
       <label class="host-check"><input v-model="insecure" type="checkbox" :disabled="busy">使用可信局域网 HTTP</label>
       <button class="solid-button" :disabled="busy || !name.trim()">注册电脑</button>
     </form>
     <div v-else class="host-setup">
       <button class="solid-button" type="button" @click="download">下载电脑配置</button>
-      <p>配置包含这台电脑的连接凭据，仅本次可下载。在那台 Mac 上打开夭夭 App，通过菜单「电脑 → 导入电脑配置…」选择下载的 desktop-host.json。</p>
+      <p>配置包含这台电脑的连接凭据，仅本次可下载。在那台电脑上打开夭夭 App，通过菜单「电脑 → 导入电脑配置…」选择下载的 desktop-host.json。</p>
       <small>配置丢失后可停用电脑并重新注册；停用立即断开那台电脑。</small>
     </div>
     <p v-if="error" class="host-error" role="alert">{{ error }}</p>

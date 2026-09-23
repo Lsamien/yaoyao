@@ -181,7 +181,7 @@ export abstract class WorkspaceScheduler {
     } else {
       root.status = active.some(t => t.status === 'uncertain') ? 'uncertain' : active.some(t => t.status === 'running') ? 'running' : active.some(t => t.status === 'waiting') ? 'waiting' : tasks.some(t => t.status !== 'queued') ? 'running' : 'queued'
     }
-    root.error = tasks.find(t => t.status === 'uncertain' || t.status === 'failed')?.error
+    root.error = tasks.find(t => t.status === 'uncertain' || t.status === 'failed')?.error ?? active.find(t => t.error)?.error
     this.store.saveRun(owner, root)
     if (done && !wasTerminal) this.onRunSettled(owner, root)
     if (done && !wasTerminal && root.status !== 'interrupted') {

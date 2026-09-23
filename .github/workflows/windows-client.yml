@@ -1,0 +1,49 @@
+name: Windows client
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/windows-client*']
+  pull_request:
+    paths: ['desktop/**', 'scripts/**', 'src/**', 'tests/**', 'package*.json', 'electron-builder.yml', '.github/workflows/windows-client.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run tests/server/desktopEnvironments.test.ts tests/server/desktopHosts.test.ts
+      - run: npm run desktop:pack:win
+      - run: npm run desktop:test:win
+        env:
+          DESKTOP_TEST_EXECUTABLE: ${{ github.workspace }}\desktop-release\windows-x64\win-unpacked\Yaoyao.exe
+      - run: node --test desktop/windows-upgrade.test.mjs
+        env:
+          DESKTOP_TEST_UPGRADE: '1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yaoyao-windows-x64-unsigned
+          path: |
+            desktop-release/windows-x64/*.exe
+            desktop-release/windows-x64/*.blockmap
+            desktop-release/windows-x64/latest.yml
+            desktop-release/windows-x64/SHA256SUMS-win-x64.txt
+            desktop-release/windows-x64/BUILD-INFO.json
+            desktop-release/windows-x64/README.txt
+            docs/windows-client.md
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-client-test-evidence
+          path: test-results/windows-client
+          if-no-files-found: ignore

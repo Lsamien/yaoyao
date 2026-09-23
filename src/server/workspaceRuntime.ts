@@ -2,6 +2,7 @@ import {type DesktopEnvironments} from './desktopEnvironments.js'
 import {type GrokCloud} from './grokCloud.js'
 import {VmToolSession} from './vmComputer.js'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { WorkspaceStore, parse } from './workspaceStore.js'
@@ -69,6 +70,8 @@ export interface WorkspaceBinding {
   conversationTaskId?: string
   taskId?: string
   contextSeq?: number
+  /** This admitted turn needs its original in-memory tool grant to keep running. */
+  toolsBound?: boolean
 }
 interface LiveTurn {
   gateway: WorkspaceGateway
@@ -385,6 +388,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     let flushTimer: ReturnType<typeof setTimeout> | undefined
     let usageCompletion: Promise<void> | undefined
     let submittedText = ''
+    let reconnecting: Promise<void> | undefined
     const toolController = new AbortController()
     let toolLease: WorkspaceToolLease | undefined
     let pluginLease: OpenBotPlugins | undefined
@@ -460,8 +464,105 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       } catch (failure) { rejectTurn(failure instanceof Error ? failure : new Error('无法保存执行状态')) }
       finally { vmTools?.close(); if (usageCompletion) void usageCompletion.finally(() => gateway.close()); else gateway.close() }
     }
-    gateway.onDisconnect = () =>
-      finish(completedEvidence ? undefined : new Error('Hermes 连接断开'))
+    const restoreCompleted = async () => {
+      const marker = `[yaoyao-run:${run.runId}:${resultMessage.id}]`
+      let answer: { content?: string; text?: string } | undefined
+      let found = false, seenLastEvent = false
+      for (let page = 0; page < 20 && !found; page++) {
+        const response = await target.session.request(`/api/sessions/${encodeURIComponent(binding!.storedId)}/messages`, {
+          search: new URLSearchParams({ profile: agent.profile, limit: '500', offset: String(page * 500), order: 'latest', include_compacted: 'true' }),
+          maxResponseBytes: 8 * 1024 * 1024,
+        })
+        if (settled) return
+        gateway.scope?.authorize()
+        if (response.status !== 200) throw new Error('无法核对历史')
+        const history = JSON.parse(response.body.toString()).messages
+        if (!Array.isArray(history)) throw new Error('历史响应无效')
+        for (const item of [...history].reverse()) {
+          if (item.role === 'user') {
+            if (String(item.content ?? item.text).includes(marker)) { found = true; break }
+            answer = undefined; seenLastEvent = false
+          } else if (!seenLastEvent && ['assistant', 'tool'].includes(item.role)) {
+            seenLastEvent = true
+            const calls = item.tool_calls
+            const hasCalls = Array.isArray(calls) ? calls.length > 0 : !!calls && calls !== '[]'
+            if (item.role === 'assistant' && !hasCalls && !item.function_call && item.finish_reason !== 'tool_calls' && (item.content || item.text)) answer = item
+          }
+        }
+        if (history.length < 500) break
+      }
+      if (!found || !answer) throw new Error('无法确认本轮的最终回复，正在核对原执行；不会重复提交')
+      resultMessage.content = String(answer.content ?? answer.text)
+      binding!.contextSeq = Math.max(binding!.contextSeq ?? 0, run.contextThroughSeq ?? 0)
+      this.store.put(owner, 'binding', key, binding!)
+      finish()
+    }
+    const lostTools = () => new HttpError(409, '原执行仍在运行，但本轮工具授权已丢失，无法完整恢复；请停止后重新发起。', 'workspace_tool_lease_lost')
+    const recoverTransport = async () => {
+      let attempt = 0
+      while (!settled) {
+        try {
+          gateway.scope?.authorize()
+          await delay(Math.min(30_000, 500 * 2 ** Math.min(attempt++, 6)), undefined, { signal: toolController.signal })
+          gateway.scope?.authorize()
+          if (!gateway.connected) await gateway.connect()
+          if (settled) return
+          gateway.scope?.authorize()
+          const opened = await gateway.rpc('session.resume', { profile: agent.profile, session_id: binding!.storedId, omit_messages: true, close_on_disconnect: false })
+          if (settled) return
+          gateway.scope?.authorize()
+          if (!opened.session_id || (opened.info?.profile_name && opened.info.profile_name !== agent.profile)) throw new Error('Hermes 会话身份不匹配')
+          runtimeId = String(opened.session_id)
+          const previousStoredId = binding!.storedId
+          const storedId = String(opened.stored_session_id ?? opened.session_key ?? opened.resumed ?? previousStoredId)
+          if (!storedId) throw new Error('Hermes 会话身份不匹配')
+          binding!.storedId = storedId
+          binding!.aliases = [...new Set([...binding!.aliases, previousStoredId, storedId])]
+          binding!.runtimeId = runtimeId
+          this.store.put(owner, 'binding', key, binding!)
+          const live = this.live.get(key)
+          if (live?.taskId === run.id) live.runtimeId = runtimeId
+          if (!opened.running) {
+            try { await restoreCompleted() } catch (error) { finish(error instanceof Error ? error : new Error('无法核对原执行')) }
+            return
+          }
+          if (binding!.toolsBound && !toolLease) throw lostTools()
+          if (toolLease) {
+            try { await toolLease.bind() }
+            catch (error) {
+              if (error instanceof HttpError && (error.code === 'team_tools_bind_failed' || error.code === 'hermes_bridge_session_busy')) throw lostTools()
+              throw error
+            }
+          }
+          if (settled) return
+          gateway.scope?.authorize()
+          if (!gateway.connected) continue
+          const current = this.getWork(owner, run.id)
+          current.error = undefined
+          if (current.status === 'uncertain') current.status = 'running'
+          resultMessage.status = 'streaming'; resultMessage.error = undefined
+          this.store.atomic(() => { this.saveWork(owner, current); this.store.saveMessage(owner, resultMessage) })
+          return
+        } catch (error) {
+          if (settled) return
+          try { gateway.scope?.authorize() } catch (revoked) { finish(revoked instanceof Error ? revoked : new Error('本轮授权已结束')); return }
+          if (error instanceof HttpError && error.code === 'workspace_tool_lease_lost') { finish(error); return }
+          // No new prompt is admitted while the original outcome is unknown.
+          const current = this.getWork(owner, run.id)
+          current.error = error instanceof Error ? error.message : '正在恢复 Hermes 连接'
+          this.saveWork(owner, current)
+        }
+      }
+    }
+    gateway.onDisconnect = () => {
+      if (settled || reconnecting) return
+      if (completedEvidence || !submitted || !binding?.storedId || !runtimeId) { finish(completedEvidence ? undefined : new Error('Hermes 连接断开')); return }
+      const current = this.getWork(owner, run.id)
+      current.error = 'Hermes 连接断开，正在恢复原执行'
+      this.saveWork(owner, current)
+      reconnecting = recoverTransport().finally(() => { reconnecting = undefined })
+      void reconnecting.catch(error => finish(error instanceof Error ? error : new Error('无法恢复 Hermes 连接')))
+    }
     gateway.onEvent = (frame: GatewayFrame) => {
       if (settled || !runtimeId || frame.session_id !== runtimeId) return
       const currentTurn = this.getWork(owner, run.id)
@@ -638,6 +739,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       )
         throw new Error('Hermes 会话身份不匹配')
       binding = {
+        toolsBound: recovering ? binding?.toolsBound : undefined,
         memoryVersion: binding?.memoryVersion,
         memoryState: binding?.memoryState,
         memoryPending: binding?.memoryPending,
@@ -671,39 +773,12 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         throw new Error('运行已停止')
       if (recovering) {
         if (opened.running) {
+          if (binding.toolsBound) throw lostTools()
           const current = this.getWork(owner, run.id)
           current.status = 'running'
           this.saveWork(owner, current)
         } else {
-          const marker = `[yaoyao-run:${run.runId}:${resultMessage.id}]`
-          let answer: { content?: string; text?: string } | undefined
-          let found = false, seenLastEvent = false
-          for (let page = 0; page < 20 && !found; page++) {
-            const response = await target.session.request(`/api/sessions/${encodeURIComponent(storedId)}/messages`, {
-              search: new URLSearchParams({ profile: agent.profile, limit: '500', offset: String(page * 500), order: 'latest', include_compacted: 'true' }),
-              maxResponseBytes: 8 * 1024 * 1024,
-            })
-            if (response.status !== 200) throw new Error('无法核对历史')
-            const history = JSON.parse(response.body.toString()).messages
-            if (!Array.isArray(history)) throw new Error('历史响应无效')
-            for (const item of [...history].reverse()) {
-              if (item.role === 'user') {
-                if (String(item.content ?? item.text).includes(marker)) { found = true; break }
-                answer = undefined; seenLastEvent = false
-              } else if (!seenLastEvent && ['assistant', 'tool'].includes(item.role)) {
-                seenLastEvent = true
-                const calls = item.tool_calls
-                const hasCalls = Array.isArray(calls) ? calls.length > 0 : !!calls && calls !== '[]'
-                if (item.role === 'assistant' && !hasCalls && !item.function_call && item.finish_reason !== 'tool_calls' && (item.content || item.text)) answer = item
-              }
-            }
-            if (history.length < 500) break
-          }
-          if (!found || !answer) throw new Error('无法确认本轮的最终回复，正在核对原执行；不会重复提交')
-          resultMessage.content = String(answer.content ?? answer.text)
-          binding.contextSeq = Math.max(binding.contextSeq ?? 0, run.contextThroughSeq ?? 0)
-          this.store.put(owner, 'binding', key, binding)
-          finish()
+          await restoreCompleted()
         }
       } else {
         if (opened.running) throw new HttpError(409, '上游会话仍在运行', 'session_busy')
@@ -759,6 +834,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             onFailure:error=>{if(!settled)void gateway.rpc('session.interrupt',{session_id:runtimeId}).catch(()=>{}).finally(()=>finish(error))},
           })
           await toolLease.bind();if(settled)return await completion
+          binding.toolsBound = true
+          this.store.put(owner, 'binding', key, binding)
         }
         const workingDirectory = await applyWorkingDirectory((method, params) => gateway.rpc(method, params), runtimeId, cwd, undefined, opened.info?.cwd)
         environment.cwd=workingDirectory?.resolved
@@ -861,6 +938,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       }
       return await completion
     } catch (error) {
+      if (reconnecting && submitted && !settled) return await completion
       finish(error instanceof Error ? error : new Error('执行失败'))
       return await completion
     }
@@ -941,7 +1019,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const key = this.bindingKey(work.conversationId, work.conversationTaskId, work.agentId)
     const live = this.live.get(key)
     if (live?.taskId === work.id) {
-      await live.gateway.rpc('session.interrupt', { session_id: live.runtimeId })
+      try { await live.gateway.rpc('session.interrupt', { session_id: live.runtimeId }) }
+      catch (error) { if (!live.gateway.connected) live.done(new Error('已停止')); throw error }
       const current = this.getWork(owner, work.id)
       if (['complete', 'failed', 'interrupted'].includes(current.status)) {
         live.done(new Error('已停止'))

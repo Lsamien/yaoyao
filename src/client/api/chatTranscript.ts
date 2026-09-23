@@ -196,14 +196,13 @@ export class ChatTranscriptClient {
         value.epoch !== current.epoch ||
         typeof cursor !== 'number' ||
         !Number.isSafeInteger(cursor) ||
-        cursor < current.cursor ||
         typeof value.running !== 'boolean' ||
         typeof value.queued !== 'boolean'
       ) throw new TranscriptGap()
-      const nextCursor = cursor
+      if (cursor < current.cursor) return
+      if (cursor > current.cursor) throw new TranscriptGap()
       await this.commit({
         ...current,
-        cursor: nextCursor,
         running: value.running,
         queued: value.queued,
         pendingApproval: value.pendingApproval ?? null,

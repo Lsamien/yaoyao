@@ -3,11 +3,11 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
 <title>App 更新 · 夭夭</title><link rel="stylesheet" href="update.css"></head>
 <body><main>
-<header><p class="eyebrow">夭夭 · macOS</p><h1>App 更新</h1><p id="subtitle">更新当前电脑的 App，下载完成后重启安装。</p></header>
+<header><p class="eyebrow">夭夭 · 桌面客户端</p><h1>App 更新</h1><p id="subtitle">更新当前电脑的 App，下载完成后重启安装。</p></header>
 <section class="versions" aria-label="版本信息"><div><span>当前版本</span><strong id="current">—</strong></div><div><span>最新版本</span><strong id="latest">待检查</strong></div></section>
 <p id="status" role="status" aria-live="polite">正在检查…</p><p id="error" role="alert" hidden></p>
 <progress id="progress" aria-label="安装包下载进度" hidden></progress><p id="bytes" class="muted"></p>
 <div class="actions"><button id="check">检查更新</button><button id="download" class="primary" disabled>下载更新</button><button id="cancel" hidden>取消</button><button id="install" class="primary" hidden>重启更新</button><button id="open" class="primary" hidden>打开安装包</button><button id="folder" hidden>打开所在文件夹</button></div>
 <details id="notes-section" hidden><summary>发布说明</summary><pre id="notes"></pre></details>
-<footer><button id="release" class="link">查看 GitHub 发布页</button><p>此处仅更新本机 App。远程服务器版本由服务器管理员管理。</p><p>下载期间可继续使用；重启时会断开本机连接，独立后台服务继续运行。</p></footer>
+<footer><button id="release" class="link">查看 GitHub 发布页</button><p>此处仅更新本机 App。远程服务器版本由服务器管理员管理。</p><p>下载期间可继续使用；重启时会断开本机连接。</p></footer>
 </main><script src="update.js"></script></body></html>

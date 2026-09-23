@@ -42,13 +42,15 @@ export class HTTPRealtimeChannel {
   private async readLoop(onReady: () => void): Promise<void> {
     let attempt = 0
     while (!this.stopped) {
-      this.abort = new AbortController()
+      const attemptAbort = new AbortController()
+      this.abort = attemptAbort
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       let watchdog: number | undefined
       try {
+        watchdog = window.setTimeout(() => attemptAbort.abort(), 45_000)
         const headers: Record<string, string> = { Accept: 'text/event-stream' }
         if (this.cursor) headers['Last-Event-ID'] = this.cursor
-        const response = await fetch(`/api/realtime/channels/${this.id}/events`, { credentials: 'same-origin', headers, signal: this.abort.signal, cache: 'no-store' })
+        const response = await fetch(`/api/realtime/channels/${this.id}/events`, { credentials: 'same-origin', headers, signal: attemptAbort.signal, cache: 'no-store' })
         if ([401, 403, 404, 409, 428].includes(response.status)) throw new ApiError('实时连接需要重新同步', response.status, 'REALTIME_RESET_REQUIRED')
         if (!response.ok) throw new Error(`SSE HTTP ${response.status}`)
         if (!response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body) throw new ApiError('无效的事件流响应', 502, 'INVALID_EVENT_STREAM')
@@ -56,7 +58,7 @@ export class HTTPRealtimeChannel {
         const parser = new SSEParser(), decoder = new TextDecoder()
         while (!this.stopped) {
           window.clearTimeout(watchdog)
-          watchdog = window.setTimeout(() => this.abort?.abort(), 45_000)
+          watchdog = window.setTimeout(() => attemptAbort.abort(), 45_000)
           const { value, done } = await reader.read()
           if (done) throw new Error('SSE disconnected')
           attempt = 0

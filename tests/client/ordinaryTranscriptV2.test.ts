@@ -62,6 +62,40 @@ describe('ordinary v2 durable Web replica', () => {
     } as unknown as TranscriptSnapshot)
     expect(client.snapshot).toBeUndefined()
   })
+  it('rejects an ahead control cursor and ignores a delayed control without replacing state', async () => {
+    const { client, changed } = setup()
+    const saved = { ...client.snapshot, running: true, queued: true, liveStatus: '进行中' }
+    client.restore(saved)
+    await expect(client.control({ epoch: saved.epoch, cursor: saved.cursor + 1, running: false, queued: false })).rejects.toThrow('版本不连续')
+    await client.control({ epoch: saved.epoch, cursor: saved.cursor - 1, running: false, queued: false })
+    expect(changed).not.toHaveBeenCalled()
+    expect(client.snapshot).toEqual(saved)
+    client.close()
+  })
+  it.each(['ready', 'state'])('repairs a %s cursor gap with a snapshot instead of skipping messages', async event => {
+    vi.useFakeTimers()
+    const { client, changed } = setup()
+    const repaired = { ...fixture.snapshot, cursor: 3, hasOlder: false,
+      messages: [{ ...fixture.snapshot.messages[0], revision: 3, content: '补齐的消息' }] }
+    api.request.mockResolvedValue(repaired)
+    let attempts = 0
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, options: RequestInit) => {
+      attempts++
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        if (attempts === 1) controller.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify({ epoch: repaired.epoch, cursor: 3, running: false, queued: false })}\n\n`))
+        options.signal?.addEventListener('abort', () => { try { controller.close() } catch {} }, { once: true })
+      } }), { status: 200 }))
+    }))
+    const running = client.run()
+    try {
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(api.request).toHaveBeenCalledWith(expect.stringContaining('/snapshot?'), expect.anything())
+      expect(changed.mock.lastCall![0]).toMatchObject({ cursor: 3, messages: repaired.messages })
+      expect(attempts).toBe(2)
+    } finally {
+      client.close(); await running; vi.unstubAllGlobals(); vi.useRealTimers()
+    }
+  })
   it('reopens an inactive event connection without dropping the durable cursor', async () => {
     vi.useFakeTimers()
     const { client } = setup()

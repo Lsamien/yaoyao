@@ -49,6 +49,20 @@ test('same version with a different commit and unsupported architectures never o
     assert.equal(f.calls.length, 0)
   } finally { await f.clean() }
 })
+test('Windows downloads an EXE using its platform checksum manifest', async () => {
+  const assetName = 'Yaoyao-0.4.2-win-x64-setup.exe'
+  const sums = Buffer.from(`${hash(data)}  ${assetName}\n`)
+  const f = await fixture({ platform: 'win32', arch: 'x64', fetchImpl: async url => new Response(url.endsWith('.exe') ? data : sums) })
+  try {
+    f.release.assets = [
+      { name: assetName, url: prefix + assetName, size: data.length },
+      { name: 'SHA256SUMS-win-x64.txt', url: prefix + 'SHA256SUMS-win-x64.txt', size: sums.length },
+    ]
+    assert.equal((await f.manager.check()).available, true)
+    assert.equal((await f.manager.download()).phase, 'ready')
+    assert.match(await f.manager.verifiedFile(), /win-x64-setup\.exe$/)
+  } finally { await f.clean() }
+})
 test('corrupt or missing checksum, wrong size, and failed image validation never expose a file', async () => {
   for (const failure of ['digest', 'size', 'checksum', 'image']) {
     const f = await fixture()

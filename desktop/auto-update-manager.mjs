@@ -18,12 +18,13 @@ function errorMessage(error) {
  * The patched MacUpdater resolves downloadUpdate only after native staging.
  * Native staging cannot be canceled or retried safely in the same process. */
 export class DesktopAutoUpdateManager {
-  constructor({ driver, version, arch = process.arch, prepareInstall = async () => {}, recoverInstall = async () => {}, stagingTimeout = 300000, restartTimeout = 120000 }) {
-    Object.assign(this, { driver, prepareInstall, recoverInstall, stagingTimeout, restartTimeout })
+  constructor({ driver, version, arch = process.arch, platform = process.platform, prepareInstall = async () => {}, recoverInstall = async () => {}, stagingTimeout = 300000, restartTimeout = 120000 }) {
+    Object.assign(this, { driver, platform, prepareInstall, recoverInstall, stagingTimeout, restartTimeout })
     this.state = { phase: 'idle', installMode: 'restart', currentVersion: version, arch, available: false,
       received: 0, total: 0, message: '点击检查 App 更新', releasePageUrl, retryable: true }
     driver.autoDownload = false
-    driver.autoInstallOnAppQuit = true
+    // NSIS installation must follow our explicit connection/process cleanup.
+    driver.autoInstallOnAppQuit = platform !== 'win32'
     driver.autoRunAppAfterInstall = true
     driver.allowPrerelease = false
     driver.allowDowngrade = false
@@ -37,9 +38,11 @@ export class DesktopAutoUpdateManager {
     driver.on('update-downloaded', () => {
       if (this.operation !== 'downloading' || this.recoveryRequired || this.cancelled) return
       this.nativeStarted = true
-      this.set({ phase: 'preparing', message: '下载完成，正在验证签名并准备安装…' })
-      this.stagingTimer = setTimeout(() => this.failure(new Error('准备更新超时')), this.stagingTimeout)
-      this.stagingTimer.unref?.()
+      this.set({ phase: 'preparing', message: platform === 'win32' ? '下载完成，正在核对安装包…' : '下载完成，正在验证签名并准备安装…' })
+      if (platform !== 'win32') {
+        this.stagingTimer = setTimeout(() => this.failure(new Error('准备更新超时')), this.stagingTimeout)
+        this.stagingTimer.unref?.()
+      }
     })
   }
   set(patch) { this.state = { ...this.state, ...patch } }
@@ -109,7 +112,8 @@ export class DesktopAutoUpdateManager {
     if (this.recoveryRequired || this.cancelled) return
     this.failed = true
     clearTimeout(this.stagingTimer); clearTimeout(this.restartTimer)
-    this.recoveryRequired = Boolean(this.nativeStarted)
+    this.recoveryRequired = Boolean(this.nativeStarted && (this.platform !== 'win32' || this.installAttempted))
+    if (this.platform === 'win32' && !this.recoveryRequired) this.nativeStarted = false
     const suffix = this.recoveryRequired ? ' 请退出并重新打开 App 后再尝试。' : ''
     const silent = this.manual === false && !this.nativeStarted
     this.set({ phase: silent ? 'idle' : 'failed',

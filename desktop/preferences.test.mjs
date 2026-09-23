@@ -11,7 +11,7 @@ test('background login remains opt-in and persists without changing system login
     assert.deepEqual(await preferences.load(),{backgroundAtLogin:false,startupChoice:'ask',remoteServer:''})
     await preferences.setBackgroundAtLogin(true)
     assert.deepEqual(await new DesktopPreferences(home).load(),{backgroundAtLogin:true,startupChoice:'ask',remoteServer:''})
-    assert.equal((await stat(preferences.path)).mode&0o777,0o600)
+    if(process.platform!=='win32')assert.equal((await stat(preferences.path)).mode&0o777,0o600)
     await preferences.setBackgroundAtLogin(false)
     assert.deepEqual(await new DesktopPreferences(home).load(),{backgroundAtLogin:false,startupChoice:'ask',remoteServer:''})
   }finally{await rm(home,{recursive:true,force:true})}

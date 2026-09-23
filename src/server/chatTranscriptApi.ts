@@ -34,7 +34,7 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
   router.get('/api/app/chat/sessions/:id/events',ctx=>{
     const {owner,profile,id}=scope(ctx),version=auth.pushAuthorizationVersion(owner)
     const raw=ctx.get('last-event-id')||String(ctx.query.after??''),parts=raw.split(':')
-    let cursor=Number(parts.at(-1)),closed=false,lastFlush=0
+    let cursor=Number(parts.at(-1)),closed=false,lastFlush=0,ready=false
     transcripts.seed(owner,profile,id)
     const epoch=transcripts.epochFor(owner,profile,id)
     if(parts.length!==2||parts[0]!==epoch||!Number.isSafeInteger(cursor)||cursor<0||cursor>transcripts.cursor(owner,profile,id))throw new HttpError(409,'聊天事件需要重新同步','transcript_reset')
@@ -47,14 +47,19 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
       if(res.writableLength+Buffer.byteLength(value)>4*1024*1024){res.write('event: reset\ndata: {}\n\n');close();return false}
       res.write(value);return true
     }
+    const control=()=>({epoch,cursor,...transcripts.control(owner,profile,id)})
     const flush=()=>{
       clearTimeout(timer);timer=undefined
+      if(closed)return
       if(!valid()){close();return}
       if(transcripts.epochFor(owner,profile,id)!==epoch){write('event: reset\ndata: {}\n\n');close();return}
       const events=transcripts.events(owner,profile,id,cursor)
       for(const event of events){if(event.epoch!==epoch){write('event: reset\ndata: {}\n\n');close();return}if(!write(`id: ${epoch}:${event.cursor}\nevent: transcript\ndata: ${JSON.stringify(event)}\n\n`))return;cursor=event.cursor}
       if(events.length)lastFlush=Date.now()
-      if(events.length===250)timer=setTimeout(flush,0)
+      if(events.length===250){timer=setTimeout(flush,0);return}
+      // A control frame must never acknowledge events still waiting in another page.
+      if(cursor!==transcripts.cursor(owner,profile,id)){write('event: reset\ndata: {}\n\n');close();return}
+      if(!ready){ready=true;write(`event: ready\ndata: ${JSON.stringify(control())}\n\n`)}
     }
     const changed=()=>{
       if(closed)return
@@ -67,12 +72,13 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','X-Accel-Buffering':'no'})
     res.flushHeaders();res.once('close',close);res.once('error',close)
     off=transcripts.subscribe(changed)
-    const control=()=>({epoch,cursor:transcripts.cursor(owner,profile,id),...transcripts.control(owner,profile,id)})
-    flush();write(`event: ready\ndata: ${JSON.stringify(control())}\n\n`)
+    flush()
+    if(closed)return
     heartbeat=setInterval(()=>{
       if(!valid()){close();return}
       if(transcripts.epochFor(owner,profile,id)!==epoch){write('event: reset\ndata: {}\n\n');close();return}
-      write(`event: state\ndata: ${JSON.stringify(control())}\n\n`)
+      flush()
+      if(!closed&&ready&&timer===undefined)write(`event: state\ndata: ${JSON.stringify(control())}\n\n`)
     },5_000);heartbeat.unref()
   })
   return router

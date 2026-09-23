@@ -28,12 +28,12 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
   try{
     app=await electron.launch({args:[root],cwd:root,env:{...process.env,HERMES_YAOYAO_DESKTOP_TEST_HOME:home,HERMES_YAOYAO_DESKTOP_PORT:String(local.address().port),HERMES_YAOYAO_DESKTOP_TEST_SYNC:'0'}})
     const page=await app.firstWindow();releaseIdentity();await page.waitForURL(origin+'/**')
-    assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.modeState()),{mode:'server',serverURL:origin,switching:false})
+    assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.modeState()),{mode:'server',serverURL:origin,switching:false,platform:'darwin',supportedModes:['client','server']})
     assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.authorizeComputer('csrf-test')),{registered:false})
     assert.equal(await page.evaluate(()=>window.yaoyaoDesktop.switchMode('invalid').then(()=>false,()=>true)),true)
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('client')})
     await page.waitForURL(remoteURL+'/**')
-    assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.modeState()),{mode:'client',serverURL:remoteURL,switching:false})
+    assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.modeState()),{mode:'client',serverURL:remoteURL,switching:false,platform:'darwin',supportedModes:['client','server']})
     await expect.poll(async()=>JSON.parse(await readFile(join(home,'desktop-preferences.json'),'utf8')).startupChoice).toBe('remote')
     // Unchecking "ask at startup" must retain the active client role.
     await app.evaluate(({Menu})=>{const item=Menu.getApplicationMenu().getMenuItemById('desktop-host-ask');item.click(item)})
@@ -50,7 +50,7 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     assert.deepEqual(denied,[true,true,true,true])
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('server')})
     await page.waitForURL(origin+'/**')
-    await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false})
+    await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false,platform:'darwin',supportedModes:['client','server']})
     assert.equal(JSON.parse(await readFile(join(home,'desktop-preferences.json'),'utf8')).startupChoice,'local')
     assert.equal(local.listening,true,'switching must leave an independent service running')
     assert.equal(remote.listening,true)
@@ -71,7 +71,7 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     await page.locator('#prepare-local').click()
     await page.locator('#submit').click()
     await page.waitForURL(origin+'/**')
-    await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false})
+    await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false,platform:'darwin',supportedModes:['client','server']})
   }finally{
     releaseIdentity();await app?.close().catch(()=>{})
     await Promise.all([local,remote].map(server=>new Promise(done=>{server.close(done);server.closeAllConnections()})))

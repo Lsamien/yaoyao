@@ -146,14 +146,14 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
     <p class="hint">电脑开关在 Bot 设置里，对所有机器人一起生效。</p>
     <div class="computer-options">
     <template v-if="showDesktop">
-      <p>服务器是运行夭夭服务的电脑；电脑是连接这台服务器的 Mac。两者都可改名。「本机」跟你当前发消息所在的电脑走。要文件用文件工具，要命令用 shell；只有需要看窗口或点按时才截图。</p>
+      <p>服务器是运行夭夭服务的电脑；电脑是连接这台服务器的 Mac 或 Windows 电脑。两者都可改名。「本机」跟你当前发消息所在的电脑走。要文件用文件工具，要命令用 shell；只有需要看窗口或点按时才截图。</p>
       <div v-for="host in desktopHosts" :key="host.id" class="host-permission" :class="{offline:!host.online}">
        <div class="host-permission-head"><strong>{{host.id==='local'?('服务器 · '+(host.name||'服务器')):('电脑 · '+(host.name||'未命名'))}}</strong><small>{{host.online?'在线':'离线'}}</small></div>
-       <div class="permission-list"><span>{{host.local.authorized?'✓':'○'}} 屏幕控制授权</span><span>{{host.local.screen?'✓':'○'}} 屏幕录制</span><span>{{host.local.accessibility?'✓':'○'}} 辅助功能</span><span>{{host.local.fullAuthorized?'✓':'○'}} 文件与命令</span></div>
+       <div class="permission-list"><span>{{host.local.authorized?'✓':'○'}} 屏幕控制授权</span><span>{{host.local.screen?'✓':'○'}} {{host.platform==='win32'?'屏幕可用':'屏幕录制'}}</span><span>{{host.local.accessibility?'✓':'○'}} {{host.platform==='win32'?'键鼠可用':'辅助功能'}}</span><span>{{host.local.fullAuthorized?'✓':'○'}} 文件与命令</span></div>
        <button v-if="host.online&&!host.local.ready" class="primary" :disabled="busy||!isAdmin" @click="authorizeHost(host.id)">在桌面端授权</button>
-       <p v-if="host.online&&!host.local.ready" class="hint">在 {{host.id==='local'?'这台':host.name}} Mac 上确认授权，并按系统提示开启权限；系统可能要求重新打开 App。</p>
+       <p v-if="host.online&&!host.local.ready" class="hint">{{host.platform==='win32'?'在 Windows 客户端确认授权，并解锁电脑、保持桌面会话连接。':'在目标 Mac 上确认授权，并按系统提示开启屏幕录制和辅助功能；可能需要重新打开 App。'}}</p>
        <button v-if="host.online&&!host.local.fullAuthorized" :disabled="busy||!isAdmin" @click="authorizeHost(host.id,'full')">授权文件与命令</button>
-       <p v-if="host.online&&!host.local.fullAuthorized" class="hint">授权后，机器人可以在这台 Mac 的用户主目录内读写文件并执行命令；每台电脑单独授权，可随时撤销。</p>
+       <p v-if="host.online&&!host.local.fullAuthorized" class="hint">授权后，机器人可以在这台电脑的用户主目录内读写文件，并以当前用户权限执行命令；每台电脑单独授权，可随时撤销。</p>
       </div>
       <button v-if="serverHost" class="primary" :disabled="busy||!serverHost.online||!serverHost.local.ready" @click="openDesktop('desktop','local')">接管服务器</button>
     </template>

@@ -16,6 +16,17 @@ function display(next) {
     initialized = true
   }
   const busy = pending || state.busy
+  const clientOnly = state.supportedModes && !state.supportedModes.includes('server')
+  $('choice-section').hidden = Boolean(clientOnly)
+  $('step-choice').hidden = Boolean(clientOnly)
+  if (clientOnly) {
+    $('prepare-title').firstElementChild.textContent = '01'
+    $('account-title').firstElementChild.textContent = '02'
+    $('step-prepare').querySelector('b').textContent = '1'
+    $('step-account').querySelector('b').textContent = '2'
+    $('help').firstElementChild.hidden = true
+    $('help').lastElementChild.textContent = '更换服务器不会迁移原服务器上的数据。连接失败时请检查服务器地址和网络。'
+  }
   const local = state.mode === 'local'
   const ready = ['ready', 'authenticating', 'entering'].includes(state.phase) && !serverDirty
   const setup = ready && state.setupRequired

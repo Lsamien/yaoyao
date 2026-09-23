@@ -299,7 +299,7 @@ async function refresh() {
   conversations.value = transcriptStore.conversations
   if (!cursor) { cursor = c.cursor; transcriptStore.cursor = c.cursor }
 }
-async function load(id = selected.value, append = false) {
+async function load(id = selected.value, append = false, signal?: AbortSignal) {
   if (!id) {
     generation++
     active.value = undefined
@@ -311,6 +311,9 @@ async function load(id = selected.value, append = false) {
     return
   }
   const own = ++generation
+  const owner = auth.user?.id, epoch = accountEpoch
+  const current = () => !disposed && own === generation && !signal?.aborted
+    && auth.user?.id === owner && accountEpoch === epoch
   const previousComposer = composerKey.value
   const previousFiles = composer.value?.filesSnapshot() ?? []
   const previousQuote = quoted.value
@@ -324,11 +327,11 @@ async function load(id = selected.value, append = false) {
     activeTask.value = null;tasks.value = [];assignments.value = [];quoted.value = null;older.value = false
   }
   try {
-    const incoming = cached ?? await apiRequest<WorkspaceDetail>(`/api/app/conversations/${id}?limit=50${requestedTask ? `&taskId=${encodeURIComponent(requestedTask)}` : ''}`)
-    if (disposed || own !== generation) return
+    const incoming = cached ?? await apiRequest<WorkspaceDetail>(`/api/app/conversations/${id}?limit=50${requestedTask ? `&taskId=${encodeURIComponent(requestedTask)}` : ''}`, { signal })
+    if (!current()) return
     const r = cached ?? transcriptStore.finishRead(readToken, incoming)
     if (cached && transcriptStore.staleDetails.has(transcriptKey(id, cached.task?.id))) {
-      queueMicrotask(() => { if (!disposed && active.value?.id === id) void load(id, true) })
+      queueMicrotask(() => { if (current() && active.value?.id === id) void load(id, true, signal) })
     }
     const atBottom = timeline.value?.isFollowingBottom() ?? true
     active.value = r.conversation
@@ -350,28 +353,31 @@ async function load(id = selected.value, append = false) {
         } catch { /* Leave the original draft intact when browser storage is unavailable. */ }
       }
       await nextTick()
+      if (!current()) return
       const saved = taskFiles.get(composerKey.value)
       if (saved?.length) await composer.value?.attachFiles(saved)
+      if (!current()) return
       quoted.value = taskQuotes.get(composerKey.value) ?? null
     }
     if (!append) older.value = r.hasOlder ?? r.messages.length === 50
     if (!append || atBottom) {
       await nextTick()
+      if (!current()) return
       if (!append) timeline.value?.scrollToBottom('auto')
-      void markRead().catch(e => { if (own === generation) error.value = e instanceof Error ? e.message : '同步已读失败' })
+      void markRead().catch(e => { if (current()) error.value = e instanceof Error ? e.message : '同步已读失败' })
     }
   } catch (e) {
-    if (own === generation && requestedTask && e instanceof ApiError && e.status === 404) {
+    if (current() && requestedTask && e instanceof ApiError && e.status === 404) {
       try {
-        const current = await apiRequest<{tasks:WorkspaceTask[]}>(`/api/app/conversations/${id}/tasks`)
-        const fallback = current.tasks[0]
-        if (own === generation && fallback && fallback.id !== requestedTask) {
+        const available = await apiRequest<{tasks:WorkspaceTask[]}>(`/api/app/conversations/${id}/tasks`, { signal })
+        const fallback = available.tasks[0]
+        if (current() && fallback && fallback.id !== requestedTask) {
           await router.replace({query:{...route.query,taskId:fallback.id}})
           return
         }
       } catch { /* A deleted conversation still reports its original error. */ }
     }
-    if (own === generation) error.value = e instanceof Error ? e.message : '加载失败'
+    if (current()) error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     transcriptStore.cancelRead(readToken)
     if (own === generation) loading.value = false
@@ -470,6 +476,12 @@ let patchEvents = false
 let eventSource: EventSource | undefined
 let eventFrame: number | undefined
 let eventQueue: WorkspaceEvent[] = []
+let recoveryAbort: AbortController | undefined
+function cancelRecovery() {
+  recoveryAbort?.abort(); recoveryAbort = undefined
+  if (timer) clearTimeout(timer)
+  timer = undefined
+}
 function presentDetail(detail: WorkspaceDetail) {
   const atBottom = timeline.value?.isFollowingBottom() ?? true
   active.value = detail.conversation
@@ -501,17 +513,17 @@ function flushEvents() {
     }
   }
 }
-async function hydrateWorkspace() {
+async function hydrateWorkspace(signal: AbortSignal) {
   const owner = auth.user?.id, epoch = accountEpoch
-  const capabilities = await apiRequest<{ features: string[]; csrfToken?: string }>('/api/app/capabilities')
-  if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
+  const capabilities = await apiRequest<{ features: string[]; csrfToken?: string }>('/api/app/capabilities', { signal })
+  if (signal.aborted || disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
   patchEvents = capabilities.features.includes(WORKSPACE_PATCH_CAPABILITY)
   knowledgeEnabled.value = capabilities.features.includes('bot-file-memory-v1')
   if (capabilities.csrfToken) setApiCsrfToken(capabilities.csrfToken)
   const readToken = transcriptStore.beginRead()
   try {
-  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity; projects?: WorkspaceProject[] }>('/api/app/workspace/snapshot')
-  if (disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
+  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity; projects?: WorkspaceProject[] }>('/api/app/workspace/snapshot', { signal })
+  if (signal.aborted || disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
   transcriptStore.hydrate(snapshot)
   agents.value = snapshot.agents; conversations.value = transcriptStore.conversations; cursor = snapshot.cursor
   projects.value = snapshot.projects ?? []
@@ -536,7 +548,7 @@ function connectEvents() {
     flushEvents(); error.value = ''
     publishServerIdentity(JSON.parse((event as MessageEvent).data).serverIdentity)
   })
-  source.addEventListener('reset', () => { source.close(); void recoverEvents() })
+  source.addEventListener('reset', () => { if (!disposed && eventSource === source) { source.close(); void recoverEvents() } })
   source.onerror = () => {
     if (disposed || eventSource !== source) return
     error.value = '连接中断，正在重连'
@@ -549,34 +561,41 @@ function connectEvents() {
   }
 }
 function suspendEvents() {
+  cancelRecovery()
   eventSource?.close(); eventSource = undefined
-  if (timer) clearTimeout(timer)
   error.value = '网络已断开，恢复连接后将自动同步'
 }
 function resumeEvents() {
   if (!disposed && auth.user?.id) void recoverEvents()
 }
-async function recoverEvents() {
+async function recoverEvents(initial = false) {
+  cancelRecovery()
+  if (disposed || !auth.user?.id) return
   if (!navigator.onLine) { suspendEvents(); return }
+  const controller = new AbortController(), owner = auth.user.id, epoch = accountEpoch
+  recoveryAbort = controller
+  const current = () => !disposed && !controller.signal.aborted && recoveryAbort === controller
+    && accountEpoch === epoch && auth.user?.id === owner
   eventSource?.close(); eventSource = undefined; eventQueue = []
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
   eventFrame = undefined
   try {
-    await hydrateWorkspace()
-    const detail = selected.value ? transcriptStore.get(selected.value, selectedTask.value || activeTask.value?.id) : undefined
+    await hydrateWorkspace(controller.signal)
+    if (!current()) return
+    const detail = !initial && selected.value ? transcriptStore.get(selected.value, selectedTask.value || activeTask.value?.id) : undefined
     if (detail) {
       presentDetail(detail)
-      if (transcriptStore.staleDetails.has(transcriptKey(detail.conversation.id, detail.task?.id))) await load(detail.conversation.id, true)
-    } else await load()
-    connectEvents()
+      if (transcriptStore.staleDetails.has(transcriptKey(detail.conversation.id, detail.task?.id))) await load(detail.conversation.id, true, controller.signal)
+    } else await load(selected.value, false, controller.signal)
+    if (current()) connectEvents()
   }
   catch (cause) {
-    if (disposed) return
+    if (!current()) return
     if (!navigator.onLine) { suspendEvents(); return }
     error.value = cause instanceof Error ? cause.message : '连接中断'
     if (cause instanceof ApiError && [401, 403].includes(cause.status)) return
     timer = setTimeout(() => void recoverEvents(), 1500)
-  }
+  } finally { if (recoveryAbort === controller) recoveryAbort = undefined }
 }
 async function select(id: string) {
   error.value = ''
@@ -929,7 +948,7 @@ watch(() => auth.user?.id, (owner, previous) => {
   knowledgePanel.value?.close(); knowledgeEnabled.value = false; projects.value = []; knowledgeRevision.value++
   accountEpoch++; busy.value = false
   generation++
-  if (timer) clearTimeout(timer)
+  cancelRecovery()
   text.value = ''; files.value = []; mentions.value = []; quoted.value = null
   pendingRequestId = undefined; pendingFingerprint = ''; uploadedSources = []; uploadedReferences = []
   eventSource?.close(); eventSource = undefined; eventQueue = []
@@ -946,13 +965,7 @@ onMounted(async () => {
   window.addEventListener('offline', suspendEvents)
   window.addEventListener('online', resumeEvents)
   void auth.refreshProfileAvatars().catch(() => undefined)
-  try {
-    await hydrateWorkspace()
-    if (!disposed) connectEvents()
-    await load()
-  } catch (e) {
-    error.value = String(e)
-  }
+  await recoverEvents(true)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('offline', suspendEvents)
@@ -963,7 +976,7 @@ onBeforeUnmount(() => {
   eventSource?.close()
   if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
   generation++
-  if (timer) clearTimeout(timer)
+  cancelRecovery()
 })
 </script>
 <template>

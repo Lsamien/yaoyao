@@ -1,10 +1,12 @@
 import {readdir,readFile,writeFile,mkdir,stat,realpath,open,link,rename,unlink} from 'node:fs/promises'
 import {createHash,randomUUID} from 'node:crypto'
-import {join,resolve,sep} from 'node:path'
+import {join,resolve} from 'node:path'
 import {homedir} from 'node:os'
 import {execFile} from 'node:child_process'
+import {hostPathInput,pathInside} from '../src/shared/hostPaths.mjs'
+import {windowsShell} from './windows-shell.mjs'
 
-export const HOST_SHELL='/bin/zsh'
+export const HOST_SHELL=process.platform==='win32'?join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'):'/bin/zsh'
 export const FILE_READ_LIMIT=12*1024*1024
 export const FILE_WRITE_LIMIT=10*1024*1024
 export const FILE_LIST_LIMIT=500
@@ -15,9 +17,9 @@ export const SHELL_TIMEOUT_MAX=120000
  *  through .., absolute outsiders and symlinks pointing out of the root. */
 export async function resolveWithin(root,input,kind='target'){
   const base=await realpath(root)
-  const raw=String(input??'').replace(/^~\//,'').replace(/^~$/,'')
-  if(/\u0000/.test(raw))throw new Error('路径无效')
+  const raw=hostPathInput(input)
   const target=resolve(base,raw)
+  if(!pathInside(base,target))throw new Error('路径超出允许范围')
   let real=target
   try{real=await realpath(target)}catch(error){
     if(kind==='existing')throw new Error('文件或目录不存在')
@@ -26,10 +28,10 @@ export async function resolveWithin(root,input,kind='target'){
       for(;;){
         try{
           const parent=await realpath(directory)
-          if(parent!==base&&!parent.startsWith(base+sep))throw new Error('路径超出允许范围')
+          if(!pathInside(base,parent))throw new Error('路径超出允许范围')
           break
         }catch(failure){
-          if(failure.message==='路径超出允许范围')throw failure
+          if(failure.code!=='ENOENT')throw failure
           const next=join(directory,'..')
           if(directory===next)throw error
           directory=next
@@ -38,7 +40,7 @@ export async function resolveWithin(root,input,kind='target'){
       return {base,target}
     }
   }
-  if(real!==base&&!real.startsWith(base+sep))throw new Error('路径超出允许范围')
+  if(!pathInside(base,real))throw new Error('路径超出允许范围')
   return {base,target}
 }
 
@@ -101,14 +103,15 @@ export async function receiveHostFile(root,input){
   }finally{await handle.close();await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error})}
 }
 
-export async function execHostShell(root,input){
+export async function execHostShell(root,input,{signal,helper}={}){
   const command=String(input?.command??'')
   if(!command.trim())throw new Error('命令为空')
   const timeout=Math.min(Math.max(Number(input?.timeoutMs)||60000,1000),SHELL_TIMEOUT_MAX)
   let cwd
-  try{cwd=resolve(String(root),String(input?.cwd??'').replace(/^~\//,'').replace(/^~$/,''))}catch{cwd=String(root)}
+  try{cwd=resolve(String(root),String(input?.cwd??'').replace(process.platform==='win32'?/^~[\\/]/:/^~\//,'').replace(/^~$/,''))}catch{cwd=String(root)}
+  if(process.platform==='win32')return windowsShell(HOST_SHELL,command,{cwd,timeout,signal,helper,limit:SHELL_OUTPUT_LIMIT})
   return new Promise(done=>{
-    execFile(HOST_SHELL,['-c',command],{cwd,timeout,killSignal:'SIGKILL',maxBuffer:1024*1024,env:{...process.env,TERM:'dumb'}},(error,stdout,stderr)=>{
+    execFile(HOST_SHELL,['-c',command],{cwd,timeout,signal,killSignal:'SIGKILL',maxBuffer:1024*1024,env:{...process.env,TERM:'dumb'}},(error,stdout,stderr)=>{
       const clip=value=>Buffer.from(value??'','utf8').subarray(0,SHELL_OUTPUT_LIMIT).toString('utf8')
       done({command,exitCode:error?typeof error.code==='number'?error.code:1:0,timedOut:error?.killed===true&&error?.signal==='SIGKILL',stdout:clip(stdout),stderr:clip(stderr)})
     })

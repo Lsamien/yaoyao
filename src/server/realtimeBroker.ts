@@ -330,14 +330,43 @@ export class RealtimeBroker {
     }
     return u
   }
+  private authorized(p: RealtimePrincipal): boolean {
+    try { if (!p.valid()) return false; p.authorize?.('chat'); return true } catch { return false }
+  }
+  private connectionPrincipal(u: Upstream): RealtimePrincipal | undefined {
+    if (this.authorized(u.principal)) return u.principal
+    // A service transport may outlive its first browser session and serve other users.
+    const candidates = [
+      ...[...this.channels.values()].filter(c => c.principal.upstreamKey === u.principal.upstreamKey).map(c => c.principal),
+      ...[...u.routes.values()].flatMap(r => [...r.observers.values()]),
+    ]
+    const principal = candidates.find(p => this.authorized(p))
+    if (principal) u.principal = principal
+    return principal
+  }
+  private scheduleReconnect(u: Upstream): void {
+    if (this.closed || this.upstreams.get(u.principal.upstreamKey) !== u || u.retry || !this.connectionPrincipal(u)) return
+    u.retry = setTimeout(() => {
+      u.retry = undefined
+      void this.connect(u).catch(() => {})
+    }, Math.min(15_000, 500 * 2 ** Math.min(u.attempts++, 5)))
+    u.retry.unref()
+  }
   private connect(u: Upstream): Promise<void> {
+    if (this.closed || this.upstreams.get(u.principal.upstreamKey) !== u) return Promise.reject(new Error('Broker transport closed'))
     if (u.connecting) return u.connecting
     if (u.socket?.readyState === WebSocket.OPEN && u.ready) return Promise.resolve()
+    clearTimeout(u.retry); u.retry = undefined
     u.connecting = (async () => {
-      const url = await u.principal.url('chat')
-      if (this.closed) throw new Error('Broker closed')
+      // Let the previous socket's recovery unwind before starting another generation.
+      await u.recovery?.catch(() => {})
+      const principal = this.connectionPrincipal(u)
+      if (!principal) throw new HttpError(401, 'Authentication expired', 'authentication_required')
+      const url = await principal.url('chat')
+      if (this.closed || this.upstreams.get(principal.upstreamKey) !== u) throw new Error('Broker transport closed')
+      if (!this.authorized(principal)) throw new HttpError(401, 'Authentication expired', 'authentication_required')
       await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(url, { agent: u.principal.agent, headers: { Origin: `${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}` }, maxPayload: CHAT_MAX_PAYLOAD, handshakeTimeout: 15_000 })
+        const ws = new WebSocket(url, { agent: principal.agent, headers: { Origin: `${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}` }, maxPayload: CHAT_MAX_PAYLOAD, handshakeTimeout: 15_000 })
         u.socket = ws
         const timeout = setTimeout(() => { reject(new Error('Upstream ready timeout')); ws.terminate() }, 20_000)
         let ready = false
@@ -346,12 +375,20 @@ export class RealtimeBroker {
           let f: Frame
           try { f = JSON.parse(data.toString()) } catch { ws.terminate(); return }
           if (f.method === 'event' && f.params?.type === 'gateway.ready') {
-            clearTimeout(timeout); ready = true; u.ready = f; u.attempts = 0
+            if (ready) return
+            clearTimeout(timeout); ready = true; u.ready = f
             const epoch = f.params.payload?.replay_epoch
             const changed = u.epoch !== undefined && epoch !== u.epoch
             u.epoch = epoch
-            if (u.routes.size) u.recovery = this.recover(u, changed).finally(() => { u.recovery = undefined })
-            resolve()
+            const recovery = u.routes.size ? this.recover(u, changed) : Promise.resolve()
+            u.recovery = recovery
+            void recovery.then(() => {
+              if (this.closed || u.socket !== ws || ws.readyState !== WebSocket.OPEN) throw new Error('Upstream disconnected during recovery')
+              u.attempts = 0
+              resolve()
+            }).catch(error => { reject(error); ws.terminate() }).finally(() => {
+              if (u.recovery === recovery) u.recovery = undefined
+            })
           } else if (f.id !== undefined) {
             const pending = u.pending.get(String(f.id))
             if (pending) { clearTimeout(pending.timer); u.pending.delete(String(f.id)); pending.resolve(f) }
@@ -359,23 +396,24 @@ export class RealtimeBroker {
         })
         let alive = true
         ws.on('pong', () => { alive = true })
-        u.ping = setInterval(() => { if (!alive) ws.terminate(); else if (ws.readyState === WebSocket.OPEN) { alive = false; ws.ping() } }, 25_000)
-        u.ping.unref()
+        const ping = setInterval(() => { if (!alive) ws.terminate(); else if (ws.readyState === WebSocket.OPEN) { alive = false; ws.ping() } }, 25_000)
+        u.ping = ping; ping.unref()
         ws.on('error', () => { if (!ready) reject(new Error('Upstream connection failed')) })
         ws.on('close', () => {
-          clearTimeout(timeout); clearInterval(u.ping)
+          clearTimeout(timeout); clearInterval(ping)
           if (u.socket !== ws) return
           u.socket = undefined; u.ready = undefined
-          if (!ready) reject(new Error('Upstream disconnected'))
+          reject(new Error('Upstream disconnected'))
           for (const pending of u.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('Upstream disconnected; result unknown')) }
           u.pending.clear()
-          if (!this.closed && this.upstreams.get(u.principal.upstreamKey) === u) {
-            u.retry = setTimeout(() => { u.retry = undefined; void this.connect(u).catch(() => {}) }, Math.min(15_000, 500 * 2 ** Math.min(u.attempts++, 5)))
-            u.retry.unref()
-          }
+          this.scheduleReconnect(u)
         })
       })
-    })().finally(() => { u.connecting = undefined })
+    })().catch(error => {
+      // Credentials and readiness can fail before any WebSocket close callback exists.
+      this.scheduleReconnect(u)
+      throw error
+    }).finally(() => { u.connecting = undefined })
     return u.connecting
   }
   private rpc(u: Upstream, method: string, params: Frame, observed?: (frame: Frame) => void, sent?: (frame: Frame) => void): Promise<Frame> {
@@ -496,6 +534,23 @@ export class RealtimeBroker {
       for (const r of u.routes.values()) {
         const lastSeen = r.seq
         const resumed = await this.rpc(u, 'session.resume', { session_id: r.stored, profile: r.profile, close_on_disconnect: false, omit_messages: true })
+        if (resumed.error?.code === 4007 || resumed.error?.code === 'session_not_found') {
+          // Hermes' session.resume uses 4007 for a missing stored session. Retire
+          // only that route; a deleted session must not reconnect the whole service forever.
+          this.reset(u, 'upstream_session_missing')
+          this.event(u, { method: 'event', params: { type: 'error', session_id: r.runtime,
+            payload: { code: 'session_not_found', message: 'Hermes 中的原会话已不存在，无法恢复。' } } }, true)
+          r.active = false
+          const key = this.routeKey(r.profile, r.stored)
+          u.routes.delete(key); u.byRuntime.delete(r.runtime)
+          this.routeOwners.delete(JSON.stringify([u.principal.instanceKey ?? u.principal.upstreamKey, r.profile, r.stored]))
+          for (const c of this.channels.values()) if (c.principal.upstreamKey === u.principal.upstreamKey) c.routes.delete(key)
+          for (const [id, runtime] of this.interactions) if (id.startsWith(`${u.principal.upstreamKey}:`) && runtime === r.runtime) this.interactions.delete(id)
+          continue
+        }
+        if (resumed.error || typeof resumed.result?.session_id !== 'string' || !resumed.result.session_id) {
+          throw new Error('Upstream session recovery failed')
+        }
         r.workingDirectory = undefined
         r.cwd = typeof resumed.result?.info?.cwd === 'string' ? resumed.result.info.cwd : undefined
         if (typeof resumed.result?.running === 'boolean') r.active = resumed.result.running
@@ -506,7 +561,7 @@ export class RealtimeBroker {
               snapshot?resumed.result:{...resumed.result,inflight:undefined})
           }
         }
-        if (!resumed.result || resumed.result.session_id !== r.runtime || changed) {
+        if (resumed.result.session_id !== r.runtime || changed) {
           if (resumed.result?.session_id) { u.byRuntime.delete(r.runtime); r.runtime = resumed.result.session_id; u.byRuntime.set(r.runtime, r) }
           r.seq = 0; this.reset(u, 'upstream_reset'); restore(true); continue
         }
@@ -514,7 +569,7 @@ export class RealtimeBroker {
         if (replay.error || replay.result?.truncated || replay.result?.epoch !== u.epoch) {this.reset(u, 'upstream_replay_unavailable');restore(true)}
         else {for (const p of replay.result?.events ?? []) this.event(u, { jsonrpc: '2.0', method: 'event', params: p }, true);restore(false)}
       }
-    } catch { this.reset(u, 'upstream_recovery_failed') }
+    } catch (error) { this.reset(u, 'upstream_recovery_failed'); throw error }
     finally {
       u.recovering = false
       const deferred = u.deferred; u.deferred = []

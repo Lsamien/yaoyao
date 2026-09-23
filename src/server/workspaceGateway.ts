@@ -277,6 +277,10 @@ export class WorkspaceNodes {
 
 /** One server-owned transport per execution binding, never tied to a browser. */
 export class WorkspaceGateway {
+  private closed = false
+  private generation = 0
+  private available = false
+  get connected(): boolean { return this.available }
   private serverRequests = new Map<string, {method:'approval'|'clarify';sessionId:string}>()
   private socket?: WebSocket
   private paired?: WorkspacePairedChannel
@@ -289,15 +293,26 @@ export class WorkspaceGateway {
   onDisconnect: () => void = () => {}
   constructor(readonly target: GatewayTarget,readonly scope?:GatewayExecutionScope) {}
   async connect(): Promise<void> {
-    if(this.target.runner){this.runner=await this.target.runner.open(frame=>this.onEvent(frame),()=>this.onDisconnect(),this.scope);return}
+    if (this.closed) throw new Error('Hermes connection closed')
+    const generation = ++this.generation
+    const active = () => !this.closed && generation === this.generation
+    const disconnected = () => { if(active()){this.available=false;this.onDisconnect()} }
+    if(this.target.runner){
+      const runner=await this.target.runner.open(frame=>{if(active())this.onEvent(frame)},disconnected,this.scope)
+      if(!active()){runner.close();throw new Error('Hermes connection closed')}
+      this.runner=runner;this.available=true;return
+    }
     if (this.target.pairedToken) {
       this.paired = new WorkspacePairedChannel(this.target.url, this.target.pairedToken, this.target.client.fetchImpl,
-        frame => this.onEvent(frame), () => this.onDisconnect())
+        frame => {if(active())this.onEvent(frame)}, disconnected)
       await this.paired.connect()
+      if(!active())throw new Error('Hermes connection closed')
+      this.available = true
       return
     }
     const credential = await this.target.session.webSocketCredential(),
       url = new URL(this.target.url)
+    if (!active()) throw new Error('Hermes connection closed')
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     url.pathname = `${url.pathname.replace(/\/$/, '')}/api/ws`
     url.search = ''
@@ -318,7 +333,17 @@ export class WorkspaceGateway {
       socket.terminate()
       failed(new Error('Hermes gateway readiness timed out'))
     }, 20_000)
+    let awaitingPong = false
+    const heartbeat = setInterval(() => {
+      if (!active() || socket.readyState !== WebSocket.OPEN) return
+      if (awaitingPong) { socket.terminate(); return }
+      awaitingPong = true
+      socket.ping()
+    }, 15_000)
+    heartbeat.unref()
+    socket.on('pong', () => { awaitingPong = false })
     socket.on('message', (raw) => {
+      if (!active()) return
       try {
         const frame = JSON.parse(raw.toString()),
           waiter = this.pending.get(String(frame.id))
@@ -360,17 +385,21 @@ export class WorkspaceGateway {
       failed(error)
     })
     socket.on('close', () => {
+      clearInterval(heartbeat)
+      clearTimeout(handshakeTimer)
+      failed(new Error('Hermes connection closed'))
+      if (!active()) return
       for (const waiter of this.pending.values()) {
         clearTimeout(waiter.timer)
         waiter.reject(new Error('Hermes connection closed'))
       }
       this.pending.clear()
       this.serverRequests.clear()
-      this.onDisconnect()
-      clearTimeout(handshakeTimer)
-      failed(new Error('Hermes connection closed'))
+      disconnected()
     })
     await handshake
+    if (!active() || socket.readyState !== WebSocket.OPEN) throw new Error('Hermes connection closed')
+    this.available = true
   }
   private acceptServerRequest(frame:any):boolean {
     if(!['approval','clarify'].includes(frame?.method)||typeof frame.id!=='string'||typeof frame.params?.session_id!=='string')return false
@@ -424,10 +453,18 @@ export class WorkspaceGateway {
     })
   }
   close(): void {
+    this.closed = true
+    this.available = false
+    this.generation++
     this.onDisconnect = () => {}
+    for (const waiter of this.pending.values()) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error('Hermes connection closed'))
+    }
+    this.pending.clear()
     this.serverRequests.clear()
     this.paired?.close()
     this.runner?.close()
-    this.socket?.close()
+    this.socket?.terminate()
   }
 }

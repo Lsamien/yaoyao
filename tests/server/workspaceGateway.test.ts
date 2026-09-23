@@ -1,5 +1,5 @@
 // @vitest-environment node
-import {expect,it} from 'vitest'
+import {expect,it,vi} from 'vitest'
 import {WebSocketServer,type WebSocket} from 'ws'
 import {WorkspaceGateway,type GatewayFrame,type GatewayTarget} from '../../src/server/workspaceGateway'
 
@@ -43,5 +43,66 @@ it('adapts Hermes server requests, scopes answers, restores pending cards and wi
   }finally{
     gateway.close();for(const client of server.clients)client.terminate()
     await new Promise<void>(done=>server.close(()=>done()))
+  }
+})
+
+it('ignores frames and closes from the previous socket after a reconnect', async () => {
+  const server = new WebSocketServer({port: 0, host: '127.0.0.1'})
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  let current!: WebSocket, pending: any
+  server.on('connection', socket => {
+    current = socket
+    socket.send(JSON.stringify({method: 'event', params: {type: 'gateway.ready'}}))
+    socket.on('message', raw => { pending = JSON.parse(String(raw)) })
+  })
+  const target = {url: new URL(`http://127.0.0.1:${(server.address() as {port:number}).port}`), client: {},
+    session: {webSocketCredential: async () => ({name: 'ticket', value: 'fixture'})}} as unknown as GatewayTarget
+  const gateway = new WorkspaceGateway(target), events = vi.fn(), disconnect = vi.fn()
+  gateway.onEvent = events; gateway.onDisconnect = disconnect
+  try {
+    await gateway.connect()
+    const previous = (gateway as any).socket as WebSocket
+    current.terminate()
+    await expect.poll(() => disconnect.mock.calls.length).toBe(1)
+    await gateway.connect()
+    const reply = gateway.rpc('session.resume', {session_id: 'stored'})
+    await expect.poll(() => pending?.method).toBe('session.resume')
+    previous.emit('message', Buffer.from(JSON.stringify({method: 'event', params: {type: 'message.complete', session_id: 'stale'}})))
+    previous.emit('close')
+    expect(gateway.connected).toBe(true)
+    expect(disconnect).toHaveBeenCalledOnce()
+    expect(events.mock.calls.some(([frame]) => frame.session_id === 'stale')).toBe(false)
+    current.send(JSON.stringify({id: pending.id, result: {session_id: 'current'}}))
+    await expect(reply).resolves.toEqual({session_id: 'current'})
+  } finally {
+    gateway.close(); for (const client of server.clients) client.terminate()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+it('detects a half-open connection when Hermes stops answering pings', async () => {
+  vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']})
+  const server = new WebSocketServer({port: 0, host: '127.0.0.1', autoPong: false})
+  await new Promise<void>(resolve => server.once('listening', resolve))
+  const ping = vi.fn()
+  server.on('connection', socket => {
+    socket.on('ping', ping)
+    socket.send(JSON.stringify({method: 'event', params: {type: 'gateway.ready'}}))
+  })
+  const target = {url: new URL(`http://127.0.0.1:${(server.address() as {port:number}).port}`), client: {},
+    session: {webSocketCredential: async () => ({name: 'ticket', value: 'fixture'})}} as unknown as GatewayTarget
+  const gateway = new WorkspaceGateway(target), disconnect = vi.fn()
+  gateway.onDisconnect = disconnect
+  try {
+    await gateway.connect()
+    await vi.advanceTimersByTimeAsync(15_000)
+    await expect.poll(() => ping.mock.calls.length).toBe(1)
+    await vi.advanceTimersByTimeAsync(15_000)
+    await expect.poll(() => disconnect.mock.calls.length).toBe(1)
+    expect(gateway.connected).toBe(false)
+  } finally {
+    gateway.close(); for (const client of server.clients) client.terminate()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    vi.useRealTimers()
   }
 })

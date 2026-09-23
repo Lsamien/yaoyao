@@ -29,6 +29,10 @@ macOS 新版本默认使用 Developer ID Application 正式分发签名、Apple 
 
 既有手动安装版客户端需先手动安装一次正式包，之后才能使用“下载更新 → 重启更新”。发布前应使用同一签名身份的两个版本，在隔离机器上验证实际替换与重新启动；单元测试或未签名包的打包成功不能代替这项验收。
 
+### Windows 测试安装包
+
+Windows 原生助手和安装包在 Windows x64 环境从同一发布提交构建，并验证安装、启动和升级。未配置正式证书时须标为未签名测试版；经用户选择交付后，Release 可提供 EXE 与独立测试元数据 ZIP，但不在 Release 根目录上传 Windows `latest.yml`。元数据包含同次构建的更新清单、blockmap、校验值和构建身份。Windows Server CI 与 Windows 10/11 真机验收结果分别说明。
+
 ## Docker Hub 远程镜像
 
 固定仓库为 `samienluo/yaoyao`。以每次发布的 `vX.Y.Z` 为版本标签：

@@ -105,7 +105,7 @@ onMounted(() => { void load(); void loadNames() })
   <section class="host-tools" aria-label="电脑与服务端工具">
     <p>这些开关对所有机器人生效，不再按单个机器人勾选。所有 Bot 共用电脑权限和审批策略。设备是否在线、是否获得系统授权会单独显示。</p>
     <form @submit.prevent="save" @change="changed">
-      <label class="toggle"><input v-model="scriptMachine" type="checkbox" :disabled="loading || saving" /><span><strong>电脑</strong><small>连接服务器的 Mac。机器人按名称点名：文件走文件工具，命令走 shell，只有看窗口或点按时才截图。</small></span></label>
+      <label class="toggle"><input v-model="scriptMachine" type="checkbox" :disabled="loading || saving" /><span><strong>电脑</strong><small>连接服务器的 Mac 或 Windows 电脑。机器人按名称点名：文件走文件工具，命令走 shell，只有看窗口或点按时才截图。</small></span></label>
       <label class="toggle"><input v-model="serverComputer" type="checkbox" :disabled="loading || saving" /><span><strong>服务器</strong><small>夭夭正在运行的这台电脑。文件走文件工具，命令走 shell；只有看窗口或点按时才截图操作。</small></span></label>
       <label class="toggle"><input v-model="vm" type="checkbox" :disabled="loading || saving" /><span><strong>虚拟环境</strong><small>服务端上的隔离桌面。聊天留在夭夭，操作派到虚拟机里。</small></span></label>
       <label class="toggle"><input v-model="cloud" type="checkbox" :disabled="loading || saving" /><span><strong>云虚拟机</strong><small>共享的 Grok Bot 电脑。先看真实桌面，再点击、输入、按键或滚动。</small></span></label>

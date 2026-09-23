@@ -92,7 +92,7 @@ export async function enrollDesktopHost(session,{name,installId,previousHostId},
     headers:{accept:'application/json','content-type':'application/json',cookie,'x-csrf-token':session.csrfToken,origin:session.origin},
     body:JSON.stringify({name:String(name).slice(0,100),...(installId?{installId}:{}),...(previousHostId?{previousHostId}:{})}),
   })
-  if(response.status===403)throw new Error('需要管理员账号，才能把这台 Mac 注册为可远程控制的电脑')
+  if(response.status===403)throw new Error('需要管理员账号，才能把这台电脑注册为可远程控制的电脑')
   if(!response.ok)throw new Error(`注册电脑失败（HTTP ${response.status}）`)
   const result=await response.json()
   if(typeof result?.token!=='string'||!result?.host?.id)throw new Error('注册电脑响应无效')

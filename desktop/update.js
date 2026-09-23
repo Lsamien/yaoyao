@@ -13,7 +13,7 @@ function render(state) {
   byId('subtitle').textContent = automatic ? '更新当前电脑的 App，下载完成后重启安装。' : '开发运行：从 GitHub 下载，校验后手动安装。'
   byId('check').disabled = busy || (automatic && ready) || state.retryable === false
   byId('download').disabled = busy || !state.available; byId('download').hidden = ready
-  byId('download').textContent = automatic ? '下载更新' : state.phase === 'failed' || state.phase === 'cancelled' ? '重试下载' : '下载 DMG'
+  byId('download').textContent = automatic ? '下载更新' : state.phase === 'failed' || state.phase === 'cancelled' ? '重试下载' : '下载安装包'
   byId('cancel').hidden = automatic ? !state.canCancel : !busy
   byId('open').hidden = !ready || automatic; byId('folder').hidden = !ready || automatic
   byId('install').hidden = !automatic || (!ready && state.phase !== 'installing')

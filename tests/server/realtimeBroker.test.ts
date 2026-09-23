@@ -8,7 +8,7 @@ import { RealtimeBroker, type RealtimeActivity, type RealtimePrincipal, type Str
 import { RealtimeReceipts } from '../../src/server/realtimeReceipts.js'
 
 const cleanup: Array<() => void> = []
-afterEach(() => cleanup.splice(0).reverse().forEach(f => f()))
+afterEach(() => { cleanup.splice(0).reverse().forEach(f => f()); vi.restoreAllMocks() })
 async function fixture() {
   const home = mkdtempSync(join(tmpdir(), 'yaoyao-realtime-test-'))
   const ws = new WebSocketServer({ port: 0, host: '127.0.0.1' })
@@ -18,6 +18,8 @@ async function fixture() {
   let count = 0
   let seq = 0, truncate = false, dropPrompt = false
   let cwd = '/old-session', busy = false, rejectCwd = false
+  let loseResumeReply = false
+  let resumeError: number | undefined
   const history: any[] = []
   let peer: WebSocket
   ws.on('connection', socket => {
@@ -26,6 +28,11 @@ async function fixture() {
     socket.on('message', raw => {
       const f = JSON.parse(raw.toString()); commands.push(f)
       if (f.method === 'prompt.submit' && dropPrompt) { socket.terminate(); return }
+      if (f.method === 'session.resume' && loseResumeReply) { loseResumeReply = false; return }
+      if (f.method === 'session.resume' && resumeError !== undefined) {
+        socket.send(JSON.stringify({ id: f.id, error: { code: resumeError, message: resumeError === 4007 ? 'session not found' : 'database temporarily unavailable' } }))
+        resumeError = undefined; return
+      }
       if (f.method === 'profiles.list') {
         socket.send(JSON.stringify({id:f.id,result:{profiles:[{name:'default',ui_meta:{'hermes-bots':{chat:'stored-1'}}}]}}))
       } else if (f.method === 'session.events.since') {
@@ -53,6 +60,8 @@ async function fixture() {
   return { home, broker, principal, commands, activities, count: () => count, advance: (n: number) => { now += n },
     cwd: () => cwd, busy: () => { busy = true }, rejectCwd: () => { rejectCwd = true },
     disconnect: () => peer!.terminate(), truncate: () => { truncate = true }, dropPrompt: () => { dropPrompt = true },
+    loseResumeReply: () => { loseResumeReply = true },
+    failNextResume: (code: number) => { resumeError = code },
     emit: (type: string, payload: unknown) => {
       const params = { type, session_id: 'runtime-1', seq: ++seq, payload }; history.push(params)
       if (peer!.readyState === 1) peer!.send(JSON.stringify({ method: 'event', params }))
@@ -354,6 +363,111 @@ describe('realtime broker', () => {
     await vi.waitFor(() => expect(received.filter(e => e.data.includes('offline'))).toHaveLength(1), { timeout: 2500 })
     expect(f.count()).toBe(2)
     expect(received.filter(e => e.event === 'reset')).toHaveLength(0)
+  })
+  it('keeps retrying credential failures and replays missed events without resubmitting prompts', async () => {
+    const f = await fixture(), p = f.principal('alice'), url = vi.fn(p.url)
+    const channel = await f.broker.create({ ...p, url }, 'chat')
+    await f.broker.command(channel, 'open', resume)
+    await f.broker.command(channel, 'send-once', { method: 'prompt.submit', params: { session_id: 'runtime-1', text: 'once' } })
+    const received: StreamEntry[] = []
+    f.broker.subscribe(channel, undefined, entry => received.push(entry))
+    url.mockRejectedValueOnce(new Error('Hermes is restarting')).mockRejectedValueOnce(new Error('Ticket endpoint unavailable'))
+    f.disconnect(); f.emit('message.delta', { text: 'missed-during-restart' })
+    await vi.waitFor(() => expect(received.filter(e => e.data.includes('missed-during-restart'))).toHaveLength(1), { timeout: 5000 })
+    expect(url).toHaveBeenCalledTimes(4)
+    expect(f.count()).toBe(2)
+    expect(f.commands.filter(command => command.method === 'prompt.submit')).toHaveLength(1)
+  }, 7000)
+  it('shares one credential attempt when clients reconnect during the retry delay', async () => {
+    const f = await fixture(), p = f.principal('alice'), url = vi.fn(p.url)
+    await f.broker.create({ ...p, url }, 'chat')
+    let release!: (url: URL) => void
+    url.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    f.disconnect()
+    await vi.waitFor(() => expect(url).toHaveBeenCalledTimes(2))
+    const second = f.broker.create({ ...p, url }, 'chat')
+    const third = f.broker.create({ ...p, url }, 'chat')
+    release(await p.url('chat'))
+    await Promise.all([second, third])
+    expect(url).toHaveBeenCalledTimes(2)
+    expect(f.count()).toBe(2)
+  })
+  it('retries a connected gateway whose session recovery never replies', async () => {
+    const f = await fixture(), channel = await f.broker.create(f.principal('alice'), 'chat')
+    await f.broker.command(channel, 'open', resume)
+    const received: StreamEntry[] = []
+    f.broker.subscribe(channel, undefined, entry => received.push(entry))
+    const setTimeout = globalThis.setTimeout
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: any[]) => void, ms?: number, ...args: any[]) =>
+      setTimeout(callback, ms === 120_000 ? 30 : ms, ...args)) as typeof globalThis.setTimeout)
+    f.loseResumeReply(); f.disconnect(); f.emit('message.delta', { text: 'after-recovery-timeout' })
+    await vi.waitFor(() => expect(received.some(e => e.data.includes('after-recovery-timeout'))).toBe(true), { timeout: 3000 })
+    expect(f.count()).toBe(3)
+    expect(received.some(e => e.data.includes('upstream_recovery_failed'))).toBe(true)
+  })
+  it('retries an explicit temporary session recovery error instead of reporting ready', async () => {
+    const f = await fixture(), channel = await f.broker.create(f.principal('alice'), 'chat')
+    await f.broker.command(channel, 'open', resume)
+    const received: StreamEntry[] = []
+    f.broker.subscribe(channel, undefined, entry => received.push(entry))
+    f.failNextResume(5000); f.disconnect(); f.emit('message.delta', { text: 'after-temporary-resume-error' })
+    await vi.waitFor(() => expect(received.some(e => e.data.includes('after-temporary-resume-error'))).toBe(true), { timeout: 3000 })
+    expect(f.count()).toBe(3)
+    expect(channel.routes.size).toBe(1)
+  })
+  it('retires a missing stored session without endlessly reconnecting the service', async () => {
+    const f = await fixture(), channel = await f.broker.create(f.principal('alice'), 'chat')
+    await f.broker.command(channel, 'open', resume)
+    const received: StreamEntry[] = []
+    f.broker.subscribe(channel, undefined, entry => received.push(entry))
+    f.failNextResume(4007); f.disconnect()
+    await vi.waitFor(() => expect(received.some(e => e.data.includes('session_not_found'))).toBe(true), { timeout: 2500 })
+    expect(channel.routes.size).toBe(0)
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    expect(f.count()).toBe(2)
+    expect(f.commands.filter(command => command.method === 'session.resume')).toHaveLength(2)
+  })
+  it('does not reopen a socket when authorization is revoked during credential lookup', async () => {
+    const f = await fixture(), p = f.principal('alice')
+    let valid = true, release!: (url: URL) => void
+    const url = vi.fn(p.url)
+    await f.broker.create({ ...p, valid: () => valid, url }, 'chat')
+    url.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    f.disconnect()
+    await vi.waitFor(() => expect(url).toHaveBeenCalledTimes(2))
+    valid = false
+    release(await p.url('chat'))
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(url).toHaveBeenCalledTimes(2)
+    expect(f.count()).toBe(1)
+  })
+  it('does not reopen a socket after shutdown with credentials still pending', async () => {
+    const f = await fixture(), p = f.principal('alice'), url = vi.fn(p.url)
+    await f.broker.create({ ...p, url }, 'chat')
+    let release!: (url: URL) => void
+    url.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    f.disconnect()
+    await vi.waitFor(() => expect(url).toHaveBeenCalledTimes(2))
+    f.broker.close()
+    release(await p.url('chat'))
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(url).toHaveBeenCalledTimes(2)
+    expect(f.count()).toBe(1)
+  })
+  it('recovers a shared service connection for another authorized user after its first user expires', async () => {
+    const f = await fixture()
+    let firstValid = true
+    const firstURL = vi.fn(f.principal('alice').url), secondURL = vi.fn(f.principal('bob').url)
+    await f.broker.create({ ...f.principal('alice'), valid: () => firstValid, url: firstURL }, 'chat')
+    const channel = await f.broker.create({ ...f.principal('bob'), url: secondURL }, 'chat')
+    await f.broker.command(channel, 'open', resume)
+    const received: StreamEntry[] = []
+    f.broker.subscribe(channel, undefined, entry => received.push(entry))
+    firstValid = false
+    f.disconnect(); f.emit('message.delta', { text: 'still-authorized' })
+    await vi.waitFor(() => expect(received.some(e => e.data.includes('still-authorized'))).toBe(true), { timeout: 2500 })
+    expect(firstURL).toHaveBeenCalledTimes(1)
+    expect(secondURL).toHaveBeenCalledTimes(1)
   })
   it('reports reset when upstream history was truncated', async () => {
     const f = await fixture(), c = await f.broker.create(f.principal('alice'), 'chat')

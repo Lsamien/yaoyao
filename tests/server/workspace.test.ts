@@ -570,7 +570,7 @@ describe('Web-owned workspace', () => {
     }
     const run = runtime.send(owner, c.id, { requestId: randomUUID(), content: '修改一次' })
     await vi.waitFor(() =>
-      expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('uncertain'),
+      expect(store.require<WorkspaceRun>(owner, 'run', run.id).error).toContain('正在恢复原执行'),
     )
     runtime.close()
     const configured = requests.filter(r => r.method === 'config.set').length
@@ -1250,7 +1250,7 @@ it('recovers a partially completed parallel batch after restart without resubmit
   const last=pending.get(c.name)!
   recoveryByStored.set(storedByRuntime.get(last.p.session_id)!,[{role:'user',content:last.p.text},{role:'assistant',content:'丙已完成'}])
   last.socket.terminate()
-  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',root.id).status).toBe('uncertain'))
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',root.id).error).toContain('正在恢复原执行'))
   runtime.close();runtime=new WorkspaceRuntime(store,nodes,uploads);runtime.start()
   await finished(root.id)
   expect(admin).toBe(2)
@@ -1530,7 +1530,7 @@ it('upgrades an admitted v0.3.7 execution without submitting its prompt again', 
   const a=agent('升级执行'),c=direct(a.id)
   reply=(socket,p)=>{recoveryHistory=[{role:'user',content:p.text},{role:'assistant',content:'升级前已完成'}];socket.terminate()}
   const root=runtime.send(owner,c.id,{requestId:randomUUID(),content:'只执行一次'})
-  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',root.id).status).toBe('uncertain'))
+  await vi.waitFor(()=>expect(store.require<WorkspaceRun>(owner,'run',root.id).error).toContain('正在恢复原执行'))
   runtime.close()
   const old=store.list<any>(owner,'turn')[0]!
   for(const task of store.list<any>(owner,'turn'))store.remove(owner,'turn',task.id)

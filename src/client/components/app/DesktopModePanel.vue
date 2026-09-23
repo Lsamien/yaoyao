@@ -1,18 +1,19 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 
 type Mode = 'client' | 'server'
 const desktop = window.yaoyaoDesktop
-const state = ref<{ mode: Mode; serverURL: string; switching: boolean }>()
+const state = ref<{ mode: Mode; serverURL: string; switching: boolean; supportedModes?: Mode[] }>()
 const selected = ref<Mode>('client')
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
-const options = [
+const options = computed(() => ([
   { mode: 'client', title: '客户端模式', description: '连接另一台电脑上的夭夭服务器。本机无需安装 Hermes。', icon: 'link' },
   { mode: 'server', title: '服务器模式', description: '在这台电脑上运行夭夭服务，使用本机 Hermes，并供其他客户端连接。', icon: 'monitor' },
-] as const
+] as const).filter(option => !state.value?.supportedModes || state.value.supportedModes.includes(option.mode)))
+const canSwitch = computed(() => !!state.value && options.value.length > 1)
 
 async function load() {
   busy.value = true; error.value = ''
@@ -49,7 +50,7 @@ onMounted(load)
       <span v-if="state.serverURL">{{ state.serverURL }}</span>
     </div>
     <p v-else-if="busy" role="status">正在读取运行模式…</p>
-    <fieldset :disabled="busy || !state || state.switching">
+    <fieldset v-if="canSwitch" :disabled="busy || !state || state.switching">
       <legend>这台电脑如何使用夭夭？</legend>
       <label v-for="option in options" :key="option.mode" class="mode-option" :class="{ selected: selected === option.mode }">
         <input v-model="selected" type="radio" name="desktop-running-mode" :value="option.mode" />
@@ -57,12 +58,12 @@ onMounted(load)
         <span><strong>{{ option.title }}</strong><small>{{ option.description }}</small></span>
       </label>
     </fieldset>
-    <p class="mode-note">切换后会打开对应服务的页面，并记住选择。数据保留在原服务器；连接另一台服务器时，可能需要登录。</p>
+    <p class="mode-note">{{ canSwitch ? '切换后会打开对应服务的页面，并记住选择。' : '此客户端连接已有服务器。' }}数据保留在原服务器；连接另一台服务器时，可能需要登录。</p>
     <p v-if="error" class="mode-error" role="alert">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <div class="mode-actions">
       <button v-if="!state" type="button" :disabled="busy" @click="load">重新读取</button>
-      <button v-else class="mode-primary" type="button" :disabled="busy || state.switching || selected === state.mode" @click="switchMode">
+      <button v-else-if="canSwitch" class="mode-primary" type="button" :disabled="busy || state.switching || selected === state.mode" @click="switchMode">
         {{ busy ? '正在切换…' : selected === state.mode ? '正在使用此模式' : selected === 'client' ? '切换为客户端' : '切换为服务器' }}
       </button>
       <button v-if="desktop?.openRemoteLogin" type="button" :disabled="busy || state?.switching" @click="changeServer">更换服务器…</button>
