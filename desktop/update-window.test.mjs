@@ -60,8 +60,8 @@ test('native update window works without a Web service, verifies a real DMG and 
       Menu.getApplicationMenu().getMenuItemById('desktop-update-check').click()
     }, { version, name, sums, data: bytes.toString('base64'), size: bytes.length, digest })
     const page = await opened
-    await page.getByRole('button', { name: '下载 DMG', exact: true }).waitFor()
-    await page.getByRole('button', { name: '下载 DMG', exact: true }).click()
+    await page.getByRole('button', { name: '下载安装包', exact: true }).waitFor()
+    await page.getByRole('button', { name: '下载安装包', exact: true }).click()
     await page.getByRole('button', { name: '打开安装包', exact: true }).waitFor({ timeout: 30000 })
     await page.getByRole('button', { name: '检查更新', exact: true }).focus()
     await page.keyboard.press('Tab')
