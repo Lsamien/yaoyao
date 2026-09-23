@@ -5,6 +5,39 @@ import {dataKey,DesktopServiceManager} from './service-manager.mjs'
 import {mkdtemp,realpath,writeFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {DesktopOnboarding} from './onboarding.mjs'
+test('local inspection defers Hermes and Runner until entry and does not retain activation after disconnect',async()=>{
+  const home=await realpath(await mkdtemp(join(tmpdir(),'yaoyao-deferred-start-')))
+  const record={protocol:1,instanceId:'deferred-fixture',pid:process.pid,dataKey:dataKey(home),version:'0.4.71',token:'private-token'}
+  let required=true,hermesStarts=0,runnerStarts=0
+  const server=createServer((req,res)=>{
+    assert.equal(req.headers['x-yaoyao-desktop-token'],record.token)
+    const {token,...identity}=record
+    res.setHeader('Content-Type','application/json')
+    if(req.url==='/desktop/service/activate'&&req.method==='POST'){required=false;hermesStarts++;res.end(JSON.stringify({activated:true}))}
+    else{assert.equal(req.url,'/desktop/service');assert.equal(req.method,'GET');res.end(JSON.stringify({...identity,activationRequired:required}))}
+  })
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
+  record.url=`http://127.0.0.1:${server.address().port}`
+  await writeFile(join(home,'service-instance.json'),JSON.stringify(record))
+  const manager=new DesktopServiceManager({home,version:record.version})
+  const flow=new DesktopOnboarding({remoteServer:()=>'',prepareLocal:async()=>{await manager.start();return manager.state.url},inspect:async()=>({authenticated:true}),
+    activate:async()=>{await manager.activate();runnerStarts++},navigate:async()=>{}})
+  try{
+    flow.select('local');await flow.prepare()
+    assert.equal(flow.state.phase,'ready');assert.equal(hermesStarts,0);assert.equal(runnerStarts,0)
+    await flow.submit()
+    assert.equal(hermesStarts,1);assert.equal(runnerStarts,1)
+    await manager.activate();assert.equal(hermesStarts,1)
+    // A process replacement while actively using local mode retains this entry's intent.
+    required=true;await manager.check();assert.equal(hermesStarts,2)
+    await manager.stop();required=true
+    flow.open({mode:'local'});await flow.prepare()
+    assert.equal(hermesStarts,2);assert.equal(runnerStarts,1)
+    await flow.submit()
+    assert.equal(hermesStarts,3);assert.equal(runnerStarts,2)
+  }finally{await manager.stop();await new Promise(resolve=>server.close(resolve));await rm(home,{recursive:true,force:true})}
+})
 test('checks recorded and bundled versions while permitting a separately owned older service',async()=>{
   const root='/fixture/desktop',record={protocol:1,instanceId:'fixture',pid:1234,dataKey:dataKey(root),version:'0.3.32',token:'fixture'}
   let actual={...record};delete actual.token

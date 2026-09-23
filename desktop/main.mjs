@@ -33,6 +33,7 @@ else {
   let updateWindow, updater, environmentHost, hostManager, onboarding
   let remoteMode = false, remoteURL = '', serverModeActive = false, switchingMode = false
   let recoveringService = false
+  let resumeLocalAfterUpdate = false
   const serviceURL = () => remoteMode ? remoteURL : manager?.state.url
   // Use the same Chromium networking as server detection/navigation. Auth owns
   // its cookie jar: do not send or overwrite another account's browser cookies.
@@ -218,6 +219,7 @@ else {
   app.on('window-all-closed', () => {})
   function requestQuit(stopBackground = false) {
     if (closing || quitting) return
+    const resumeLocal = serverModeActive && manager?.activationRequested === true
     closing = true; clearInterval(timer)
     updater?.stopChecking?.(); updater?.cancel(); updateWindow?.close()
     window?.hide()
@@ -240,9 +242,13 @@ else {
         else {
           closing=false
           if(remoteMode)await hostManager?.start().catch(error=>log(error.message))
-          else{
+          else if(serverModeActive){
             await manager?.reconnect().catch(error=>log(error.message))
-            await runnerManager?.start().catch(error=>log(error.message))
+            if(resumeLocal){
+              await manager?.activate().catch(error=>log(error.message))
+              environmentHost?.start()
+              await runnerManager?.start().catch(error=>log(error.message))
+            }
           }
           if (manager) stateChanged(manager.state)
           timer=setInterval(()=>{if(serverModeActive)void manager.check()},10000);timer.unref()
@@ -254,6 +260,7 @@ else {
   }
   async function prepareUpdateRestart() {
     if (closing || quitting) throw new Error('App 正在退出，请稍后重试')
+    resumeLocalAfterUpdate = serverModeActive && manager?.activationRequested === true
     closing = true; clearInterval(timer)
     await environmentHost?.close()
     await hostManager?.stop()
@@ -270,8 +277,11 @@ else {
     if (remoteMode) await hostManager?.start().catch(error => log(error.message))
     else if (serverModeActive) {
       await manager?.reconnect().catch(error => log(error.message))
-      environmentHost?.start()
-      await runnerManager?.start().catch(error => log(error.message))
+      if (resumeLocalAfterUpdate) {
+        await manager?.activate().catch(error => log(error.message))
+        environmentHost?.start()
+        await runnerManager?.start().catch(error => log(error.message))
+      }
     }
     clearInterval(timer)
     timer = setInterval(() => { if (serverModeActive) void manager?.check() }, 10000); timer.unref()
@@ -310,7 +320,7 @@ else {
         ? onProgress => stopLocalService({home,port,root,fixture:Boolean(fixtureHome),onProgress}) : undefined,
       synchronize: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
         ? (onProgress, { force = false } = {}) => synchronizeLocalService({ home, port, root, fixture: Boolean(fixtureHome), onProgress, force,
-          environment: { HERMES_YAOYAO_UPSTREAM: process.env.HERMES_YAOYAO_UPSTREAM || 'http://127.0.0.1:9119', HERMES_YAOYAO_SUPERVISE_DASHBOARD: fixtureHome ? '0' : '1' } })
+          environment: { HERMES_YAOYAO_UPSTREAM: process.env.HERMES_YAOYAO_UPSTREAM || 'http://127.0.0.1:9119', HERMES_YAOYAO_SUPERVISE_DASHBOARD: fixtureHome ? '0' : '1', HERMES_YAOYAO_DEFER_HERMES: '1' } })
         : undefined,
       fork: ({ home, port }) => {
         const env = { ...process.env, NODE_ENV: 'production', NODE_USE_ENV_PROXY: '0',
@@ -318,6 +328,7 @@ else {
           HERMES_YAOYAO_DESKTOP: '1', HERMES_YAOYAO_HOME: home, HERMES_YAOYAO_HOST: '127.0.0.1',
           HERMES_YAOYAO_PORT: String(port), HERMES_YAOYAO_STATIC_DIR: join(root, 'ui'),
           HERMES_YAOYAO_SUPERVISE_DASHBOARD: fixtureHome ? '0' : '1',
+          HERMES_YAOYAO_DEFER_HERMES: '1',
           HERMES_YAOYAO_UPSTREAM: process.env.HERMES_YAOYAO_UPSTREAM || 'http://127.0.0.1:9119' }
         delete env.ELECTRON_RUN_AS_NODE
         delete env.HERMES_YAOYAO_TLS_CERT; delete env.HERMES_YAOYAO_TLS_KEY
@@ -335,6 +346,8 @@ else {
     }
     async function runnerAction(action){try{await action()}catch(error){await dialog.showMessageBox(window,{type:'error',message:'执行节点操作未完成',detail:error.message})}}
     hostManager=new DesktopHostManager({home,root,dataRoot:app.getPath('userData'),
+      // Device polling must share the Chromium transport used to log in to LAN servers.
+      fetchImpl:authFetch,
       createCore:({root,dataRoot})=>new DesktopHostCore({root,dataRoot}),
       encrypt:value=>credentials.encrypt(value),
       decrypt:bytes=>credentials.decrypt(bytes),
@@ -356,6 +369,7 @@ else {
     })
     async function hostAction(action){try{await action()}catch(error){await dialog.showMessageBox(window,{type:'error',message:'电脑操作未完成',detail:error.message})}}
     const appDialog = options => window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
+    let authorizedOnboardingServer = ''
     async function authorizeComputer(server,session){
       const previous=await hostManager.read().catch(()=>undefined)
       const previousHostId=previous&&new URL(previous.serverURL).origin===new URL(server).origin?previous.hostId:undefined
@@ -421,12 +435,11 @@ else {
         if (force) await manager.retrySynchronization({ force: true })
         else await manager.start()
         if (manager.state.phase !== 'ready') throw new Error(manager.state.message)
-        if (!closing) environmentHost.start()
-        await runnerManager.start().catch(error => runnerManager.publish(error.message))
         return manager.state.url
       },
       register: ({ serverURL, username, password }) => remoteRegistration(serverURL, { username, password }, authFetch),
       authenticate: async ({ mode, serverURL, setup, username, password }) => {
+        authorizedOnboardingServer = ''
         const auth = await remoteSession(serverURL, { setup, username, password }, authFetch)
         for (const cookie of auth.cookieDetails) {
           await electronSession.defaultSession.cookies.set({ url: serverURL, ...cookie,
@@ -435,13 +448,15 @@ else {
         await electronSession.defaultSession.cookies.flushStore()
         let warning
         if (mode === 'remote' && auth.user.role === 'admin') {
-          try { await authorizeComputer(serverURL, auth) }
+          try { await authorizeComputer(serverURL, auth); authorizedOnboardingServer = serverURL }
           catch (error) { warning = `账号已登录，但电脑授权未恢复：${error.message}。可先进入夭夭，稍后在“电脑”菜单重新授权。` }
         }
         return { username: auth.user.username, warning }
       },
       activate: async ({ mode, serverURL, remember }) => {
         if (closing || quitting) throw new Error('App 正在退出')
+        const alreadyAuthorized = authorizedOnboardingServer === serverURL
+        authorizedOnboardingServer = ''
         if (mode === 'remote') {
           // Detach only; an independently installed local service keeps running.
           serverModeActive = false
@@ -450,9 +465,26 @@ else {
           await manager?.stop()
           remoteMode = true; remoteURL = serverURL
           await preferences.setRemoteServer(serverURL)
+          if (!alreadyAuthorized) {
+            // A remembered browser session skips password authentication. Restore
+            // its device authorization only on entry, never during detection.
+            try {
+              const current = await inspectServer(serverURL, (...args) => net.fetch(...args))
+              if (current.authenticated && current.user?.role === 'admin') {
+                const cookies = await electronSession.defaultSession.cookies.get({ url: serverURL })
+                await authorizeComputer(serverURL, { origin: serverURL, csrfToken: current.csrfToken,
+                  cookies: cookies.map(cookie => [cookie.name, cookie.value]) })
+              }
+            } catch (error) { hostManager.publish(`电脑授权未恢复：${error.message}`) }
+          }
           const enrolled = await hostManager.read().catch(error => { log(error.message); return undefined })
           if (enrolled && new URL(enrolled.serverURL).origin === new URL(serverURL).origin)
             await hostManager.start().catch(error => hostManager.publish(error.message))
+        } else {
+          await manager.activate()
+          if (closing || quitting) throw new Error('App 正在退出')
+          environmentHost.start()
+          await runnerManager.start().catch(error => runnerManager.publish(error.message))
         }
         await preferences.setStartupChoice(remember ? mode : 'ask')
         syncModeMenu()

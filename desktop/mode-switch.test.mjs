@@ -15,10 +15,35 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
   const identityReady=new Promise(resolve=>{releaseIdentity=resolve})
   const local=createServer(async(req,res)=>{
     if(req.url==='/desktop/service'){await identityReady;res.setHeader('Content-Type','application/json');res.end(JSON.stringify(identity))}
-    else if(req.url==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
+    else if(req.url.split('?')[0]==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
     else {res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的本机页面</title>')}
   })
-  const remote=createServer((_req,res)=>{if(_req.url==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}));return}res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的服务器页面</title>')})
+  let enrollments = 0, exchanges = 0, enrollmentFails = true
+  const deviceId = '99999999-9999-4999-8999-999999999999', deviceToken = 'fixture-machine-token-with-at-least-32-characters'
+  const remote=createServer((_req,res)=>{
+    if(_req.url.split('?')[0]==='/api/app/bootstrap'){
+      res.setHeader('Content-Type','application/json')
+      res.setHeader('Set-Cookie',['session=remembered; Path=/; HttpOnly','csrf=fixture; Path=/; HttpOnly'])
+      res.end(JSON.stringify({authenticated:true,csrfToken:'fixture',user:{id:'admin',role:'admin',username:'管理员'}}));return
+    }
+    if(_req.url==='/api/app/admin/desktop-hosts'&&_req.method==='POST'){
+      enrollments++
+      assert.equal(_req.headers.origin,remoteURL)
+      assert.equal(_req.headers['x-csrf-token'],'fixture')
+      assert.match(_req.headers.cookie,/session=remembered/)
+      res.setHeader('Content-Type','application/json')
+      if(enrollmentFails){res.statusCode=503;res.end(JSON.stringify({error:'fixture enrollment unavailable'}));return}
+      res.statusCode=201;res.end(JSON.stringify({host:{id:deviceId},token:deviceToken}));return
+    }
+    if(_req.url===`/api/desktop-host/v1/${deviceId}/exchange`){
+      exchanges++
+      assert.equal(_req.headers.authorization,`Bearer ${deviceToken}`)
+      assert.equal(_req.headers.origin,undefined)
+      assert.equal(_req.headers.cookie,undefined)
+      res.setHeader('Content-Type','application/json');res.end(JSON.stringify({commands:[]}));return
+    }
+    res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的服务器页面</title>')
+  })
   await new Promise(done=>local.listen(0,'127.0.0.1',done))
   await new Promise(done=>remote.listen(0,'127.0.0.1',done))
   const origin=`http://127.0.0.1:${local.address().port}`,remoteURL=`http://127.0.0.1:${remote.address().port}`
@@ -33,6 +58,7 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     assert.equal(await page.evaluate(()=>window.yaoyaoDesktop.switchMode('invalid').then(()=>false,()=>true)),true)
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('client')})
     await page.waitForURL(remoteURL+'/**')
+    assert.equal(enrollments,1,'entering an already signed-in remote session restores this computer authorization')
     assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.modeState()),{mode:'client',serverURL:remoteURL,switching:false,platform:'darwin',supportedModes:['client','server']})
     await expect.poll(async()=>JSON.parse(await readFile(join(home,'desktop-preferences.json'),'utf8')).startupChoice).toBe('remote')
     // Unchecking "ask at startup" must retain the active client role.
@@ -62,8 +88,26 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     await page.locator('#prepare-local').click()
     await page.locator('#submit').click()
     await page.waitForURL(origin+'/**')
+    enrollmentFails = false
+    await app.evaluate(async (_electron, credentialsModule) => {
+      // Fixture credentials stay in this temporary directory; do not access Keychain.
+      const module = process.getBuiltinModule('module')
+      const { DesktopCredentials } = module.createRequire(credentialsModule)(credentialsModule)
+      DesktopCredentials.prototype.encrypt = async value => Buffer.from(value)
+      DesktopCredentials.prototype.decrypt = async value => value.toString('utf8')
+      globalThis.fetch = async () => { throw new Error('fixture Node transport is unavailable') }
+      const http = process.getBuiltinModule('http')
+      const originalRequest = http.request
+      http.request = (url, ...args) => {
+        if (url?.pathname?.startsWith('/api/desktop-host/')) throw new Error('fixture Node socket is unavailable')
+        return originalRequest(url, ...args)
+      }
+      module.syncBuiltinESMExports()
+    }, join(root, 'desktop/credentials.mjs'))
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('client')})
     await page.waitForURL(remoteURL+'/**')
+    await expect.poll(() => exchanges).toBeGreaterThan(0)
+    assert.equal(enrollments,2,'restoring the session retries device registration without a password login')
     await page.evaluate(()=>{void window.yaoyaoDesktop.openRemoteLogin()})
     await page.waitForURL('**/boot.html')
     assert.equal(app.windows().length,1)

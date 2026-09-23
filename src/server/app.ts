@@ -71,6 +71,7 @@ import { HermesBridgeManager } from './hermesBridge.js'
 import type { DashboardController } from './dashboardController.js'
 
 export interface ApplicationOptions {
+  deferBackground?: boolean
   dashboardSupervisor?: DashboardController
   hermesBridge?: HermesBridgeManager
   config?: ServerConfig
@@ -126,6 +127,7 @@ export interface ApplicationRuntime {
   workspaceRoutines:WorkspaceRoutines
   workspacePlugins:WorkspacePlugins
   localVm: LocalVmService
+  startBackground(): void
   close(): void
 }
 
@@ -262,9 +264,15 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
   workspaceRuntime.assertCanSubmit=()=>hermesBridge.assertDashboardAvailable()
   const workspaceMemory = new WorkspaceMemorySynthesis(workspaceRuntime)
-  workspaceMemory.start()
   const openVikingSessionSync = new OpenVikingSessionSync(workspace, openVikingService, owner => auth.isUserActive(owner))
-  openVikingSessionSync.start()
+  let backgroundStarted = false, closed = false
+  const startBackground = () => {
+    if (backgroundStarted || closed) return
+    backgroundStarted = true
+    workspaceMemory.start()
+    openVikingSessionSync.start()
+  }
+  if (!options.deferBackground) startBackground()
   const grokCloud=new GrokCloud(workspace,auth,workspaceNodes,sharedComputers,options.grokFetch)
   const desktopEnvironments=new DesktopEnvironments(workspace,auth,workspaceNodes)
   const desktopHosts=new DesktopHostHub(workspace,auth)
@@ -570,7 +578,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
     pushEventCoordinator,
     chatPushJobs,
     chatCache,
+    startBackground,
     close: () => {
+      closed = true
       openVikingSessionSync.close()
       workspaceMemory.close()
       runners.close()
@@ -596,10 +606,11 @@ export function createApplication(options: ApplicationOptions = {}): Application
 
 export interface NodeServerRuntime {
   server: HttpServer
+  startBackground(): void
   close(closeConnections?: boolean): Promise<void>
 }
 
-export function createNodeServer(runtime: ApplicationRuntime): NodeServerRuntime {
+export function createNodeServer(runtime: ApplicationRuntime, options: { deferBackground?: boolean } = {}): NodeServerRuntime {
   const { config } = runtime
   const server: HttpServer = config.tlsCert && config.tlsKey
     ? createHttpsServer({
@@ -607,23 +618,42 @@ export function createNodeServer(runtime: ApplicationRuntime): NodeServerRuntime
         key: readFileSync(config.tlsKey),
       }, runtime.app.callback())
     : createHttpServer(runtime.app.callback())
+  let backgroundStarted = false, localVmStarted = false, closed = false
   const synchronizePushObservers = (enabled = runtime.push.isAnyProviderEnabled()) => {
+    if (!backgroundStarted || closed) return
     if (enabled) {
       runtime.chatPushJobs.start()
     } else {
       runtime.chatPushJobs.stop()
     }
   }
-  server.once('listening',()=>{const address=server.address();if(address&&typeof address!=='string')void runtime.localVm.start(`${config.tlsCert?'https':'http'}://127.0.0.1:${address.port}`).catch(error=>console.error('本地虚拟机服务启动失败',error.message))})
-  runtime.workspaceRuntime.start()
-  runtime.workspaceRoutines.start()
-  runtime.grokAuth.start()
-  synchronizePushObservers()
+  const startLocalVm = () => {
+    if (!backgroundStarted || localVmStarted || closed) return
+    const address = server.address()
+    if (!address || typeof address === 'string') return
+    localVmStarted = true
+    void runtime.localVm.start(`${config.tlsCert ? 'https' : 'http'}://127.0.0.1:${address.port}`)
+      .catch(error => console.error('本地虚拟机服务启动失败', error.message))
+  }
+  const startBackground = () => {
+    if (backgroundStarted || closed) return
+    backgroundStarted = true
+    runtime.startBackground()
+    runtime.workspaceRuntime.start()
+    runtime.workspaceRoutines.start()
+    runtime.grokAuth.start()
+    synchronizePushObservers()
+    startLocalVm()
+  }
+  server.once('listening', startLocalVm)
+  if (!options.deferBackground) startBackground()
   const removePushConfigurationListener = runtime.push.onEnabledChange(synchronizePushObservers)
   const removeWebSockets = runtime.realtime.rejectLegacyUpgrades(server)
   return {
     server,
+    startBackground,
     close: async (closeConnections = false) => {
+      closed = true
       await runtime.localVm.close()
       removePushConfigurationListener()
       removeWebSockets()

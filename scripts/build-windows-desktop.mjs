@@ -24,8 +24,9 @@ await bundleDesktopUpdater(join(out, 'electron-updater.cjs'), 'win32')
 await build({ entryPoints: [join(root, 'src/server/githubReleases.ts')], outfile: join(out, 'github-release.mjs'),
   bundle: true, platform: 'node', format: 'esm', target: 'node24' })
 await cp(join(root, 'bin/lib/data-home.mjs'), join(shell, 'data-home.mjs'))
+await cp(join(root, 'bin/lib/desktop-activation.mjs'), join(shell, 'desktop-activation.mjs'))
 for (const file of await readdir(join(root, 'desktop'))) {
-  if (file === 'data-home.mjs' || file.endsWith('.test.mjs') || !/\.(js|mjs|cjs|html|css|png|svg)$/.test(file)) continue
+  if (['data-home.mjs', 'desktop-activation.mjs'].includes(file) || file.endsWith('.test.mjs') || !/\.(js|mjs|cjs|html|css|png|svg)$/.test(file)) continue
   if (['file-transfer.mjs', 'host-files.mjs'].includes(file)) {
     await build({ entryPoints: [join(root, 'desktop', file)], outfile: join(shell, file), bundle: true, platform: 'node', format: 'esm', target: 'node24' })
   } else {

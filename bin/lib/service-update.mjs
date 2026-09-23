@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { readJSON, readRuntime, syncDecision, verifyRuntimePackage } from './runtime-release.mjs'
 import { backupData, databaseSchema, legacyDataIdle, restoreData } from './service-data.mjs'
 import { normalizeReleaseSource } from './release-source.mjs'
+import { deferDesktopActivation } from './desktop-activation.mjs'
 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 export const alive = pid => { try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' } }
@@ -168,9 +169,29 @@ export class LaunchAgentService {
     const temporary = `${this.plistPath}.${randomUUID()}`
     writeFileSync(temporary, xml, { mode: 0o600 }); renameSync(temporary, this.plistPath)
   }
-  async boot() {
+  prepareBoot(deferHermes) {
+    // A live service is only being reused. Its authorization and background
+    // work must survive inspection; reset only a service we are about to boot.
+    if (deferHermes && !this.pid()) {
+      const plist = JSON.parse(command('/usr/bin/plutil', ['-convert', 'json', '-o', '-', this.plistPath]))
+      plist.EnvironmentVariables ??= {}
+      plist.EnvironmentVariables.HERMES_YAOYAO_DEFER_HERMES = '1'
+      this.writePlist(plist)
+      deferDesktopActivation(this.home)
+      return true
+    }
+    return false
+  }
+  async boot({ deferHermes = this.environment.HERMES_YAOYAO_DEFER_HERMES === '1' } = {}) {
+    const prepared = this.prepareBoot(deferHermes)
     let loaded = false
     try { execFileSync('launchctl', ['print', `${this.domain}/${this.label}`], { stdio: 'ignore' }); loaded = true } catch { /* Not registered yet. */ }
+    // launchd caches a loaded job's environment even when it has no process.
+    // Reload that stopped job so its next process receives the deferred mode.
+    if (loaded && prepared && !this.pid()) {
+      command('launchctl', ['bootout', `${this.domain}/${this.label}`])
+      loaded = false
+    }
     if (loaded) { command('launchctl', ['kickstart', `${this.domain}/${this.label}`]); return }
     const deadline = Date.now() + 20000
     for (;;) {
@@ -191,13 +212,14 @@ export class LaunchAgentService {
     Object.assign(plist.EnvironmentVariables, { NODE_ENV: 'production', HERMES_YAOYAO_HOME: this.home, HERMES_YAOYAO_PORT: String(this.port),
       HERMES_YAOYAO_SERVICE_ROOT: stable, HERMES_YAOYAO_RELEASE_ROOT: this.releaseRoot, HERMES_YAOYAO_DESKTOP: '0',
       HERMES_YAOYAO_STATIC_DIR: join(stable, existsSync(join(root, 'ui')) ? 'ui' : 'dist') })
+    if (this.environment.HERMES_YAOYAO_DEFER_HERMES === '1') plist.EnvironmentVariables.HERMES_YAOYAO_DEFER_HERMES = '1'
     delete plist.EnvironmentVariables.ELECTRON_RUN_AS_NODE
     this.writePlist(plist); await this.boot()
   }
   async restore(previous) {
     if (!previous) { rmSync(this.plistPath, { force: true }); return }
     this.writePlist(previous.plist)
-    if (previous.wasRunning && !this.pid()) await this.boot()
+    if (previous.wasRunning && !this.pid()) await this.boot({ deferHermes: false })
   }
   async verify(expected, timeout = 45000) {
     const deadline = Date.now() + timeout

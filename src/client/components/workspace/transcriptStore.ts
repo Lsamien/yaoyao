@@ -118,6 +118,10 @@ export class WorkspaceTranscriptStore {
     return detail
   }
   hydrate(snapshot: WorkspaceSnapshot): void {
+    if (!snapshot || !Number.isSafeInteger(snapshot.cursor) || snapshot.cursor < 0
+      || !Array.isArray(snapshot.agents) || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.details)) {
+      throw new Error('Bot 会话数据尚未就绪，正在重新同步')
+    }
     const reset = snapshot.cursor === 0 && snapshot.conversations.length === 0
     const previous = new Map(reset ? [] : this.details)
     if (reset) this.reads.clear()

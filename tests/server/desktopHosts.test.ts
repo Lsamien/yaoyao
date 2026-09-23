@@ -101,6 +101,38 @@ it('re-enables the exact disabled legacy computer after an explicit administrato
     .expect(403)
 })
 
+it.each(['disabled','deleted','rotated'] as const)('restores an installed computer with %s server credentials',async(state)=>{
+  const installId='44444444-4444-4444-8444-444444444444'
+  const enrollment={name:'书房 iMac',installId}
+  const first=(await request(app()).post('/api/app/admin/desktop-hosts').send(enrollment).expect(201)).body
+  const exchange=(id:string,credential:string)=>request(app()).post(`/api/desktop-host/v1/${id}/exchange`)
+    .set('Authorization','Bearer '+credential)
+    .set('x-desktop-host-protocol','1')
+    .send(body())
+  await exchange(first.host.id,first.token).expect(200)
+  let supersededToken:string|undefined
+  if(state==='disabled')await request(app()).delete(`/api/app/admin/desktop-hosts/${first.host.id}`).expect(200)
+  else if(state==='deleted')store.remove('_system','desktop-host',first.host.id)
+  else supersededToken=(await request(app()).post('/api/app/admin/desktop-hosts').send(enrollment).expect(201)).body.token
+  await exchange(first.host.id,first.token).expect(403)
+
+  const restored=(await request(app()).post('/api/app/admin/desktop-hosts')
+    .send({...enrollment,previousHostId:first.host.id}).expect(201)).body
+  expect(restored.host).toMatchObject({installId,enabled:true})
+  if(state==='deleted')expect(restored.host.id).not.toBe(first.host.id)
+  else expect(restored.host.id).toBe(first.host.id)
+  expect(restored.token).not.toBe(first.token)
+  await exchange(restored.host.id,restored.token).expect(200)
+  await exchange(first.host.id,first.token).expect(403)
+  await exchange(restored.host.id,first.token).expect(403)
+  if(supersededToken)await exchange(restored.host.id,supersededToken).expect(403)
+  expect(exchanged).toHaveLength(2)
+  const list=(await request(app()).get('/api/app/admin/desktop-hosts').expect(200)).body
+  expect(list.hosts).toHaveLength(1)
+  expect(list.hosts.filter((host:{enabled:boolean})=>host.enabled)).toHaveLength(1)
+  expect(list.hosts[0]).toMatchObject({id:restored.host.id,installId,enabled:true,online:true})
+})
+
 it('admits optional negotiated environment facts through the same remote transport schema',async()=>{
  await enroll()
  const input=body()

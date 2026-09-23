@@ -5,6 +5,7 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { deferDesktopActivation } from './desktop-activation.mjs'
 
 const exec = promisify(execFile)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -47,6 +48,7 @@ export class DesktopServiceManager {
     this.generation = 0
     this.stopping = false
     this.restarts = []
+    this.activationRequested = false
   }
   publish(value) {
     if (value.phase === 'ready' && this.updateNotice) value = { ...value, updateNotice: this.updateNotice, message: `${value.message}，Web 同步待完成` }
@@ -86,6 +88,20 @@ export class DesktopServiceManager {
       throw new Error('服务身份与本地数据不匹配')
     if (this.child?.pid === actual.pid && actual.version !== this.options.version) throw new Error('App 内置服务版本不匹配，请重新安装完整 App')
     return { ...actual, url: url.origin }
+  }
+  async activate() {
+    if (this.state.legacy) { this.activationRequested = true; return }
+    const generation = this.generation, record = await this.readRecord()
+    if (!record) throw new Error('本机服务尚未就绪')
+    const service = await this.verify(record)
+    if (this.stopping || generation !== this.generation) throw new Error('本机服务状态已改变，请重试')
+    await this.activateRecord(record, service)
+    if (this.stopping || generation !== this.generation) throw new Error('本机服务状态已改变，请重试')
+    this.activationRequested = true
+  }
+  async activateRecord(record, service) {
+    if (service.activationRequired)
+      await localJSON(new URL('/desktop/service/activate', service.url), { 'x-yaoyao-desktop-token': record.token }, 'POST')
   }
   async legacyService() {
     // Old CLI/LaunchAgent builds lack the new descriptor. Prove the listener
@@ -137,6 +153,8 @@ export class DesktopServiceManager {
       if (record?.url) {
         const service = await this.verify(record)
         if (generation !== this.generation || this.stopping) return
+        if (this.activationRequested) await this.activateRecord(record, service)
+        if (generation !== this.generation || this.stopping) return
         this.publish({ phase: 'ready', message: `已连接已有服务（${service.version}）`, ...service, external: !this.child })
         return this.state
       }
@@ -145,6 +163,7 @@ export class DesktopServiceManager {
       if (legacy) { this.publish({ phase: 'ready', message: '已连接已有后台服务', ...legacy }); return this.state }
       if (!record) {
         if (this.options.synchronize) throw new Error('独立后台服务尚未就绪，请稍后重试')
+        deferDesktopActivation(this.root)
         const child = this.options.fork({ home: this.root, port: this.options.port })
         child.desktopExited = false
         this.child = child
@@ -167,6 +186,8 @@ export class DesktopServiceManager {
           try {
             const service = await this.verify(record)
             if (this.child && service.pid !== this.child.pid) throw new Error('服务启动期间归属发生变化')
+            if (generation !== this.generation || this.stopping) return
+            if (this.activationRequested) await this.activateRecord(record, service)
             if (generation !== this.generation || this.stopping) return
             this.publish({ phase: 'ready', message: '本地服务已就绪', ...service, external: !this.child })
             return this.state
@@ -205,6 +226,9 @@ export class DesktopServiceManager {
         const record = await this.readRecord()
         if (!record) throw new Error('服务已停止')
         const service = await this.verify(record)
+        if (this.stopping || generation !== this.generation) return
+        if (this.activationRequested) await this.activateRecord(record, service)
+        if (this.stopping || generation !== this.generation) return
         if (service.pid !== this.state.pid || service.version !== this.state.version || service.build?.commit !== this.state.build?.commit)
           this.publish({ phase: 'ready', message: `已连接后台服务（${service.version}）`, ...service, external: !this.child })
       }
@@ -239,6 +263,7 @@ export class DesktopServiceManager {
   async stop() {
     const owned = Boolean(this.child)
     this.stopping = true
+    this.activationRequested = false
     clearTimeout(this.restartTimer)
     ++this.generation
     await this.starting?.catch(() => {})
@@ -248,6 +273,7 @@ export class DesktopServiceManager {
   }
   async stopBackground() {
     this.stopping = true
+    this.activationRequested = false
     clearTimeout(this.restartTimer)
     ++this.generation
     await this.starting?.catch(() => {})

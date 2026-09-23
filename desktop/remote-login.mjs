@@ -47,7 +47,7 @@ class CookieJar{
 
 export async function inspectServer(serverURL,fetchImpl=globalThis.fetch){
   const base=normalizeServerURL(serverURL)
-  const response=await requestServer(fetchImpl,new URL('/api/app/bootstrap',base),{
+  const response=await requestServer(fetchImpl,new URL('/api/app/bootstrap?inspectOnly=1',base),{
     headers:{accept:'application/json'},redirect:'error',signal:AbortSignal.timeout(10000),
   })
   if(!response.ok)throw new Error(`无法连接服务器（HTTP ${response.status}）`)

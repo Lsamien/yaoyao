@@ -17,7 +17,7 @@ test('the main local app can open the native updater and repeated requests reuse
   const identityReady = new Promise(resolve => { releaseIdentity = resolve })
   const server = createServer(async (req, res) => {
     if (req.url === '/desktop/service') { await identityReady; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(identity)) }
-    else if(req.url==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
+    else if(req.url.split('?')[0]==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
     else { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end('<title>Update entry fixture</title><button onclick="window.yaoyaoDesktop.openUpdates()">检测更新</button>') }
   })
   await new Promise(done => server.listen(0, '127.0.0.1', done))
@@ -57,7 +57,7 @@ test('client mode opens local App updates without a local service or admin role'
   const root = resolve(import.meta.dirname, '..')
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-client-update-')))
   const remote = createServer((req, res) => {
-    if (req.url === '/api/app/bootstrap') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ authenticated: true, csrfToken: 'fixture', user: { role: 'member' } })) }
+    if (req.url.split('?')[0] === '/api/app/bootstrap') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ authenticated: true, csrfToken: 'fixture', user: { role: 'member' } })) }
     else { res.setHeader('Content-Type', 'text/html'); res.end('<title>Remote member</title><button onclick="window.yaoyaoDesktop.openUpdates()">App update</button>') }
   })
   await new Promise(done => remote.listen(0, '127.0.0.1', done))

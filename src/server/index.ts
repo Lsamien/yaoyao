@@ -13,6 +13,7 @@ import { migrateDataHome } from '../../bin/lib/data-migration.mjs'
 import { legacyDataHome, resolveDataHome } from '../../bin/lib/data-home.mjs'
 import { spawn } from 'node:child_process'
 import { ServerDashboardController } from './dashboardController.js'
+import { DesktopActivation } from './desktopActivation.js'
 
 migrateDataHome(resolveDataHome(process.env.YAOYAO_HOME || process.env.HERMES_YAOYAO_HOME, { preserveActiveUpdate: true }))
 const config = loadServerConfig()
@@ -29,13 +30,17 @@ const dashboardSupervisor = config.superviseDashboard
   ? new DashboardSupervisor({ managed: process.env.HERMES_YAOYAO_DESKTOP === '1' })
   : undefined
 const dashboardController = new ServerDashboardController(config.upstream, dashboardSupervisor)
-const runtime = createApplication({config, dashboardSupervisor: dashboardController})
-const nodeRuntime = createNodeServer(runtime)
+const runtime = createApplication({config, dashboardSupervisor: dashboardController, deferBackground: true})
+const nodeRuntime = createNodeServer(runtime, {deferBackground:true})
+const desktopActivation = new DesktopActivation(config.home, process.env.HERMES_YAOYAO_DEFER_HERMES === '1', () => {
+  nodeRuntime.startBackground()
+  dashboardSupervisor?.start()
+})
 let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).
 // The capability is loopback-only and never shared with the Web renderer.
 runtime.app.middleware.unshift(instance.middleware(shutdown, () => runtime.realtime.broker.idleForUpdate
-  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermesBridge.idleForUpdate, ctx=>runtime.desktopEnvironments.bridge(ctx)))
+  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermesBridge.idleForUpdate, ctx=>runtime.desktopEnvironments.bridge(ctx), desktopActivation))
 
 if (runtime.config.production) {
   const dist = resolve(process.env.HERMES_YAOYAO_STATIC_DIR || resolve(process.cwd(), 'dist'))
@@ -95,7 +100,7 @@ nodeRuntime.server.listen(runtime.config.port, runtime.config.host, () => {
   if (runtime.config.insecureLan) {
     console.warn('Warning: trusted-LAN HTTP mode is enabled; credentials are not encrypted in transit.')
   }
-  dashboardSupervisor?.start()
+  desktopActivation.start()
 })
 
 let closing = false

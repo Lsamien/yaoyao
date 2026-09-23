@@ -12,7 +12,7 @@ import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth'
 import { WorkspaceAssets } from '../../src/server/workspaceAssets'
 import { WorkspaceTranscriptStore } from '../../src/client/components/workspace/transcriptStore'
 import { SharedComputers, type SharedComputer } from '../../src/server/sharedComputers'
-import type { WorkspaceAgent } from '../../src/shared/workspace'
+import type { WorkspaceAgent, WorkspaceConversation } from '../../src/shared/workspace'
 
 let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, upstream: string[], bridgeReady: boolean
 const first: LocalUser = {
@@ -123,6 +123,36 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it.each(['empty', 'existing'] as const)('serves a complete %s Bot snapshot before any Runner or virtual machine is created', async state => {
+    const store = runtime.workspace
+    expect(runtime.runners.records()).toEqual([])
+    expect(store.list('first', 'shared-computer')).toEqual([])
+    let conversation: WorkspaceConversation | undefined
+    if (state === 'existing') {
+      store.createAgent('first', { name: '尚未配置电脑的 Bot', profile: 'default' })
+      conversation = store.list<WorkspaceConversation>('first', 'conversation')[0]!
+      store.saveMessage('first', { id: randomUUID(), conversationId: conversation.id, seq: 0, role: 'assistant',
+        content: '没有虚拟机也能读取聊天记录', reasoning: '', status: 'complete', tools: [], attachments: [], createdAt: Date.now() })
+    }
+    const requestsBeforeSnapshot = [...upstream]
+    const response = await req('get', '/api/app/workspace/snapshot').expect(200).expect('Content-Type', /json/)
+    const snapshot = response.body
+    expect(Number.isSafeInteger(snapshot.cursor)).toBe(true)
+    expect(snapshot.cursor).toBeGreaterThanOrEqual(0)
+    for (const key of ['agents', 'conversations', 'details', 'projects']) expect(Array.isArray(snapshot[key])).toBe(true)
+    const client = new WorkspaceTranscriptStore()
+    expect(() => client.hydrate(snapshot)).not.toThrow()
+    expect(client.cursor).toBe(snapshot.cursor)
+    if (conversation) {
+      expect(client.conversations.map(row => row.id)).toEqual([conversation.id])
+      expect(client.get(conversation.id)?.messages.map(message => message.content)).toEqual(['没有虚拟机也能读取聊天记录'])
+    } else {
+      expect(snapshot).toMatchObject({ cursor: 0, agents: [], conversations: [], details: [] })
+    }
+    expect(runtime.runners.records()).toEqual([])
+    expect(store.list('first', 'shared-computer')).toEqual([])
+    expect(upstream).toEqual(requestsBeforeSnapshot)
+  })
   it('does not advertise retired remote Bot references and preserves their existing history', async () => {
     const store = runtime.workspace
     const agent = store.createAgent('first', { name: '历史远程 Bot', profile: 'default' })

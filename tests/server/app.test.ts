@@ -107,6 +107,23 @@ function cookieHeader(response: request.Response): string {
 
 describe('15300 BFF', () => {
   it.each([
+    { create: createUnauthenticatedApplication, authenticated: false },
+    { create: createApplication, authenticated: true },
+    { create: createUserAuthenticatedApplication, authenticated: true },
+  ])('inspects local login state without binding a Hermes session (authenticated=$authenticated)', async ({ create, authenticated }) => {
+    const records: RecordedRequest[] = []
+    const runtime = create({ config: makeConfig(), fetchImpl: fakeGateway(records) })
+    runtimes.push(runtime)
+    const result = await request(runtime.app.callback()).get('/api/app/bootstrap?inspectOnly=1')
+      .set('Host', '127.0.0.1:15300').expect(200)
+    expect(result.body).toMatchObject({ authenticated, serverKind: 'yaoyao-web', profiles: [] })
+    expect(result.body.registrationAvailable).toEqual(expect.any(Boolean))
+    expect(runtime.csrf.verify(cookieHeader(result), result.body.csrfToken)).toBe(true)
+    expect(result.headers['cache-control']).toContain('no-store')
+    expect(records).toEqual([])
+  })
+
+  it.each([
     { create: createUnauthenticatedApplication, userId: null },
     { create: createApplication, userId: 'test-admin' },
     { create: createUserAuthenticatedApplication, userId: 'test-user' },

@@ -12,7 +12,7 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
   let exchanges = 0, app
   const server = createServer((req, res) => {
     const json = (body, status = 200) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)) }
-    if (req.url === '/api/app/bootstrap') {
+    if (req.url.split('?')[0] === '/api/app/bootstrap') {
       res.setHeader('set-cookie', 'csrf=fixture; Path=/; HttpOnly')
       return json({ authenticated: String(req.headers.cookie).includes('session=fixture'), setupRequired: false, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
     }

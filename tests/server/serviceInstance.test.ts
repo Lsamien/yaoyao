@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import Koa from 'koa'
 import request from 'supertest'
 import { acquireServiceInstance } from '../../src/server/serviceInstance'
+import { DesktopActivation } from '../../src/server/desktopActivation'
 
 let home: string
 let instances: ReturnType<typeof acquireServiceInstance>[]
@@ -14,6 +15,28 @@ afterEach(() => { for (const instance of instances) instance.release(); rmSync(h
 const acquire = (desktop = true) => { const instance = acquireServiceInstance(home, '0.3.32', desktop); instances.push(instance); return instance }
 
 describe('service ownership', () => {
+  it('inspection never activates Hermes, and activation requires the private local capability', async () => {
+    const instance = acquire(false), launch = vi.fn(), activation = new DesktopActivation(home, true, launch)
+    const app = new Koa().use(instance.middleware(async () => {}, () => true, undefined, activation))
+    const api = request(app.callback()), auth = { 'x-yaoyao-desktop-token': instance.record.token }
+    activation.start()
+    const inspection = await api.get('/desktop/service').set(auth).expect(200)
+    expect(inspection.body.activationRequired).toBe(true)
+    await api.post('/desktop/service/activate').expect(403)
+    await api.post('/desktop/service/activate').set(auth).set('Origin', 'http://localhost').expect(403)
+    await api.get('/desktop/service/activate').set(auth).expect(405)
+    expect(launch).not.toHaveBeenCalled()
+    await api.post('/desktop/service/quiesce').set(auth).expect(200)
+    await api.post('/desktop/service/activate').set(auth).expect(503)
+    await api.delete('/desktop/service/quiesce').set(auth).expect(200)
+    await api.post('/desktop/service/activate').set(auth).expect(200)
+    await api.post('/desktop/service/activate').set(auth).expect(200)
+    expect(launch).toHaveBeenCalledTimes(1)
+    const activated = await api.get('/desktop/service').set(auth).expect(200)
+    expect(activated.body.activationRequired).toBe(false)
+    instance.beginShutdown()
+    await api.post('/desktop/service/activate').set(auth).expect(503)
+  })
   it('rejects new application requests during shutdown without calling it an update',async()=>{
     const instance=acquire(false)
     const app=new Koa().use(instance.middleware(async()=>{})).use(ctx=>{ctx.body={ok:true}})

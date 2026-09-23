@@ -8,6 +8,14 @@ const detail = (): WorkspaceDetail => ({ conversation, messages: [message('old',
 const event = (seq: number, value: WorkspaceMessage): WorkspaceEvent => ({ seq, type: 'message.changed', conversationId: value.conversationId, data: value })
 
 describe('Bot transcript cache', () => {
+  it.each([undefined, null, { agents: [], conversations: [], details: [] }, { cursor: 0 }])('keeps the last transcript when a snapshot response is incomplete', snapshot => {
+    const store = new WorkspaceTranscriptStore(), initial = detail()
+    store.hydrate({ agents: [], conversations: [conversation], details: [initial], cursor: 10 })
+    expect(() => store.hydrate(snapshot as any)).toThrow('Bot 会话数据尚未就绪')
+    expect(store.cursor).toBe(10)
+    expect(store.conversations).toEqual([conversation])
+    expect(store.get('c')).toBe(initial)
+  })
   it('keeps independent clients ordered after snapshots, pin changes and new activity', () => {
     const rows: WorkspaceConversation[] = [
       { ...conversation, id: 'tie-b', lastMessageAt: 200 },

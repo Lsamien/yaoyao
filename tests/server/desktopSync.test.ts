@@ -9,6 +9,7 @@ import { assertRollbackCompatible, backupData, databaseSchema } from '../../bin/
 import { currentRelease, reserveUpdate, switchRelease, synchronizeDesktop, stopDesktopService, transitionService, updateMutex, writeJSON, recoverTransition, LaunchAgentService } from '../../bin/lib/service-update.mjs'
 import { execFileSync } from 'node:child_process'
 import { RunnerHub } from '../../src/server/runnerHub'
+import { deferDesktopActivation, grantDesktopActivation, hasDesktopActivation } from '../../bin/lib/desktop-activation.mjs'
 
 const homes: string[] = []
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
@@ -21,6 +22,48 @@ function runtime(root: string, commit = 'b'.repeat(40), version = '0.3.32', ance
   sealRuntime(root); return verifyRuntimePackage(root)
 }
 const clean = (commit: string, ancestors: string[] = [], version = '0.3.32') => ({ commit, ancestors, version, dirty: false })
+
+it('defers Hermes for both new and old desktop LaunchAgents while preserving other service settings', async () => {
+  const home = temporary(), root = join(home, 'runtime'), releaseRoot = join(home, 'releases')
+  runtime(root)
+  const driver = new LaunchAgentService({ home, releaseRoot, environment: {
+    HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:9119', HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1', HERMES_YAOYAO_DEFER_HERMES: '1',
+  } })
+  let saved: any, boots = 0
+  driver.writePlist = (plist: any) => { saved = structuredClone(plist) }
+  driver.boot = async () => { boots++ }
+  await driver.start(root)
+  expect(saved.EnvironmentVariables).toMatchObject({ HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1', HERMES_YAOYAO_DEFER_HERMES: '1' })
+  const existing = structuredClone(saved)
+  delete existing.EnvironmentVariables.HERMES_YAOYAO_DEFER_HERMES
+  existing.EnvironmentVariables.CUSTOM_SETTING = 'keep'
+  await driver.start(root, { plist: existing })
+  expect(saved.EnvironmentVariables.HERMES_YAOYAO_DEFER_HERMES).toBe('1')
+  expect(saved.EnvironmentVariables.HERMES_YAOYAO_SUPERVISE_DASHBOARD).toBe('1')
+  expect(saved.EnvironmentVariables.CUSTOM_SETTING).toBe('keep')
+  expect(existing.EnvironmentVariables.HERMES_YAOYAO_DEFER_HERMES).toBeUndefined()
+  expect(boots).toBe(2)
+})
+
+it.skipIf(process.platform !== 'darwin')('clears a saved activation only when an inspection actually boots a stopped service', () => {
+  const home = temporary(), plistPath = join(home, 'fixture.plist')
+  const driver = new LaunchAgentService({ home, releaseRoot: join(home, 'releases'), plistPath, environment: { HERMES_YAOYAO_DEFER_HERMES: '1' } })
+  driver.writePlist({ EnvironmentVariables: { HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1', CUSTOM_SETTING: 'keep' } })
+  grantDesktopActivation(home)
+  driver.pid = () => process.pid
+  driver.prepareBoot(true)
+  expect(hasDesktopActivation(home)).toBe(true)
+  let plist = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath], { encoding: 'utf8' }))
+  expect(plist.EnvironmentVariables.HERMES_YAOYAO_DEFER_HERMES).toBeUndefined()
+  driver.pid = () => undefined
+  driver.prepareBoot(true)
+  expect(hasDesktopActivation(home)).toBe(false)
+  plist = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath], { encoding: 'utf8' }))
+  expect(plist.EnvironmentVariables).toMatchObject({ HERMES_YAOYAO_DEFER_HERMES: '1', HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1', CUSTOM_SETTING: 'keep' })
+  grantDesktopActivation(home)
+  driver.prepareBoot(false)
+  expect(hasDesktopActivation(home)).toBe(true)
+})
 
 it.skipIf(process.platform !== 'darwin')('persists official source migration while preserving custom sources and other service settings', () => {
   const home = temporary(), plistPath = join(home, 'fixture.plist')
@@ -123,6 +166,10 @@ describe('transactional service switching', () => {
   it('restores both schema and data after a failed startup; preserves independent Runner state', async () => {
     const f = fixture(), schema = databaseSchema(f.home)
     mkdirSync(join(f.home, 'runner-state')); writeFileSync(join(f.home, 'runner-state', 'preserve'), 'runner')
+    grantDesktopActivation(f.home)
+    const start = f.driver.start
+    f.driver.start = async () => { deferDesktopActivation(f.home); await start() }
+    f.driver.restore = async () => { expect(hasDesktopActivation(f.home)).toBe(true) }
     f.fail()
     await expect(transitionService({ ...f, finalRoot: f.target })).rejects.toThrow('wrong running build')
     expect(currentRelease(f.releaseRoot)).toBe(f.old)
@@ -132,6 +179,7 @@ describe('transactional service switching', () => {
     expect(readFileSync(join(f.home, 'settings.json'), 'utf8')).toBe('original')
     expect(existsSync(join(f.home, 'new-migration-file'))).toBe(false)
     expect(readFileSync(join(f.home, 'runner-state', 'preserve'), 'utf8')).toBe('runner')
+    expect(hasDesktopActivation(f.home)).toBe(true)
     expect(existsSync(join(f.home, 'updates', 'last-success.json'))).toBe(false)
   })
   it('does not stop or mark a busy service as synchronized', async () => {

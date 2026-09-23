@@ -6,7 +6,7 @@ import {join} from 'node:path'
 import {createServer} from 'node:http'
 import {randomUUID,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto'
 import {HostEnvironmentReporter} from './host-environment.mjs'
-import {DesktopHostManager} from './host-manager.mjs'
+import {DesktopHostManager,remoteExchange} from './host-manager.mjs'
 import {parseDesktopHostConfiguration} from './host-config.mjs'
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
@@ -23,13 +23,13 @@ test('computer configuration validation mirrors the runner rules',()=>{
  assert.throws(()=>parseDesktopHostConfiguration({...base,token:'short'}),/电脑凭据/)
 })
 
-async function fixture(config){
+async function fixture(config,options={}){
  const home=await mkdtemp(join(tmpdir(),'yaoyao-desktop-host-')),key=randomBytes(32)
  const encrypt=value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);const bytes=Buffer.concat([cipher.update(value),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),bytes])}
  const decrypt=bytes=>{const cipher=createDecipheriv('aes-256-gcm',key,bytes.subarray(0,12));cipher.setAuthTag(bytes.subarray(12,28));return Buffer.concat([cipher.update(bytes.subarray(28)),cipher.final()]).toString()}
  const cores=[],handled=[]
  const manager=new DesktopHostManager({home,root:'/app',dataRoot:home,
-  encrypt,decrypt,
+  encrypt,decrypt,...options,
   createCore:()=>{const reporter=new HostEnvironmentReporter('/Users/fixture');const core={id:randomUUID(),closed:false,results:[],exchanges:0,
     info(){core.exchanges++;return {id:core.id,name:'测试 Mac',platform:'darwin',screen:true,accessibility:true,approved:[],...reporter.fields()}},
     acceptCapabilities(capabilities){reporter.accept(capabilities)},
@@ -63,6 +63,77 @@ test('a damaged installation identity is not silently replaced by a new computer
   await assert.rejects(()=>manager.installIdentity(),/设备标识/)
   assert.equal(await readFile(join(home,'desktop-install-id'),'utf8'),'damaged')
  }finally{await rm(home,{recursive:true,force:true})}
+})
+
+test('device polling uses the injected login transport without cookies or redirects',async()=>{
+ const config={protocol:1,serverURL:'http://127.0.0.1:1',hostId:randomUUID(),token:randomBytes(32).toString('base64url')}
+ const requests=[]
+ const f=await fixture(config,{fetchImpl:async(url,options)=>{
+  requests.push({url,options})
+  return Response.json({commands:[{id:'test-command'}],capabilities:{environmentMetadata:1}})
+ }})
+ try{
+  await f.manager.importFile(f.configPath)
+  clearTimeout(f.manager.timer)
+  await f.manager.cycle();clearTimeout(f.manager.timer)
+  assert.equal(requests.length,1)
+  assert.equal(requests[0].url,`${config.serverURL}/api/desktop-host/v1/${config.hostId}/exchange`)
+  const options=requests[0].options
+  assert.equal(options.method,'POST')
+  assert.equal(options.credentials,'omit')
+  assert.equal(options.redirect,'error')
+  assert.equal(options.headers.Authorization,`Bearer ${config.token}`)
+  assert.equal(options.headers['x-desktop-host-protocol'],'1')
+  assert.equal(JSON.parse(options.body).host.name,'测试 Mac')
+  assert.match(f.manager.state,/已连接/)
+  assert.deepEqual(f.handled,[{id:'test-command'}])
+ }finally{await f.manager.stop();await rm(f.home,{recursive:true,force:true})}
+})
+
+test('injected transport stops polling on revoked authorization or incompatible protocol',async()=>{
+ for(const status of [401,403,409]){
+  const config={protocol:1,serverURL:'http://127.0.0.1:1',hostId:randomUUID(),token:randomBytes(32).toString('base64url')}
+  let requests=0
+  const f=await fixture(config,{fetchImpl:async()=>{requests++;return new Response('',{status})}})
+  try{
+   await f.manager.importFile(f.configPath);clearTimeout(f.manager.timer)
+   await f.manager.cycle();await f.manager.cycle()
+   assert.equal(requests,1)
+   assert.equal(f.cores[0].closed,true)
+   assert.equal(f.manager.timer,undefined)
+   assert.match(f.manager.state,status===409?/协议不兼容/:/授权已失效/)
+  }finally{await f.manager.stop();await rm(f.home,{recursive:true,force:true})}
+ }
+})
+
+test('injected transport retries transient network errors',async()=>{
+ const config={protocol:1,serverURL:'http://127.0.0.1:1',hostId:randomUUID(),token:randomBytes(32).toString('base64url')}
+ let requests=0
+ const f=await fixture(config,{fetchImpl:async()=>{
+  if(++requests===1)throw new Error('EHOSTUNREACH')
+  return Response.json({commands:[]})
+ }})
+ try{
+  await f.manager.importFile(f.configPath);clearTimeout(f.manager.timer)
+  await f.manager.cycle();clearTimeout(f.manager.timer)
+  assert.match(f.manager.state,/正在重试/)
+  assert.equal(f.cores[0].closed,false)
+  assert.equal(f.manager.backoff,800)
+  await f.manager.cycle();clearTimeout(f.manager.timer)
+  assert.match(f.manager.state,/已连接/)
+  assert.equal(f.manager.backoff,400)
+ }finally{await f.manager.stop();await rm(f.home,{recursive:true,force:true})}
+})
+
+test('injected transport rejects oversized desktop responses and invalid JSON',async()=>{
+ const config={serverURL:'https://yaoyao.example.com',hostId:randomUUID(),token:randomBytes(32).toString('base64url')}
+ let cancelled=false
+ await assert.rejects(()=>remoteExchange(config,{},async()=>new Response(new ReadableStream({
+  start(controller){controller.enqueue(new Uint8Array(16*1024*1024+1))},
+  cancel(){cancelled=true},
+ }))),/桌面命令超过限制/)
+ assert.equal(cancelled,true)
+ await assert.rejects(()=>remoteExchange(config,{},async()=>new Response('not json')),SyntaxError)
 })
 
 test('imports an encrypted config, exchanges with the paired server and stops on revocation',async()=>{

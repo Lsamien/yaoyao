@@ -19,10 +19,15 @@ test('packaged core service starts, preserves window-close work, recovers, and s
   try{
     await until(()=>localJSON(`http://127.0.0.1:${upstreamPort}/api/status`),Boolean)
     app=await electron.launch({...(process.env.DESKTOP_TEST_EXECUTABLE?{executablePath:process.env.DESKTOP_TEST_EXECUTABLE}:{}),args:process.env.DESKTOP_TEST_EXECUTABLE?[]:[root],cwd:root,env:{...process.env,HERMES_YAOYAO_DESKTOP_TEST_HOME:home,HERMES_YAOYAO_DESKTOP_PORT:String(port),HERMES_YAOYAO_UPSTREAM:`http://127.0.0.1:${upstreamPort}`},timeout:30000})
-    const page=await app.firstWindow();await enterLocal(page);await page.waitForURL(`http://127.0.0.1:${port}/**`)
+    const page=await app.firstWindow()
+    await page.locator('#login-form').waitFor()
+    const prepared=JSON.parse(await readFile(join(home,'service-instance.json'),'utf8'))
+    assert.equal((await localJSON(`http://127.0.0.1:${port}/desktop/service`,{'x-yaoyao-desktop-token':prepared.token})).activationRequired,true)
+    await enterLocal(page);await page.waitForURL(`http://127.0.0.1:${port}/**`)
     const initial=JSON.parse(await readFile(join(home,'service-instance.json'),'utf8'));pid=initial.pid
     const identity=await localJSON(`http://127.0.0.1:${port}/desktop/service`,{'x-yaoyao-desktop-token':initial.token})
     assert.equal(identity.desktopOwned,true);assert.equal(identity.pid,pid);assert.equal(identity.version,release.webVersion)
+    assert.equal(identity.activationRequired,false)
     assert.equal(await page.evaluate(async()=>{try{await window.yaoyaoDesktop.retry();return false}catch{return true}}),true)
     await mkdir(join(root,'test-results/desktop'),{recursive:true});await page.screenshot({path:join(root,'test-results/desktop/packaged-core.png')})
     await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close())

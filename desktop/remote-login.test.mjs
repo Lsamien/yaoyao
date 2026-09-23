@@ -2,7 +2,18 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {randomUUID,randomBytes} from 'node:crypto'
-import {remoteSession,enrollDesktopHost,normalizeServerURL} from './remote-login.mjs'
+import {remoteSession,enrollDesktopHost,normalizeServerURL,inspectServer} from './remote-login.mjs'
+
+test('server inspection requests local login metadata without binding Hermes', async () => {
+  const calls = []
+  const info = { authenticated: true, csrfToken: 'fixture', serverKind: 'yaoyao-web', user: { username: 'admin' } }
+  const result = await inspectServer('http://127.0.0.1:15300', async (url, options) => {
+    calls.push({ path: url.pathname + url.search, method: options.method ?? 'GET' })
+    return Response.json(info)
+  })
+  assert.deepEqual(result, info)
+  assert.deepEqual(calls, [{ path: '/api/app/bootstrap?inspectOnly=1', method: 'GET' }])
+})
 
 test('server addresses are normalized like browser URLs',()=>{
   assert.equal(normalizeServerURL('192.168.1.10:15300'),'http://192.168.1.10:15300')

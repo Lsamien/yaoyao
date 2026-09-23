@@ -15,7 +15,7 @@ test('first launch, failed connection and remote login all stay in the only main
   let holdBootstrap = false, replyBootstrap, sessionValid = true
   const server = createServer((req, res) => {
     const json = (value, status = 200) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value)) }
-    if (req.url === '/api/app/bootstrap') {
+    if (req.url.split('?')[0] === '/api/app/bootstrap') {
       res.setHeader('set-cookie', 'csrf=fixture; Path=/; HttpOnly')
       const reply = () => json({ authenticated: sessionValid && String(req.headers.cookie).includes('session=fixture'), setupRequired: false, registrationAvailable: true, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
       if (holdBootstrap) { replyBootstrap = reply; return }

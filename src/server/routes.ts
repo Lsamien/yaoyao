@@ -801,6 +801,7 @@ async function bootstrap(
   ctx: Koa.Context,
   dependencies: RouteDependencies,
   rotateCsrf = false,
+  inspectOnly = false,
 ): Promise<void> {
   const user = dependencies.auth.current(ctx)
   const csrfToken = dependencies.csrf.issue(ctx, rotateCsrf)
@@ -820,11 +821,13 @@ async function bootstrap(
     })
     return
   }
-  let status: JsonObject = { state: user.mustChangePassword ? 'password_change_required' : 'degraded' }
+  let status: JsonObject = { state: user.mustChangePassword ? 'password_change_required' : inspectOnly ? 'ready' : 'degraded' }
   let profiles: unknown[] = []
   let upstreamReady = false
   let upstreamError: string | undefined
-  if (!user.mustChangePassword) {
+  // Desktop connection checks need only local account state. Even an existing
+  // login must not acquire Hermes credentials or open its service session here.
+  if (!user.mustChangePassword && !inspectOnly) {
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       // Local login/settings must remain usable even when 9119 never responds.
@@ -1705,7 +1708,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       })
       return
     }
-    await bootstrap(ctx, dependencies)
+    await bootstrap(ctx, dependencies, false, ctx.query.inspectOnly === '1')
   })
   router.post('/api/app/setup', async (ctx) => {
     await setup(ctx, dependencies)

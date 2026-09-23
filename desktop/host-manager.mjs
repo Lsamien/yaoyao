@@ -7,7 +7,39 @@ import {parseDesktopHostConfiguration} from './host-config.mjs'
 
 const FATAL = Symbol('desktop-host-fatal')
 
-export function remoteExchange(config,body){return new Promise((resolve,reject)=>{
+function checkExchangeStatus(status){
+ if(status===401||status===403){const error=new Error('电脑授权已失效，请重新登录授权这台电脑');error[FATAL]=true;throw error}
+ if(status===409){const error=new Error('电脑连接协议不兼容，请更新夭夭后重新授权');error[FATAL]=true;throw error}
+ if(status!==200)throw new Error(`电脑未连接（HTTP ${status}）`)
+}
+
+async function fetchExchange(config,body,fetchImpl){
+ const url=new URL(`/api/desktop-host/v1/${config.hostId}/exchange`,config.serverURL)
+ if(!['http:','https:'].includes(url.protocol))throw new Error('夭夭服务地址无效')
+ const signal=AbortSignal.timeout(10000)
+ try{
+  const response=await fetchImpl(url.href,{method:'POST',credentials:'omit',redirect:'error',cache:'no-store',signal,
+   headers:{Authorization:`Bearer ${config.token}`,'x-desktop-host-protocol':'1','content-type':'application/json'},body:JSON.stringify(body)})
+  if(response.status!==200){await response.body?.cancel();checkExchangeStatus(response.status)}
+  const reader=response.body?.getReader()
+  if(!reader)throw new Error('电脑响应为空')
+  let size=0;const chunks=[]
+  try{
+   while(true){
+    const {done,value}=await reader.read()
+    if(done)break
+    size+=value.byteLength
+    if(size>16*1024*1024){await reader.cancel();throw new Error('桌面命令超过限制')}
+    chunks.push(value)
+   }
+  }finally{reader.releaseLock()}
+  return JSON.parse(Buffer.concat(chunks).toString())
+ }catch(error){if(signal.aborted)throw new Error('电脑连接超时');throw error}
+}
+
+export function remoteExchange(config,body,fetchImpl){
+ if(fetchImpl)return fetchExchange(config,body,fetchImpl)
+ return new Promise((resolve,reject)=>{
  const url=new URL(`/api/desktop-host/v1/${config.hostId}/exchange`,config.serverURL)
  if(!['http:','https:'].includes(url.protocol))return reject(new Error('夭夭服务地址无效'))
  const bytes=Buffer.from(JSON.stringify(body)),send=url.protocol==='https'?httpsRequest:httpRequest
@@ -16,9 +48,7 @@ export function remoteExchange(config,body){return new Promise((resolve,reject)=
   res.on('data',chunk=>{size+=chunk.length;if(size>16*1024*1024)res.destroy(new Error('桌面命令超过限制'));else chunks.push(chunk)})
   res.on('error',reject)
   res.on('end',()=>{try{
-   if(res.statusCode===401||res.statusCode===403){const error=new Error('电脑授权已失效，请重新登录授权这台电脑');error[FATAL]=true;throw error}
-   if(res.statusCode===409){const error=new Error('电脑连接协议不兼容，请更新夭夭后重新授权');error[FATAL]=true;throw error}
-   if(res.statusCode!==200)throw new Error(`电脑未连接（HTTP ${res.statusCode}）`)
+   checkExchangeStatus(res.statusCode)
    resolve(JSON.parse(Buffer.concat(chunks).toString()))
   }catch(error){reject(error)}})
  })
@@ -116,7 +146,7 @@ export class DesktopHostManager {
   try{
    await core.prepareInfo?.()
    if(this.config!==config||this.core!==core)return
-   const value=await remoteExchange(config,{host:core.info(),results:core.takeResults()})
+   const value=await remoteExchange(config,{host:core.info(),results:core.takeResults()},this.options.fetchImpl)
    this.backoff=400
    if(this.config!==config||this.core!==core)return
    this.publish(process.platform==='win32'&&!(Array.isArray(value.capabilities?.desktopPlatforms)&&value.capabilities.desktopPlatforms.includes('win32'))

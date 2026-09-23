@@ -32,8 +32,9 @@ await cp(resolve(root, 'public/icons/icon-512.png'), resolve(root, 'desktop/icon
 const shell = resolve(out, 'shell')
 await mkdir(shell)
 await cp(resolve(root, 'bin/lib/data-home.mjs'), resolve(shell, 'data-home.mjs'))
+await cp(resolve(root, 'bin/lib/desktop-activation.mjs'), resolve(shell, 'desktop-activation.mjs'))
 for (const file of await readdir(resolve(root, 'desktop'))) {
-  if (file === 'data-home.mjs' || file.endsWith('.test.mjs') || !/\.(js|mjs|cjs|html|css|png|svg)$/.test(file)) continue
+  if (['data-home.mjs', 'desktop-activation.mjs'].includes(file) || file.endsWith('.test.mjs') || !/\.(js|mjs|cjs|html|css|png|svg)$/.test(file)) continue
   if(['file-transfer.mjs','host-files.mjs'].includes(file)){await build({entryPoints:[resolve(root,'desktop',file)],outfile:resolve(shell,file),bundle:true,platform:'node',format:'esm',target:'node24'});continue}
   if(/\.(js|mjs|cjs)$/.test(file))execFileSync(process.execPath,['--check',resolve(root,'desktop',file)],{stdio:'inherit'})
   await cp(resolve(root, 'desktop', file), resolve(shell, file))
