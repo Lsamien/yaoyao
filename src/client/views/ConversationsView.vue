@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ComputerBackend } from '@shared/managedBrowser'
 import { WORKSPACE_PATCH_CAPABILITY } from '@shared/workspaceMessagePatch'
 import { setApiCsrfToken } from '@/api/client'
 import { publishServerIdentity } from '@/api/serverIdentity'
@@ -232,14 +233,26 @@ let cursor = 0,
 const selected = computed(() => (typeof route.params.id === 'string' ? route.params.id : undefined))
 const selectedTask = computed(() => typeof route.query.taskId === 'string' ? route.query.taskId : '')
 const shell=ref<InstanceType<typeof WorkspaceShell>>(),vmWorkspace=ref<InstanceType<typeof LocalVmWorkspace>>(),desktopViewer=ref<InstanceType<typeof ComputerPanel>>()
-const computerOpen=ref(false),dockView=ref<'computer'|'inspector'>(),twoDesktops=ref(false),desktopAgent=ref<Agent>(),desktopBackend=ref<'desktop'|'cloud'|'vm'>(),desktopHost=ref('')
+const computerOpen=ref(false),dockView=ref<'computer'|'inspector'>(),twoDesktops=ref(false),desktopAgent=ref<Agent>(),desktopBackend=ref<ComputerBackend>(),desktopHost=ref('')
 async function resolveDeviceHost(){try{return (await window.yaoyaoDesktop?.deviceHost?.())?.deviceHost??null}catch{return null}}
 const creatingTask=ref(false)
 const CREATE_TASK_VALUE='__create_task__'
 function toggleDock(view:'computer'|'inspector'){dockView.value=dockView.value===view?undefined:view}
-async function openComputer(agent:Agent,backend?:'desktop'|'cloud'|'vm',host?:string){
+async function openComputer(agent:Agent,backend?:ComputerBackend,host?:string){
   if(window.yaoyaoDesktop?.openComputer){try{await window.yaoyaoDesktop.openComputer(agent.id,{backend,host})}catch(cause){error.value=cause instanceof Error?cause.message:'无法打开电脑窗口'}return}
+  if(computerOpen.value&&desktopViewer.value){
+    if(desktopAgent.value?.id===agent.id&&desktopBackend.value===backend&&desktopHost.value===(host??''))return
+    try{await desktopViewer.value.releaseControl();computerOpen.value=false;await nextTick()}catch(cause){error.value=cause instanceof Error?cause.message:'请先交还当前电脑';return}
+  }
   desktopAgent.value=agent;desktopBackend.value=backend;desktopHost.value=host??'';computerOpen.value=true
+}
+async function openBrowserCard(card:NonNullable<UiMessage['browserCard']>){
+  // Only the structured server message supplies this target; markdown links and
+  // model-authored text never become computer-control instructions.
+  if(!messages.value.some(message=>message.browserCard?.id===card.id&&message.browserCard.agentId===card.agentId))return
+  const agent=agents.value.find(agent=>agent.id===card.agentId&&!agent.archived)
+  if(!agent){error.value='此浏览器所属机器人已不可用，或你已没有访问权限';return}
+  await openComputer(agent,'managed-browser')
 }
 async function leaveComputer(){
   if(twoDesktops.value&&vmWorkspace.value&&!await vmWorkspace.value.close())return false
@@ -1027,6 +1040,7 @@ onBeforeUnmount(() => {
         :interaction-busy="!!respondingInteractionId" :interaction-error="interactionError"
         :approval-agent-name="agents.find(agent => agent.id === interactions[0]?.agentId)?.name"
         @load-older="loadOlder" @quote="quoted = $event" @preview="openPreview" @preview-file="openPreview"
+        @browser-control="openBrowserCard"
         @approval-choice="interactions[0] && respond(interactions[0], $event)"
         @clarify="interactions[0] && respond(interactions[0], $event)">
         <template #header-leading><button v-if="active" class="workspace-list-back icon-button" aria-label="返回 Bot 列表" @click="router.push('/conversations')"><AppIcon name="chevron-left" /></button></template>

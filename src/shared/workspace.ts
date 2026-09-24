@@ -179,6 +179,9 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  browserCard?: import('./managedBrowser.js').ManagedBrowserCard
+  /** Server-owned, nonfatal availability notices; never model-authored markup. */
+  serviceWarnings?: Array<{code:string;service:string;message:string}>
   communication?: WorkspaceCommunication
   peerMessageId?: string
   revision?: number

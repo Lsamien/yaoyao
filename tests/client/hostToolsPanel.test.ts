@@ -46,6 +46,21 @@ it('edits the shared transfer limit and blocks invalid values with an inline err
   wrapper.unmount()
 })
 
+it('keeps managed browsing opt-in and saves it independently of virtual machines', async () => {
+  const wrapper = mount(HostToolsPanel)
+  try {
+    await flushPromises()
+    const browser = wrapper.findAll('label.toggle').find(label => label.text().includes('托管浏览器'))!.get<HTMLInputElement>('input')
+    expect(browser.element.checked).toBe(false)
+    const vm = wrapper.findAll('label.toggle').find(label => label.text().includes('虚拟环境'))!.get<HTMLInputElement>('input')
+    await vm.setValue(false)
+    await browser.setValue(true)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(request).toHaveBeenCalledWith('/api/app/settings/host-tools', { method: 'PUT', body: expect.objectContaining({ managedBrowser: true, vm: false }) })
+  } finally { wrapper.unmount() }
+})
+
 it('distinguishes same-name registrations by status, ID and pairing time without merging them', async () => {
   const wrapper = mount(HostToolsPanel)
   await flushPromises()

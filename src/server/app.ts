@@ -1,3 +1,4 @@
+import {ManagedBrowsers} from './managedBrowsers.js'
 import { isWorkspaceAccountPath } from './subaccountAccess.js'
 import { chatTranscriptRouter } from './chatTranscriptApi.js'
 import {DesktopEnvironments} from './desktopEnvironments.js'
@@ -275,6 +276,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
   if (!options.deferBackground) startBackground()
   const grokCloud=new GrokCloud(workspace,auth,workspaceNodes,sharedComputers,options.grokFetch)
   const desktopEnvironments=new DesktopEnvironments(workspace,auth,workspaceNodes)
+  const managedBrowsers=new ManagedBrowsers(workspace,auth,workspaceNodes,runners)
+  workspaceRuntime.managedBrowsers=managedBrowsers
+  runners.browserAllowed=(runnerId,scope,grantId)=>managedBrowsers.allowed(runnerId,scope,grantId)
   const desktopHosts=new DesktopHostHub(workspace,auth)
   desktopHosts.exchange=(id,value)=>desktopEnvironments.remoteExchange(id,value)
   desktopHosts.drop=id=>desktopEnvironments.dropHost(id)
@@ -477,7 +481,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     } else await next()
   })
 
-  for(const router of [desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
+  for(const router of [managedBrowsers.router(),desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
   const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
   const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
@@ -585,6 +589,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       workspaceMemory.close()
       runners.close()
     workspaceAssets.close()
+    managedBrowsers.close()
     desktopEnvironments.close()
     desktopHosts.close()
       grokCloud.authorization.close()

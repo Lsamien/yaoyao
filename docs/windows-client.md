@@ -15,7 +15,7 @@ Windows 首版支持 Windows 10/11 x64，安装后连接已有夭夭服务器。
 
 ## 构建与安装包
 
-v0.4.72 发布页提供未签名测试 EXE 与独立的测试更新元数据压缩包。元数据包包含 `latest.yml`、blockmap、构建身份与校验值，解压后与 EXE 放在同一目录使用；GitHub Release 根目录不提供 Windows `latest.yml`，测试包不进入正式自动更新源。
+v0.4.73 发布页提供未签名测试 EXE 与独立的测试更新元数据压缩包。元数据包包含 `latest.yml`、blockmap、构建身份与校验值，解压后与 EXE 放在同一目录使用；GitHub Release 根目录不提供 Windows `latest.yml`，测试包不进入正式自动更新源。
 
 日常可以在 Mac 修改共享代码；原生助手和 EXE 安装包在 Windows x64 上构建。需要 Node 24、CMake、Visual Studio 2022 C++ 工具链和 Windows SDK；GitHub Actions `windows-2022` 提供该构建环境。
 

@@ -1,3 +1,4 @@
+import {MANAGED_BROWSER_TOOLS,MANAGED_BROWSER_VM_TOOLS} from './managedBrowserTools.js'
 import type { DesktopEnvironmentSnapshot, WorkspaceEnvironment } from '../shared/botEnvironment.js'
 import type { WorkspaceAgent } from '../shared/workspace.js'
 import type { HostToolSettings } from './hostToolSettings.js'
@@ -13,6 +14,7 @@ export function buildWorkspaceEnvironment(input: {
   bridge: boolean
   cloud: boolean
   plugins: boolean
+  managedBrowser?: boolean
 }): WorkspaceEnvironment {
   const { agent, globals, desktop } = input
   const eligible = !agent.archived && !agent.remoteAgentId
@@ -26,6 +28,7 @@ export function buildWorkspaceEnvironment(input: {
       desktopView: !!eligible && desktop.hosts.some(host => host.capabilities.view.enabled),
       desktopFile: !!eligible && desktop.hosts.some(host => host.capabilities.fileRead.enabled),
       vm, cloud, plugins: input.plugins,
+      ...(eligible && input.bridge && globals.managedBrowser && input.managedBrowser ? {managedBrowser:true} : {}),
     },
     virtual: {
       vm: { status: !globals.vm ? 'disabled' : vm ? 'on_demand' : 'bridge_unavailable', environmentId: agent.computerEnvironmentId ?? agent.id },
@@ -38,6 +41,8 @@ export function buildWorkspaceEnvironment(input: {
 export function workspaceEnvironmentTools(environment: WorkspaceEnvironment) {
   const { tools, fileTransferMaxMiB } = environment
   return [
+    ...(tools.managedBrowser ? MANAGED_BROWSER_TOOLS : []),
+    ...(tools.managedBrowser && tools.vm ? MANAGED_BROWSER_VM_TOOLS : []),
     ...(tools.cloud ? GROK_COMPUTER_TOOLS : []),
     ...(tools.vm ? VM_COMPUTER_TOOLS : []),
     ...DESKTOP_ENVIRONMENT_TOOLS.filter(tool =>

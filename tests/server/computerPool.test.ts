@@ -67,6 +67,38 @@ it('fences cancellation before an old operation returns and waits for its stop b
   expect(f.provider.stop).toHaveBeenCalledTimes(1)
   await f.pool.close()
 })
+it('aborts only the cancelled holder and keeps other shared work in the same environment generation',async()=>{
+  const f=fixture();await f.pool.recover();const resource=spec(),abort=new AbortController()
+  const cancelled=await f.pool.acquire(resource,'cancelled',()=>{},abort.signal)
+  const peer=await f.pool.acquire(resource,'peer',()=>{})
+  let cancelledSignal:AbortSignal|undefined,peerSignal:AbortSignal|undefined,finishPeer!:()=>void
+  const cancelledWork=f.pool.use(cancelled,({signal})=>new Promise<void>(resolve=>{
+    cancelledSignal=signal;signal.addEventListener('abort',()=>resolve(),{once:true})
+  })).catch(error=>error)
+  const peerWork=f.pool.use(peer,({signal})=>new Promise<void>(resolve=>{peerSignal=signal;finishPeer=resolve}))
+  await vi.waitFor(()=>expect(peerSignal).toBeDefined())
+  try{
+    abort.abort()
+    expect(cancelledSignal?.aborted).toBe(true)
+    await expect(cancelledWork).resolves.toMatchObject({code:'computer_lease_stale'})
+    // Joining also drains any queued lifecycle work from the cancellation.
+    const next=await f.pool.acquire(resource,'next',()=>{})
+    expect(next.generation).toBe(peer.generation)
+    expect(peerSignal?.aborted).toBe(false)
+    expect(()=>f.pool.authorize(peer)).not.toThrow()
+    expect(f.provider.stop).not.toHaveBeenCalled()
+    expect(f.provider.ensure).toHaveBeenCalledTimes(1)
+  }finally{finishPeer();await peerWork.catch(()=>{});await f.pool.close()}
+})
+it('rejects an already cancelled holder without touching another shared holder',async()=>{
+  const f=fixture();await f.pool.recover();const resource=spec(),peer=await f.pool.acquire(resource,'peer',()=>{})
+  try{
+    await expect(f.pool.acquire(resource,'cancelled',()=>{},AbortSignal.abort())).rejects.toMatchObject({code:'computer_cancelled'})
+    expect(()=>f.pool.authorize(peer)).not.toThrow()
+    expect(f.pool.status('owner')[0]?.holderIds).toEqual(['peer'])
+    expect(f.provider.stop).not.toHaveBeenCalled()
+  }finally{await f.pool.close()}
+})
 it('keeps an unconfirmed stop reserved and recovers it before a new acquisition',async()=>{
   const f=fixture();await f.pool.recover();const resource=spec(),lease=await f.pool.acquire(resource,'task',()=>{})
   vi.mocked(f.provider.stop).mockRejectedValueOnce(new Error('daemon unavailable'))

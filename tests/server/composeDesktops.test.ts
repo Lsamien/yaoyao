@@ -75,3 +75,89 @@ it('reuses a fixed desktop, rotates authorization and never creates or deletes i
   expect(engine).not.toHaveBeenCalled()
  }finally{await pool.close();db.close()}
 })
+
+it('serializes Compose desktop input while keeping command work concurrent and skipping cancelled queued input',async()=>{
+ const spec={id:randomUUID(),ownerKey:'owner',imageId:COMPOSE_DESKTOP_IMAGE},calls:string[]=[],held=new Map<string,()=>void>()
+ const relay=vi.fn(async(_target:string,op:string,body:any)=>{
+  if(op==='health')return {instance:'boot-1',ready:true}
+  if(op==='acquire')return {token:'lease',instance:'boot-1'}
+  if(op==='execute'){
+   const name=String(body.argv[0]);calls.push(name)
+   if(name.startsWith('hold'))await new Promise<void>(resolve=>held.set(name,resolve))
+   return {stdout:name,stderr:'',exitCode:0}
+  }
+  return {ok:true}
+ })
+ const provider=new ComposeComputerProvider(randomUUID(),'/fixture',relay),abort=new AbortController()
+ await provider.ensure(spec,()=>{})
+ const gui=provider.execute(spec,['hold-gui'],{authorize:()=>{},lane:'gui'})
+ await vi.waitFor(()=>expect(calls).toContain('hold-gui'))
+ const cancelled=provider.execute(spec,['cancelled-gui'],{authorize:()=>{},lane:'gui',signal:abort.signal}).catch(error=>error)
+ const next=provider.execute(spec,['next-gui'],{authorize:()=>{},lane:'gui'})
+ const shell=provider.execute(spec,['hold-shell'],{authorize:()=>{}})
+ try{
+  await provider.execute(spec,['parallel-shell'],{authorize:()=>{}})
+  expect(calls).toEqual(['hold-gui','hold-shell','parallel-shell'])
+  abort.abort();held.get('hold-gui')!()
+  await gui;await next
+  expect(await cancelled).toMatchObject({code:'computer_cancelled'})
+  expect(calls).not.toContain('cancelled-gui')
+  expect(calls).toContain('next-gui')
+ }finally{for(const release of held.values())release();await Promise.allSettled([gui,next,cancelled,shell])}
+})
+
+it('does not return a successful Compose command after its holder cancels',async()=>{
+ const spec={id:randomUUID(),ownerKey:'owner',imageId:COMPOSE_DESKTOP_IMAGE},abort=new AbortController()
+ const relay=vi.fn(async(_target:string,op:string)=>{
+  if(op==='health')return {instance:'boot-1',ready:true}
+  if(op==='acquire')return {token:'lease',instance:'boot-1'}
+  if(op==='execute'){abort.abort();return {stdout:'late result',stderr:'',exitCode:0}}
+  if(op==='cancel')return {ok:true,stopped:true}
+  return {ok:true}
+ })
+ const provider=new ComposeComputerProvider(randomUUID(),'/fixture',relay)
+ await provider.ensure(spec,()=>{})
+ await expect(provider.execute(spec,['work'],{authorize:()=>{},signal:abort.signal,mayFence:()=>false})).rejects.toMatchObject({code:'computer_cancelled'})
+ expect(relay.mock.calls.some(([,op])=>op==='release')).toBe(false)
+})
+
+it('cancels the in-flight Compose operation by ID and waits for a confirmed stop without releasing its shared lease',async()=>{
+ const spec={id:randomUUID(),ownerKey:'owner',imageId:COMPOSE_DESKTOP_IMAGE},abort=new AbortController()
+ let acknowledge:()=>void=()=>{}
+ const relay=vi.fn(async(_target:string,op:string,body:any)=>{
+  if(op==='health')return {instance:'boot-1',ready:true}
+  if(op==='acquire')return {token:'lease',instance:'boot-1'}
+  if(op==='execute')return new Promise(()=>{})
+  if(op==='cancel'){await new Promise<void>(resolve=>{acknowledge=resolve});return {ok:true,stopped:true,operationId:body.operationId}}
+  return {ok:true}
+ })
+ const provider=new ComposeComputerProvider(randomUUID(),'/fixture',relay)
+ await provider.ensure(spec,()=>{})
+ let finished=false
+ const execution=provider.execute(spec,['work'],{authorize:()=>{},signal:abort.signal,mayFence:()=>false}).catch(error=>{finished=true;return error})
+ await vi.waitFor(()=>expect(relay.mock.calls.some(([,op])=>op==='execute')).toBe(true))
+ abort.abort()
+ await vi.waitFor(()=>expect(relay.mock.calls.some(([,op])=>op==='cancel')).toBe(true))
+ expect(finished).toBe(false)
+ const execute=relay.mock.calls.find(([,op])=>op==='execute')![2],cancel=relay.mock.calls.find(([,op])=>op==='cancel')![2]
+ expect(cancel).toMatchObject({token:'lease',instance:'boot-1',operationId:execute.operationId})
+ expect(execute.operationId).toMatch(/^[a-f0-9-]{36}$/)
+ acknowledge()
+ expect(await execution).toMatchObject({code:'computer_cancelled'})
+ expect(relay.mock.calls.some(([,op])=>op==='release')).toBe(false)
+})
+
+it('reports an unconfirmed Compose cancellation without claiming that shared work has stopped',async()=>{
+ const spec={id:randomUUID(),ownerKey:'owner',imageId:COMPOSE_DESKTOP_IMAGE},abort=new AbortController()
+ const relay=vi.fn(async(_target:string,op:string)=>{
+  if(op==='health')return {instance:'boot-1',ready:true}
+  if(op==='acquire')return {token:'lease',instance:'boot-1'}
+  if(op==='execute'){abort.abort();return {stdout:'late',stderr:'',exitCode:0}}
+  if(op==='cancel')throw new Error('disconnected')
+  return {ok:true}
+ })
+ const provider=new ComposeComputerProvider(randomUUID(),'/fixture',relay)
+ await provider.ensure(spec,()=>{})
+ await expect(provider.execute(spec,['work'],{authorize:()=>{},signal:abort.signal,mayFence:()=>false})).rejects.toMatchObject({code:'computer_cancel_uncertain'})
+ expect(relay.mock.calls.some(([,op])=>op==='release')).toBe(false)
+})

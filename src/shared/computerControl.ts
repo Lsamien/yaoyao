@@ -1,5 +1,5 @@
 export interface ComputerFrame {id:string;generation:number;data:string;width:number;height:number;capturedAt:number}
-export interface ComputerControlStatus {backend?:'grok'|'local'|'browser';hostName?:string;mode:'off'|'idle'|'agent'|'pausing'|'human'|'resuming'|'error';generation?:number;controlId?:string;canResume?:boolean;error?:string}
+export interface ComputerControlStatus {backend?:'grok'|'local'|'browser'|'managed-browser';hostName?:string;mode:'off'|'idle'|'agent'|'pausing'|'human'|'resuming'|'error';generation?:number;controlId?:string;canResume?:boolean;error?:string}
 export type ComputerInput =
   | {kind:'click';x:number;y:number;button?:'left'|'right'|'middle';count?:number}
   | {kind:'drag';fromX:number;fromY:number;toX:number;toY:number}

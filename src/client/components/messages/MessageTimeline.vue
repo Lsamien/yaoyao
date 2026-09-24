@@ -3,6 +3,7 @@ import { useChatAppearance } from '@/stores/chatAppearance'
 import { bubbleVariables } from '@/utils/chatAppearance'
 import '@/styles/chat-bubbles.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import ServiceWarnings from './ServiceWarnings.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import MessageFailureNotice from '@/components/messages/MessageFailureNotice.vue'
 import { messageFailure } from '@/utils/messageFailure'
@@ -319,6 +320,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
               <button v-if="!readOnly && allowBranch && message.role === 'assistant'" type="button" title="从这里分支" aria-label="从这里分支" @click="emit('branch', message)"><AppIcon name="branch" :size="13" /></button>
             </div>
             </template>
+            <ServiceWarnings v-if="message.serviceWarnings?.length" :warnings="message.serviceWarnings"/>
           </div>
           <MessageFailureNotice v-if="messageFailure(message) && (!messageFailure(message)?.replacesContent || !!message.attachments?.length)" :failure="messageFailure(message)!" />
         </article>

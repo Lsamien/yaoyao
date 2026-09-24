@@ -9,6 +9,7 @@ const schema=z.object({
   hermesURL:z.string().url().default('http://127.0.0.1:9119'),satellite:z.boolean().optional(),
   allowedProfiles:z.array(z.string().trim().min(1).max(256).regex(/^[^/\\\u0000-\u001f]+$/)).min(1).max(256),
   artifactRoots:z.array(z.string().refine(isAbsolute,'产物目录必须为绝对路径')).max(64).default([]),
+  browser:z.object({enabled:z.boolean().default(true),maxSessions:z.number().int().min(1).max(8).optional(),idleTimeoutMs:z.number().int().min(60000).max(7200000).optional()}).strict().default({enabled:true}),
   computers:z.object({managedBy:z.literal('compose').optional(),network:z.enum(['none','public-proxy']).default('none'),runtime:z.enum(['docker','podman']),imageId:z.string().regex(/^sha256:[a-f0-9]{64}$/),python:localPath,hermesSource:localPath,hermesHome:localPath,maxConcurrent:z.number().int().min(1).max(8).optional()}).strict().transform(value=>{
     const hermesHome=value.hermesHome||join(homedir(),'.hermes'),hermesSource=value.hermesSource||join(hermesHome,'hermes-agent')
     return {...value,hermesHome,hermesSource,python:value.python||join(hermesSource,'venv','bin','python')}

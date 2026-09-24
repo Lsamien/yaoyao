@@ -42,7 +42,7 @@ export interface WorkspaceEnvironment {
   execution: { nodeId: string; profile: string }
   cwd?: string
   open: { computer: boolean; server: boolean; vm: boolean; cloud: boolean }
-  tools: { desktopView: boolean; desktopFile: boolean; vm: boolean; cloud: boolean; plugins: boolean }
+  tools: { managedBrowser?: boolean; desktopView: boolean; desktopFile: boolean; vm: boolean; cloud: boolean; plugins: boolean }
   desktop: DesktopEnvironmentSnapshot
   virtual: {
     vm: { status: 'on_demand' | 'disabled' | 'bridge_unavailable'; environmentId: string }

@@ -1,3 +1,7 @@
+import {type ManagedBrowsers,type BrowserTurn} from './managedBrowsers.js'
+import {ToolOperationJournal} from './toolOperationJournal.js'
+import {browserOwnedFile,browserVmFile} from './browserFiles.js'
+import type {BrowserUpload} from '../runner/browser/types.js'
 import {type DesktopEnvironments} from './desktopEnvironments.js'
 import {type GrokCloud} from './grokCloud.js'
 import {VmToolSession} from './vmComputer.js'
@@ -109,6 +113,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   readonly knowledgeTools: WorkspaceKnowledgeTools
   onMemoryCandidate: (owner: string, run: Run) => void = () => {}
   plugins?: WorkspacePlugins
+  managedBrowsers?:ManagedBrowsers
+  private operationJournal:ToolOperationJournal
   assertCanSubmit:()=>void=()=>{}
   get idleForUpdate(): boolean {
     return this.live.size === 0 && this.executing.size === 0 && !this.store.db.prepare("SELECT 1 FROM workspace_entities WHERE kind IN ('run','turn') AND COALESCE(json_extract(data,'$.status'),'unknown') NOT IN ('complete','failed','interrupted') LIMIT 1").get()
@@ -127,6 +133,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   constructor(store: WorkspaceStore, readonly nodes: WorkspaceNodes, readonly uploads: UploadStore, userActive: (owner: string) => boolean = () => true,
     readonly authorizationVersion: (owner: string) => number = () => 0, openViking?: OpenVikingService) {
     super(store, userActive)
+    this.operationJournal=new ToolOperationJournal(store)
     this.openViking = openViking
     this.teamTools = new WorkspaceTeamTools(store, nodes, this)
     this.tasks = new WorkspaceTaskCoordinator(store, this)
@@ -307,6 +314,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       chatExecution = 'profile',
       target = this.nodes.target(owner, agent.nodeId)
     let vmTools: VmToolSession | undefined
+    let browserTurn:BrowserTurn|undefined
     const gateway = new WorkspaceGateway(target,{workId:run.id,publishArtifact:async(name,bytes)=>{
       this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
       const file=this.publishArtifact(owner,resultMessage,agent,name,bytes)
@@ -402,6 +410,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const finish = (error?: Error) => {
       if (settled) return
       settled = true
+      // End browser task authority before aborting the shared tool lease. A
+      // successful turn parks its Bot's page; cancellation still interrupts I/O.
+      let retainBrowser=false
+      try { retainBrowser=!error&&!this.getWork(owner,run.id).cancelRequested&&!this.store.require<Run>(owner,'run',run.runId).stopRequested } catch { /* Missing/revoked work must not retain a browser. */ }
+      void browserTurn?.close({retain:retainBrowser}).catch(()=>{})
       toolController.abort()
       void toolLease?.dispose()
       void pluginLease?.dispose()
@@ -434,14 +447,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           if (!resultMessage.content.trim() && current.status === 'failed') resultMessage.content = `执行失败：${current.error}`
         } else {
           if (root.discussion && /^(?:\(?pass\)?\.?|\[\[YAOYAO_NO_REPLY_V1\]\])$/i.test(resultMessage.content.trim())) resultMessage.content = ''
-          const silent = (resultMessage.content.trim() === NO_REPLY || !resultMessage.content.trim()) && current.replyMode === 'automatic' && (!current.requiredReply || current.hadInteraction) && !resultMessage.tools.length && !resultMessage.attachments.length
+          const silent = (resultMessage.content.trim() === NO_REPLY || !resultMessage.content.trim()) && current.replyMode === 'automatic' && (!current.requiredReply || current.hadInteraction) && !resultMessage.tools.length && !resultMessage.attachments.length && !resultMessage.browserCard && !resultMessage.serviceWarnings?.length
           current.silent = silent
           if (current.replyMode === 'automatic') {
             resultMessage.content = resultMessage.content.replace(/\[\[YAOYAO_[A-Z0-9_]*(?:\]\])?/g, '').trim()
             resultMessage.reasoning = resultMessage.reasoning.replace(/\[\[YAOYAO_[A-Z0-9_]*(?:\]\])?/g, '')
           }
-          if (current.requiredReply && !silent && !resultMessage.content) resultMessage.content = HOST_FALLBACK
-          if (!silent && !resultMessage.content && !resultMessage.attachments.length && !resultMessage.tools.length) {
+          if (current.requiredReply && !silent && !resultMessage.content && !resultMessage.browserCard) resultMessage.content = HOST_FALLBACK
+          if (!silent && !resultMessage.content && !resultMessage.attachments.length && !resultMessage.tools.length && !resultMessage.browserCard && !resultMessage.serviceWarnings?.length) {
             current.status = 'failed'; current.error = '未返回有效回复'; resultMessage.content = '执行失败：未返回有效回复'
           } else { current.status = 'complete'; current.error = undefined }
           resultMessage.visible = !silent
@@ -787,7 +800,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const globals=globalComputers(this.store.home)
         const desktopSnapshot=this.desktopEnvironments?.snapshot(owner,agent,root.deviceHost,{script:globals.scriptMachine,server:globals.serverComputer,maxMiB:globals.fileTransferMaxMiB})
           ??{capturedAt:Date.now(),sourceHost:root.deviceHost,hosts:[]}
-        const environment=buildWorkspaceEnvironment({agent,globals,desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent)})
+        const environment=buildWorkspaceEnvironment({agent,globals,desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent),managedBrowser:this.managedBrowsers?.available(owner,agent)})
         const {cloud,plugins,vm:dispatchedVm}=environment.tools
         const desktop=environment.tools.desktopView||environment.tools.desktopFile
         const desktopEpochs=Object.fromEntries(desktopSnapshot.hosts.map(host=>[host.id,host.epoch??'']))
@@ -795,7 +808,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const knowledge = botCapabilities.tools && !agent.remoteAgentId
         const vmHolder:{session?:VmToolSession}={}
         const requireVm=()=>{if(!globalComputers(this.store.home).vm)throw new HttpError(403,'全局设置未开放虚拟机。','computer_disabled')}
-        const callVm=async(name:string,args:unknown)=>{
+        const callVm=async(name:string,args:unknown,callId?:string)=>{
           requireVm()
           if(!vmHolder.session){
             const vmTarget=this.nodes.targetForAgent(owner,{...agent,execution:'computer'})
@@ -812,9 +825,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             })
             vmTools=vmHolder.session
           }
-          return name==='__file_transfer'?vmHolder.session.transfer(args as Record<string,unknown>):vmHolder.session.call(name,args)
+          return name==='__file_transfer'?vmHolder.session.transfer(args as Record<string,unknown>):vmHolder.session.call(name,args,callId)
         }
-        if(team||cloud||desktop||plugins||knowledge||dispatchedVm){
+        if(team||cloud||desktop||plugins||knowledge||dispatchedVm||environment.tools.managedBrowser){
           if(team){const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)}
           if(desktop)await this.desktopEnvironments!.requireAvailable(owner,agent,target)
           if(cloud)await this.cloud!.requireAvailable(owner,agent,target)
@@ -824,13 +837,36 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             if(team)this.teamTools.assertTurn(owner,run.id)
             if(plugins){const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id);if(current.cancelRequested||this.store.require<Run>(owner,'run',run.runId).stopRequested||latest.archived||!['running','waiting'].includes(current.status))throw new HttpError(403,'本轮插件授权已结束','plugin_grant_revoked')}
           }
-          if(plugins)pluginLease=await this.plugins!.open(owner,agent,target,toolController.signal,assertActive)
+          if(plugins){
+            pluginLease=await this.plugins!.open(owner,agent,target,toolController.signal,assertActive)
+            const warnings=pluginLease.warnings().map(({name,code,message})=>({service:name,code,message}))
+            if(warnings.length){resultMessage.serviceWarnings=warnings;resultMessage.visible=true;this.store.saveMessage(owner,resultMessage)}
+          }
           toolLease=await createWorkspaceToolLease({
             target,profile:agent.profile,workId:run.id,signal:toolController.signal,
             workspaceMemory:botCapabilities.memory,
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
             catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...environmentCatalog,...(pluginLease?.catalog()??[])],
-            call:async(toolId,args)=>{assertActive();return knowledge&&this.knowledgeTools.handles(toolId)?this.knowledgeTools.call(owner,run.id,toolId,args,botCapabilities.memory):toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,'local',desktopEpochs,root.deviceHost,dispatchedVm?action=>callVm('__file_transfer',action):undefined):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):toolId.startsWith('computer_')&&dispatchedVm?callVm(toolId,args):this.teamTools.call(owner,run.id,toolId,args)},
+            call:async(toolId,args,callId)=>{
+              assertActive()
+              if(toolId.startsWith('managed_browser_')&&environment.tools.managedBrowser&&this.managedBrowsers){
+                browserTurn??=this.managedBrowsers.openTurn(owner,agent,{workId:run.id,signal:toolController.signal,authorize:assertActive,
+                  onCard:card=>{
+                    try{
+                      // Human control can outlive this turn and its deleted history.
+                      const saved=this.store.get<Message>(owner,'message',resultMessage.id)
+                      if(!saved)return
+                      resultMessage.browserCard=card;resultMessage.visible=true
+                      this.store.saveMessage(owner,settled?{...saved,browserCard:card,visible:true}:resultMessage)
+                    }catch{return false /* Card persistence must not interrupt browser cleanup. */}
+                  },
+                  publish:async(name,bytes)=>{assertActive();const file=this.publishArtifact(owner,resultMessage,agent,name,bytes);if(!resultMessage.attachments.some(item=>item.id===file.id))resultMessage.attachments.push(file);this.store.saveMessage(owner,resultMessage);return {...file,url:`/api/app/files/${file.id}/download`}},
+                  upload:fileId=>browserOwnedFile(this.store,this.nodes,this.uploads,owner,fileId),
+                  ...(dispatchedVm?{toVm:(file:BrowserUpload,path:string,overwrite:boolean)=>browserVmFile(action=>callVm('__file_transfer',action),path,assertActive,file,overwrite,Math.min(25,globals.fileTransferMaxMiB)*1024*1024),fromVm:async(path:string)=>await browserVmFile(action=>callVm('__file_transfer',action),path,assertActive,undefined,false,Math.min(25,globals.fileTransferMaxMiB)*1024*1024) as BrowserUpload}:{})})
+                return browserTurn.call(toolId,args,callId)
+              }
+              return knowledge&&this.knowledgeTools.handles(toolId)?this.knowledgeTools.call(owner,run.id,toolId,args,botCapabilities.memory):toolId.startsWith('plugin_')&&pluginLease?pluginLease.call(toolId,args):toolId.startsWith('desktop_')?this.desktopEnvironments!.call(owner,agent.id,toolId,args,toolController.signal,assertActive,'local',desktopEpochs,root.deviceHost,dispatchedVm?action=>callVm('__file_transfer',action):undefined):toolId.startsWith('cloud_computer_')?this.cloud!.call(owner,agent.id,toolId,args,toolController.signal):toolId.startsWith('computer_')&&dispatchedVm?this.operationJournal.execute(owner,run.id,callId,toolId,args,assertActive,()=>callVm(toolId,args,callId)):this.teamTools.call(owner,run.id,toolId,args)
+            },
             onFailure:error=>{if(!settled)void gateway.rpc('session.interrupt',{session_id:runtimeId}).catch(()=>{}).finally(()=>finish(error))},
           })
           await toolLease.bind();if(settled)return await completion
@@ -903,7 +939,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           submittedText = buildWorkspacePrompt({
             agent, conversation: c, members, work: run,
             run: this.store.require<Run>(owner, 'run', run.runId), goal,
-            environment, pluginServices,
+            environment, pluginServices, pluginWarnings:resultMessage.serviceWarnings,
             teamRules: team ? TEAM_TOOL_RULES : undefined,
             knowledgeRules: knowledge ? BOT_KNOWLEDGE_RULES : undefined,
             memory: memoryDelta(memory, binding.memoryState), noReply: NO_REPLY,
@@ -911,7 +947,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             content: text, contentKind: c.kind === 'group' || !!resetReason ? 'history' : 'user', attachmentRefs,
           })
           this.inspector?.record(owner,c.id,{method:'bot.environment',direction:'request',agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId,
-            data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id),pluginServices}})
+            data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id),pluginServices,pluginWarnings:resultMessage.serviceWarnings}})
           binding.memoryPending = true
           this.store.put(owner, 'binding', key, binding)
           await gateway.rpc('prompt.submit', {

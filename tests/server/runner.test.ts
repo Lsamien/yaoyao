@@ -13,6 +13,7 @@ import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { LocalAuthStore } from '../../src/server/localAuth'
 import { RunnerHub } from '../../src/server/runnerHub'
 import { RunnerAgent } from '../../src/runner/agent'
+import { ComputerGateway } from '../../src/runner/worker/gateway'
 import { WorkspaceGateway, type GatewayTarget, type GatewayFrame } from '../../src/server/workspaceGateway'
 import { createWorkspaceToolLease } from '../../src/server/workspaceToolLease'
 import { HttpError } from '../../src/server/errors'
@@ -72,6 +73,19 @@ async function channel(){
   await gateway.connect();const session=await gateway.rpc('session.create',{profile:'default'})
   return {gateway,session}
 }
+it('admits virtual computer calls only on a computer gateway with an owned session',async()=>{
+  const connectionId=randomUUID(),sessionId=randomUUID(),rpc=vi.fn(async()=>({ok:true}))
+  const computer=Object.assign(Object.create(ComputerGateway.prototype),{rpc,close:()=>{}}) as ComputerGateway
+  const connection={gateway:computer,sessions:new Map([[sessionId,'default']]),running:new Set(),events:Promise.resolve()}
+  ;(runner as any).connections.set(connectionId,connection)
+  const command=(method:string,id=sessionId)=>({kind:'gateway.rpc',payload:{connectionId,method,params:{session_id:id,name:'computer_desktop_state',arguments:{}}}})
+  expect(await (runner as any).execute(command('computer.invoke'))).toEqual({ok:true})
+  expect(await (runner as any).execute(command('computer.transfer'))).toEqual({ok:true})
+  await expect((runner as any).execute(command('computer.invoke',randomUUID()))).rejects.toMatchObject({code:'runner_session_forbidden'})
+  connection.gateway=Object.assign(Object.create(WorkspaceGateway.prototype),{rpc,close:()=>{}}) as ComputerGateway
+  await expect((runner as any).execute(command('computer.invoke'))).rejects.toMatchObject({code:'runner_command_forbidden'})
+  expect(rpc).toHaveBeenCalledTimes(2)
+})
 it('requires an upgraded Runner before granting mixed host and VM tools',()=>{
  const id=randomUUID()
  expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true})).toThrow('不支持同时使用本机和虚拟机')
@@ -304,4 +318,24 @@ it('carries workspace memory policy through the Runner to the authenticated Herm
     session:()=>({runtimeId:session.session_id,storedId:session.stored_session_id}),signal:abort.signal,
     assertActive:()=>{},catalog:()=>[],call:async()=>({}),onFailure:()=>{}})
   try{await lease.bind();expect(bindings.at(-1)).toMatchObject({workspace_memory:true})}finally{await lease.dispose()}
+})
+
+it('distinguishes automatically supported browsers from explicit node opt-out, old runners and offline nodes',()=>{
+  const agent=store.createAgent('owner',{name:'浏览器节点状态',profile:'default'}),record=hub.records()[0]!
+  const states=(hub as any).online as Map<string,{features:string[]}>,state=states.get(record.id)!,features=state.features
+  try{
+    expect(state.features).toContain('managed-browser-setup-v1')
+    expect(hub.browserRunner('owner',agent).id).toBe(record.id)
+    auth.allowed=false
+    expect(()=>hub.browserRunner('owner',agent)).toThrow('浏览器 Profile 未授权')
+    auth.allowed=true
+    state.features=['managed-browser-disabled-v1']
+    expect(()=>hub.browserRunner('owner',agent)).toThrow('节点管理员已关闭托管浏览器')
+    state.features=[]
+    expect(()=>hub.browserRunner('owner',agent)).toThrow('执行节点版本尚不支持自动准备浏览器')
+    states.delete(record.id)
+    expect(()=>hub.browserRunner('owner',agent)).toThrow('执行节点暂未连接')
+    store.put('_system','runner',record.id,{...record,enabled:false})
+    expect(()=>hub.browserRunner('owner',agent)).toThrow('尚未找到此 Bot 的执行节点')
+  }finally{auth.allowed=true;state.features=features;states.set(record.id,state);store.put('_system','runner',record.id,record)}
 })

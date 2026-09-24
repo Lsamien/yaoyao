@@ -1,5 +1,6 @@
 appId: cn.samien.yaoyao.desktop
 productName: 夭夭
+afterPack: scripts/verify-desktop-runtime.mjs
 directories:
   output: desktop-release
   app: .desktop-build/shell
@@ -34,6 +35,16 @@ extraResources:
       - computer-helper.exe
       - ui/**/*
       - web-service/**/*
+  # electron-builder skips node_modules at a resource source root, even when
+  # globbed explicitly. Each package needs its own copy source.
+  - from: .desktop-build/node_modules/playwright
+    to: runtime/node_modules/playwright
+    filter:
+      - '**/*'
+  - from: .desktop-build/node_modules/playwright-core
+    to: runtime/node_modules/playwright-core
+    filter:
+      - '**/*'
 asar: true
 npmRebuild: false
 win:

@@ -1,10 +1,11 @@
 // @vitest-environment node
-import {afterEach,expect,it} from 'vitest'
+import {afterEach,expect,it,vi} from 'vitest'
 import {randomUUID} from 'node:crypto'
 import {mkdtemp,rm,symlink,mkdir,rename,writeFile,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {ContainerComputerProvider,type ContainerCommand,type ComputerSpecification} from '../../src/runner/computers/container'
+import {ContainerComputerProvider,CUA_DRIVER,type ContainerCommand,type ComputerSpecification} from '../../src/runner/computers/container'
+import {COMMAND_ROOT,GUEST_COMMAND} from '../../src/runner/computers/commandProcess'
 const homes:string[]=[]
 afterEach(async()=>{await Promise.all(homes.splice(0).map(home=>rm(home,{recursive:true,force:true})))})
 async function fixture(runtime:'docker'|'podman'='docker',onCommand?:(args:string[])=>Promise<void>){
@@ -43,12 +44,27 @@ it.each(['docker','podman'] as const)('uses the same private ownership and execu
   const f=await fixture(runtime),state=await f.provider.ensure(f.spec,()=>{})
   expect(state).toMatchObject({running:true,isolation:'container'})
   await f.provider.execute(f.spec,['/bin/sh','-c','echo hello'],{authorize:()=>{}})
-  expect(f.calls.find(args=>args[0]==='exec')).toEqual(['exec','--user','1000:1000','--env','HOME=/home/cua','--env','USER=cua','--workdir','/home/cua/workspace','--',state.containerId,'/bin/sh','-c','echo hello'])
+  expect(f.calls.find(args=>args[0]==='exec')).toEqual(['exec','--user','0:0','--env','HOME=/home/cua','--env','USER=cua','--workdir','/home/cua/workspace','--',state.containerId,'python3','-u','-c',GUEST_COMMAND,'run',COMMAND_ROOT,expect.any(String),'cua','30','/bin/sh','-c','echo hello'])
   await f.provider.execute(f.spec,['/bin/sh','-c','id -u'],{authorize:()=>{},user:'root'})
-  expect(f.calls.find(args=>args.includes('0:0'))).toEqual(['exec','--user','0:0','--env','HOME=/root','--env','USER=root','--workdir','/home/cua/workspace','--',state.containerId,'/bin/sh','-c','id -u'])
+  expect(f.calls.find(args=>args.includes('HOME=/root'))).toEqual(['exec','--user','0:0','--env','HOME=/root','--env','USER=root','--workdir','/home/cua/workspace','--',state.containerId,'python3','-u','-c',GUEST_COMMAND,'run',COMMAND_ROOT,expect.any(String),'root','30','/bin/sh','-c','id -u'])
   await expect(f.provider.ensure({...f.spec,ownerKey:'different-account'},()=>{})).rejects.toMatchObject({code:'computer_owner_mismatch'})
   await f.provider.remove(f.spec)
   expect(f.calls.find(args=>args[0]==='rm')).toEqual(['rm','--',state.containerId])
+})
+it('waits for the desktop driver on a cold start before sending a GUI command',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{})
+  let checks=0
+  const provider=new ContainerComputerProvider('docker',f.provider.runnerId,f.home,async(runtime,args,options)=>{
+    if(args.includes('health_report')){
+      checks++
+      if(checks<3)throw Object.assign(new Error('driver starting'),{stderr:'Cua Driver daemon is not running on /run/user/1000/openmausbot-cua.sock.'})
+    }
+    return f.run(runtime,args,options)
+  },{})
+  await provider.execute(f.spec,[CUA_DRIVER,'call','get_desktop_state','{}'],{authorize:()=>{},lane:'gui'})
+  expect(checks).toBe(3)
+  expect(f.calls.filter(args=>args.includes('health_report'))).toHaveLength(1)
+  expect(f.calls.some(args=>args.includes('get_desktop_state'))).toBe(true)
 })
 it.each([
   (d:any)=>{d.HostConfig.Privileged=true},
@@ -170,12 +186,37 @@ it('keeps a shared desktop alive when one holder cancels an unacknowledged opera
   })
   await f.provider.ensure(f.spec,()=>{})
   // Another holder still shares the desktop: the ambiguous operation must not close it.
-  await expect(f.provider.execute(f.spec,['/bin/sh','-c','boom-shared'],{authorize:()=>{},mayFence:()=>false})).rejects.toThrow('unacknowledged')
+  await expect(f.provider.execute(f.spec,['/bin/sh','-c','boom-shared'],{authorize:()=>{},mayFence:()=>false})).rejects.toMatchObject({code:'computer_cancel_uncertain'})
   await new Promise(resolve=>setTimeout(resolve,25))
   expect(stopped).toBe(0)
   await f.provider.execute(f.spec,['/bin/sh','-c','after'],{authorize:()=>{}})
   // A sole holder keeps the original hard fence.
-  await expect(f.provider.execute(f.spec,['/bin/sh','-c','boom-alone'],{authorize:()=>{}})).rejects.toThrow('unacknowledged')
+  await expect(f.provider.execute(f.spec,['/bin/sh','-c','boom-alone'],{authorize:()=>{}})).rejects.toMatchObject({code:'computer_cancel_uncertain'})
   await new Promise(resolve=>setTimeout(resolve,25))
   expect(stopped).toBe(1)
+})
+
+it('requires a guest stop acknowledgement for a cancelled command and preserves another holder',async()=>{
+  const f=await fixture(),abort=new AbortController(),calls:string[][]=[]
+  await f.provider.ensure(f.spec,()=>{})
+  let acknowledge:()=>void=()=>{}
+  const provider=new ContainerComputerProvider('docker',f.provider.runnerId,f.home,async(runtime,args,options)=>{
+    calls.push(args)
+    if(args.includes(GUEST_COMMAND)&&args.includes('run')){abort.abort();return {stdout:'late',stderr:''}}
+    if(args.includes(GUEST_COMMAND)&&args.includes('cancel')){
+      expect(options?.signal).toBeUndefined()
+      await new Promise<void>(resolve=>{acknowledge=resolve})
+      return {stdout:JSON.stringify({stopped:true}),stderr:''}
+    }
+    return f.run(runtime,args,options)
+  },{})
+  let finished=false
+  const execution=provider.execute(f.spec,['work'],{authorize:()=>{},signal:abort.signal,mayFence:()=>false}).catch(error=>{finished=true;return error})
+  await vi.waitFor(()=>expect(calls.some(args=>args.includes('cancel'))).toBe(true))
+  expect(finished).toBe(false)
+  const running=calls.find(args=>args.includes('run'))!,cancelled=calls.find(args=>args.includes('cancel'))!
+  expect(cancelled.at(-1)).toBe(running[running.indexOf(COMMAND_ROOT)+1])
+  acknowledge()
+  expect(await execution).toMatchObject({code:'computer_cancelled'})
+  expect(calls.some(args=>args[0]==='stop')).toBe(false)
 })

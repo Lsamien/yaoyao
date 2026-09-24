@@ -29,6 +29,7 @@ export class RunnerHub {
   get idleForUpdate(): boolean { return this.localVmActivity.size === 0 && [...this.pending.values()].every(commands => commands.size === 0) && [...this.artifacts.values()].every(upload => upload.result !== undefined) }
   private localVmActivity = new Map<string, { owner: string; runnerId: string }>()
   private localVmChecks = new Set<string>()
+  browserAllowed:(runnerId:string,scope:unknown,grantId?:string)=>boolean=()=>false
   controlAllowed:(id:string,runnerId:string)=>boolean=()=>false
   readonly epoch=randomUUID()
   private online = new Map<string,{instance:string;seen:number;epoch:string;features:string[];wake?:()=>void}>()
@@ -221,6 +222,28 @@ export class RunnerHub {
     if(!valid())throw new HttpError(403,'电脑请求授权已失效','computer_control_expired')
     return result
   }
+  browserRunner(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent){
+    const record=this.records().find(r=>r.enabled&&r.sourceNodeId===agent.nodeId&&(r.sourceOwner==='_system'||r.sourceOwner===owner))
+    if(!record)throw new HttpError(409,'尚未找到此 Bot 的执行节点，请检查服务器的节点连接','browser_runner_missing')
+    const online=this.online.get(record.id)
+    if(!online)throw new HttpError(503,'执行节点暂未连接，节点上线后将自动检测浏览器','runner_offline')
+    if(online.features.includes('managed-browser-disabled-v1'))throw new HttpError(409,'节点管理员已关闭托管浏览器，请在该节点重新启用','browser_node_disabled')
+    if(!online.features.some(feature=>['managed-browser-v1','managed-browser-setup-v1'].includes(feature)))throw new HttpError(409,'执行节点版本尚不支持自动准备浏览器，请更新节点上的夭夭并重新启动','browser_runner_upgrade_required')
+    if(!record.allowedProfiles.includes(agent.profile)||!this.auth.canUseSource(owner,agent.nodeId,agent.profile))throw new HttpError(403,'浏览器 Profile 未授权','browser_profile_forbidden')
+    return {...record,browserEpoch:online.epoch}
+  }
+  async browser(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent,payload:Record<string,unknown>,authorize:()=>void):Promise<any>{
+    const record=this.browserRunner(owner,agent),version=this.auth.pushAuthorizationVersion(owner)
+    const valid=()=>{try{authorize();return this.auth.isUserActive(owner)&&this.auth.pushAuthorizationVersion(owner)===version&&this.store.get<RunnerRecord>('_system','runner',record.id)?.enabled===true}catch{return false}}
+    if(!valid())throw new HttpError(403,'浏览器授权已失效','browser_authorization_revoked')
+    const result=await this.request(record.id,'browser.invoke',{...payload,profile:agent.profile},valid)
+    if(!valid())throw new HttpError(403,'浏览器授权已失效','browser_authorization_revoked')
+    return result
+  }
+  supportsBrowserRetention(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent){
+    const runner=this.browserRunner(owner,agent)
+    return this.online.get(runner.id)?.features.includes('managed-browser-retention-v1')===true
+  }
   async retireHelper(owner:string,helper:import('../shared/workspace.js').WorkspaceAgent):Promise<void>{
     if(!helper.temporaryGoalId||!helper.archived||!helper.helperRunnerId)throw new HttpError(403,'只能清理已退役的任务助手','helper_cleanup_forbidden')
     const current=this.store.require<import('../shared/workspace.js').WorkspaceAgent>(owner,'agent',helper.id)
@@ -240,7 +263,7 @@ export class RunnerHub {
   }
   middleware():Koa.Middleware {
     return async(ctx,next)=>{
-      const match=/^\/api\/runner\/v1\/([0-9a-f-]{36})\/(poll|admit|result|event|tool|check|artifact|control-check|local-vm-check|desktop)$/.exec(ctx.path)
+      const match=/^\/api\/runner\/v1\/([0-9a-f-]{36})\/(poll|admit|result|event|tool|check|artifact|control-check|local-vm-check|browser-check|desktop)$/.exec(ctx.path)
       if(!match)return next()
       const record=this.store.get<RunnerRecord>('_system','runner',match[1]!),token=ctx.get('authorization').replace(/^Bearer /,'')
       if(ctx.get('origin')||!record?.enabled||!ctx.get('authorization').startsWith('Bearer ')||!timingSafeEqual(Buffer.from(record.tokenHash),Buffer.from(hash(token))))
@@ -257,7 +280,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')
@@ -280,17 +303,18 @@ export class RunnerHub {
       if(!body||typeof body!=='object'||Array.isArray(body))throw new HttpError(400,'请求必须是对象','invalid_json')
       if(match[2]==='desktop'){
         if(record.sourceNodeId!=='local'||record.sourceOwner!=='_system'||!state.features.includes('compose-desktops-v1'))throw new HttpError(403,'该节点不能访问 Compose 桌面','compose_desktop_forbidden')
-        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute','skills-install']),ownerKey:z.string().optional()}).passthrough(),body)
+        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute','cancel','skills-install']),ownerKey:z.string().optional()}).passthrough(),body)
         if(operation==='list'){ctx.body=await this.composeDesktops.status();return}
         const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',id)
         if(!claim||claim.runnerId!==record.id||hash(claim.owner)!==ownerKey)throw new HttpError(403,'没有该共享桌面的使用权限','compose_desktop_forbidden')
         const valid=()=>this.auth.isUserActive(claim.owner)&&this.store.list<import('../shared/workspace.js').WorkspaceAgent>(claim.owner,'agent').some(a=>!a.archived&&a.computerEnvironmentId===id&&this.auth.canUseSource(claim.owner,a.nodeId,a.profile))
         const active=()=>[...this.connections.values()].some(c=>c.runnerId===record.id&&c.computer?.environmentId===id&&c.computer.ownerKey===ownerKey&&c.valid())||this.store.list<any>('_system','computer-control').some(g=>g.owner===claim.owner&&g.runnerId===record.id&&g.environmentId===id&&this.controlAllowed(g.id,record.id))
-        if(operation!=='release'&&(!valid()||(!['health','frame'].includes(operation)&&!active())))throw new HttpError(403,'桌面操作缺少当前任务或接管授权','compose_desktop_forbidden')
+        if(!['release','cancel'].includes(operation)&&(!valid()||(!['health','frame'].includes(operation)&&!active())))throw new HttpError(403,'桌面操作缺少当前任务或接管授权','compose_desktop_forbidden')
         const result=await this.composeDesktops.call(id,operation,{...payload,owner:ownerKey})
         if(operation==='acquire'&&(!valid()||!active())){await this.composeDesktops.call(id,'release',{...result,cancel:true}).catch(()=>{});throw new HttpError(410,'桌面操作已取消','computer_control_expired')}
         ctx.body=result;return
       }
+      if(match[2]==='browser-check'){ctx.body={allowed:state.features.some(feature=>['managed-browser-v1','managed-browser-setup-v1'].includes(feature))&&this.browserAllowed(record.id,body.scope,typeof body.grantId==='string'?body.grantId:undefined)};return}
       if(match[2]==='local-vm-check'){ctx.body={allowed:typeof body.id==='string'&&this.localVmAllowed(body.id,record.id)};return}
       if(match[2]==='control-check'){ctx.body={allowed:typeof body.controlId==='string'&&this.controlAllowed(body.controlId,record.id)};return}
       if(match[2]==='artifact'){

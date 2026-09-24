@@ -46,7 +46,7 @@ beforeEach(async () => {
   runtime = new WorkspaceRuntime(store, nodes, uploads, () => authorized)
   pluginDispose = vi.fn(async () => {})
   pluginCall = vi.fn(async () => ({message: '插件仍可使用'}))
-  runtime.plugins = {selected: () => true, open: async () => ({services: () => [],
+  runtime.plugins = {selected: () => true, open: async () => ({services: () => [], warnings: () => [],
     catalog: () => [{id: 'plugin_fixture', name: 'plugin_fixture', description: '回归测试', inputSchema: {type: 'object'}}],
     call: pluginCall, dispose: pluginDispose,
   })} as unknown as WorkspacePlugins

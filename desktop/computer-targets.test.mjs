@@ -34,6 +34,7 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
    {key:'desktop:local',backend:'desktop',host:'local',name:'服务器',color:'#263f59'},
    {key:'desktop:client-mac',backend:'desktop',host:'client-mac',name:'Mac Studio 客户端',color:'#245b49'},
    {key:'cloud',backend:'cloud',name:'Grok Bot 云端',color:'#6a405e'},
+   {key:'managed-browser',backend:'managed-browser',name:'托管浏览器',color:'#264e60'},
    {key:'vm',backend:'vm',name:'独立虚拟机',color:'#65502c'},
   ]
   const images=await page.evaluate(targets=>Object.fromEntries(targets.map(target=>{
@@ -47,13 +48,15 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
   const hosts=targets.filter(t=>t.backend==='desktop').map(t=>({id:t.host,name:t.name,online:true,local:permission,browser:{available:false}}))
   const calls=[],leases=new Set()
   let refuseGiveback=false
-  await app.context().route('**/api/app/settings/host-tools',route=>route.fulfill({json:{scriptMachine:true,serverComputer:true,vm:true,cloud:true}}))
+  await app.context().route('**/api/app/settings/host-tools',route=>route.fulfill({json:{scriptMachine:true,serverComputer:true,vm:true,cloud:true,managedBrowser:true}}))
   await app.context().route('**/api/app/agents/*/**',async route=>{
    const url=new URL(route.request().url()),path=url.pathname
    if(!path.startsWith(`/api/app/agents/${seed.agentId}/`))return route.continue()
    if(path.endsWith('/desktop-environment'))return route.fulfill({json:{hosts,online:true,local:permission}})
    if(path.endsWith('/cloud-computer')||path.endsWith('/cloud-computer/open'))return route.fulfill({json:{configured:true,running:true,connected:true}})
    if(path.endsWith('/local-vm'))return route.fulfill({json:{enabled:true,image:true,container:'running',ready:true,mode:'per-bot',fixedCapacity:true}})
+   if(path.endsWith('/managed-browser'))return route.fulfill({json:{enabled:true,available:true,open:true,generation:1,profile:'temporary',tabs:[{id:'tab',title:'托管网页',url:'https://example.com/',active:true}],downloads:[]}})
+   if(path.endsWith('/managed-browser/action')){calls.push({op:'browser-action',key:'managed-browser',body:route.request().postDataJSON()});return route.fulfill({json:{ok:true}})}
    if(!path.includes('/computer'))return route.continue()
    const backend=url.searchParams.get('backend'),host=url.searchParams.get('host')
    const key=backend==='desktop'?'desktop:'+host:backend
@@ -66,7 +69,7 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
     if(op==='take')leases.add(key)
     if(op==='giveback')leases.delete(key)
    }
-   return route.fulfill({json:{mode:leases.has(key)?'human':'idle',backend:backend==='desktop'?'local':backend==='cloud'?'grok':'docker',
+   return route.fulfill({json:{mode:leases.has(key)?'human':'idle',backend:backend==='desktop'?'local':backend==='cloud'?'grok':backend==='managed-browser'?'managed-browser':'docker',
     hostName:target.name,generation:1,controlId:leases.has(key)?key:undefined,token:'fixture-token'}})
   })
   await page.goto(origin+'/conversations/'+seed.conversationId)
@@ -91,8 +94,22 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
    }
    assert.deepEqual([...leases],[target.key])
    previousKey=target.key
+   if(target.backend==='managed-browser'){
+    await expect(viewer.getByRole('textbox',{name:'浏览器地址'})).toHaveValue('https://example.com/')
+    await viewer.getByRole('textbox',{name:'浏览器地址'}).fill('https://example.org/')
+    await viewer.getByRole('button',{name:'前往',exact:true}).click()
+    await expect.poll(()=>calls.filter(c=>c.op==='browser-action').length).toBe(1)
+    const navigation=calls.find(c=>c.op==='browser-action').body
+    assert.equal(navigation.controlId,'managed-browser');assert.equal(navigation.generation,1)
+    assert.deepEqual(navigation.action,{kind:'navigate',url:'https://example.org/'})
+    const output=join(root,'test-results/managed-browser');await mkdir(output,{recursive:true})
+    await viewer.screenshot({path:join(output,'desktop.png')})
+    await page.setViewportSize({width:375,height:812});await page.screenshot({path:join(output,'mobile-preview.png')})
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false)
+    await page.setViewportSize({width:1440,height:900})
+   }
    if(target.host==='client-mac'){
-    const output=join(root,'docs/verification/2026-09-19-computer-targets');await mkdir(output,{recursive:true})
+    const output=join(root,'test-results/computer-targets');await mkdir(output,{recursive:true})
     await viewer.screenshot({path:join(output,'client-desktop.png')})
     await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(output,'selected-client-mobile.png')})
     await page.setViewportSize({width:1440,height:900})

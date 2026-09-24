@@ -1,9 +1,10 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { mkdir, realpath, chmod, lstat, rm, readFile } from 'node:fs/promises'
 import { join, resolve, posix, dirname, basename } from 'node:path'
 import { z } from 'zod'
 import {recoverWorkspace} from './workspaceRecovery.js'
+import {COMMAND_ROOT,GUEST_COMMAND} from './commandProcess.js'
 
 export const COMPUTER_WORKSPACE = '/home/cua/workspace'
 export const CUA_DRIVER = '/usr/local/libexec/openmausbot/cua-driver'
@@ -110,7 +111,7 @@ export class ContainerComputerProvider implements ComputerProvider {
     z.string().uuid().parse(runnerId)
     if(!['docker','podman'].includes(runtime))throw new ComputerError('runtime_unsupported','电脑运行时不受支持')
   }
-  private lane(id:string):Lane{let lane=this.lanes.get(id);if(!lane){lane=new Lane();this.lanes.set(id,lane)}return lane}
+  protected lane(id:string):Lane{let lane=this.lanes.get(id);if(!lane){lane=new Lane();this.lanes.set(id,lane)}return lane}
   async verifyRuntime() {
     if(this.runtime==='docker') {
       const endpoint=this.environment.DOCKER_HOST||JSON.parse((await this.run('docker',['context','inspect','--format','{{json .Endpoints.docker.Host}}'])).stdout)
@@ -256,6 +257,22 @@ export class ContainerComputerProvider implements ComputerProvider {
       // Persistent workspace deletion is a separate, explicit operation.
     })
   }
+  private async waitForDesktop(state:ComputerState,authorize:()=>void,signal?:AbortSignal):Promise<void> {
+    const deadline=Date.now()+15000
+    for(;;){
+      authorize()
+      if(signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
+      try {
+        await this.run(this.runtime,['exec','--user','1000:1000','--',state.containerId,CUA_DRIVER,'call','health_report','{}','--socket',CUA_SOCKET],{timeout:3000,signal})
+        authorize()
+        return
+      }catch(error){
+        if(signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
+        if(!/Cua Driver daemon is not running on/.test(String((error as any).stderr??''))||Date.now()>=deadline)throw error
+        await new Promise(resolve=>setTimeout(resolve,250))
+      }
+    }
+  }
   async execute(value:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:ComputerLane;mayFence?():boolean;user?:ComputerUser}):Promise<CommandResult> {
     const spec=this.validateSpecification(value)
     if(!argv.length||argv.length>64||argv.some(arg=>typeof arg!=='string'||arg.includes('\0'))||argv.join('').length>65536)throw new ComputerError('computer_command_invalid','电脑命令无效或过长')
@@ -264,19 +281,38 @@ export class ContainerComputerProvider implements ComputerProvider {
       const state=await this.inspect(spec)
       if(!state?.running)throw new ComputerError('computer_not_running','电脑环境尚未运行')
       options.authorize()
+      if(argv[0]===CUA_DRIVER)await this.waitForDesktop(state,options.authorize,options.signal)
+      if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
+      const operationId=randomUUID(),timeout=Math.min(60000,Math.max(1000,options.timeout??30000))
+      let cancellation:Promise<void>|undefined
+      const cancel=()=>cancellation??=(async()=>{
+        try{
+          const result=await this.run(this.runtime,['exec','--user','0:0','--',state.containerId,'python3','-c',GUEST_COMMAND,'cancel',COMMAND_ROOT,operationId],{timeout:10000})
+          if(JSON.parse(result.stdout).stopped!==true)throw new Error('missing stop acknowledgement')
+        }catch{
+          if(options.mayFence===undefined||options.mayFence())this.fence(spec,state.containerId)
+          throw new ComputerError('computer_cancel_uncertain','尚未确认电脑命令已停止，请检查电脑中的运行进程')
+        }
+      })()
+      // Observe cancellation immediately; waiting for the docker client to close
+      // would leave its guest command running after the holder had been revoked.
+      const abort=()=>{void cancel().catch(()=>{})}
+      options.signal?.addEventListener('abort',abort,{once:true})
       try {
-        const user=options.user??'cua',uid=user==='root'?'0:0':'1000:1000',home=user==='root'?'/root':'/home/cua'
-        const result=await this.run(this.runtime,['exec',...(options.input?['-i']:[]),'--user',uid,'--env',`HOME=${home}`,'--env',`USER=${user}`,'--workdir',spec.cwd,'--',state.containerId,...argv],{timeout:Math.min(60000,Math.max(1000,options.timeout??30000)),signal:options.signal,input:options.input})
+        if(options.signal?.aborted){await cancel();throw new ComputerError('computer_cancelled','操作已停止')}
+        const user=options.user??'cua',home=user==='root'?'/root':'/home/cua'
+        const result=await this.run(this.runtime,['exec',...(options.input?['-i']:[]),'--user','0:0','--env',`HOME=${home}`,'--env',`USER=${user}`,'--workdir',spec.cwd,'--',state.containerId,'python3','-u','-c',GUEST_COMMAND,'run',COMMAND_ROOT,operationId,user,String(timeout/1000),...argv],{timeout:timeout+5000,signal:options.signal,input:options.input})
+        if(options.signal?.aborted){await cancel();throw new ComputerError('computer_cancelled','操作已停止')}
         options.authorize();return result
       }catch(error){
-        // Killing a docker exec client alone cannot prove its guest process stopped.
-        // A cancelled or unacknowledged operation closes this private environment —
-        // unless other holders still share it, in which case only this operation fails.
+        // Ambiguous client exits need a guest acknowledgement. If it cannot be
+        // obtained, retain the existing sole-holder fence without stopping peers.
         if(options.signal?.aborted||(error as any).killed||typeof (error as any).code!=='number'){
-          if(options.mayFence===undefined||options.mayFence())this.fence(spec,state.containerId)
+          await cancel()
+          if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
         }
         throw error
-      }
+      }finally{options.signal?.removeEventListener('abort',abort)}
     },options.lane==='gui'?this.lane(spec.id).gui:undefined)
   }
   /** Escalates to the lifecycle lane so the stop never runs under live operations. */
@@ -297,6 +333,7 @@ export class ContainerComputerProvider implements ComputerProvider {
     return this.lane(spec.id).read(async()=>{
       const state=await this.inspect(spec)
       authorize();if(!state?.running)throw new ComputerError('computer_not_running','电脑尚未运行')
+      await this.waitForDesktop(state,authorize)
       const file=`/tmp/yaoyao-view-${randomBytes(12).toString('hex')}.png`
       const exec=(args:string[])=>this.run(this.runtime,['exec','--user','1000:1000','--',state.containerId,...args],{timeout:10000})
       try{

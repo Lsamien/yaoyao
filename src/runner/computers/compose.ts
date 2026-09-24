@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {ContainerComputerProvider,ComputerError,type ComputerSpecification,type ComputerState,type CommandResult,type SkillInstallation} from './container.js'
+import {ContainerComputerProvider,ComputerError,type ComputerSpecification,type ComputerState,type CommandResult,type SkillInstallation,type ComputerLane} from './container.js'
 import type {DesktopRelay} from '../../shared/composeDesktops.js'
 /** Uses only the fixed desktops declared by Compose; never calls a container engine. */
 export class ComposeComputerProvider extends ContainerComputerProvider {
@@ -33,12 +33,41 @@ export class ComposeComputerProvider extends ContainerComputerProvider {
   async stop(spec:ComputerSpecification){await this.releaseFence(spec)}
   async remove(spec:ComputerSpecification){await this.stop(spec)}
   async deleteWorkspace(_spec:ComputerSpecification){} // Compose owns the named volume.
-  async execute(spec:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:string;mayFence?():boolean;user?:'cua'|'root'}):Promise<CommandResult>{
-    options.authorize();if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
-    const lease=this.leases.get(spec.id);if(!lease)throw new ComputerError('computer_lease_stale','需要当前共享桌面的控制权')
-    const result=await this.relay(spec.id,'execute',{ownerKey:spec.ownerKey,...lease,argv,cwd:spec.cwd??'/home/cua/workspace',timeout:options.timeout??30000,user:options.user??'cua',...(options.input?{input:options.input.toString('base64')}:{})})
-    options.authorize();if(result.exitCode)throw Object.assign(new ComputerError('computer_command_failed','桌面命令执行失败'),{code:result.exitCode,stdout:result.stdout,stderr:result.stderr})
-    return result
+  async execute(spec:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:ComputerLane;mayFence?():boolean;user?:'cua'|'root'}):Promise<CommandResult>{
+    return this.lane(spec.id).read(async()=>{
+      options.authorize();if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
+      const lease=this.leases.get(spec.id);if(!lease)throw new ComputerError('computer_lease_stale','需要当前共享桌面的控制权')
+      const operationId=randomUUID(),identity={ownerKey:spec.ownerKey,...lease,operationId}
+      let completeCancellation!:(error:ComputerError)=>void,cancelling=false
+      const cancelled=new Promise<ComputerError>(resolve=>{completeCancellation=resolve})
+      const abort=()=>{
+        if(cancelling)return
+        cancelling=true
+        void (async()=>{
+          try{
+            const result=await this.relay(spec.id,'cancel',identity)
+            if(result.stopped!==true)throw new Error('missing stop acknowledgement')
+            completeCancellation(new ComputerError('computer_cancelled','操作已停止'))
+          }catch{
+            // A shared desktop cannot be fenced for one holder. Preserve the
+            // uncertainty instead of reporting a successful cancellation.
+            if(options.mayFence===undefined||options.mayFence())await this.releaseFence(spec).catch(()=>{})
+            completeCancellation(new ComputerError('computer_cancel_uncertain','尚未确认桌面命令已停止，请检查桌面中的运行进程'))
+          }
+        })()
+      }
+      options.signal?.addEventListener('abort',abort,{once:true})
+      try{
+        if(options.signal?.aborted){abort();throw await cancelled}
+        const execution=this.relay(spec.id,'execute',{...identity,argv,cwd:spec.cwd??'/home/cua/workspace',timeout:options.timeout??30000,user:options.user??'cua',...(options.input?{input:options.input.toString('base64')}:{})})
+        const result=await Promise.race([execution,cancelled.then(error=>{throw error})])
+        if(options.signal?.aborted)throw await cancelled
+        options.authorize()
+        if(result.exitCode)throw Object.assign(new ComputerError('computer_command_failed','桌面命令执行失败'),{code:result.exitCode,stdout:result.stdout,stderr:result.stderr})
+        return result
+      }catch(error){if(options.signal?.aborted)throw await cancelled;throw error}
+      finally{options.signal?.removeEventListener('abort',abort)}
+    },options.lane==='gui'?this.lane(spec.id).gui:undefined)
   }
   async installSkill(spec:ComputerSpecification,bundle:SkillInstallation,_script:string,options:{authorize():void;signal?:AbortSignal}):Promise<{path:string;revision:string}>{
     options.authorize();if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')

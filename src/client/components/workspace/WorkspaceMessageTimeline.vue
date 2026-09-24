@@ -15,6 +15,8 @@ import TypingIndicator from '@/components/common/TypingIndicator.vue'
 import InteractionCard from '../messages/InteractionCard.vue'
 import WorkspaceApprovalCard from './WorkspaceApprovalCard.vue'
 import TaskResultNotice from './TaskResultNotice.vue'
+import ManagedBrowserCard from '../messages/ManagedBrowserCard.vue'
+import ServiceWarnings from '../messages/ServiceWarnings.vue'
 import MarkdownContent from '../messages/MarkdownContent.vue'
 import ToolTrace from '../messages/ToolTrace.vue'
 import TurnTrace from '../messages/TurnTrace.vue'
@@ -96,6 +98,7 @@ const emit = defineEmits<{
   previewFile: [file: UiLocalFileLink]
   approvalChoice: [choice: 'once' | 'deny' | 'auto']
   clarify: [text: string]
+  browserControl: [card: NonNullable<UiMessage['browserCard']>]
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
@@ -349,11 +352,13 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
             <span class="communication-caption__name">{{ message.communication.peerName }}</span>
           </div>
           <div class="message__body">
+            <div v-if="message.browserCard && showAssistantIdentity" class="message__meta"><strong>{{ message.author || message.browserCard.agentName }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
+            <ManagedBrowserCard v-if="message.browserCard" :card="message.browserCard" :read-only="readOnly" @open="emit('browserControl', $event)"/>
             <MessageFailureNotice v-if="messageFailure(message)?.replacesContent && !message.attachments?.length" :failure="messageFailure(message)!" />
             <TaskResultNotice v-else-if="message.role === 'system' && message.taskReference" :content="message.content" :task-reference="message.taskReference" />
             <MessageSystemEvent v-else-if="systemMessageNotice(message)" :message="message" />
             <template v-else>
-            <div v-if="!message.communication && (message.role !== 'assistant' || showAssistantIdentity)" class="message__meta">
+            <div v-if="!message.browserCard && !message.communication && (message.role !== 'assistant' || showAssistantIdentity)" class="message__meta">
               <strong><AppIcon v-if="message.isRemoteAgent" class="message__remote-agent" name="globe" :size="12" />{{ message.role === 'user' ? '你' : message.author || message.profile || (message.role === 'assistant' ? '机器人' : '系统') }}</strong>
               <span v-if="message.metadata" class="message__execution">{{ message.metadata }}</span>
               <time>{{ formatTime(message.createdAt) }}</time>
@@ -419,6 +424,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
               <button v-if="!readOnly && allowBranch && message.role === 'assistant'" type="button" title="从这里分支" aria-label="从这里分支" @click="emit('branch', message)"><AppIcon name="branch" :size="13" /></button>
             </div>
             </template>
+            <ServiceWarnings v-if="message.serviceWarnings?.length" :warnings="message.serviceWarnings"/>
           </div>
           <MessageFailureNotice v-if="messageFailure(message) && (!messageFailure(message)?.replacesContent || !!message.attachments?.length)" :failure="messageFailure(message)!" />
         </article>

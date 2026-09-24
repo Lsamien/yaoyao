@@ -14,6 +14,8 @@ import { WorkspaceGateway, type GatewayTarget, type GatewayFrame } from '../serv
 import { createWorkspaceToolLease, type WorkspaceToolLease } from '../server/workspaceToolLease.js'
 import {UNCONFIGURED_COMPUTER_IMAGE} from '../shared/runner.js'
 import {assertRunnerHermes} from './config.js'
+import {RunnerBrowser} from './managedBrowser.js'
+import {BrowserRuntimeError} from './browser/types.js'
 import type { RunnerCommand, RunnerConfiguration } from '../shared/runner.js'
 import { LoopbackTransport, isLocalAuthorizationTarget } from '../server/loopbackAuthorization.js'
 
@@ -35,6 +37,7 @@ export class RunnerAgent {
   private db:DatabaseSync
   private computers?:ComputerRuntime
   private localVm?:LocalVmImages
+  private browsers?:RunnerBrowser
   private target:GatewayTarget
   private controlTransport=new LoopbackTransport()
   private serverEpoch?:string
@@ -49,14 +52,21 @@ export class RunnerAgent {
     this.db=new DatabaseSync(join(home,'runner-commands.sqlite3'))
     this.db.exec('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created INTEGER NOT NULL)')
     if(config.computers){this.computers=new ComputerRuntime(this.db,config,home,undefined,(id,operation,body)=>this.api('desktop',{id,operation,...body}),this.target);this.localVm=new LocalVmImages(this.computers,this.db)}
+    // Embedded runners can load pre-browser sealed configs without the CLI parser.
+    // Only an explicit opt-out disables setup; it never changes VM isolation.
+    const browser={...config.browser,enabled:config.browser?.enabled!==false}
+    if(browser.enabled)this.browsers=new RunnerBrowser(browser,home,async(scope,grantId)=>{
+      if(!this.active||!this.connected||(await this.api('browser-check',{scope,grantId})).allowed!==true)throw new HttpError(403,'浏览器授权已失效','browser_authorization_revoked')
+    })
     this.compactReceipts()
   }
   private async api(path:string,body?:unknown):Promise<any> {
     const url=new URL(`/api/runner/v1/${this.config.runnerId}/${path}`,this.config.serverURL)
     if(url.hostname==='localhost')url.hostname='127.0.0.1'
+    const toolId=body&&typeof body==='object'&&'toolId' in body?body.toolId:undefined
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
-      method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':this.computers?'workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'workspace-memory-bind-v1',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:path==='tool'&&typeof toolId==='string'&&toolId.startsWith('managed_browser_')?600000:25000)]),
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':(this.computers?'workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'workspace-memory-bind-v1')+(this.browsers?',managed-browser-setup-v1,managed-browser-retention-v1':',managed-browser-disabled-v1')+(this.browsers?.available?',managed-browser-v1':''),...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
@@ -90,6 +100,7 @@ export class RunnerAgent {
     for(const value of leases)value.controller.abort()
     const pending=Promise.all([
       ...leases.map(value=>value.lease.dispose()),
+      ...(this.browsers?[this.browsers.disconnect()]:[]),
       ...[...this.connections.keys()].map(id=>this.closeConnection(id)),
     ]).then(()=>{}).finally(()=>{if(this.disconnecting===pending)this.disconnecting=undefined})
     this.disconnecting=pending;return pending
@@ -97,6 +108,10 @@ export class RunnerAgent {
   private async execute(command:RunnerCommand):Promise<any> {
     const p=command.payload
     if(!this.active||!this.connected)throw new Error('执行节点已断开')
+    if(command.kind==='browser.invoke'){
+      if(!this.browsers)throw new HttpError(409,'托管浏览器未配置','browser_unavailable')
+      return this.browsers.invoke(p,command.expiresAt,profile=>{this.requireProfile(profile)})
+    }
     if(command.kind==='local-vm.manage'){
       if(!this.localVm)throw new HttpError(409,'本地虚拟机尚未配置','computer_unavailable')
       const input=z.object({owner:z.string().regex(/^[a-f0-9]{64}$/),op:z.enum(['status','prepare','policy','idle-policy','instance']),idleStopMinutes:z.number().int().min(0).max(MAX_VM_IDLE_STOP_MINUTES).optional(),id:z.string().uuid().optional(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),mode:z.enum(['shared','per-bot']).optional(),maxInstances:z.number().int().min(1).max(4).optional(),environmentId:z.string().uuid().optional(),action:z.enum(['stop','remove']).optional()}).strict().parse(p)
@@ -210,7 +225,8 @@ export class RunnerAgent {
     if(command.kind==='gateway.close'){await this.closeConnection(connectionId);return {ok:true}}
     if(command.kind==='gateway.rpc') {
       const connection=this.connections.get(connectionId),method=String(p.method),params=p.params as Record<string,unknown>
-      if(!connection||!commands.has(method)||!params||typeof params!=='object')throw new HttpError(403,'执行通道或命令无效','runner_command_forbidden')
+      const computerCommand=method==='computer.invoke'||method==='computer.transfer'
+      if(!connection||(!commands.has(method)&&!(computerCommand&&connection.gateway instanceof ComputerGateway))||!params||typeof params!=='object')throw new HttpError(403,'执行通道或命令无效','runner_command_forbidden')
       if(connection.cleanupOnly&&!['session.resume','session.interrupt','session.close'].includes(method))throw new HttpError(403,'清理通道不允许执行新工作','runner_cleanup_forbidden')
       if(method==='session.create'||method==='session.resume'){if(!connection.cleanupOnly)this.requireProfile(params.profile)}
       else if(!connection.sessions.has(String(params.session_id)))throw new HttpError(403,'会话不属于这个通道','runner_session_forbidden')
@@ -282,7 +298,7 @@ export class RunnerAgent {
     const pending=Promise.resolve().then(async()=>{
       if(command.expiresAt<=Date.now()||!(await this.api('admit',{id:command.id})).allowed||command.expiresAt<=Date.now())throw new HttpError(403,'命令授权已经失效，未执行','runner_command_not_admitted')
       return this.execute(command)
-    }).then(result=>({result}),error=>({error:{message:(error instanceof Error&&error.message?error.message:'执行节点操作失败').slice(0,1000),code:error instanceof HttpError||error instanceof ComputerError?error.code:'runner_error'}}))
+    }).then(result=>({result}),error=>({error:{message:(error instanceof Error&&error.message?error.message:'执行节点操作失败').slice(0,1000),code:error instanceof HttpError||error instanceof ComputerError||error instanceof BrowserRuntimeError?error.code:'runner_error'}}))
       .then(reply=>{this.db.prepare("UPDATE commands SET state='complete',result=? WHERE id=?").run(JSON.stringify(reply),command.id);return reply})
       .finally(()=>this.inflight.delete(command.id))
     this.inflight.set(command.id,pending);return pending
@@ -291,7 +307,7 @@ export class RunnerAgent {
   private status(message:string){if(message!==this.lastStatus){this.lastStatus=message;this.onStatus(message)}}
   async run(signal:AbortSignal):Promise<void> {
     const deliveries=new Map<string,Promise<void>>()
-    const cleanupTimer=setInterval(()=>{void this.computers?.pool.expire().catch(()=>{})},5000);cleanupTimer.unref()
+    const cleanupTimer=setInterval(()=>{void this.computers?.pool.expire().catch(()=>{});void this.browsers?.sweep().catch(()=>{})},5000);cleanupTimer.unref()
     const abort=()=>{this.active=false;this.controlAbort.abort();void this.disconnect()};signal.addEventListener('abort',abort,{once:true})
     try {
       while(this.active&&!signal.aborted) {
@@ -323,6 +339,7 @@ export class RunnerAgent {
       signal.removeEventListener('abort',abort)
       try{
         await this.disconnect().catch(()=>{})
+        await this.browsers?.shutdown()
         await Promise.allSettled(deliveries.values());await Promise.allSettled(this.inflight.values())
         await this.localVm?.close();await this.computers?.controls.close();await this.computers?.pool.close()
       }finally{this.target.client.close();this.controlTransport.close();this.db.close();this.status('执行节点已停止')}

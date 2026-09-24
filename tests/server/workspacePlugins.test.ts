@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { beforeEach, afterEach, describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import request from 'supertest'
 import type Koa from 'koa'
 import { createApplication, type ApplicationRuntime } from '../../src/server/app'
@@ -14,6 +14,7 @@ import { createWorkspaceToolLease } from '../../src/server/workspaceToolLease'
 
 let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, failedInventory: boolean
 let requests: Array<{ url: string; body: any; method: string }>, accounts: any[], sessions: Map<string, string>
+let rejectRequest: ((url: string, body: any, init?: RequestInit) => Response | undefined | Promise<Response | undefined>) | undefined
 const principal = (id: string) => ({ id, username: id, role: id === 'owner' ? 'admin' as const : 'user' as const, enabled: true, mustChangePassword: false, createdAt: 1, updatedAt: 1 })
 class TestAuth extends LocalAuthStore {
   override current(ctx: Koa.Context) { return principal(ctx.get('x-test-user') || 'owner') }
@@ -27,6 +28,8 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 const mcpFetch: typeof fetch = async (input, init) => {
   const url = String(input), body = JSON.parse(String(init?.body || '{}')), method = init?.method ?? 'GET'
   requests.push({ url, body, method })
+  const rejected = await rejectRequest?.(url, body, init)
+  if (rejected) return rejected
   if (url.includes('/tool_router/session') && method === 'POST' && !url.endsWith('/link')) {
     const id = 'trs_' + randomUUID(); sessions.set(id, body.user_id)
     return response({ session_id: id, config: { user_id: body.user_id }, mcp: { url: `https://backend.composio.dev/tool_router/${id}/mcp` } }, 201)
@@ -51,14 +54,14 @@ const mcpFetch: typeof fetch = async (input, init) => {
 const api = (method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, owner = 'owner') => request(runtime.app.callback())[method]('/api/app/bot-tools' + path)
   .set('Host', '127.0.0.1:15300').set('Origin', 'http://127.0.0.1:15300').set('Cookie', cookie).set('x-csrf-token', csrf).set('x-test-user', owner)
 beforeEach(async () => {
-  home = mkdtempSync(join(tmpdir(), 'yaoyao-plugin-test-')); failedInventory = false; requests = []; accounts = []; sessions = new Map()
+  home = mkdtempSync(join(tmpdir(), 'yaoyao-plugin-test-')); failedInventory = false; requests = []; accounts = []; sessions = new Map(); rejectRequest = undefined
   const config = loadServerConfig({ HERMES_YAOYAO_HOME: home, HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:19119' })
   runtime = createApplication({ config, auth: new TestAuth(home, false), pluginFetch: mcpFetch, fetchImpl: (async () => response({ ok: true, auth_required: false, profiles: [] })) as typeof fetch })
   const boot = await request(runtime.app.callback()).get('/api/app/bootstrap').set('Host', '127.0.0.1:15300')
   cookie = (boot.headers['set-cookie'] as unknown as string[]).map(s => s.split(';')[0]).join('; ')
   csrf = boot.body.csrfToken
 })
-afterEach(async () => { runtime.close(); await new Promise(r => setTimeout(r, 20)); rmSync(home, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); runtime.close(); await new Promise(r => setTimeout(r, 20)); rmSync(home, { recursive: true, force: true }) })
 async function addPlugin(agentIds: string[] = []) {
   const added = await api('post', '/mcp').send({ name: '测试服务', transport: 'http', url: 'https://mcp.example.test/mcp', headers: { Authorization: 'Bearer fixture-secret' }, agentIds })
   expect(added.status, JSON.stringify(added.body)).toBe(201)
@@ -251,4 +254,110 @@ it('accepts SSE MCP responses, preserves tool results and disables redirect foll
   expect(options.every(o => o.redirect === 'error')).toBe(true)
   expect(options.at(-1).headers['Mcp-Session-Id']).toBe('session-fixture')
   client.dispose()
+})
+
+const pluginTarget: any = { url: new URL('http://127.0.0.1:19119'), session: { request: async () => ({
+  status: 200, body: Buffer.from(JSON.stringify({ version: 1, ready: true, native_tools: true, in_process: true })),
+}) } }
+async function enablePlugin(agentId: string, name: string, url: string) {
+  const added = await api('post', '/mcp').send({ name, transport: 'http', url, agentIds: [agentId] }).expect(201)
+  await api('post', '/mcp/' + added.body.plugin.id + '/test').send({}).expect(200)
+  await api('patch', '/mcp/' + added.body.plugin.id).send({ enabled: true, revision: 1 }).expect(200)
+  return added.body.plugin.id as string
+}
+
+it.each(['initialize', 'tools/list'])('isolates a failed %s without discarding healthy MCP services or claiming failed tools worked', async method => {
+  const agent = runtime.workspace.createAgent('owner', { name: '可选插件 Bot', profile: 'default' })
+  const badId = await enablePlugin(agent.id, '离线服务', 'https://offline.example.test/mcp')
+  await enablePlugin(agent.id, '健康服务', 'https://healthy.example.test/mcp')
+  rejectRequest = (url, body) => url.includes('offline.example.test') && body.method === method ? response({ error: 'Bearer fixture-secret' }, 503) : undefined
+  const disposed = vi.spyOn(HttpMcp.prototype, 'dispose')
+  const lease = await runtime.workspacePlugins.open('owner', agent, pluginTarget, new AbortController().signal, () => {})
+  try {
+    expect(lease.services()).toEqual([{ name: '健康服务', transport: 'http', toolCount: 1 }])
+    expect(lease.warnings()).toEqual([{ name: '离线服务', code: 'plugin_initialization_failed', message: expect.stringContaining('不可用') }])
+    expect(JSON.stringify(lease.warnings())).not.toContain('fixture-secret')
+    expect(lease.catalog()).toHaveLength(1)
+    expect(lease.catalog()[0]!.description).toContain('健康服务')
+    expect((await lease.call(lease.catalog()[0]!.id, { value: 'healthy' }) as any).structuredContent.value).toBe('healthy')
+    const count = requests.length, failedTool = 'plugin_' + createHash('sha256').update(badId + ':fixture_echo').digest('hex').slice(0, 32)
+    await expect(lease.call(failedTool, {})).rejects.toMatchObject({ code: 'plugin_unavailable' })
+    expect(requests).toHaveLength(count)
+    expect(disposed).toHaveBeenCalledOnce()
+    await api('patch', '/mcp/' + badId).send({ enabled: false, revision: 2 }).expect(200)
+    expect(lease.warnings()).toEqual([])
+    await expect(lease.call(failedTool, {})).rejects.toMatchObject({ code: 'plugin_grant_revoked' })
+  } finally { await lease.dispose() }
+})
+
+it('returns an unavailable-app warning when connected-app session creation fails, preserving healthy MCP tools', async () => {
+  const agent = runtime.workspace.createAgent('owner', { name: '应用故障隔离', profile: 'default' })
+  await enablePlugin(agent.id, '健康服务', 'https://healthy.example.test/mcp')
+  await configure()
+  await api('put', '/apps/gmail/agents').send({ revision: 0, agentIds: [agent.id] }).expect(200)
+  rejectRequest = url => url.endsWith('/tool_router/session') ? response({ error: 'upstream unavailable' }, 503) : undefined
+  const lease = await runtime.workspacePlugins.open('owner', agent, pluginTarget, new AbortController().signal, () => {})
+  try {
+    expect(lease.services()).toEqual([{ name: '健康服务', transport: 'http', toolCount: 1 }])
+    expect(lease.warnings()).toEqual([{ name: '已连接应用', code: 'plugin_initialization_failed', message: expect.stringContaining('不可用') }])
+    expect(lease.catalog()).toHaveLength(1)
+    expect((await lease.call(lease.catalog()[0]!.id, { value: 'still connected' }) as any).structuredContent.value).toBe('still connected')
+  } finally { await lease.dispose() }
+})
+
+it('returns an empty, explicitly degraded lease when every optional plugin is offline', async () => {
+  const agent = runtime.workspace.createAgent('owner', { name: '普通聊天', profile: 'default' })
+  await enablePlugin(agent.id, '离线服务', 'https://offline.example.test/mcp')
+  rejectRequest = (_url, body) => body.method === 'initialize' ? response({}, 503) : undefined
+  const lease = await runtime.workspacePlugins.open('owner', agent, pluginTarget, new AbortController().signal, () => {})
+  try {
+    expect(lease.services()).toEqual([]); expect(lease.catalog()).toEqual([])
+    expect(lease.warnings()).toHaveLength(1)
+    await expect(lease.call('plugin_unknown', {})).rejects.toMatchObject({ code: 'plugin_tool_not_found' })
+  } finally { await lease.dispose() }
+})
+
+it('does not turn cancellation or a revoked plugin grant into a degraded lease', async () => {
+  const agent = runtime.workspace.createAgent('owner', { name: '撤权 Bot', profile: 'default' })
+  const id = await enablePlugin(agent.id, '受控服务', 'https://controlled.example.test/mcp')
+  const controller = new AbortController()
+  rejectRequest = (_url, body) => {
+    if (body.method === 'initialize') { controller.abort(); throw new Error('cancelled transport') }
+    return undefined
+  }
+  await expect(runtime.workspacePlugins.open('owner', agent, pluginTarget, controller.signal, () => {})).rejects.toMatchObject({ code: 'plugin_grant_revoked' })
+  rejectRequest = (_url, body) => {
+    if (body.method === 'initialize') {
+      const current = runtime.workspace.require<any>('owner', 'bot-mcp-plugin', id)
+      runtime.workspace.put('owner', 'bot-mcp-plugin', id, { ...current, enabled: false, revision: current.revision + 1 })
+      return response({}, 503)
+    }
+    return undefined
+  }
+  await expect(runtime.workspacePlugins.open('owner', agent, pluginTarget, new AbortController().signal, () => {})).rejects.toMatchObject({ code: 'plugin_grant_revoked' })
+})
+
+it('reaps a failed stdio initialization process while keeping a healthy service available', async () => {
+  const agent = runtime.workspace.createAgent('owner', { name: '进程故障隔离', profile: 'default' })
+  const script = join(home, 'degraded-plugin.cjs'), pidFile = join(home, 'degraded-plugin.pid'), failFile = join(home, 'fail-list')
+  writeFileSync(script, `const fs=require('node:fs');fs.writeFileSync(process.argv[2],String(process.pid));
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+  const r=JSON.parse(line);if(!r.id)return;
+  const result=r.method==='initialize'?{protocolVersion:'2025-06-18',capabilities:{tools:{}}}
+    :{tools:fs.existsSync(process.argv[3])?[{name:'duplicate'},{name:'duplicate'}]:[{name:'stdio_tool',inputSchema:{type:'object'}}]};
+  process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:r.id,result})+'\\n');
+});`)
+  const added = await api('post', '/mcp').send({ name: '故障进程', transport: 'stdio', command: process.execPath, args: [script, pidFile, failFile], agentIds: [agent.id] }).expect(201)
+  await api('post', '/mcp/' + added.body.plugin.id + '/test').send({}).expect(200)
+  await api('patch', '/mcp/' + added.body.plugin.id).send({ enabled: true, revision: 1 }).expect(200)
+  await enablePlugin(agent.id, '健康服务', 'https://healthy.example.test/mcp')
+  writeFileSync(failFile, 'fail')
+  const lease = await runtime.workspacePlugins.open('owner', agent, pluginTarget, new AbortController().signal, () => {})
+  try {
+    expect(lease.services()).toEqual([{ name: '健康服务', transport: 'http', toolCount: 1 }])
+    expect(lease.warnings()[0]).toMatchObject({ name: '故障进程', code: 'plugin_initialization_failed' })
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    expect(pid).toBeGreaterThan(0)
+    expect(() => process.kill(pid, 0)).toThrow()
+  } finally { await lease.dispose() }
 })

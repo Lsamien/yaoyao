@@ -1,14 +1,15 @@
 <script setup lang="ts">
+import type { ComputerBackend } from '@shared/managedBrowser'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { apiRequest } from '@/api/client'
 import ComputerPanel from '@/components/workspace/ComputerPanel.vue'
 import type { WorkspaceAgent } from '@shared/workspace'
 const route = useRoute(), agent = ref<WorkspaceAgent>(), error = ref(''), panel = ref<InstanceType<typeof ComputerPanel>>()
-const backend = ref<'desktop' | 'cloud' | 'vm'>(), host = ref<string>()
+const backend = ref<ComputerBackend>(), host = ref<string>()
 let detach: (() => void) | undefined
 async function finish(){await window.yaoyaoDesktop?.computerClosed()}
-async function targetChanged(backend: 'desktop' | 'cloud' | 'vm', host?: string) {
+async function targetChanged(backend: ComputerBackend, host?: string) {
   await window.yaoyaoDesktop?.computerTargetChanged?.({backend,host})
 }
 async function close() {
@@ -19,7 +20,7 @@ onMounted(async () => {
   detach = window.yaoyaoDesktop?.onComputerClose(() => { void close() })
   try {
     const requestedBackend = route.query.backend, requestedHost = route.query.host
-    if (requestedBackend !== undefined && requestedBackend !== 'desktop' && requestedBackend !== 'cloud' && requestedBackend !== 'vm')
+    if (requestedBackend !== undefined && requestedBackend !== 'desktop' && requestedBackend !== 'cloud' && requestedBackend !== 'vm' && requestedBackend !== 'managed-browser')
       throw new Error('所选电脑无效，请关闭窗口后重新选择')
     if (requestedHost !== undefined && (requestedBackend !== 'desktop' || typeof requestedHost !== 'string' || !/^[\w-]{1,128}$/.test(requestedHost)))
       throw new Error('所选电脑无效，请关闭窗口后重新选择')

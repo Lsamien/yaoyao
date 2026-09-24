@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { ComputerBackend, ManagedBrowserState } from '@shared/managedBrowser'
 import {ref,computed,watch,onBeforeUnmount} from 'vue'
 import {apiRequest} from '@/api/client'
+import {browserCanPrepare} from '@/utils/managedBrowser'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type {DesktopEnvironmentState} from '@shared/desktopEnvironment'
 import GrokAuthPanel from './GrokAuthPanel.vue'
@@ -8,11 +10,13 @@ import {type WorkspaceAgent} from '@shared/workspace'
 import type {ComputerFrame} from '@shared/computerControl'
 import {vmIdleStopLabel,type LocalVmInstance,type LocalVmAction} from '@shared/localVm'
 const props=defineProps<{agents:WorkspaceAgent[];isAdmin:boolean;active?:boolean;embedded?:boolean}>()
-const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:'desktop'|'cloud'|'vm',host?:string];workspace:[agent:WorkspaceAgent]}>()
+const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:ComputerBackend,host?:string];workspace:[agent:WorkspaceAgent]}>()
 const selected=ref(''),state=ref<LocalVmInstance&{enabled:boolean;controlMode?:string}>(),frame=ref<ComputerFrame>(),error=ref(''),busy=ref(false),loading=ref(true)
 const agent=computed(()=>props.agents.find(a=>a.id===selected.value))
 const native=ref<DesktopEnvironmentState>()
-const computers=ref({scriptMachine:true,serverComputer:true,vm:true,cloud:true})
+const computers=ref({scriptMachine:true,serverComputer:true,vm:true,cloud:true,managedBrowser:false})
+const managedBrowser=ref<ManagedBrowserState>()
+const recheckingBrowser=ref(false),browserError=ref('')
 const showDesktop=computed(()=>computers.value.scriptMachine||computers.value.serverComputer)
 const cloud=ref<{configured:boolean;running:boolean;connected:boolean;mode?:string}>(),connectionSettings=ref(false)
 const showCloud=computed(()=>computers.value.cloud)
@@ -32,12 +36,14 @@ const serverHost=computed(()=>desktopHosts.value.find(host=>host.id==='local'))
 const activeEnvLine=computed(()=>[
  computers.value.serverComputer?'服务器':'',computers.value.scriptMachine?'电脑':'',
  computers.value.cloud?'云端':'',computers.value.vm?'虚拟机':'',
+ computers.value.managedBrowser?'托管浏览器':'',
 ].filter(Boolean).join(' · '))
 const previewTargets=computed(()=>{
- const list:{key:string;label:string;backend:'desktop'|'cloud'|'vm';host?:string}[]=[]
+ const list:{key:string;label:string;backend:ComputerBackend;host?:string}[]=[]
  if(computers.value.scriptMachine||computers.value.serverComputer)for(const h of desktopHosts.value){list.push({key:'desktop:'+h.id,label:(h.id==='local'?'服务器 · '+(h.name||'服务器'):'电脑 · '+(h.name||'未命名'))+(h.online?'':' · 离线'),backend:'desktop',host:h.id})}
  if(computers.value.cloud&&cloud.value?.configured)list.push({key:'cloud',label:'云端 · Grok Bot',backend:'cloud'})
  if(computers.value.vm)list.push({key:'vm',label:'虚拟环境',backend:'vm'})
+ if(computers.value.managedBrowser)list.push({key:'managed-browser',label:'托管浏览器',backend:'managed-browser'})
  return list
 })
 const previewKey=ref('')
@@ -53,6 +59,7 @@ const previewEmptyText=computed(()=>{
  if(!target)return previewKey.value?'所选电脑已不可用，请重新选择':'暂无已开放的电脑'
  if(target.backend==='desktop'){const host=native.value?.hosts?.find(h=>h.id===target.host);return !host?.online?'这台电脑已离线':host.local.ready?'正在读取电脑画面…':'请完成这台电脑的屏幕控制授权'}
  if(target.backend==='cloud')return cloud.value?.configured?(cloud.value?.running?'正在连接桌面…':'打开云端电脑后可查看桌面'):'尚未连接 Grok Bot 账号'
+ if(target.backend==='managed-browser')return !managedBrowser.value?.available?(managedBrowser.value?.installation?.message||managedBrowser.value?.reason||'托管浏览器执行节点不可用'):managedBrowser.value.open?'正在读取浏览器画面…':'浏览器尚未打开，接管后可打开网页'
  if(!state.value?.enabled)return state.value?.fixedCapacity?'请先连接下方的共享桌面':'未使用电脑'
  if(state.value.problem)return state.value.problem
  if(!state.value.image)return '本地虚拟机尚未准备'
@@ -66,13 +73,22 @@ function authorizeHost(hostId:string,scope?:'full'){
  if(scope)body.scope=scope
  void run(()=>apiRequest(`/api/app/agents/${selected.value}/desktop-environment/authorize`,{method:'POST',body,timeoutMs:125000}))
 }
-let timer:ReturnType<typeof setTimeout>|undefined,closed=false,revision=0,previewRevision=0
+let timer:ReturnType<typeof setTimeout>|undefined,closed=false,revision=0,previewRevision=0,browserRevision=0
 const base=()=>`/api/app/agents/${encodeURIComponent(selected.value)}/local-vm`
+async function readBrowser(){
+ const id=selected.value,current=++browserRevision
+ try{
+  const result=await apiRequest<ManagedBrowserState>(`/api/app/agents/${encodeURIComponent(id)}/managed-browser`)
+  if(!closed&&id===selected.value&&current===browserRevision){managedBrowser.value=result;browserError.value=''}
+ }catch(cause){if(!closed&&id===selected.value&&current===browserRevision){managedBrowser.value=undefined;browserError.value=cause instanceof Error?cause.message:'无法读取托管浏览器状态'}}
+}
+async function recheckBrowser(){if(busy.value||recheckingBrowser.value)return;recheckingBrowser.value=true;try{await readBrowser();await refreshFrame()}finally{recheckingBrowser.value=false}}
 async function refreshFrame(){
  if(closed||props.active===false||!selected.value||document.hidden||busy.value)return
  const version=++previewRevision,id=selected.value,target=previewTarget.value
  const usable=target?.backend==='vm'?state.value?.container==='running'&&state.value?.ready
   :target?.backend==='cloud'?!!cloud.value?.running&&!!cloud.value?.connected
+  :target?.backend==='managed-browser'?!!managedBrowser.value?.available&&!!managedBrowser.value?.open
   :target?.backend==='desktop'&&desktopHosts.value.some(h=>h.id===target.host&&h.online&&h.local.ready)
  if(!target||!usable){frame.value=undefined;previewLoading.value=false;return}
  previewLoading.value=true
@@ -88,12 +104,13 @@ async function refresh(){
  if(closed||props.active===false||!selected.value||document.hidden||busy.value)return
  const version=revision
  try{
-  try{const tools=await apiRequest<{scriptMachine?:boolean;serverComputer?:boolean;vm?:boolean;cloud?:boolean}>('/api/app/settings/host-tools');if(version===revision&&!closed)computers.value={scriptMachine:tools.scriptMachine!==false,serverComputer:tools.serverComputer!==false,vm:tools.vm!==false,cloud:tools.cloud!==false}}catch{}
+  try{const tools=await apiRequest<{scriptMachine?:boolean;serverComputer?:boolean;vm?:boolean;cloud?:boolean;managedBrowser?:boolean}>('/api/app/settings/host-tools');if(version===revision&&!closed)computers.value={scriptMachine:tools.scriptMachine!==false,serverComputer:tools.serverComputer!==false,vm:tools.vm!==false,cloud:tools.cloud!==false,managedBrowser:tools.managedBrowser===true}}catch{}
   const id=selected.value
   const [desktopResult,cloudResult,vmResult]=await Promise.all([
    apiRequest<DesktopEnvironmentState>(`/api/app/agents/${id}/desktop-environment`),
    apiRequest<typeof cloud.value>(`/api/app/agents/${id}/cloud-computer`),
    computers.value.vm?apiRequest<typeof state.value>(base()):Promise.resolve(undefined),
+   computers.value.managedBrowser?readBrowser():Promise.resolve(undefined),
   ])
   if(version!==revision||closed)return
   native.value=desktopResult;cloud.value=cloudResult;state.value=vmResult
@@ -108,7 +125,7 @@ async function connectCompose(){
  const id=selected.value,desktopId=composeDesktopId.value
  if(await run(()=>apiRequest(`/api/app/agents/${encodeURIComponent(id)}/local-vm`,{method:'PUT',body:{enabled:true,desktopId}}))&&selected.value===id)previewKey.value='vm'
 }
-async function openDesktop(backend:'desktop'|'cloud'|'vm',host?:string){
+async function openDesktop(backend:ComputerBackend,host?:string){
  const selectedAgent=agent.value
  if(!selectedAgent||busy.value)return
  if(backend==='cloud'&&!await run(()=>apiRequest(`/api/app/agents/${encodeURIComponent(selectedAgent.id)}/cloud-computer/open`,{method:'POST',body:{}})))return
@@ -125,7 +142,7 @@ function action(value:LocalVmAction){
 }
 async function cycle(){const version=revision;await refresh();if(!closed&&version===revision)timer=setTimeout(cycle,3000)}
 watch(()=>props.agents.map(a=>a.id).join(','),()=>{if(!props.agents.some(a=>a.id===selected.value))selected.value=props.agents[0]?.id??''},{immediate:true})
-watch(selected,()=>{revision++;previewRevision++;state.value=undefined;composeDesktopId.value='';native.value=undefined;cloud.value=undefined;frame.value=undefined;error.value='';loading.value=true;previewKey.value='';clearTimeout(timer);void cycle()},{immediate:true})
+watch(selected,()=>{revision++;previewRevision++;browserRevision++;state.value=undefined;composeDesktopId.value='';native.value=undefined;cloud.value=undefined;managedBrowser.value=undefined;browserError.value='';frame.value=undefined;error.value='';loading.value=true;previewKey.value='';clearTimeout(timer);void cycle()},{immediate:true})
 watch(()=>props.active,value=>{if(value)void refresh()})
 onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer)})
 </script>
@@ -145,6 +162,14 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
     <p v-if="error" class="problem" role="alert">{{error}}</p>
     <p class="hint">电脑开关在 Bot 设置里，对所有机器人一起生效。</p>
     <div class="computer-options">
+    <section v-if="computers.managedBrowser" class="managed-browser-option" aria-label="托管浏览器">
+      <strong>托管浏览器</strong>
+      <p>网页操作使用独立浏览器，虚拟机按任务需要单独启动。查看状态不会打开网页。</p>
+      <p v-if="!managedBrowser?.available" class="hint" role="status">{{browserError||managedBrowser?.installation?.message||managedBrowser?.reason||'执行节点尚未提供浏览器能力，请检查节点配置与连接。'}}</p>
+      <progress v-if="managedBrowser?.installation?.status==='installing'" :value="managedBrowser.installation.progress" max="100" aria-label="浏览器准备进度"/>
+      <button v-if="!managedBrowser?.available" type="button" :disabled="busy||recheckingBrowser" :aria-busy="recheckingBrowser" @click="recheckBrowser">{{recheckingBrowser?'正在检测…':'重新检测'}}</button>
+      <button class="primary" :disabled="busy||recheckingBrowser||!browserCanPrepare(managedBrowser)" @click="openDesktop('managed-browser')">{{managedBrowser?.installation?.status==='failed'?'重试并接管浏览器':managedBrowser?.open?'接管浏览器':'打开并接管浏览器'}}</button>
+    </section>
     <template v-if="showDesktop">
       <p>服务器是运行夭夭服务的电脑；电脑是连接这台服务器的 Mac 或 Windows 电脑。两者都可改名。「本机」跟你当前发消息所在的电脑走。要文件用文件工具，要命令用 shell；只有需要看窗口或点按时才截图。</p>
       <div v-for="host in desktopHosts" :key="host.id" class="host-permission" :class="{offline:!host.online}">
@@ -212,7 +237,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
 .computer-tabs button[aria-selected="true"]{background:var(--surface);color:var(--text-primary);font-weight:600;box-shadow:0 1px 3px #00000014}
 .computer-tabs button:hover:not(:disabled):not([aria-selected="true"]){background:var(--surface-hover)}
 .computer-tabs button:focus-visible{outline-offset:-2px}
-.computer-options{display:flex;flex-direction:column;gap:14px}
+.computer-options{display:flex;flex-direction:column;gap:14px}.managed-browser-option{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-soft)}.managed-browser-option strong{font-size:13px}.managed-browser-option button{min-height:44px}
 .computer-options:empty{display:none}
 .screen-caption{gap:8px}.screen-select{min-height:44px;min-width:0}
 </style>

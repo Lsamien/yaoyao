@@ -11,7 +11,7 @@ export interface RunnerRecord {
 }
 export interface RunnerCommand {
   id: string
-  kind: 'local-vm.manage' | 'computer.control' | 'computer.retire' | 'http' | 'gateway.open' | 'gateway.rpc' | 'gateway.close' | 'lease.create' | 'lease.bind' | 'lease.close'
+  kind: 'browser.invoke' | 'local-vm.manage' | 'computer.control' | 'computer.retire' | 'http' | 'gateway.open' | 'gateway.rpc' | 'gateway.close' | 'lease.create' | 'lease.bind' | 'lease.close'
   payload: Record<string, unknown>
   expiresAt: number
 }
@@ -26,6 +26,8 @@ export interface RunnerConfiguration {
   allowedProfiles: string[]
   artifactRoots: string[]
   allowInsecureLan?: boolean
+  /** Opt-in, independent of the full Linux desktop. */
+  browser?: { enabled: boolean; maxSessions?: number; idleTimeoutMs?: number }
   computers?: {managedBy?:'compose';network?:'none'|'public-proxy';runtime:'docker'|'podman';imageId:string;python:string;hermesSource:string;hermesHome:string;maxConcurrent?:number}
   hermesCredentials?: {username:string;password:string}
 }

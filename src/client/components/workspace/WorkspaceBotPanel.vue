@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ComputerBackend } from '@shared/managedBrowser'
 import {ref,watch} from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import LocalVmChatPanel from './LocalVmChatPanel.vue'
@@ -6,7 +7,7 @@ import WorkspaceInspectorPanel from './WorkspaceInspectorPanel.vue'
 import WorkspaceRoutinesPanel from './WorkspaceRoutinesPanel.vue'
 import type {WorkspaceAgent} from '@shared/workspace'
 const props=defineProps<{agents:WorkspaceAgent[];conversationId:string;taskId?:string;mode:'computer'|'inspector';isAdmin:boolean;active?:boolean}>()
-const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:'desktop'|'cloud'|'vm',host?:string];workspace:[agent:WorkspaceAgent]}>()
+const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:ComputerBackend,host?:string];workspace:[agent:WorkspaceAgent]}>()
 const view=ref<'computer'|'routines'>('computer')
 watch(()=>props.conversationId,()=>{let saved;try{saved=localStorage.getItem('yaoyao-bot-panel:'+props.conversationId)}catch{}view.value=saved==='routines'?'routines':'computer'},{immediate:true})
 watch(view,value=>{try{localStorage.setItem('yaoyao-bot-panel:'+props.conversationId,value)}catch{}})

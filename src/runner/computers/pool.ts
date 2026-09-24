@@ -68,6 +68,7 @@ export class ComputerPool {
     if(!holderId||holderId.length>256)throw new ComputerError('computer_holder_invalid','电脑任务身份无效')
     return this.serial(spec.id,async()=>{
       authorize()
+      if(signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
       if(this.maintenance)throw new ComputerError('computer_busy','执行节点正在管理镜像，请稍后重试')
       if(!this.ready||this.closing)throw new ComputerError('computer_pool_unavailable','电脑资源正在恢复或关闭')
       let entry=this.get(spec.id)
@@ -84,13 +85,20 @@ export class ComputerPool {
       if(!joining){entry={spec:structuredClone(spec),generation:lease.generation,status:'preparing',holders:new Map(),expiresAt:this.now()+this.limits.ttlMs,updatedAt:this.now()};this.entries.set(spec.id,entry)}
       const holder=entry as Entry
       // This reservation is synchronous, before any provider await or next acquire.
-      const abort=()=>{const current=this.get(spec.id);if(current?.holders.has(lease.id)){this.removeHolder(current,lease.id);this.save(current);if(!current.holders.size){current.generation++;current.status='stopping';current.expiresAt=0;this.save(current)}void this.serial(spec.id,()=>this.stopEntry(current!)).catch(()=>{})}}
+      const abort=()=>{
+        const current=this.get(spec.id)
+        if(!current?.holders.has(lease.id))return
+        this.removeHolder(current,lease.id)
+        if(current.holders.size){this.save(current);return}
+        this.invalidate(current)
+        void this.serial(spec.id,()=>this.stopEntry(current)).catch(()=>{})
+      }
       const active:Active={lease,authorize,controller:new AbortController(),operations:new Set(),detach:()=>signal?.removeEventListener('abort',abort)}
       holder.holders.set(lease.id,active)
       holder.expiresAt=Math.max(holder.expiresAt,this.now()+this.limits.ttlMs)
       this.save(holder)
       signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort()
-      if(joining){authorize();return lease}
+      if(joining){this.assert(lease);return lease}
       const guard=()=>{const current=this.require(lease,false);if(this.closing||active.controller.signal.aborted||current.status!=='preparing'||current.expiresAt<=this.now())throw new ComputerError('computer_lease_expired','电脑启动授权已失效');authorize()}
       try{
         await this.provider.ensure(spec,guard);guard()

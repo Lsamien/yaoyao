@@ -39,3 +39,15 @@ it('resolves optional Hermes paths on the execution host while preserving explic
 it('rejects the retired satellite runner',()=>{
   expect(()=>parseRunnerConfiguration({...config,satellite:true,hermesURL:'https://hermes.example',allowInsecureLan:true})).toThrow('卫星执行节点已停用')
 })
+
+
+it('upgrades omitted browser settings while preserving explicit opt-out and VM isolation',()=>{
+  expect(parseRunnerConfiguration(config).browser).toEqual({enabled:true})
+  expect(parseRunnerConfiguration({...config,browser:{}}).browser).toEqual({enabled:true})
+  const browser={enabled:false,maxSessions:2,idleTimeoutMs:120000}
+  const computers={runtime:'docker',imageId:'sha256:'+'a'.repeat(64),network:'none',python:'/fixture/python',hermesSource:'/fixture/source',hermesHome:'/fixture/home'}
+  const disabled=parseRunnerConfiguration({...config,browser,computers})
+  expect(disabled.browser).toEqual(browser);expect(disabled.computers).toEqual(computers)
+  expect(parseRunnerConfiguration({...config,computers}).computers).toEqual(computers)
+  for(const invalid of [{enabled:'false'},{enabled:null},{enabled:true,command:'install'}])expect(()=>parseRunnerConfiguration({...config,browser:invalid})).toThrow()
+})

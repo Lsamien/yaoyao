@@ -5,6 +5,7 @@ import { cp, mkdir, rm, readdir, readFile, writeFile, realpath, chmod } from 'no
 import { resolve } from 'node:path'
 import { sealRuntime } from '../bin/lib/runtime-release.mjs'
 import { bundleDesktopUpdater } from './bundle-desktop-updater.mjs'
+import {browserRuntimeExternals} from './bundle-browser-runtime.mjs'
 
 const root = resolve(import.meta.dirname, '..'), out = resolve(root, '.desktop-build')
 await rm(out, { recursive: true, force: true })
@@ -15,7 +16,7 @@ execFileSync('xcrun', ['swift', resolve(root, 'scripts/build-desktop-icon.swift'
 execFileSync('iconutil', ['-c', 'icns', resolve(out, 'branding/icon.iconset'),
   '-o', resolve(out, 'branding/icon.icns')], { stdio: 'inherit' })
 await build({ entryPoints: [resolve(root, 'src/server/index.ts')], outfile: resolve(out, 'server.mjs'),
-  bundle: true, platform: 'node', format: 'esm', target: 'node24', external: ['vite'],
+  bundle: true, platform: 'node', format: 'esm', target: 'node24', external: ['vite',...browserRuntimeExternals],
   banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
   define: { 'process.env.NODE_ENV': '"production"' }, sourcemap: true,
 })
@@ -44,7 +45,7 @@ await cp(resolve(root,'build-info.json'),resolve(out,'build-info.json'))
 const manifest = JSON.parse(await readFile(resolve(root, 'release.json'), 'utf8'))
 const service = resolve(out, 'web-service')
 await mkdir(service)
-for (const file of ['server.mjs', 'ui', 'release.json', 'build-info.json', 'hermes-bots-bridge', 'install-hermes-bridge.py', 'hermes_worker.py', 'profile_skills.py', 'skill_bundle.py', 'guest_proxy.py', 'computer-image', 'third-party']) await cp(resolve(out, file), resolve(service, file), { recursive: true })
+for (const file of ['server.mjs', 'node_modules', 'ui', 'release.json', 'build-info.json', 'hermes-bots-bridge', 'install-hermes-bridge.py', 'hermes_worker.py', 'profile_skills.py', 'skill_bundle.py', 'guest_proxy.py', 'computer-image', 'third-party']) await cp(resolve(out, file), resolve(service, file), { recursive: true })
 for (const file of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'licenses']) await cp(resolve(root, file), resolve(service, file), { recursive: true })
 await cp(resolve(root, 'bin'), resolve(service, 'bin'), { recursive: true })
 await cp(await realpath(process.execPath), resolve(service, 'node'))

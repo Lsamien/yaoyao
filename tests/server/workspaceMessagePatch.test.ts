@@ -125,3 +125,38 @@ it('flushes the last paused-stream preview without creating an extra message rev
   expect(store.require<WorkspaceConversation>('owner', 'conversation', message.conversationId).preview).toContain('暂停前的最后文字')
   expect(store.require<WorkspaceMessage>('owner', 'message', 'm').revision).toBe(revision)
 })
+
+it('persists card-only messages and replays installation updates as full frames without losing the card on text patches',()=>{
+  message.content='';message.visible=true
+  message.browserCard={id:'browser-turn',agentId:'bot',agentName:'浏览器 Bot',status:'preparing',installation:{status:'installing',message:'下载中',progress:20,updatedAt:1},updatedAt:1}
+  let cursor=store.cursor('owner')
+  store.saveMessage('owner',message)
+  expect(store.events('owner',cursor).find(e=>e.type==='message.changed')?.data).toMatchObject({browserCard:{installation:{progress:20}}})
+  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).preview).toContain('托管浏览器')
+  const folder=new WorkspaceMessageReconciler();folder.remember(structuredClone(message))
+  cursor=store.cursor('owner')
+  message.browserCard={...message.browserCard,status:'active',title:'测试网页',url:'https://example.com/',installation:{status:'ready',message:'已就绪',updatedAt:2},updatedAt:2}
+  store.saveMessage('owner',message)
+  const events=store.events('owner',cursor)
+  expect(events.some(e=>e.type==='message.patch')).toBe(false)
+  for(const e of events)folder.normalize(e)
+  cursor=store.cursor('owner');append('浏览器已打开')
+  const patched=folder.normalize(store.events('owner',cursor).find(e=>e.type==='message.patch')!)
+  expect(patched.data).toMatchObject({content:'浏览器已打开',browserCard:{status:'active',title:'测试网页'}})
+  message.content='';message.status='complete';message.browserCard={...message.browserCard,status:'closed'}
+  store.saveMessage('owner',message)
+  store.close();store=new WorkspaceStore(home,{messagePatches:true})
+  expect(store.require<WorkspaceMessage>('owner','message',message.id)).toMatchObject({visible:true,status:'complete',content:'',browserCard:{status:'closed',title:'测试网页'}})
+  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).unread).toBe(true)
+})
+
+it('persists nonfatal service warnings independently of reply text and keeps terminal warning-only replies visible',()=>{
+  message.content='';message.visible=true
+  message.serviceWarnings=[{service:'离线服务',code:'plugin_initialization_failed',message:'本轮未连接'}]
+  const cursor=store.cursor('owner');store.saveMessage('owner',message)
+  expect(store.events('owner',cursor).find(e=>e.type==='message.changed')?.data).toMatchObject({serviceWarnings:message.serviceWarnings})
+  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).preview).toBe('部分服务暂时不可用')
+  message.status='complete';store.saveMessage('owner',message)
+  expect(store.require<WorkspaceMessage>('owner','message',message.id)).toMatchObject({visible:true,content:'',status:'complete',serviceWarnings:message.serviceWarnings})
+  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).unread).toBe(true)
+})

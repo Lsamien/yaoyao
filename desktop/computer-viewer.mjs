@@ -9,7 +9,7 @@ export function installComputerViewer({ owner, origin, preload, quitting = () =>
     if (typeof id !== 'string' || !/^[\w-]{1,128}$/.test(id)) throw new Error('电脑窗口请求无效')
     if (!target || typeof target !== 'object' || Array.isArray(target)
       || Object.keys(target).some(key => !['backend', 'host'].includes(key))
-      || (target.backend !== undefined && !['desktop', 'cloud', 'vm'].includes(target.backend))
+      || (target.backend !== undefined && !['desktop', 'cloud', 'vm', 'managed-browser'].includes(target.backend))
       || (target.host !== undefined && (target.backend !== 'desktop' || typeof target.host !== 'string' || !/^[\w-]{1,128}$/.test(target.host))))
       throw new Error('所选电脑无效，请重新选择')
     const url = new URL(`/conversations/computer/${encodeURIComponent(id)}`, origin())

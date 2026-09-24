@@ -129,7 +129,7 @@ it('includes only the connected per-turn MCP inventory in the submitted Bot prom
     ? { status: 200, body: Buffer.from(JSON.stringify({ ok: true, version: 1, ready: true, in_process: true, native_tools: true })), headers: new Headers() }
     : request(path, options))
   const services = vi.fn(() => [{ name: 'vaultwarden', transport: 'stdio' as const, toolCount: 59 }])
-  const open = vi.fn(async () => ({ services, catalog: () => [], call: vi.fn(), dispose: async () => {} }))
+  const open = vi.fn(async () => ({ services, warnings: () => [], catalog: () => [], call: vi.fn(), dispose: async () => {} }))
   runtime.plugins = { selected: () => true, open } as unknown as WorkspacePlugins
   const run = runtime.send(owner, conversation.id, { requestId: randomUUID(), content: '查看 vaultwarden mcp 是否正常使用' })
   await vi.waitFor(() => expect(['complete', 'failed']).toContain(store.require<WorkspaceRun>(owner, 'run', run.id).status))

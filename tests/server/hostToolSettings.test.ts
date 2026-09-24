@@ -11,7 +11,7 @@ afterEach(() => { if (home) rmSync(home, { recursive: true, force: true }) })
 describe('host tool settings', () => {
   it('uses one global approval policy and retires the ineffective native-tool switch', () => {
     home = mkdtempSync(join(tmpdir(), 'yaoyao-host-tools-'))
-    expect(readHostTools(home)).toEqual({ denyServerTools: false, approvalPolicy:'ask', scriptMachine: true, serverComputer: true, vm: true, cloud: true, fileTransferMaxMiB:25 })
+    expect(readHostTools(home)).toEqual({ denyServerTools: false, approvalPolicy:'ask', scriptMachine: true, serverComputer: true, vm: true, cloud: true, managedBrowser:false, fileTransferMaxMiB:25 })
     expect(deniedHostToolsets(home)).toEqual([])
     saveHostTools(home,{approvalPolicy:'allow',cloud:false})
     expect(saveHostTools(home,{denyServerTools:true})).toMatchObject({denyServerTools:false,approvalPolicy:'allow',cloud:false})
@@ -23,7 +23,14 @@ describe('host tool settings', () => {
     home = mkdtempSync(join(tmpdir(), 'yaoyao-host-tools-'))
     writeFileSync(join(home, 'host-tools.json'), JSON.stringify({ denyServerTools: true }))
     expect(readHostTools(home).scriptMachine).toBe(true)
+    expect(readHostTools(home).managedBrowser).toBe(false)
     expect(saveHostTools(home, { denyServerTools: true, scriptMachine: false, serverComputer: true, vm: false, cloud: true })).toMatchObject({ scriptMachine: false, vm: false, cloud: true })
+  })
+  it('enables managed browsing explicitly without changing other environments or losing it on old-client saves',()=>{
+    home=mkdtempSync(join(tmpdir(),'yaoyao-host-tools-'))
+    expect(saveHostTools(home,{managedBrowser:true,vm:false})).toMatchObject({managedBrowser:true,vm:false,cloud:true,serverComputer:true})
+    expect(saveHostTools(home,{cloud:false})).toMatchObject({managedBrowser:true,vm:false,cloud:false})
+    expect(()=>saveHostTools(home,{managedBrowser:'true'})).toThrow('浏览器开关无效')
   })
   it('validates transfer limits and preserves them when an older client saves switches', () => {
     home = mkdtempSync(join(tmpdir(), 'yaoyao-host-tools-'))

@@ -1067,17 +1067,17 @@ export class WorkspaceStore {
       c.lastSeq = Math.max(c.lastSeq, message.seq)
       const needsAttention = (value: Message | undefined) => !!value && value.role !== 'user' && value.visible !== false
         && ['complete', 'failed', 'interrupted'].includes(value.status)
-        && !!(value.content.trim() || value.error || this.messageForDisplay(owner, value).attachments.length)
+        && !!(value.content.trim() || value.error || value.browserCard || value.serviceWarnings?.length || this.messageForDisplay(owner, value).attachments.length)
       if (needsAttention(message) && !needsAttention(previous)) {
         c.unread = true
         c.unreadVersion = (c.unreadVersion ?? 0) + 1
         if (task) { task.unread = true; task.unreadVersion = (task.unreadVersion ?? 0) + 1 }
       }
       c.unreadCount = c.unread ? 1 : 0
-      if (updateSummary && message.visible !== false && (message.content.trim() || message.attachments.length)) {
+      if (updateSummary && message.visible !== false && (message.content.trim() || message.attachments.length || message.browserCard && !previous?.browserCard || message.serviceWarnings?.length && !previous?.serviceWarnings?.length)) {
         c.updatedAt = Date.now()
         c.lastMessageAt = Math.max(c.lastMessageAt ?? 0, message.createdAt)
-        c.preview = notificationPlainText(message.content, { maximum: 160, fallback: '' })
+        c.preview = notificationPlainText(message.content, { maximum: 160, fallback: message.browserCard?.title || (message.browserCard ? '托管浏览器' : message.serviceWarnings?.length ? '部分服务暂时不可用' : '') })
         c.previewAgentId = message.role === 'assistant' ? message.agentId : undefined
       }
       this.put(owner, 'message', message.id, message)
@@ -1089,7 +1089,7 @@ export class WorkspaceStore {
         if (becameHidden) task.messageCount = Math.max(0, task.messageCount - 1)
         task.lastSeq = Math.max(task.lastSeq, message.seq)
         task.unreadCount = task.unread ? 1 : 0
-        if (message.visible !== false && (message.content.trim() || message.attachments.length)) {
+        if (message.visible !== false && (message.content.trim() || message.attachments.length || message.browserCard && !previous?.browserCard || message.serviceWarnings?.length && !previous?.serviceWarnings?.length)) {
           if (message.role === 'user' && task.titleSource === 'automatic' && task.messageCount <= 1) {
             const source = notificationPlainText(message.content, { maximum: 48, fallback: message.attachments[0]?.name ?? '' }).trim()
             if (source) task.title = source

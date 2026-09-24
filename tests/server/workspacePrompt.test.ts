@@ -144,3 +144,15 @@ describe('Bot prompt composition', () => {
     expect(text).not.toContain('computer_export')
   })
 })
+
+it('describes failed optional services separately without replacing the user request or promising unavailable tools',()=>{
+  const value=input()
+  value.pluginWarnings=[{service:'故障 MCP',code:'plugin_initialization_failed',message:'本轮暂时不可用'}]
+  const prompt=buildWorkspacePrompt(value)
+  expect(prompt).toContain('【本轮服务连接提示】')
+  expect(prompt).toContain(JSON.stringify(value.pluginWarnings))
+  expect(prompt).toContain('不要因为无关插件离线而中断整轮对话')
+  expect(prompt).toContain('不能宣称已经调用或执行成功')
+  expect(prompt).toContain('【本轮用户消息】\n'+value.content)
+  expect(prompt).not.toContain('已完成本轮连接和工具发现的服务')
+})

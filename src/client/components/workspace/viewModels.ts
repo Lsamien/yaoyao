@@ -389,6 +389,8 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
   return messages.filter(message => message.visible !== false).map(message => ({
     id: message.id, role: message.role, author: message.agentName,
     communication: message.communication,
+    browserCard: message.browserCard,
+    serviceWarnings: message.serviceWarnings,
     taskReference: message.taskReference,
     error: message.error, runId: message.runId,
     profile: message.agentId, createdAt: message.createdAt,

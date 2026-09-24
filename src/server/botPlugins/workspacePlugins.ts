@@ -25,9 +25,11 @@ const definition = z.object({
 type Definition = Omit<z.infer<typeof definition>, 'env' | 'headers'> & { env: Record<string, string>; headers: Record<string, string> }
 interface StoredPlugin { id: string; sealed: string; enabled: boolean; agentIds: string[]; revision: number; testedAt?: number; tools: McpTool[] }
 export interface BotPluginService { name: string; transport: 'stdio' | 'http'; toolCount: number }
+export interface BotPluginWarning { name: string; code: string; message: string }
 export interface OpenBotPlugins {
   catalog(): Array<{ id: string; name: string; description: string; inputSchema: unknown }>
   services(): BotPluginService[]
+  warnings(): BotPluginWarning[]
   call(id: string, args: unknown): Promise<unknown>
   dispose(): Promise<void>
 }
@@ -122,24 +124,46 @@ export class WorkspacePlugins {
     return this.store.list<StoredPlugin>(owner, 'bot-mcp-plugin').some(p => p.enabled && p.agentIds.includes(agent.id)) || (this.apps.status(owner).configured && this.store.list<{ agentIds: string[] }>(owner, 'bot-app-grant').some(g => g.agentIds.includes(agent.id)))
   }
   async open(owner: string, agent: WorkspaceAgent, target: GatewayTarget, signal: AbortSignal, authorize: () => void): Promise<OpenBotPlugins> {
-    authorize(); this.assertOwner(owner); this.agents(owner, [agent.id])
+    const assertActive = () => {
+      authorize(); this.assertOwner(owner); this.agents(owner, [agent.id])
+      if (signal.aborted) throw new HttpError(403, '本轮插件授权已结束', 'plugin_grant_revoked')
+    }
+    assertActive()
     await requireTeamToolBridge(target, agent.profile)
-    authorize(); if(signal.aborted)throw new HttpError(403,'本轮插件授权已结束','plugin_grant_revoked')
+    assertActive()
     const connections: Array<{ client: PluginClient; owner: string; pluginId: string }> = []
     const tools = new Map<string, { client: PluginClient; tool: McpTool; name: string; check: () => void }>()
     const services: Array<{ summary: BotPluginService; check: () => void }> = []
+    const warnings: Array<{ summary: BotPluginWarning; check: () => void }> = []
+    const unavailable = new Map<string, { message: string; check: () => void }>()
+    const toolId = (id: string, name: string) => 'plugin_' + createHash('sha256').update(id + ':' + name).digest('hex').slice(0, 32)
     const dispose = async () => { for (const entry of connections) entry.client.dispose(); await Promise.all(connections.map(async entry => { await entry.client.waitClosed(); this.live.delete(entry) })); signal.removeEventListener('abort', abort) }
     const abort = () => { void dispose() }; signal.addEventListener('abort', abort, { once: true })
-    const add = async (id: string, name: string, transport: 'stdio' | 'http', client: PluginClient, check: () => void) => {
-      const entry = { client, owner, pluginId: id }; connections.push(entry); this.live.add(entry)
-      await client.init(signal)
-      const list = validateTools(await client.listTools(signal)); authorize(); check()
-      services.push({ summary: { name, transport, toolCount: list.length }, check })
-      for (const tool of list) {
-        const key = 'plugin_' + createHash('sha256').update(id + ':' + tool.name).digest('hex').slice(0, 32)
-        tools.set(key, { client, tool, name, check })
+    const add = async (id: string, name: string, transport: 'stdio' | 'http', create: () => PluginClient | Promise<PluginClient>, check: () => void, knownTools: McpTool[] = []) => {
+      let entry: (typeof connections)[number] | undefined
+      try {
+        assertActive(); check()
+        const client = await create()
+        entry = { client, owner, pluginId: id }; connections.push(entry); this.live.add(entry)
+        await client.init(signal)
+        const list = validateTools(await client.listTools(signal)); assertActive(); check()
+        // Publish only complete, live inventories. A rejected service must not
+        // leave partially mounted tools or remove another healthy service.
+        if (tools.size + list.length > 500) throw new HttpError(409, '所选插件工具总数超过 500，请减少授权的服务', 'plugin_tools_limit')
+        services.push({ summary: { name, transport, toolCount: list.length }, check })
+        for (const tool of list) tools.set(toolId(id, tool.name), { client, tool, name, check })
+      } catch (error) {
+        if (entry) {
+          entry.client.dispose(); await entry.client.waitClosed()
+          this.live.delete(entry); connections.splice(connections.indexOf(entry), 1)
+        }
+        // Transport failure is optional; cancellation and authority changes are not.
+        assertActive(); check()
+        if (error instanceof HttpError && [401, 403].includes(error.status)) throw error
+        const summary = { name, code: 'plugin_initialization_failed', message: `${name}暂时不可用，本轮未连接；请在已连接应用中测试连接后重试。` }
+        warnings.push({ summary, check })
+        for (const tool of knownTools) unavailable.set(toolId(id, tool.name), { message: summary.message, check })
       }
-      if (tools.size > 500) throw new HttpError(409, '所选插件工具总数超过 500，请减少授权的服务', 'plugin_tools_limit')
     }
     try {
       for (const plugin of this.store.list<StoredPlugin>(owner, 'bot-mcp-plugin').filter(p => p.enabled && p.agentIds.includes(agent.id))) {
@@ -149,26 +173,31 @@ export class WorkspacePlugins {
           if (!current?.enabled || current.revision !== plugin.revision || !current.agentIds.includes(agent.id)) throw new HttpError(403, '该插件的本轮授权已结束', 'plugin_grant_revoked')
         }
         check(); const value = this.value(owner, plugin)
-        await add(plugin.id, value.name, value.transport, this.client(owner, value), check)
+        await add(plugin.id, value.name, value.transport, () => this.client(owner, value), check, plugin.tools)
       }
       const grants = this.store.db.prepare("SELECT id,data FROM workspace_entities WHERE owner=? AND kind='bot-app-grant'").all(owner)
         .map(row => ({ slug: String(row.id), ...JSON.parse(String(row.data)) as { agentIds: string[]; revision: number } })).filter(g => g.agentIds.includes(agent.id))
       if (grants.length && this.apps.status(owner).configured) {
-        const session = await this.apps.sessionFor(owner, agent.id, grants.map(g => g.slug), signal)
+        const revision = this.apps.status(owner).revision
         const check = () => {
           this.assertOwner(owner)
-          if (this.apps.status(owner).revision !== session.revision || grants.some(g => { const current = this.apps.grant(owner, g.slug); return current.revision !== g.revision || !current.agentIds.includes(agent.id) })) throw new HttpError(403, '应用连接的本轮授权已结束', 'plugin_grant_revoked')
+          if (this.apps.status(owner).revision !== revision || grants.some(g => { const current = this.apps.grant(owner, g.slug); return current.revision !== g.revision || !current.agentIds.includes(agent.id) })) throw new HttpError(403, '应用连接的本轮授权已结束', 'plugin_grant_revoked')
         }
-        await add('connected-apps', '已连接应用', 'http', new HttpMcp(session.url, session.headers, this.fetchImpl), check)
+        await add('connected-apps', '已连接应用', 'http', async () => {
+          const session = await this.apps.sessionFor(owner, agent.id, grants.map(g => g.slug), signal)
+          return new HttpMcp(session.url, session.headers, this.fetchImpl)
+        }, check)
       }
       return {
-        catalog: () => [...tools].flatMap(([id, entry]) => { try { authorize(); entry.check(); return [{ id, name: id, description: `${entry.name} · ${entry.tool.name}：${entry.tool.description ?? ''}`, inputSchema: entry.tool.inputSchema ?? { type: 'object', properties: {} } }] } catch { return [] } }),
-        services: () => services.flatMap(entry => { try { authorize(); entry.check(); return [{ ...entry.summary }] } catch { return [] } }),
+        catalog: () => [...tools].flatMap(([id, entry]) => { try { assertActive(); entry.check(); return [{ id, name: id, description: `${entry.name} · ${entry.tool.name}：${entry.tool.description ?? ''}`, inputSchema: entry.tool.inputSchema ?? { type: 'object', properties: {} } }] } catch { return [] } }),
+        services: () => services.flatMap(entry => { try { assertActive(); entry.check(); return [{ ...entry.summary }] } catch { return [] } }),
+        warnings: () => warnings.flatMap(entry => { try { assertActive(); entry.check(); return [{ ...entry.summary }] } catch { return [] } }),
         call: async (id, args) => {
-          authorize(); const entry = tools.get(id)
+          assertActive(); const entry = tools.get(id), failed = unavailable.get(id)
+          if (failed) { failed.check(); throw new HttpError(503, failed.message, 'plugin_unavailable') }
           if (!entry) throw new HttpError(404, '插件工具不存在', 'plugin_tool_not_found')
           entry.check()
-          try { const result = await entry.client.callTool(entry.tool.name, args, signal); authorize(); entry.check(); return result }
+          try { const result = await entry.client.callTool(entry.tool.name, args, signal); assertActive(); entry.check(); return result }
           catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(502, '插件工具调用失败或连接已关闭', 'plugin_call_failed') }
         }, dispose,
       }

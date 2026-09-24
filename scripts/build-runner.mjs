@@ -2,6 +2,7 @@ import { build } from 'esbuild'
 import { mkdir,copyFile,cp } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {browserRuntimeExternals,bundleBrowserRuntime} from './bundle-browser-runtime.mjs'
 
 export async function buildRunner(directory = resolve(import.meta.dirname, '../.runner-build')) {
   await mkdir(directory, { recursive: true })
@@ -16,11 +17,13 @@ export async function buildRunner(directory = resolve(import.meta.dirname, '../.
   await build({
     entryPoints: { 'runner-maintenance':resolve(import.meta.dirname, '../src/runner/computers/maintenanceCli.ts'), 'runner-image':resolve(import.meta.dirname, '../src/runner/computers/imageCli.ts'), runner:resolve(import.meta.dirname, '../src/runner/index.ts'), 'runner-config':resolve(import.meta.dirname, '../src/runner/config.ts') },
     outdir:directory, outExtension:{'.js':'.mjs'}, bundle: true, platform: 'node',
-    format: 'esm', target: 'node24', sourcemap: true,
+    format: 'esm', target: 'node24', sourcemap: true,external:browserRuntimeExternals,
     banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
   })
+  await bundleBrowserRuntime(directory)
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await buildRunner()
   console.log('执行节点已打包到 .runner-build/runner.mjs（需要 Node.js 24 或更高版本）')
+  console.log('启用托管浏览器前，在目标主机运行 node .runner-build/node_modules/playwright/cli.js install chromium；Linux 还需 install-deps chromium。')
 }

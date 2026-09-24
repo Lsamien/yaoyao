@@ -9,6 +9,7 @@ const scriptMachine = ref(true)
 const serverComputer = ref(true)
 const vm = ref(true)
 const cloud = ref(true)
+const managedBrowser = ref(false)
 const fileTransferMaxMiB = ref<number | string>(25)
 const transferError = computed(() => Number.isInteger(fileTransferMaxMiB.value) && Number(fileTransferMaxMiB.value) >= 1 && Number(fileTransferMaxMiB.value) <= 100 ? '' : '请输入 1–100 之间的整数。')
 const loading = ref(false), saving = ref(false), error = ref(''), saved = ref(false)
@@ -68,17 +69,18 @@ async function removeHost(id: string) {
   finally { nameBusy.value = '' }
 }
 
-type Settings = { approvalPolicy?: 'ask'|'allow'|'deny'; scriptMachine: boolean; serverComputer: boolean; vm: boolean; cloud: boolean; fileTransferMaxMiB?: number }
+type Settings = { approvalPolicy?: 'ask'|'allow'|'deny'; scriptMachine: boolean; serverComputer: boolean; vm: boolean; cloud: boolean; managedBrowser?: boolean; fileTransferMaxMiB?: number }
 function apply(value: Settings) {
   approvalPolicy.value = value.approvalPolicy ?? 'ask'
   scriptMachine.value = value.scriptMachine
   serverComputer.value = value.serverComputer
   vm.value = value.vm
   cloud.value = value.cloud
+  managedBrowser.value = value.managedBrowser === true
   fileTransferMaxMiB.value = value.fileTransferMaxMiB ?? 25
 }
 function payload(): Settings {
-  return { approvalPolicy: approvalPolicy.value, scriptMachine: scriptMachine.value, serverComputer: serverComputer.value, vm: vm.value, cloud: cloud.value, fileTransferMaxMiB: Number(fileTransferMaxMiB.value) }
+  return { approvalPolicy: approvalPolicy.value, scriptMachine: scriptMachine.value, serverComputer: serverComputer.value, vm: vm.value, cloud: cloud.value, managedBrowser: managedBrowser.value, fileTransferMaxMiB: Number(fileTransferMaxMiB.value) }
 }
 async function load() {
   loading.value = true; error.value = ''
@@ -109,6 +111,7 @@ onMounted(() => { void load(); void loadNames() })
       <label class="toggle"><input v-model="serverComputer" type="checkbox" :disabled="loading || saving" /><span><strong>服务器</strong><small>夭夭正在运行的这台电脑。文件走文件工具，命令走 shell；只有看窗口或点按时才截图操作。</small></span></label>
       <label class="toggle"><input v-model="vm" type="checkbox" :disabled="loading || saving" /><span><strong>虚拟环境</strong><small>服务端上的隔离桌面。聊天留在夭夭，操作派到虚拟机里。</small></span></label>
       <label class="toggle"><input v-model="cloud" type="checkbox" :disabled="loading || saving" /><span><strong>云虚拟机</strong><small>共享的 Grok Bot 电脑。先看真实桌面，再点击、输入、按键或滚动。</small></span></label>
+      <label class="toggle"><input v-model="managedBrowser" type="checkbox" :disabled="loading || saving" /><span><strong>托管浏览器</strong><small>通过已启用浏览器能力的执行节点处理网页，无需启动虚拟机。默认关闭，打开后可在电脑面板查看和接管。</small></span></label>
       <label>所有 Bot 的审批策略<select v-model="approvalPolicy" :disabled="loading || saving"><option value="ask">询问我</option><option value="allow">自动允许</option><option value="deny">自动拒绝</option></select><small>统一用于新的工具审批请求；已等待的请求仍由你答复。Hermes 原生终端和文件始终操作服务器。</small></label>
       <label for="file-transfer-limit">单文件传输上限（MiB）<input id="file-transfer-limit" v-model.number="fileTransferMaxMiB" type="number" min="1" max="100" step="1" :disabled="loading || saving" :aria-invalid="!!transferError" aria-describedby="file-transfer-help file-transfer-error" @input="changed" /><small id="file-transfer-help">1–100 MiB，默认 25 MiB。电脑、服务器和当前 Bot 虚拟机之间的复制共用此上限，从下一次传输生效。</small><small v-if="transferError" id="file-transfer-error" class="error" role="alert">{{ transferError }}</small></label>
       <p v-if="error" class="error" role="alert">{{ error }}</p>

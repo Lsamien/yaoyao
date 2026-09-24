@@ -26,6 +26,9 @@ export class VmToolSession {
       const gateway=new WorkspaceGateway(this.target,{workId:this.workId,authorize:this.authorize,...(this.publishArtifact?{publishArtifact:this.publishArtifact}:{})})
       this.gateway=gateway
       this.opening=(async()=>{
+        this.authorize()
+        await gateway.connect()
+        this.authorize()
         const opened=await gateway.rpc('session.create',{profile:this.profile,toolsOnly:true,title:'Yaoyao vm tools',source:'yaoyao_workspace',close_on_disconnect:true})
         this.authorize()
         if(this.gateway!==gateway)throw new Error('虚拟环境连接已关闭')
@@ -41,9 +44,9 @@ export class VmToolSession {
     await this.open()
     return this.gateway!.rpc('computer.transfer',{session_id:this.sessionId,action})
   }
-  async call(name:string,args:unknown){
+  async call(name:string,args:unknown,callId?:string){
     await this.open()
-    const value=await this.gateway!.rpc('computer.invoke',{session_id:this.sessionId,name,arguments:args??{}})
+    const value=await this.gateway!.rpc('computer.invoke',{session_id:this.sessionId,name,arguments:args??{},...(callId?{id:callId}:{})})
     if(name==='computer_desktop_state'&&value&&typeof value==='object'&&(value as any)._multimodal){
       const url=String((value as any).content?.[0]?.image_url?.url??'')
       const data=url.includes(',')?url.split(',')[1]:''
