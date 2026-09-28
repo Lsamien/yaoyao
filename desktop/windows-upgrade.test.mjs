@@ -36,7 +36,7 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
         res.setHeader('Content-Type', 'application/json'); res.end('{}'); return
       }
       if (path === '/api/app/bootstrap') {
-        const authenticated = !requireCookie || String(req.headers.cookie).includes('session=upgrade-fixture')
+        const authenticated = !requireCookie || String(req.headers.cookie).includes('hermes_yaoyao_session=fixture')
         if (requireCookie && authenticated) restored++
         res.setHeader('content-type', 'application/json')
         res.end(JSON.stringify({ authenticated, csrfToken: 'fixture', user: { role: 'member' }, serverKind: 'yaoyao-web' })); return
@@ -110,6 +110,8 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
     await stopInstalled()
     application = await launch(); page = await application.firstWindow(); await page.waitForURL(origin + '/**')
     assert.equal(await application.evaluate(({ app }) => app.getVersion()), nextVersion)
+    assert.equal(await application.evaluate(async ({ session }, origin) =>
+      (await session.defaultSession.cookies.get({ url: origin, name: 'session' }))[0]?.value, origin), 'upgrade-fixture')
     assert.deepEqual(JSON.parse(await readFile(join(home, 'desktop-preferences.json'), 'utf8')), preferences)
     assert.equal(await application.evaluate(async ({ safeStorage }, home) => {
       const fs = process.getBuiltinModule('node:fs'); return (await safeStorage.decryptStringAsync(fs.readFileSync(home + '/upgrade-token.enc'))).result
