@@ -9,6 +9,14 @@ export async function enterLocal(page, { username = 'desktop-fixture', password 
       body: JSON.stringify({username,currentPassword:'',newPassword:password}) })
     if (!response.ok) throw new Error('Fixture account configuration failed')
   }, {username,password})
-  // Reload after credential rotation so callers attach to the final authorized document.
-  await page.goto(new URL('/conversations', page.url()).href)
+  // The native service may finish its own navigation after credentials rotate.
+  // Retry only interrupted navigation; all other browser failures remain errors.
+  const url = new URL('/conversations', page.url()).href
+  for (let attempt = 0; ; attempt++) {
+    try { await page.goto(url); break }
+    catch (error) {
+      if (attempt >= 2 || !String(error.message).includes('net::ERR_ABORTED')) throw error
+      await page.waitForLoadState('load')
+    }
+  }
 }
