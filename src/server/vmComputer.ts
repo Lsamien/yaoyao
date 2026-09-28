@@ -19,11 +19,11 @@ export class VmToolSession {
   private gateway?: WorkspaceGateway
   private sessionId=''
   private opening?:Promise<void>
-  constructor(private readonly target:GatewayTarget,private readonly profile:string,private readonly workId:string,private readonly authorize:()=>void,private readonly publishArtifact?:(name:string,bytes:Buffer)=>Promise<unknown>){}
+  constructor(private readonly target:GatewayTarget,private readonly profile:string,private readonly workId:string,private readonly authorize:()=>void,private readonly publishArtifact?:(name:string,bytes:Buffer)=>Promise<unknown>,private readonly taskEnvironment?:()=>import('../shared/executionEnvironment.js').TaskEnvironment){}
   private async open(){
     if(this.opening)return this.opening
     if(!this.gateway){
-      const gateway=new WorkspaceGateway(this.target,{workId:this.workId,authorize:this.authorize,...(this.publishArtifact?{publishArtifact:this.publishArtifact}:{})})
+      const gateway=new WorkspaceGateway(this.target,{workId:this.workId,authorize:this.authorize,taskEnvironment:this.taskEnvironment,...(this.publishArtifact?{publishArtifact:this.publishArtifact}:{})})
       this.gateway=gateway
       this.opening=(async()=>{
         this.authorize()
@@ -53,6 +53,16 @@ export class VmToolSession {
       return {content:[{type:'image',mimeType:'image/png',data},{type:'text',text:JSON.stringify({width:(value as any).width,height:(value as any).height})}]}
     }
     return value
+  }
+  async complete(){
+    const gateway=this.gateway
+    if(!gateway)return
+    try{
+      await this.opening
+      this.authorize()
+      if(this.gateway!==gateway)throw new Error('虚拟环境连接已关闭')
+      await gateway.rpc('computer.complete',{session_id:this.sessionId})
+    }finally{this.close()}
   }
   close(){const gateway=this.gateway;this.gateway=undefined;this.sessionId='';gateway?.close()}
 }

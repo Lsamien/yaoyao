@@ -101,6 +101,48 @@ test('native login preserves cookie expiry, scope and same-site policy', async (
   assert.equal(auth.cookieDetails.find(cookie => cookie.name === 'csrf').expirationDate, undefined)
 })
 
+test('folded Electron response cookies preserve the 30-day login and rotated CSRF token', async () => {
+  let request = 0
+  const before = Date.now() / 1000
+  const auth = await remoteSession('https://server.test', { username: 'admin', password: 'password' }, async () => {
+    if (++request === 1) return Response.json({ csrfToken: 'initial' }, { headers: { 'set-cookie': 'csrf=initial; Path=/; Max-Age=28800; HttpOnly; SameSite=Strict' } })
+    // Electron net.fetch joins the server's Set-Cookie array before creating Headers.
+    return Response.json({ user: { id: 'admin', role: 'admin' }, csrfToken: 'rotated' }, { headers: { 'set-cookie': [
+      'session=login; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict',
+      'csrf=rotated; Path=/; Max-Age=28800; HttpOnly; Secure; SameSite=Lax',
+    ].join(', ') } })
+  })
+  const session = auth.cookieDetails.find(cookie => cookie.name === 'session')
+  const csrf = auth.cookieDetails.find(cookie => cookie.name === 'csrf')
+  assert.ok(session.expirationDate >= before + 2592000 && session.expirationDate <= Date.now() / 1000 + 2592000)
+  assert.ok(csrf.expirationDate >= before + 28800 && csrf.expirationDate <= Date.now() / 1000 + 28800)
+  assert.equal(session.sameSite, 'strict'); assert.equal(csrf.sameSite, 'lax')
+  assert.equal(session.secure, true); assert.equal(csrf.secure, true)
+  assert.deepEqual(Object.fromEntries(auth.cookies), { csrf: 'rotated', session: 'login' })
+})
+
+test('folded cookies keep Expires date commas and separate cookie values and paths', async () => {
+  let request = 0
+  const expires = 'Wed, 21 Oct 2037 07:28:00 GMT'
+  const auth = await remoteSession('https://server.test', { username: 'admin', password: 'password' }, async () => {
+    if (++request === 1) return Response.json({ csrfToken: 'initial' })
+    return Response.json({ user: { id: 'admin', role: 'admin' } }, { headers: { 'set-cookie': [
+      `session=login==; Expires=${expires}; Path=/; HttpOnly; Secure; SameSite=Strict`,
+      'csrf=rotated; Path=/api; HttpOnly; SameSite=Lax',
+      'device=fixture; Path=/device; Max-Age=0; HttpOnly',
+    ].join(', ') } })
+  })
+  const session = auth.cookieDetails.find(cookie => cookie.name === 'session')
+  const csrf = auth.cookieDetails.find(cookie => cookie.name === 'csrf')
+  const device = auth.cookieDetails.find(cookie => cookie.name === 'device')
+  assert.equal(session.expirationDate, Date.parse(expires) / 1000)
+  assert.equal(session.value, 'login=='); assert.equal(session.path, '/')
+  assert.equal(csrf.path, '/api'); assert.equal(csrf.expirationDate, undefined)
+  assert.equal(csrf.secure, false); assert.equal(csrf.sameSite, 'lax')
+  assert.equal(device.path, '/device'); assert.ok(device.expirationDate <= Date.now() / 1000)
+  assert.equal(auth.cookieDetails.length, 3)
+})
+
 test('pending approval is not mislabeled as a bad password', async () => {
   let calls = 0
   await assert.rejects(() => remoteSession('https://server.test', { username: 'child', password: 'password' }, async () => {

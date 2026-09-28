@@ -13,6 +13,8 @@ const identifier=z.string().min(1).max(256)
 const scopeSchema=z.object({ownerKey:identifier,environmentId:identifier,profile:z.enum(['persistent','temporary'])}).strict()
 const refFields={snapshotId:z.string().uuid(),ref:z.string().regex(/^e[0-9]+$/)}
 const actionSchema=z.discriminatedUnion('kind',[
+  z.object({kind:z.literal('drag'),fromX:z.number().finite().min(0).max(1279),fromY:z.number().finite().min(0).max(799),toX:z.number().finite().min(0).max(1279),toY:z.number().finite().min(0).max(799)}).strict(),
+  z.object({kind:z.literal('pointer'),gestureId:z.string().uuid(),phase:z.enum(['start','move','end','cancel']),x:z.number().finite().min(0).max(1279),y:z.number().finite().min(0).max(799)}).strict(),
   z.object({kind:z.enum(['state','downloads','snapshot','screenshot','back','forward','reload'])}).strict(),
   z.object({kind:z.enum(['navigate','new-tab']),url:z.string().max(8192)}).strict(),
   z.object({kind:z.enum(['select-tab','close-tab']),tabId:z.string().uuid()}).strict(),
@@ -26,6 +28,7 @@ const actionSchema=z.discriminatedUnion('kind',[
 ])
 const fail=(code:string,message:string):never=>{throw new BrowserRuntimeError(code,message)}
 interface Entry {
+  pointer?:{id:string;page:Page;generation:number;timer?:ReturnType<typeof setTimeout>}
   scope:BrowserScope;generation:number;tail:Promise<unknown>;context?:BrowserContext;proxy?:BrowserPublicProxy
   pages:Map<string,Page>;active:string;profileDirectory?:string;profileLock?:string;downloadDirectory?:string
   operations:Map<string,{fingerprint:string;result:Promise<unknown>;readOnly:boolean}>
@@ -164,8 +167,9 @@ export class BrowserRuntime {
     if(entry.pages.size>=(this.options.maxTabs??12)){void page.close().catch(()=>{});return}
     const id=randomUUID();entry.pages.set(id,page);if(!entry.active)entry.active=id
     page.on('dialog',dialog=>void dialog.dismiss().catch(()=>{}))
-    page.on('framenavigated',frame=>{if(frame===page.mainFrame())this.invalidate(entry)})
-    page.on('close',()=>{entry.pages.delete(id);if(entry.active===id)entry.active=entry.pages.keys().next().value??'';this.invalidate(entry)})
+    const cancelPointer=()=>{const pointer=entry.pointer;if(pointer?.page===page)void this.queue(entry,async()=>{if(entry.pointer===pointer)await this.releasePointer(entry)}).catch(()=>{})}
+    page.on('framenavigated',frame=>{if(frame===page.mainFrame()){this.invalidate(entry);cancelPointer()}})
+    page.on('close',()=>{entry.pages.delete(id);if(entry.active===id)entry.active=entry.pages.keys().next().value??'';this.invalidate(entry);cancelPointer()})
     page.on('download',download=>{
       const generation=entry.generation,call=entry.networkContext
       const task=this.saveDownload(entry,download,generation,call).catch(error=>{entry.downloadErrors.push(error instanceof Error?error.message:'下载失败');entry.downloadErrors=entry.downloadErrors.slice(-10)})
@@ -192,6 +196,7 @@ export class BrowserRuntime {
       const abort=()=>{void this.revoke(scope).catch(()=>{})}
       context?.signal?.addEventListener('abort',abort,{once:true})
       try{await this.check(entry,input.generation,context);const value=await this.action(entry,input.action,context);await this.check(entry,input.generation,context);return value}
+      catch(error){if(!readOnly&&(input.action.kind!=='pointer'||entry.pointer?.id===input.action.gestureId))await this.releasePointer(entry);throw error}
       finally{context?.signal?.removeEventListener('abort',abort)}
     })
     entry.operations.set(input.operationId,{fingerprint,result,readOnly});return result
@@ -204,6 +209,8 @@ export class BrowserRuntime {
     return handle!
   }
   private async action(entry:Entry,action:BrowserAction,context?:BrowserCallContext):Promise<unknown>{
+    if(!['pointer','state','downloads','snapshot','screenshot'].includes(action.kind))await this.releasePointer(entry)
+    if(action.kind==='pointer')return this.pointer(entry,action,context)
     if(action.kind==='state')return this.state(entry)
     if(action.kind==='downloads')return {downloads:[...entry.downloads.values()],pending:entry.pendingDownloads.size,errors:[...entry.downloadErrors]}
     if(action.kind==='new-tab'){
@@ -255,11 +262,64 @@ export class BrowserRuntime {
       case 'forward':await page.goForward({waitUntil:'domcontentloaded'});break
       case 'reload':await page.reload({waitUntil:'domcontentloaded'});break
       case 'coordinate':await page.mouse.click(action.x,action.y,{button:action.button,clickCount:action.clickCount});break
+      case 'drag':{
+        const generation=entry.generation
+        await page.mouse.move(action.fromX,action.fromY)
+        await this.check(entry,generation,context)
+        try{
+          await page.mouse.down()
+          // Use real mouse events, including a second target move for HTML dragover.
+          for(let step=1;step<=12;step++){
+            await this.check(entry,generation,context)
+            await page.mouse.move(action.fromX+(action.toX-action.fromX)*step/12,action.fromY+(action.toY-action.fromY)*step/12)
+          }
+          await this.check(entry,generation,context)
+          await page.mouse.move(action.toX,action.toY)
+          await this.check(entry,generation,context)
+          await page.mouse.up()
+        }catch(error){await page.keyboard.press('Escape').catch(()=>{});await page.mouse.up().catch(()=>{});throw error}
+        break
+      }
       case 'key':await page.keyboard.press(action.key);break
       case 'text':await page.keyboard.insertText(action.text);break
       case 'scroll':await page.mouse.wheel(action.deltaX??0,action.deltaY);break
     }
     return {ok:true,generation:entry.generation,url:page.url()}
+  }
+  private async releasePointer(entry:Entry){
+    const pointer=entry.pointer;if(!pointer)return
+    entry.pointer=undefined;clearTimeout(pointer.timer)
+    await pointer.page.keyboard.press('Escape').catch(()=>{})
+    await pointer.page.mouse.up().catch(()=>{})
+  }
+  private async pointer(entry:Entry,action:Extract<BrowserAction,{kind:'pointer'}>,context?:BrowserCallContext){
+    const page=this.page(entry),generation=entry.generation
+    if(action.phase==='cancel'){
+      if(entry.pointer?.id===action.gestureId)await this.releasePointer(entry)
+      return {ok:true,generation}
+    }
+    if(action.phase==='start'){
+      await this.releasePointer(entry)
+      await page.mouse.move(action.x,action.y);await this.check(entry,generation,context)
+      entry.pointer={id:action.gestureId,page,generation}
+      await page.mouse.down()
+    }else{
+      const pointer=entry.pointer
+      if(!pointer||pointer.id!==action.gestureId||pointer.page!==page||pointer.generation!==generation)fail('browser_gesture_expired','拖动已结束，请重新按下鼠标')
+      await page.mouse.move(action.x,action.y,{steps:3});await this.check(entry,generation,context)
+      if(action.phase==='end'){
+        await page.mouse.move(action.x,action.y);await this.check(entry,generation,context)
+        await page.mouse.up();clearTimeout(entry.pointer?.timer);entry.pointer=undefined
+      }
+    }
+    this.invalidate(entry)
+    const pointer=entry.pointer
+    if(pointer){
+      clearTimeout(pointer.timer)
+      const timer=setTimeout(()=>{void this.queue(entry,async()=>{if(entry.pointer===pointer&&pointer.timer===timer)await this.releasePointer(entry)}).catch(()=>{})},5000)
+      pointer.timer=timer;timer.unref()
+    }
+    return {ok:true,generation}
   }
   private safeName(name:string){return basename(name.replaceAll('\\','/')).replace(/[\x00-\x1f\x7f]/g,'_').slice(0,240)||'download'}
   private async saveDownload(entry:Entry,download:Download,generation:number,context?:BrowserCallContext){
@@ -288,7 +348,7 @@ export class BrowserRuntime {
    * The same browser context is retained for manual takeover and login. */
   async pause(scope:BrowserScope,context?:BrowserCallContext){
     const entry=this.entry(scope);await this.check(entry,undefined,context);entry.generation++;entry.operations.clear();this.invalidate(entry);entry.parked=false;entry.networkContext=context;entry.proxy?.disconnect()
-    return this.queue(entry,async()=>{await this.check(entry,undefined,context);return this.state(entry)})
+    return this.queue(entry,async()=>{await this.releasePointer(entry);await this.check(entry,undefined,context);return this.state(entry)})
   }
   async resume(scope:BrowserScope,context?:BrowserCallContext){return this.pause(scope,context)}
   /** Retain this Bot's page state without retaining a task's network authority. */
@@ -296,7 +356,7 @@ export class BrowserRuntime {
     const entry=this.entry(scope);await this.check(entry,undefined,context)
     entry.generation++;entry.operations.clear();this.invalidate(entry)
     entry.parked=true;entry.networkContext=undefined;entry.proxy?.disconnect()
-    return this.queue(entry,async()=>{await this.check(entry,undefined,context);return this.state(entry)})
+    return this.queue(entry,async()=>{await this.releasePointer(entry);await this.check(entry,undefined,context);return this.state(entry)})
   }
   /** Unlike pause, revoke closes the context immediately to interrupt old I/O. */
   async revoke(scope:BrowserScope){
@@ -308,6 +368,7 @@ export class BrowserRuntime {
   }
   async close(scope:BrowserScope,context?:BrowserCallContext){const entry=this.entry(scope);await this.check(entry,undefined,context);return this.revoke(scope)}
   private async destroy(entry:Entry){
+    await this.releasePointer(entry)
     const browser=entry.context;entry.context=undefined;entry.pages.clear();entry.active='';entry.parked=false;entry.networkContext=undefined;this.invalidate(entry)
     await entry.proxy?.close();entry.proxy=undefined
     if(browser)await browser.close().catch(()=>{})

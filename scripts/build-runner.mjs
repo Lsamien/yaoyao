@@ -15,7 +15,7 @@ export async function buildRunner(directory = resolve(import.meta.dirname, '../.
   await cp(resolve(import.meta.dirname,'../deploy/computer'),resolve(directory,'computer-image'),{recursive:true})
   await cp(resolve(import.meta.dirname,'../third-party'),resolve(directory,'third-party'),{recursive:true})
   await build({
-    entryPoints: { 'runner-maintenance':resolve(import.meta.dirname, '../src/runner/computers/maintenanceCli.ts'), 'runner-image':resolve(import.meta.dirname, '../src/runner/computers/imageCli.ts'), runner:resolve(import.meta.dirname, '../src/runner/index.ts'), 'runner-config':resolve(import.meta.dirname, '../src/runner/config.ts') },
+    entryPoints: { 'vm-data-migrate':resolve(import.meta.dirname, '../src/runner/computers/migrateUserData.ts'), 'runner-maintenance':resolve(import.meta.dirname, '../src/runner/computers/maintenanceCli.ts'), 'runner-image':resolve(import.meta.dirname, '../src/runner/computers/imageCli.ts'), runner:resolve(import.meta.dirname, '../src/runner/index.ts'), 'runner-config':resolve(import.meta.dirname, '../src/runner/config.ts') },
     outdir:directory, outExtension:{'.js':'.mjs'}, bundle: true, platform: 'node',
     format: 'esm', target: 'node24', sourcemap: true,external:browserRuntimeExternals,
     banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },

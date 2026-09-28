@@ -162,6 +162,50 @@ it('keeps control tokens private, rejects cross-owner credentials and stale gene
   }finally{await f.close()}
 })
 
+it('forwards bounded screenshot drags once and exposes the same action to Bot tools',async()=>{
+  const f=fixture()
+  try{
+    const take=await request(f.app.callback()).post(controlURL(f.base,'/take')).send({requestId:randomUUID()}).expect(200)
+    const credentials={controlId:take.body.controlId,token:take.body.token}
+    const frame=await request(f.app.callback()).get(controlURL(f.base,'/frame')).expect(200)
+    const action={kind:'drag',fromX:10,fromY:20,toX:500,toY:300}
+    const body={...credentials,requestId:randomUUID(),generation:frame.body.generation,frameId:frame.body.id,action}
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send({...body,requestId:randomUUID(),action:{...action,toX:800}}).expect(400)
+    expect(f.calls.some(call=>call.operation?.action.kind==='drag')).toBe(false)
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send(body).expect(200)
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send(body).expect(200)
+    expect(f.calls.filter(call=>call.operation?.action.kind==='drag')).toHaveLength(1)
+    expect(f.calls.at(-1).operation.action).toEqual(action)
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send({...body,requestId:randomUUID()}).expect(409)
+    await request(f.app.callback()).post(controlURL(f.base,'/giveback')).send({...credentials,notes:''}).expect(200)
+    const turn=f.turn()
+    await turn.value.call('managed_browser_action',{action},'bot-drag')
+    expect(f.calls.filter(call=>call.operation?.action.kind==='drag')).toHaveLength(2)
+    expect(f.calls.findLast(call=>call.operation?.action.kind==='drag').operation.action).toEqual(action)
+    await expect(turn.value.call('managed_browser_action',{action:{kind:'pointer',phase:'start',gestureId:randomUUID(),x:10,y:20}},'bot-held-pointer')).rejects.toMatchObject({code:'browser_input_unsupported'})
+  }finally{await f.close()}
+})
+
+it('retains frames during a held gesture and allows authenticated cancellation after a frame expires',async()=>{
+  const f=fixture()
+  try{
+    const take=await request(f.app.callback()).post(controlURL(f.base,'/take')).send({requestId:randomUUID()}).expect(200)
+    const credentials={controlId:take.body.controlId,token:take.body.token},gestureId=randomUUID()
+    const frame=await request(f.app.callback()).get(controlURL(f.base,'/frame')).expect(200)
+    const body={...credentials,generation:frame.body.generation,frameId:frame.body.id}
+    const pointer=(phase:string)=>({kind:'pointer',gestureId,phase,x:10,y:20})
+    for(const phase of ['start','move','end'])await request(f.app.callback()).post(controlURL(f.base,'/input')).send({...body,requestId:randomUUID(),action:pointer(phase)}).expect(200)
+    expect(f.calls.filter(call=>call.operation?.action.kind==='pointer').map(call=>call.operation.action.phase)).toEqual(['start','move','end'])
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send({...body,requestId:randomUUID(),action:pointer('move')}).expect(409)
+    const cancel={...body,frameId:randomUUID(),requestId:randomUUID(),action:pointer('cancel')}
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send({...cancel,token:'x'.repeat(43)}).expect(403)
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send({...cancel,requestId:randomUUID(),generation:body.generation-1}).expect(409)
+    await request(f.app.callback()).post(controlURL(f.base,'/input')).send(cancel).expect(200)
+    expect(f.calls.at(-1).operation.action.phase).toBe('cancel')
+    await request(f.app.callback()).post(f.base+'/managed-browser/action').send({...body,requestId:randomUUID(),action:pointer('start')}).expect(400)
+  }finally{await f.close()}
+})
+
 it('expires a human grant without admitting further input',async()=>{
   const f=fixture()
   try{

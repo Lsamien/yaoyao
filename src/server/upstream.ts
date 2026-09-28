@@ -187,6 +187,11 @@ export class UpstreamClient {
         // a whole route handler (it may have performed several writes); repair this one 401 only.
         if (JSON.stringify([jar.header, jar.sessionToken]) === sentCredentials) await renew()
         response = await this.fetchResponse(path, jar, options)
+        // This jar belongs to the Hermes service, not the signed-in Yaoyao user.
+        // A failed renewal must not send the client back to its account login.
+        if (response.status === 401) {
+          throw new HttpError(502, 'Hermes 服务认证暂时不可用，请稍后重试', 'upstream_auth_unavailable')
+        }
       }
       return response
     }

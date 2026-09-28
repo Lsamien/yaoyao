@@ -54,6 +54,15 @@ class ComputerPolicyTests(unittest.TestCase):
         for p in reversed(self.patches): p.stop()
         self.temp.cleanup()
 
+    def test_strict_environment_blocks_unknown_native_tools_and_cannot_approve_host_access(self):
+        for mode in ('none', 'virtual'):
+            self.binding.computer_policy = {'mode': mode, 'hostAccess': True}
+            self.binding.native_names = {'yaoyao_fixture_123'}
+            for name in ('terminal', 'read_file', 'delegate_task', 'new_native_plugin', 'skill_manage'):
+                self.assertEqual(bridge.computer_directive(session_id='stored', tool_name=name, args={})['action'], 'block')
+            for name in ('skills_list', 'skill_view', 'yaoyao_fixture_123'):
+                self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name=name, args={}))
+
     def test_lazy_binding_starts_native_initialization_without_submitting_a_prompt(self):
         self.session.update(agent=None, running=False, agent_error=None)
         started = []
@@ -313,6 +322,17 @@ class ComputerPolicyTests(unittest.TestCase):
         for tool in ('memory', 'provider_remember'):
             self.assertEqual(bridge.computer_directive(session_id='stored', tool_name=tool, args={})['action'], 'block')
         self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name='skill_view', args={}))
+
+    def test_bound_bot_session_blocks_hermes_cron_and_ordinary_chat_does_not(self):
+        for name in ('cronjob', 'cron_list', 'cronjob_create'):
+            blocked = bridge.computer_directive(session_id='stored', tool_name=name, args={'action': 'create'})
+            self.assertEqual(blocked['action'], 'block')
+            self.assertIn('workspace_create_routine', blocked['message'])
+        self.session.pop('_yaoyao_computer_policy')
+        self.binding.computer_policy = None
+        self.assertEqual(bridge.computer_directive(session_id='stored', tool_name='cronjob', args={})['action'], 'block')
+        self.assertIsNone(bridge.computer_directive(session_id='stored', tool_name='skill_view', args={}))
+        self.assertIsNone(bridge.computer_directive(session_id='ordinary-chat', tool_name='cronjob', args={}))
 
     def test_skill_review_is_installed_once_and_never_runs_memory_review(self):
         bridge._enable_skill_review(self.agent, self.binding)

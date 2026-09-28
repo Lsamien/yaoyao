@@ -17,6 +17,8 @@ const schedule=z.discriminatedUnion('kind',[
   z.object({kind:z.literal('weekly'),timezone,time:clock,weekdays:z.array(z.number().int().min(0).max(6)).min(1).max(7)}).strict(),
 ])
 const input=z.object({name:z.string().trim().min(1).max(100),prompt:z.string().trim().min(1).max(24000),enabled:z.boolean(),deviceHost:z.union([z.literal('local'),z.string().uuid()]).nullish(),schedule}).strict()
+export const routineScheduleSchema=schedule
+export const routineWriteSchema=input
 export function nextRoutineAt(s:WorkspaceSchedule,after:number):number|undefined {
   if(s.kind==='once')return s.at!>after?s.at:undefined
   if(s.kind==='interval')return after+s.everyMinutes!*60000
@@ -33,6 +35,7 @@ export class WorkspaceRoutines {
   private timer?:ReturnType<typeof setInterval>;private ticking=false;private closed=false
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly runtime:WorkspaceRuntime){}
   private agent(owner:string,id:string){const agent=this.store.require<WorkspaceAgent>(owner,'agent',id);if(agent.archived||agent.temporaryGoalId||agent.remoteAgentId)throw new HttpError(409,'此机器人不能建立定时任务','routine_agent_unavailable');this.nodes.requireSource(owner,agent);return agent}
+  requireSchedulable(owner:string,id:string){return this.agent(owner,id)}
   save(owner:string,agentId:string,body:unknown,id:string=randomUUID()){
     this.agent(owner,agentId);const value=parse(input,body),old=this.store.get<WorkspaceRoutine>(owner,'routine',id)
     if(old&&old.agentId!==agentId)throw new HttpError(404,'定时任务不存在','not_found')

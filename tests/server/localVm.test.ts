@@ -47,6 +47,7 @@ it('prepares one managed image, verifies the desktop, applies it and persists it
   await manager.prepare(id,check)
   await vi.waitFor(async()=>expect((await manager.status()).job?.state).toBe('complete'))
   expect(f.runtime.config.imageId).toBe(imageId)
+  expect(manager.images.run).toHaveBeenCalledWith('docker',expect.arrayContaining(['build','--file',expect.stringContaining('Dockerfile.network'),'--tag','localhost/yaoyao/network:1']))
   expect(f.runtime.provider.capture).toHaveBeenCalledOnce()
   expect(f.running.size).toBe(0)
   await manager.prepare(id,check)
@@ -81,6 +82,32 @@ it('refuses lifecycle changes while a human or Agent holds the VM',async()=>{
   const lease=await f.runtime.pool.acquire(spec,'human:test',()=>{})
   for(const action of ['stop','remove','recreate'] as const)await expect(f.runtime.pool.desktop(spec,action,()=>{})).rejects.toMatchObject({code:'computer_busy'})
   await f.runtime.pool.release(lease)
+ }finally{await f.close()}
+})
+it('restores only existing stopped desktops with their saved image and cwd, keeping idle policy and capacity',async()=>{
+ const f=await fixture(),id=randomUUID(),meta={agentId:id,environmentId:id,ownerKey:'owner'},spec={id,ownerKey:'owner',imageId:'sha256:'+'b'.repeat(64),cwd:'/home/cua/workspace/saved',network:'none' as const}
+ try{
+  f.runtime.pool.idleStopMinutes=0
+  await f.runtime.restoreDesktop(meta,()=>{})
+  expect(f.runtime.provider.ensure).not.toHaveBeenCalled()
+  await f.runtime.pool.desktop(spec,'create',()=>{});await f.runtime.pool.desktop(spec,'stop',()=>{})
+  vi.mocked(f.runtime.provider.ensure).mockClear()
+  await f.runtime.restoreDesktop(meta,()=>{})
+  expect(f.runtime.provider.ensure).toHaveBeenCalledWith(expect.objectContaining({imageId:spec.imageId,cwd:spec.cwd}),expect.any(Function))
+  expect(f.runtime.pool.status('owner')[0]?.status).toBe('idle');expect(f.runtime.pool.idleStopMinutes).toBe(0)
+  await f.runtime.restoreDesktop(meta,()=>{})
+  expect(f.runtime.provider.ensure).toHaveBeenCalledOnce()
+  const lease=await f.runtime.pool.acquire(f.runtime.pool.definition('owner',id)!,'task',()=>{})
+  await f.runtime.restoreDesktop(meta,()=>{})
+  expect(f.runtime.pool.status('owner')[0]?.holderIds).toEqual(['task'])
+  await f.runtime.pool.release(lease)
+  const other={...spec,id:randomUUID()};f.runtime.pool.limits.concurrent=1
+  await f.runtime.pool.desktop(other,'start',()=>{})
+  await expect(f.runtime.restoreDesktop(meta,()=>{})).rejects.toMatchObject({code:'computer_quota'})
+  await f.runtime.pool.desktop(other,'stop',()=>{})
+  const removing=f.runtime.pool.desktop(spec,'remove',()=>{}),restoring=f.runtime.restoreDesktop(meta,()=>{})
+  await removing;await restoring
+  expect(f.runtime.pool.definition('owner',id)).toBeUndefined()
  }finally{await f.close()}
 })
 it('allows sharing policy changes with idle desktops but preserves active leases and image maintenance guards',async()=>{

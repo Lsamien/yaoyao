@@ -83,6 +83,8 @@ it('stops a live browser conversation immediately when the runner never confirms
       ctx.body = readFileSync(join(dist, 'index.html'))
     }
   })
+  // This fixture deliberately tests the native runtime without a tool bridge.
+  runtime.workspace.put('_system','execution-settings','selection',{mode:'server',revision:2})
   const owner = 'test-admin'
   const nodes = (runtime.workspaceRuntime as unknown as { nodes: { target: (owner: string, nodeId: string) => any; requireSource: () => void } }).nodes
   const target = nodes.target(owner, 'local')

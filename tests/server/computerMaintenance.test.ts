@@ -37,3 +37,39 @@ it('recovers an interrupted content restore without replacing the bind-mount roo
     await expect(lstat(staging)).rejects.toMatchObject({code:'ENOENT'})
   }finally{await rm(base,{recursive:true,force:true})}
 })
+it('backs up and restores private application data together with the workspace and checks tampering first',async()=>{
+  const home=await mkdtemp(join(tmpdir(),'yaoyao-private-backup-')),id=randomUUID(),workspace=join(home,'computer-workspaces',id),data=join(home,'computer-userdata',id)
+  const spec={id,ownerKey:'fixture',imageId:'sha256:'+'a'.repeat(64)},snapshot=join(home,'snapshot')
+  const maintenance=new ComputerMaintenance({status:()=>[{environmentId:id,status:'free'}]} as any,{remove:async()=>{}} as any,home)
+  try{
+    await mkdir(workspace,{recursive:true});await mkdir(join(data,'home','.local','share','keyrings'),{recursive:true})
+    await mkdir(join(data,'home','workspace'));const nestedMountInode=(await lstat(join(data,'home','workspace'))).ino
+    await writeFile(join(workspace,'file'),'before');await writeFile(join(data,'home','.local','share','keyrings','login'),'encrypted-fixture')
+    await maintenance.backup(spec,snapshot)
+    await writeFile(join(workspace,'file'),'after');await writeFile(join(data,'home','.local','share','keyrings','login'),'new-fixture')
+    const result=await maintenance.restore(spec,snapshot)
+    expect(result.userDataRestored).toBe(true)
+    expect((await lstat(join(data,'home','workspace'))).ino).toBe(nestedMountInode)
+    expect(await readFile(join(data,'home','.local','share','keyrings','login'),'utf8')).toBe('encrypted-fixture')
+    expect(await readFile(join(result.previousUserData!,'home','.local','share','keyrings','login'),'utf8')).toBe('new-fixture')
+    await writeFile(join(snapshot,'userdata','home','.local','share','keyrings','login'),'tampered')
+    await writeFile(join(workspace,'file'),'must-remain')
+    await expect(maintenance.restore(spec,snapshot)).rejects.toThrow('校验失败')
+    expect(await readFile(join(workspace,'file'),'utf8')).toBe('must-remain')
+  }finally{await rm(home,{recursive:true,force:true})}
+})
+it('rolls both workspace and credentials back after an interrupted restore',async()=>{
+  const home=await mkdtemp(join(tmpdir(),'yaoyao-private-restore-')),id=randomUUID(),base=join(home,'computer-workspaces'),dataBase=join(home,'computer-userdata')
+  const previousName=`.before-restore-${id}-${randomUUID()}`,stagingName=`.restore-${randomUUID()}`
+  try{
+    for(const parent of [base,dataBase]){
+      for(const name of [id,previousName,stagingName])await mkdir(join(parent,name),{recursive:true})
+      await writeFile(join(parent,id,'data'),'partially-restored')
+      await writeFile(join(parent,previousName,'data'),'original')
+    }
+    await writeFile(join(base,`.restore-${id}.json`),JSON.stringify({protocol:1,mode:'copy',previous:previousName,staging:stagingName,userData:{previous:previousName,staging:stagingName}}))
+    await recoverWorkspace(base,id)
+    for(const parent of [base,dataBase])expect(await readFile(join(parent,id,'data'),'utf8')).toBe('original')
+    await expect(lstat(join(base,`.restore-${id}.json`))).rejects.toMatchObject({code:'ENOENT'})
+  }finally{await rm(home,{recursive:true,force:true})}
+})

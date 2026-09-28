@@ -188,6 +188,21 @@ describe('transactional service switching', () => {
     expect(f.counts()).toEqual({ stops: 0, starts: 0 })
     expect(existsSync(join(f.home, 'updates', 'desktop-sync.json'))).toBe(false)
   })
+  it('preserves VM data after quiescing and before the old service can remove its containers',async()=>{
+    const f=fixture(),order:string[]=[]
+    f.driver.quiesce=async()=>{order.push('quiesce')}
+    ;(f.driver as any).preserveComputerData=async(root:string)=>{expect(root).toBe(f.target);order.push('preserve')}
+    const stop=f.driver.stop;f.driver.stop=async()=>{order.push('stop');await stop()}
+    await transitionService({...f,finalRoot:f.target})
+    expect(order).toEqual(['quiesce','preserve','stop'])
+  })
+  it('keeps the old service and container when VM migration fails',async()=>{
+    const f=fixture()
+    ;(f.driver as any).preserveComputerData=async()=>{throw new Error('VM copy failed')}
+    await expect(transitionService({...f,finalRoot:f.target})).rejects.toThrow('VM copy failed')
+    expect(f.counts()).toEqual({stops:0,starts:0})
+    expect(currentRelease(f.releaseRoot)).toBe(f.old)
+  })
   it('explicitly overwrites an unrelated same-version build, preserving data and bypassing an old sync receipt', async () => {
     const f=fixture()
     runtime(f.old,'c'.repeat(40),'0.3.32',[])

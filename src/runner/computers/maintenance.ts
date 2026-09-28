@@ -1,13 +1,10 @@
-import {mkdir,readdir,lstat,readlink,readFile,writeFile,rm,realpath} from 'node:fs/promises'
-import {join,resolve,dirname,relative,basename} from 'node:path'
+import {mkdir,lstat,readFile,writeFile,rm,realpath} from 'node:fs/promises'
+import {join,resolve,dirname,basename} from 'node:path'
 import {randomUUID} from 'node:crypto'
-import {z} from 'zod'
-import {fileSHA256} from './images.js'
-import {recoverWorkspace,copyWorkspace,replaceWorkspaceContents} from './workspaceRecovery.js'
+import {snapshotSchema,inventory,createSnapshot} from './dataSnapshot.js'
+import {recoverWorkspace,copyWorkspace,replaceWorkspaceContents,replaceUserDataContents} from './workspaceRecovery.js'
 import type {ComputerPool} from './pool.js'
 import type {ContainerComputerProvider,ComputerSpecification} from './container.js'
-const schema=z.object({protocol:z.literal(1),environmentId:z.string().uuid(),ownerKey:z.string(),imageId:z.string(),createdAt:z.number(),files:z.array(z.object({path:z.string(),kind:z.enum(['file','directory','symlink']),sha256:z.string().optional(),target:z.string().optional()}))}).strict()
-type Snapshot=z.infer<typeof schema>
 /** Offline maintenance: caller holds the exact Runner OS lock throughout. */
 export class ComputerMaintenance {
   constructor(readonly pool:ComputerPool,readonly provider:ContainerComputerProvider,readonly home:string){}
@@ -21,50 +18,49 @@ export class ComputerMaintenance {
     if(!detail.isDirectory()||detail.isSymbolicLink()||await realpath(path)!==join(root,spec.id))throw new Error('电脑工作区路径不安全')
     return path
   }
-  private async inventory(root:string):Promise<Snapshot['files']>{
-    const files:Snapshot['files']=[];let bytes=0
-    const visit=async(directory:string)=>{
-      for(const name of (await readdir(directory)).sort()){
-        const path=join(directory,name),item=await lstat(path),key=relative(root,path)
-        if(files.length>=200000)throw new Error('工作区文件数量超过备份上限')
-        if(item.isSymbolicLink())files.push({path:key,kind:'symlink',target:await readlink(path)})
-        else if(item.isDirectory()){files.push({path:key,kind:'directory'});await visit(path)}
-        else if(item.isFile()){bytes+=item.size;if(bytes>20*1024**3)throw new Error('工作区超过 20 GiB 备份上限');files.push({path:key,kind:'file',sha256:await fileSHA256(path)})}
-        // Runtime sockets are intentionally omitted; applications recreate them.
-      }
-    }
-    await visit(root);return files
-  }
   async backup(spec:ComputerSpecification,destination:string){
-    const source=await this.stopped(spec),target=resolve(destination)
-    if(target===resolve(source)||target.startsWith(resolve(source)+'/'))throw new Error('备份必须放在电脑工作区之外')
-    // Reserve the destination. Never overwrite an earlier snapshot.
-    await mkdir(target,{mode:0o700})
-    try{
-      await copyWorkspace(source,join(target,'workspace'))
-      const manifest:Snapshot={protocol:1,environmentId:spec.id,ownerKey:spec.ownerKey,imageId:spec.imageId,createdAt:Date.now(),files:await this.inventory(join(target,'workspace'))}
-      await writeFile(join(target,'snapshot.json'),JSON.stringify(manifest,null,2)+'\n',{flag:'wx',mode:0o600})
-      return {snapshot:target,files:manifest.files.length}
-    }catch(error){await rm(target,{recursive:true,force:true});throw error}
+    return createSnapshot(spec,await this.stopped(spec),join(this.home,'computer-userdata',spec.id),destination)
   }
   async restore(spec:ComputerSpecification,snapshot:string){
-    const workspace=await this.stopped(spec),source=resolve(snapshot),manifest=schema.parse(JSON.parse(await readFile(join(source,'snapshot.json'),'utf8')))
+    const workspace=await this.stopped(spec),source=resolve(snapshot),manifest=snapshotSchema.parse(JSON.parse(await readFile(join(source,'snapshot.json'),'utf8')))
     if(manifest.ownerKey!==spec.ownerKey||manifest.environmentId!==spec.id)throw new Error('备份不属于当前电脑及账号')
     const sourceWorkspace=join(source,'workspace')
     if((await lstat(sourceWorkspace)).isSymbolicLink())throw new Error('备份工作区不能是符号链接')
-    if(JSON.stringify(await this.inventory(sourceWorkspace))!==JSON.stringify(manifest.files))throw new Error('备份内容校验失败，未替换工作区')
+    if(JSON.stringify(await inventory(sourceWorkspace))!==JSON.stringify(manifest.files))throw new Error('备份内容校验失败，未替换工作区')
+    const sourceData=join(source,'userdata'),dataBase=join(this.home,'computer-userdata'),data=join(dataBase,spec.id)
+    if(manifest.userDataFiles){
+      const item=await lstat(sourceData)
+      if(!item.isDirectory()||item.isSymbolicLink()||JSON.stringify(await inventory(sourceData))!==JSON.stringify(manifest.userDataFiles))throw new Error('用户资料备份校验失败')
+    }
     const staging=join(dirname(workspace),`.restore-${randomUUID()}`),previous=join(dirname(workspace),`.before-restore-${spec.id}-${randomUUID()}`)
+    const dataStaging=join(dataBase,`.restore-${randomUUID()}`),dataPrevious=join(dataBase,`.before-restore-${spec.id}-${randomUUID()}`)
+    let hadData=false
     try{
       await copyWorkspace(sourceWorkspace,staging)
-      if(JSON.stringify(await this.inventory(staging))!==JSON.stringify(manifest.files))throw new Error('恢复暂存校验失败')
+      if(JSON.stringify(await inventory(staging))!==JSON.stringify(manifest.files))throw new Error('恢复暂存校验失败')
       await copyWorkspace(workspace,previous)
-      if(JSON.stringify(await this.inventory(previous))!==JSON.stringify(await this.inventory(workspace)))throw new Error('恢复前数据备份校验失败')
+      if(JSON.stringify(await inventory(previous))!==JSON.stringify(await inventory(workspace)))throw new Error('恢复前数据备份校验失败')
+      if(manifest.userDataFiles){
+        await mkdir(dataBase,{recursive:true,mode:0o700})
+        await copyWorkspace(sourceData,dataStaging)
+        if(JSON.stringify(await inventory(dataStaging))!==JSON.stringify(manifest.userDataFiles))throw new Error('用户资料恢复暂存校验失败')
+        const existing=await lstat(data).catch(error=>{if(error.code==='ENOENT')return undefined;throw error})
+        hadData=!!existing
+        if(existing){
+          if(!existing.isDirectory()||existing.isSymbolicLink())throw new Error('用户资料目录不安全')
+          await copyWorkspace(data,dataPrevious)
+          if(JSON.stringify(await inventory(dataPrevious))!==JSON.stringify(await inventory(data)))throw new Error('恢复前用户资料备份校验失败')
+        }
+      }
       const journal=join(dirname(workspace),`.restore-${spec.id}.json`)
-      await writeFile(journal,JSON.stringify({protocol:1,mode:'copy',staging:basename(staging),previous:basename(previous)}),{flag:'wx',mode:0o600})
-      try{await replaceWorkspaceContents(staging,workspace)}catch(error){await recoverWorkspace(dirname(workspace),spec.id);throw error}
+      await writeFile(journal,JSON.stringify({protocol:1,mode:'copy',staging:basename(staging),previous:basename(previous),...(manifest.userDataFiles?{userData:{previous:hadData?basename(dataPrevious):null,staging:basename(dataStaging)}}:{})}),{flag:'wx',mode:0o600})
+      try{
+        await replaceWorkspaceContents(staging,workspace)
+        if(manifest.userDataFiles){if(hadData)await replaceUserDataContents(dataStaging,data);else await copyWorkspace(dataStaging,data)}
+      }catch(error){await recoverWorkspace(dirname(workspace),spec.id);throw error}
       await rm(journal)
-      return {restored:workspace,previousWorkspace:previous,imageId:spec.imageId}
-    }finally{await rm(staging,{recursive:true,force:true})}
+      return {restored:workspace,previousWorkspace:previous,imageId:spec.imageId,userDataRestored:!!manifest.userDataFiles,...(hadData?{previousUserData:dataPrevious}:{})}
+    }finally{await rm(staging,{recursive:true,force:true});await rm(dataStaging,{recursive:true,force:true})}
   }
   async rebuild(spec:ComputerSpecification){const workspace=await this.stopped(spec);return {workspace,rebuildOnNextStart:true,imageId:spec.imageId}}
 }

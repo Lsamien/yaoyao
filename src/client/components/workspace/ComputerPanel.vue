@@ -3,6 +3,7 @@ import type { ComputerBackend, ManagedBrowserState } from '@shared/managedBrowse
 import {computed,onBeforeUnmount,onMounted,ref,watch} from 'vue'
 import {apiRequest} from '@/api/client'
 import {browserCanPrepare,prepareManagedBrowser} from '@/utils/managedBrowser'
+import {BrowserDragSession} from '@/utils/browserDrag'
 import BrowserToolbar from './BrowserToolbar.vue'
 import type {BotBrowserState,DesktopEnvironmentState} from '@shared/desktopEnvironment'
 import {createUuid} from '@/utils/id'
@@ -14,6 +15,7 @@ const selected=ref(props.agents[0]?.id??''),dialog=ref<HTMLDialogElement>()
 const backend=ref(props.backend),host=ref(props.host??(props.backend==='desktop'?'local':'')),envTargets=ref<{hosts:DesktopEnvironmentState['hosts'];cloudConfigured:boolean;vmEnabled:boolean;managedBrowser?:ManagedBrowserState}>()
 const state=ref<ComputerControlStatus>({mode:'off'}),frame=ref<ComputerFrame>(),ticket=ref<{controlId:string;token:string}>()
 const controlsOpen=ref(false),actualSize=ref(false),browserState=ref<BotBrowserState>()
+const dragging=ref(false)
 const managedBrowser=ref<ManagedBrowserState>()
 const preparing=ref(false)
 const recheckingBrowser=ref(false)
@@ -28,7 +30,7 @@ const labels:Record<ComputerControlStatus['mode'],string>={off:'电脑未运行'
 const mine=computed(()=>!!ticket.value&&ticket.value.controlId===state.value.controlId)
 const canCloseBrowser=computed(()=>backend.value==='managed-browser'&&mine.value&&state.value.mode==='human'&&!state.value.canResume)
 const canSend=computed(()=>connectionOK.value&&!!frame.value&&mine.value&&state.value.mode==='human'&&frame.value?.generation===state.value.generation)
-const controllable=computed(()=>canSend.value&&!busy.value)
+const controllable=computed(()=>canSend.value&&!busy.value&&!dragging.value)
 const computerSettings=ref({vm:true,cloud:true,desktop:true,managedBrowser:false})
 const targets=computed(()=>{
   const envs=computerSettings.value,info=envTargets.value
@@ -61,6 +63,7 @@ async function loadTargets(){
 async function switchTarget(key:string){
   const next=targets.value.find(t=>t.key===key)
   if(!next||next.disabled||key===currentKey.value)return
+  await cancelDrag()
   if(ticket.value){
     try{await post('/giveback',{...ticket.value,notes:''})}catch(cause){error.value=cause instanceof Error?cause.message:'请先交还当前电脑';return}
   }
@@ -138,7 +141,7 @@ function take(){return run(async()=>{
 })}
 const inputs:ComputerInput[]=[];let flushing=false,pendingClick:ComputerInput|undefined,clickTimer:ReturnType<typeof setTimeout>|undefined
 function send(action:ComputerInput){
-  if(!canSend.value||closed)return
+  if(!canSend.value||closed||dragging.value)return
   if(pendingClick){inputs.push(pendingClick);pendingClick=undefined;clearTimeout(clickTimer)}
   const last=inputs.at(-1)
   if(action.kind==='text'&&last?.kind==='text'&&last.text.length+action.text.length<=16000)last.text+=action.text
@@ -155,25 +158,65 @@ async function flushInputs(){
   finally{flushing=false;if(inputs.length)setTimeout(()=>void flushInputs(),0)}
 }
 function browserAction(action:Record<string,string>){
-  if(!canSend.value||!frame.value||!ticket.value)return
+  if(!controllable.value||!frame.value||!ticket.value)return
   const f=frame.value,credentials=ticket.value
   void run(async()=>{
     if(backend.value==='managed-browser')await apiRequest(`/api/app/agents/${encodeURIComponent(selected.value)}/managed-browser/action`,{method:'POST',body:{...credentials,requestId:createUuid(),generation:f.generation,action}})
     else await post('/browser',{...credentials,requestId:createUuid(),generation:f.generation,frameId:f.id,action})
   })
 }
-function point(event:MouseEvent|PointerEvent){
+function point(event:MouseEvent|PointerEvent,clamp=false){
   const r=(event.currentTarget as HTMLImageElement).getBoundingClientRect(),f=frame.value!
   const scale=Math.min(r.width/f.width,r.height/f.height),left=r.left+(r.width-f.width*scale)/2,top=r.top+(r.height-f.height*scale)/2
   const x=Math.floor((event.clientX-left)/scale),y=Math.floor((event.clientY-top)/scale)
+  if(clamp)return {x:Math.max(0,Math.min(f.width-1,x)),y:Math.max(0,Math.min(f.height-1,y))}
   if(x<0||y<0||x>=f.width||y>=f.height)return
   return {x,y}
 }
-let dragStart:{x:number;y:number;clientX:number;clientY:number}|undefined,dragged=false
-function down(event:PointerEvent){if(!canSend.value||event.button!==0)return;(event.currentTarget as HTMLElement).focus({preventScroll:true});const p=point(event);if(!p)return;dragStart={...p,clientX:event.clientX,clientY:event.clientY};(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)}
-function up(event:PointerEvent){if(!dragStart)return;const start=dragStart;dragStart=undefined;if(!canSend.value)return;if(Math.hypot(event.clientX-start.clientX,event.clientY-start.clientY)>5){const end=point(event);if(!end)return;dragged=true;send({kind:'drag',fromX:start.x,fromY:start.y,toX:end.x,toY:end.y})}}
+let dragStart:{x:number;y:number;clientX:number;clientY:number;pointerId:number;element:HTMLElement}|undefined,dragged=false,liveDrag:BrowserDragSession|undefined
+function down(event:PointerEvent){
+  if(!controllable.value||dragStart||event.button!==0||inputs.length)return
+  const element=event.currentTarget as HTMLElement;element.focus({preventScroll:true})
+  const p=point(event);if(!p)return
+  dragged=false;dragStart={...p,clientX:event.clientX,clientY:event.clientY,pointerId:event.pointerId,element};element.setPointerCapture(event.pointerId)
+}
+function startLiveDrag(start:{x:number;y:number}){
+  const base=endpoint(),targetQuery=query(),credentials=ticket.value!,controlGeneration=frame.value!.generation
+  let image=frame.value!
+  clearTimeout(clickTimer);pendingClick=undefined;error.value='';dragging.value=true
+  const current=()=>!closed&&endpoint()===base&&query()===targetQuery&&ticket.value?.controlId===credentials.controlId&&state.value.generation===controlGeneration
+  const session=new BrowserDragSession(start,async action=>{
+    if(action.phase!=='cancel'&&(!current()||!canSend.value))throw new Error('控制权已变化，请重新接管')
+    await apiRequest(base+'/input'+targetQuery,{method:'POST',timeoutMs:5000,body:{...credentials,requestId:createUuid(),generation:controlGeneration,frameId:image.id,action:{...action}}})
+    if(action.phase==='cancel')return
+    const next=await apiRequest<ComputerFrame>(base+'/frame'+targetQuery,{timeoutMs:5000})
+    if(!current()||next.generation!==controlGeneration)throw new Error('控制权已变化，请重新接管')
+    image=next;frame.value=next
+  },cause=>{if(current())error.value=cause instanceof Error?cause.message:'拖动失败，请重新按下鼠标'})
+  liveDrag=session
+  void session.done.then(async()=>{if(liveDrag===session){liveDrag=undefined;dragging.value=false;const failure=error.value;await refresh();if(current()&&failure)error.value=failure}})
+}
+function move(event:PointerEvent){
+  const start=dragStart
+  if(!start||event.pointerId!==start.pointerId||!canSend.value)return
+  if(backend.value!=='managed-browser')return
+  if(!liveDrag&&Math.hypot(event.clientX-start.clientX,event.clientY-start.clientY)>5){dragged=true;startLiveDrag(start)}
+  const p=point(event,true);if(p)liveDrag?.move(p)
+}
+function releaseCapture(){const start=dragStart;dragStart=undefined;if(start?.element.hasPointerCapture(start.pointerId))start.element.releasePointerCapture(start.pointerId)}
+function cancelDrag(){releaseCapture();if(liveDrag){dragged=true;return liveDrag.cancel()}return Promise.resolve()}
+function up(event:PointerEvent){
+  const start=dragStart;if(!start||event.pointerId!==start.pointerId)return
+  if(!canSend.value){void cancelDrag();return}
+  move(event)
+  const end=point(event,true);releaseCapture()
+  if(liveDrag){if(end)liveDrag.end(end);else void cancelDrag();return}
+  if(end&&Math.hypot(event.clientX-start.clientX,event.clientY-start.clientY)>5){dragged=true;send({kind:'drag',fromX:start.x,fromY:start.y,toX:end.x,toY:end.y})}
+}
+const windowBlur=()=>{void cancelDrag()},visibility=()=>{if(document.hidden)void cancelDrag()}
+watch(canSend,allowed=>{if(!allowed)void cancelDrag()})
 function wheel(event:WheelEvent){if(!canSend.value)return;event.preventDefault();send({kind:'scroll',direction:Math.abs(event.deltaX)>Math.abs(event.deltaY)?event.deltaX>0?'right':'left':event.deltaY>0?'down':'up',amount:Math.min(20,Math.max(1,Math.ceil(Math.abs(event.deltaY||event.deltaX)/80)))})}
-function keydown(event:KeyboardEvent){if(!canSend.value)return;event.preventDefault();event.stopPropagation();if(event.key==='Escape'){(event.currentTarget as HTMLElement).blur();return}const modifiers=[event.ctrlKey||(backend.value==='managed-browser'&&event.metaKey)?'ctrl':'',event.altKey?'alt':'',event.shiftKey?'shift':'',event.metaKey&&backend.value!=='managed-browser'?'super':''].filter(Boolean);if(event.key.length===1&&!event.ctrlKey&&!event.altKey&&!event.metaKey)send({kind:'text',text:event.key});else if(!['Control','Alt','Shift','Meta'].includes(event.key))send({kind:'key',key:({Enter:'Return',ArrowUp:'Up',ArrowDown:'Down',ArrowLeft:'Left',ArrowRight:'Right',Backspace:'BackSpace'} as Record<string,string>)[event.key]??event.key,modifiers})}
+function keydown(event:KeyboardEvent){if(!canSend.value)return;event.preventDefault();event.stopPropagation();if(event.key==='Escape'){void cancelDrag();(event.currentTarget as HTMLElement).blur();return}const modifiers=[event.ctrlKey||(backend.value==='managed-browser'&&event.metaKey)?'ctrl':'',event.altKey?'alt':'',event.shiftKey?'shift':'',event.metaKey&&backend.value!=='managed-browser'?'super':''].filter(Boolean);if(event.key.length===1&&!event.ctrlKey&&!event.altKey&&!event.metaKey)send({kind:'text',text:event.key});else if(!['Control','Alt','Shift','Meta'].includes(event.key))send({kind:'key',key:({Enter:'Return',ArrowUp:'Up',ArrowDown:'Down',ArrowLeft:'Left',ArrowRight:'Right',Backspace:'BackSpace'} as Record<string,string>)[event.key]??event.key,modifiers})}
 function click(event:MouseEvent){
   if(dragged){dragged=false;return}
   if(!canSend.value||!frame.value)return
@@ -182,9 +225,10 @@ function click(event:MouseEvent){
   if(event.button===2||event.detail>1){clearTimeout(clickTimer);pendingClick=undefined;send(action)}
   else {if(pendingClick){const old=pendingClick;pendingClick=undefined;clearTimeout(clickTimer);send(old)}pendingClick=action;clickTimer=setTimeout(()=>{const next=pendingClick;pendingClick=undefined;if(next)send(next)},180)}
 }
-async function giveBack(){if(ticket.value){await post('/giveback',{...ticket.value,notes:notes.value});ticket.value=undefined;takeRequestId=undefined;notes.value=''}}
+async function giveBack(){await cancelDrag();if(ticket.value){await post('/giveback',{...ticket.value,notes:notes.value});ticket.value=undefined;takeRequestId=undefined;notes.value=''}}
 async function closeBrowser(){
   if(busy.value||!canCloseBrowser.value||!ticket.value)return
+  await cancelDrag()
   const id=selected.value,credentials=ticket.value
   closingBrowser.value=true
   try{await run(async()=>{
@@ -199,6 +243,7 @@ async function close(){if(preparing.value){preparation?.abort();closed=true;dial
 async function fullscreen(){try{if(document.fullscreenElement)await document.exitFullscreen();else await dialog.value?.requestFullscreen()}catch{error.value='无法进入全屏，请使用窗口最大化'}}
 async function cycle(){await refresh();if(!closed)timer=setTimeout(()=>void cycle(),1200)}
 watch(selected,()=>{
+  void cancelDrag()
   preparation?.abort()
   clearTimeout(clickTimer);pendingClick=undefined;browserState.value=undefined;managedBrowser.value=undefined
   inputs.length=0;connectionOK.value=false;generation++;takeRequestId=undefined;frame.value=undefined;ticket.value=undefined;state.value={mode:'off'};error.value=''
@@ -206,6 +251,7 @@ watch(selected,()=>{
   void loadTargets().then(async()=>{if(!backend.value){const first=targets.value.find(t=>!t.disabled);if(first)await switchTarget(first.key)}await refresh()}).catch(cause=>{error.value=cause instanceof Error?cause.message:'无法读取电脑列表'})
 })
 onMounted(async()=>{
+ window.addEventListener('blur',windowBlur);document.addEventListener('visibilitychange',visibility)
  if(!props.embedded&&!props.standalone)dialog.value?.showModal()
  try{
   await loadTargets()
@@ -216,7 +262,7 @@ onMounted(async()=>{
  }catch(cause){error.value=cause instanceof Error?cause.message:'无法读取电脑列表'}
  if(!closed)void cycle()
 })
-onBeforeUnmount(()=>{preparation?.abort();if(ticket.value)void post('/giveback',{...ticket.value,notes:notes.value}).catch(()=>{});inputs.length=0;pendingClick=undefined;clearTimeout(clickTimer);closed=true;generation++;clearTimeout(timer)})
+onBeforeUnmount(()=>{void cancelDrag();window.removeEventListener('blur',windowBlur);document.removeEventListener('visibilitychange',visibility);preparation?.abort();if(ticket.value)void post('/giveback',{...ticket.value,notes:notes.value}).catch(()=>{});inputs.length=0;pendingClick=undefined;clearTimeout(clickTimer);closed=true;generation++;clearTimeout(timer)})
 defineExpose({take,close,releaseControl:async()=>{if(preparing.value){preparation?.abort();return}if(busy.value)throw new Error('请等待当前操作完成');await run(giveBack);if(ticket.value)throw new Error(error.value||'请先交还控制权')},hasControl:()=>!!ticket.value})
 </script>
 <template>
@@ -249,7 +295,7 @@ defineExpose({take,close,releaseControl:async()=>{if(preparing.value){preparatio
         <button type="button" :disabled="busy" @click="recheckBrowser">{{ recheckingBrowser?'正在检测…':'重新检测' }}</button>
       </section>
       <div class="computer-screen" :class="{controlling:canSend,'actual-size':actualSize}">
-        <img v-if="frame" :src="`data:image/png;base64,${frame.data}`" :alt="(targets.find(t=>t.key===currentKey)?.label||'电脑')+'当前画面'" draggable="false" tabindex="0" title="点按后可使用键盘、滚轮和拖动；按 Esc 退出键盘控制" @pointerdown="down" @pointerup="up" @pointercancel="dragStart=undefined" @wheel="wheel" @keydown="keydown" @click="click" @contextmenu.prevent="click">
+        <img v-if="frame" :src="`data:image/png;base64,${frame.data}`" :alt="(targets.find(t=>t.key===currentKey)?.label||'电脑')+'当前画面'" draggable="false" tabindex="0" title="点按后可使用键盘、滚轮和拖动；按 Esc 退出键盘控制" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancelDrag" @lostpointercapture="dragStart && cancelDrag()" @blur="cancelDrag" @wheel="wheel" @keydown="keydown" @click="click" @contextmenu.prevent="click">
         <p v-else>{{ preparing?'准备完成后会自动接管，无需再次点击。':state.mode==='off' ? (backend==='managed-browser'?'浏览器尚未打开。接管后可打开网页。':'打开电脑后可查看桌面。') : '正在读取电脑画面…' }}</p>
         <span v-if="frame&&(!mine||frame.generation!==state.generation)" class="view-label">{{mine?'正在同步画面':state.mode==='off'?'上次画面':'仅查看'}}</span>
       </div>
@@ -296,7 +342,7 @@ defineExpose({take,close,releaseControl:async()=>{if(preparing.value){preparatio
 .computer-screen.actual-size{overflow:auto;align-items:flex-start;justify-content:flex-start}.computer-screen.actual-size img{width:auto;height:auto;max-width:none;max-height:none;flex:none}.return-control{font-weight:600}.standalone .computer-error{flex:none;margin:0;padding:10px 18px}
 .computer-panel::backdrop{background:rgba(0,0,0,.45)}header{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--line)}header div{display:grid;gap:4px;margin-right:auto}small{font-size:12px;color:var(--text-muted);line-height:1.5}
 button,select,textarea,input{font:inherit;border:1px solid var(--line);border-radius:8px;background:var(--surface-raised);color:var(--text-primary)}button,select{min-height:44px;padding:8px 12px}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.computer-screen{position:relative;display:flex;align-items:center;justify-content:center;min-height:220px;background:#14181e}.computer-screen img{max-width:100%;max-height:58vh;width:auto;height:auto;user-select:none}.controlling img{cursor:crosshair}.computer-screen img:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.computer-screen p{color:#d8dee7}.view-label{position:absolute;top:10px;left:12px;padding:4px 8px;border-radius:6px;background:rgba(0,0,0,.65);color:white;font-size:12px;pointer-events:none}
+.computer-screen{position:relative;display:flex;align-items:center;justify-content:center;min-height:220px;background:#14181e}.computer-screen img{max-width:100%;max-height:58vh;width:auto;height:auto;user-select:none}.controlling img{cursor:crosshair;touch-action:none}.computer-screen img:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.computer-screen p{color:#d8dee7}.view-label{position:absolute;top:10px;left:12px;padding:4px 8px;border-radius:6px;background:rgba(0,0,0,.65);color:white;font-size:12px;pointer-events:none}
 footer{padding:16px 18px;display:grid;gap:12px}footer p{margin:0;font-size:13px;color:var(--text-secondary);line-height:1.6}label{display:grid;gap:6px;font-size:13px}textarea{padding:10px;min-width:0;resize:vertical}.key-row{display:flex;gap:6px;flex-wrap:wrap}.computer-error{color:var(--danger);padding:0 18px;font-size:13px}
 .browser-downloads{font-size:13px}.browser-downloads summary{cursor:pointer;min-height:44px;display:flex;align-items:center}.browser-downloads ul{margin:0;padding-left:20px;display:grid;gap:8px}.browser-downloads li{overflow-wrap:anywhere}.browser-downloads small{margin-left:8px}
 .sharing-settings{display:grid;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px}.sharing-settings input:not([type=checkbox]){min-height:44px;padding:8px 10px}.share-option{display:flex;align-items:center;gap:8px;min-height:44px}.share-option input{width:18px;height:18px;flex:none}fieldset{border:1px solid var(--line);border-radius:8px}

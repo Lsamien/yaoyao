@@ -14,9 +14,9 @@ export function generateDesktopCompose(base,entries,source='deploy/compose-deskt
   }
   if(new Set(entries.map(d=>d.id)).size!==entries.length||new Set(entries.map(d=>d.service)).size!==entries.length)throw new Error('Compose 桌面定义重复')
   const q=JSON.stringify
-  const targets=entries.map(d=>({id:d.id,name:d.name,socketPath:`/run/yaoyao-desktops/${d.service}/desktop.sock`,imageKey:d.imageKey??'standard'}))
+  const targets=entries.map(d=>({id:d.id,name:d.name,socketPath:`/run/yaoyao-desktops/${d.service}/desktop.sock`,networkSocketPath:`/run/yaoyao-networks/${d.service}/gateway.sock`,imageKey:d.imageKey??'standard'}))
   base=base.replace('      HERMES_YAOYAO_LOCAL_VM_HOST: "runner"','      HERMES_YAOYAO_LOCAL_VM_HOST: "runner"\n      HERMES_YAOYAO_COMPOSE_DESKTOPS: '+q(JSON.stringify(targets)))
-    .replace('      - yaoyao-data:/home/node/.yaoyao','      - yaoyao-data:/home/node/.yaoyao\n'+entries.map(d=>`      - ${d.service}-ipc:/run/yaoyao-desktops/${d.service}:ro`).join('\n'))
+    .replace('      - yaoyao-data:/home/node/.yaoyao','      - yaoyao-data:/home/node/.yaoyao\n'+entries.map(d=>`      - ${d.service}-ipc:/run/yaoyao-desktops/${d.service}:ro\n      - ${d.service}-network-ipc:/run/yaoyao-networks/${d.service}:ro`).join('\n'))
   const volumesAt=base.indexOf('\nvolumes:')
   if(volumesAt<0||!base.includes('HERMES_YAOYAO_COMPOSE_DESKTOPS'))throw new Error('compose.yaml 模板结构已变化')
   let yaml=`# Generated from compose.yaml and ${source}.\n`+base.slice(0,volumesAt)+'\n'
@@ -27,12 +27,12 @@ export function generateDesktopCompose(base,entries,source='deploy/compose-deskt
 ${recipe.platform?`    platform: ${recipe.platform}\n`:''}    build:
       context: ./deploy/computer
       dockerfile: ${recipe.dockerfile}
-    hostname: ${d.service}
-    extra_hosts:
-      - "${d.service}:127.0.0.1"
     init: true
     restart: unless-stopped
-    network_mode: none
+    network_mode: "service:${d.service}-network"
+    depends_on:
+      ${d.service}-network:
+        condition: service_started
     shm_size: 512m
     mem_limit: 4g
     cpus: 2
@@ -49,10 +49,30 @@ ${recipe.platform?`    platform: ${recipe.platform}\n`:''}    build:
     volumes:
       - ${d.service}-workspace:/home/cua/workspace
       - ${d.service}-ipc:/run/yaoyao-private/bridge
+  ${d.service}-network:
+    image: localhost/yaoyao/network:1
+    build:
+      context: ./deploy/computer
+      dockerfile: Dockerfile.network
+    command: ["--init", "--socket"]
+    init: true
+    restart: unless-stopped
+    network_mode: none
+    dns: ["198.18.0.1"]
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["NET_ADMIN"]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    mem_limit: 128m
+    pids_limit: 64
+    environment:
+      YAOYAO_COMPOSE_DESKTOP_ID: ${q(d.id)}
+    volumes:
+      - ${d.service}-network-ipc:/run/yaoyao-network
 `
   }
   yaml+=base.slice(volumesAt)+'\n'
-  for(const d of entries)yaml+=`  ${d.service}-workspace:\n  ${d.service}-ipc:\n`
+  for(const d of entries)yaml+=`  ${d.service}-workspace:\n  ${d.service}-ipc:\n  ${d.service}-network-ipc:\n`
   return yaml
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){

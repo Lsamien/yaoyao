@@ -14,20 +14,26 @@ export function buildWorkspaceEnvironment(input: {
   bridge: boolean
   cloud: boolean
   plugins: boolean
+  execution?:import('../shared/executionEnvironment.js').ExecutionSelection
+  serverDesktop?:boolean
   managedBrowser?: boolean
 }): WorkspaceEnvironment {
   const { agent, globals, desktop } = input
+  // The default target is a routing preference, not an environment grant.
+  // A remote Hermes server still cannot be substituted with the Yaoyao desktop.
+  const hosts=input.serverDesktop===false?desktop.hosts.filter(h=>h.kind!=='server'):desktop.hosts
   const eligible = !agent.archived && !agent.remoteAgentId
   const vm = !!eligible && globals.vm && input.bridge
   const cloud = !!eligible && globals.cloud && input.cloud
   return {
+    ...(input.execution?{selection:input.execution}:{}),
     version: 1, capturedAt: desktop.capturedAt, execution: { nodeId: agent.nodeId, profile: agent.profile },
     open: { computer: globals.scriptMachine, server: globals.serverComputer, vm: globals.vm, cloud: globals.cloud },
-    desktop,
+    desktop:{...desktop,hosts},
     tools: {
-      desktopView: !!eligible && desktop.hosts.some(host => host.capabilities.view.enabled),
-      desktopFile: !!eligible && desktop.hosts.some(host => host.capabilities.fileRead.enabled),
-      vm, cloud, plugins: input.plugins,
+      desktopView: !!eligible && hosts.some(host => host.capabilities.view.enabled),
+      desktopFile: !!eligible && hosts.some(host => host.capabilities.fileRead.enabled),
+      vm, cloud, plugins: !!eligible && input.plugins,
       ...(eligible && input.bridge && globals.managedBrowser && input.managedBrowser ? {managedBrowser:true} : {}),
     },
     virtual: {

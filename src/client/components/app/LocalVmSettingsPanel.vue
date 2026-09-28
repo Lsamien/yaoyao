@@ -31,7 +31,7 @@ function policy(mode:LocalVmMode,maxInstances=state.value?.maxInstances??2){
  void action(()=>apiRequest('/api/app/admin/local-vm/policy',{method:'PUT',body:{requestId:createUuid(),mode,maxInstances}}))
 }
 function manage(agent:WorkspaceAgent,operation:LocalVmAction){
- if(operation==='remove'&&!confirm(`移除“${agent.name}”的虚拟机实例？工作文件和浏览器资料将保留。`))return
+ if(operation==='remove'&&!confirm(`移除“${agent.name}”的虚拟机实例？工作文件、软件配置和登录资料将保留。`))return
  void action(()=>apiRequest(`/api/app/agents/${agent.id}/local-vm/${operation}`,{method:'POST',body:{}}))
 }
 async function cycle(){await refresh();if(!closed)timer=setTimeout(cycle,state.value?.busy?2000:10000)}

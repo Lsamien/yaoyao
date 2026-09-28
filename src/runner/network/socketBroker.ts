@@ -16,7 +16,7 @@ export class PublicSocketBroker {
   private closed=false
   private transferred=0
   private timer:ReturnType<typeof setInterval>
-  constructor(readonly send:(frame:NetworkFrame)=>Promise<void>,readonly authorize:()=>void,readonly resolve=publicDestination,readonly dial:(destination:Destination)=>Socket=target=>connect({host:target.address,family:target.family,port:target.port}),readonly limits={connections:16,bytes:256*1024*1024},readonly authorizeOpen:()=>Promise<void>=async()=>authorize()){
+  constructor(readonly send:(frame:NetworkFrame)=>Promise<void>,readonly authorize:()=>void,readonly resolve=publicDestination,readonly dial:(destination:Destination)=>Socket|Promise<Socket>=target=>connect({host:target.address,family:target.family,port:target.port}),readonly limits={connections:16,bytes:256*1024*1024},readonly authorizeOpen:()=>Promise<void>=async()=>authorize()){
     this.timer=setInterval(()=>{try{authorize()}catch{this.close()}},1000);this.timer.unref()
   }
   get activeConnections(){return this.streams.size}
@@ -32,9 +32,11 @@ export class PublicSocketBroker {
         await this.authorizeOpen()
         const target=await this.resolve(frame.host,frame.port)
         await this.authorizeOpen();this.authorize();if(this.closed||this.streams.get(frame.id)!==state)return
-        const socket=this.dial(target);state.socket=socket
+        const socket=await this.dial(target);state.socket=socket
+        this.authorize();if(this.closed||this.streams.get(frame.id)!==state){socket.destroy();return}
         socket.setTimeout(30000,()=>socket.destroy())
-        socket.once('connect',()=>{try{this.authorize();if(this.closed)throw new Error('closed');state.opened=true;void this.send({op:'opened',id:frame.id}).catch(()=>this.close())}catch{socket.destroy()}})
+        const connected=()=>{try{this.authorize();if(this.closed)throw new Error('closed');state.opened=true;void this.send({op:'opened',id:frame.id}).then(()=>socket.resume(),()=>this.close())}catch{socket.destroy()}}
+        if(socket.readyState==='open')queueMicrotask(connected);else socket.once('connect',connected)
         socket.on('data',chunk=>{
           socket.pause()
           try{this.authorize();this.count(chunk.length);state.received+=chunk.length}
@@ -45,6 +47,7 @@ export class PublicSocketBroker {
         socket.once('error',()=>{void this.send({op:'error',id:frame.id,message:'公网连接失败'}).catch(()=>this.close())})
         socket.once('close',()=>{if(this.streams.get(frame.id)===state)this.streams.delete(frame.id);void this.send({op:'close',id:frame.id}).catch(()=>this.close())})
       }catch{
+        state.socket?.destroy()
         this.streams.delete(frame.id)
         await this.send({op:'error',id:frame.id,message:'联网目标被拒绝或不可达'})
       }

@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {ContainerComputerProvider,CUA_DRIVER,type ContainerCommand,type ComputerSpecification} from '../../src/runner/computers/container'
 import {COMMAND_ROOT,GUEST_COMMAND} from '../../src/runner/computers/commandProcess'
+import {CLOSE_DESKTOP} from '../../src/runner/computers/desktopClose'
 const homes:string[]=[]
 afterEach(async()=>{await Promise.all(homes.splice(0).map(home=>rm(home,{recursive:true,force:true})))})
 async function fixture(runtime:'docker'|'podman'='docker',onCommand?:(args:string[])=>Promise<void>){
@@ -29,7 +30,7 @@ async function fixture(runtime:'docker'|'podman'='docker',onCommand?:(args:strin
       const workspace=/source=([^,]+)/.exec(value('--mount'))![1]
       detail={Id:'b'.repeat(64),Image:spec.imageId,Config:{Labels:Object.fromEntries(values('--label').map(label=>label.split('=')))},State:{Running:false},
         HostConfig:{Memory:4096*1024*1024,MemorySwap:4096*1024*1024,NanoCpus:2e9,PidsLimit:512,Privileged:false,IpcMode:'private',CgroupnsMode:'private',NetworkMode:'none',RestartPolicy:{Name:'no'},CapAdd:values('--cap-add'),CapDrop:values('--cap-drop'),SecurityOpt:values('--security-opt'),PortBindings:{}},
-        Mounts:[{Type:'bind',Source:workspace,Destination:'/home/cua/workspace',RW:true}],NetworkSettings:{Ports:{}}}
+        Mounts:values('--mount').map(mount=>({Type:'bind',Source:/source=([^,]+)/.exec(mount)![1],Destination:/target=([^,]+)/.exec(mount)![1],RW:!mount.includes(',readonly')})),NetworkSettings:{Ports:{}}}
       return {stdout:detail.Id,stderr:''}
     }
     if(args[0]==='start')detail.State.Running=true
@@ -91,13 +92,13 @@ it('replaces an existing desktop created with the old no-new-privileges flag',as
   const state=await f.provider.ensure(f.spec,()=>{})
   expect(state.running).toBe(true)
   expect(f.detail.HostConfig.SecurityOpt).toEqual([])
-  expect(f.calls.filter(args=>args[0]==='create')).toHaveLength(2)
+  expect(f.calls.filter(args=>args[0]==='create')).toHaveLength(3)
   expect(f.calls.some(args=>args[0]==='rm')).toBe(true)
   expect(f.calls.flat().includes('no-new-privileges:true')).toBe(false)
 })
 it('does not stop or remove an identically named container belonging to another node',async()=>{
   const f=await fixture();await f.provider.ensure(f.spec,()=>{})
-  f.detail.Config.Labels['cn.samien.yaoyao.runner']=randomUUID()
+  f.calls.splice(0);f.detail.Config.Labels['cn.samien.yaoyao.runner']=randomUUID()
   await expect(f.provider.stop(f.spec)).rejects.toMatchObject({code:'computer_owner_mismatch'})
   await expect(f.provider.remove(f.spec)).rejects.toMatchObject({code:'computer_owner_mismatch'})
   expect(f.calls.some(args=>['stop','rm'].includes(args[0]!))).toBe(false)
@@ -125,7 +126,7 @@ it('recreates a migrated mount while retaining the stopped original container an
   const oldHome=join(oldRoot,'runner-state/r1'),newHome=join(newRoot,'runner-state/r1')
   await mkdir(oldHome,{recursive:true})
   const provider=new ContainerComputerProvider('docker',f.provider.runnerId,oldHome,f.run,{})
-  await provider.ensure(f.spec,()=>{});await provider.stop(f.spec)
+  await provider.ensure(f.spec,()=>{});await provider.stop(f.spec);f.calls.splice(0)
   await writeFile(join(oldHome,'computer-workspaces',f.spec.id,'keep.txt'),'keep workspace')
   await rename(oldRoot,newRoot)
   await writeFile(join(newRoot,'.data-home-migration.json'),JSON.stringify({source:oldRoot,target:newRoot,phase:'complete'}))
@@ -175,7 +176,7 @@ it('runs command lanes concurrently, serializes desktop input and drains every l
   await Promise.all([slowFile,slowGui,guiTwo,stopping])
   expect(guiTwoDone).toBe(true)
   expect(peak).toBeGreaterThanOrEqual(2)
-  expect(order.filter(entry=>entry.startsWith('exec:')).indexOf('exec:plain-gui-2')).toBeGreaterThan(order.indexOf('exec:hold-gui-1'))
+  expect(order.indexOf('exec:plain-gui-2')).toBeGreaterThan(order.indexOf('exec:hold-gui-1'))
   expect(order.indexOf('stop')).toBeGreaterThan(order.indexOf('exec:plain-gui-2'))
 })
 it('keeps a shared desktop alive when one holder cancels an unacknowledged operation',async()=>{
@@ -194,6 +195,15 @@ it('keeps a shared desktop alive when one holder cancels an unacknowledged opera
   await expect(f.provider.execute(f.spec,['/bin/sh','-c','boom-alone'],{authorize:()=>{}})).rejects.toMatchObject({code:'computer_cancel_uncertain'})
   await new Promise(resolve=>setTimeout(resolve,25))
   expect(stopped).toBe(1)
+  expect(f.calls.some(args=>args.includes(CLOSE_DESKTOP))).toBe(false)
+})
+
+it('requests application shutdown before a planned container stop',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{});f.calls.splice(0)
+  await f.provider.stop(f.spec)
+  const close=f.calls.findIndex(args=>args.includes(CLOSE_DESKTOP)),stop=f.calls.findIndex(args=>args[0]==='stop')
+  expect(close).toBeGreaterThanOrEqual(0);expect(stop).toBeGreaterThan(close)
+  expect(f.calls[close]).toContain('1000:1000')
 })
 
 it('requires a guest stop acknowledgement for a cancelled command and preserves another holder',async()=>{
@@ -219,4 +229,68 @@ it('requires a guest stop acknowledgement for a cancelled command and preserves 
   acknowledge()
   expect(await execution).toMatchObject({code:'computer_cancelled'})
   expect(calls.some(args=>args[0]==='stop')).toBe(false)
+})
+it('retains a stopped legacy container when copying private data fails, then migrates on retry',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{})
+  f.detail.Mounts=f.detail.Mounts.filter((m:any)=>m.Destination==='/home/cua/workspace')
+  delete f.detail.Config.Labels['cn.samien.yaoyao.userdata']
+  await rm(join(f.home,'computer-userdata',f.spec.id),{recursive:true});await rm(join(f.home,'computer-userdata',f.spec.id)+'.required');f.calls.splice(0)
+  const broken=new ContainerComputerProvider('docker',f.provider.runnerId,f.home,async(runtime,args,options)=>{
+    if(args[0]==='cp')throw Object.assign(new Error('disk full'),{stderr:'private file detail'})
+    return f.run(runtime,args,options)
+  },{})
+  await expect(broken.remove(f.spec)).rejects.toThrow('原容器已保留')
+  expect(f.detail.State.Running).toBe(false)
+  expect(f.calls.some(args=>args[0]==='rm')).toBe(false)
+  const retry=new ContainerComputerProvider('docker',f.provider.runnerId,f.home,async(runtime,args,options)=>{
+    if(args[0]==='cp'&&args[1]?.endsWith('machine-id')){await writeFile(args[2]!, 'f'.repeat(32)+'\n');return {stdout:'',stderr:''}}
+    return f.run(runtime,args,options)
+  },{})
+  await retry.ensure(f.spec,()=>{})
+  expect(f.detail.State.Running).toBe(true)
+  expect(f.detail.Mounts.some((m:any)=>m.Destination==='/home/cua')).toBe(true)
+  expect(await (await import('node:fs/promises')).readFile(join(f.home,'computer-userdata',f.spec.id,'machine-id'),'utf8')).toBe('f'.repeat(32)+'\n')
+})
+it('keeps user data on remove and deletes it only with the explicit data deletion',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{})
+  const data=join(f.home,'computer-userdata',f.spec.id)
+  await writeFile(join(data,'home','authorization'),'fixture')
+  await f.provider.remove(f.spec)
+  expect(await (await import('node:fs/promises')).readFile(join(data,'home','authorization'),'utf8')).toBe('fixture')
+  await f.provider.ensure(f.spec,()=>{})
+  await expect(f.provider.deleteWorkspace(f.spec)).rejects.toMatchObject({code:'computer_busy'})
+  await f.provider.remove(f.spec);await f.provider.deleteWorkspace(f.spec)
+  await expect((await import('node:fs/promises')).lstat(data)).rejects.toMatchObject({code:'ENOENT'})
+})
+it('refuses replacing missing, linked or differently owned user profiles with an empty profile',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{});await f.provider.remove(f.spec)
+  const data=join(f.home,'computer-userdata',f.spec.id)
+  await writeFile(join(data,'identity.json'),JSON.stringify({protocol:1,environmentId:f.spec.id,owner:'different'}))
+  f.calls.splice(0)
+  await expect(f.provider.ensure(f.spec,()=>{})).rejects.toThrow('归属不匹配')
+  expect(f.calls.some(args=>args[0]==='create')).toBe(false)
+  await rm(data,{recursive:true});await symlink(f.home,data)
+  await expect(f.provider.ensure(f.spec,()=>{})).rejects.toThrow('目录不安全')
+})
+it('backs up the old image data before a different image can open application databases',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{})
+  const fs=await import('node:fs/promises'),data=join(f.home,'computer-userdata',f.spec.id),oldImage=f.spec.imageId
+  await writeFile(join(data,'home','authorization'),'old-image-credential')
+  await f.provider.remove(f.spec);f.spec.imageId='sha256:'+'c'.repeat(64)
+  await f.provider.ensure(f.spec,()=>{})
+  const backups=join(f.home,'computer-backups',f.spec.id),names=await fs.readdir(backups)
+  expect(names).toHaveLength(1)
+  const snapshot=join(backups,names[0]!)
+  expect(JSON.parse(await fs.readFile(join(snapshot,'snapshot.json'),'utf8')).imageId).toBe(oldImage)
+  expect(await fs.readFile(join(snapshot,'userdata','home','authorization'),'utf8')).toBe('old-image-credential')
+  await writeFile(join(data,'home','authorization'),'upgraded')
+  await f.provider.remove(f.spec);await f.provider.ensure(f.spec,()=>{})
+  expect(await fs.readdir(backups)).toEqual(names)
+  expect(await fs.readFile(join(snapshot,'userdata','home','authorization'),'utf8')).toBe('old-image-credential')
+})
+it('refuses to silently reseed a previously persisted environment after its data disappears',async()=>{
+  const f=await fixture();await f.provider.ensure(f.spec,()=>{});await f.provider.remove(f.spec)
+  await rm(join(f.home,'computer-userdata',f.spec.id),{recursive:true});f.calls.splice(0)
+  await expect(f.provider.ensure(f.spec,()=>{})).rejects.toThrow('用户资料缺失')
+  expect(f.calls.some(args=>args[0]==='create')).toBe(false)
 })

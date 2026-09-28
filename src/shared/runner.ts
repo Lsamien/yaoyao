@@ -11,7 +11,7 @@ export interface RunnerRecord {
 }
 export interface RunnerCommand {
   id: string
-  kind: 'browser.invoke' | 'local-vm.manage' | 'computer.control' | 'computer.retire' | 'http' | 'gateway.open' | 'gateway.rpc' | 'gateway.close' | 'lease.create' | 'lease.bind' | 'lease.close'
+  kind: 'network.configure' | 'network.test' | 'browser.invoke' | 'local-vm.manage' | 'computer.control' | 'computer.retire' | 'http' | 'gateway.open' | 'gateway.rpc' | 'gateway.close' | 'lease.create' | 'lease.bind' | 'lease.close'
   payload: Record<string, unknown>
   expiresAt: number
 }

@@ -57,6 +57,7 @@ export class ComputerControls {
     this.captures.set(meta.environmentId,pending);return pending
   }
   async take(meta:ComputerTarget,profile:string,id:string,check:()=>Promise<void>):Promise<ComputerControlStatus>{
+    this.runtime.assertNetworkReady()
     this.runtime.assertTarget(meta);await check()
     const old=this.state(meta)
     if(old){if(old.id===id)return this.status(meta);throw new HttpError(409,'电脑已由另一控制会话接管','computer_control_busy')}
@@ -71,12 +72,12 @@ export class ComputerControls {
       let spec=this.runtime.pool.definition(meta.ownerKey,meta.environmentId)
       if(!spec||resource?.status!=='active'){
         const resolved=await this.runtime.resolveWorkspace(profile);await check();this.guard(state)
-        spec={id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.runtime.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.runtime.config.network??'none'}
+        spec={id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.runtime.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.runtime.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.runtime.network}
         await this.runtime.pool.configure(spec,()=>this.guard(state))
       }
       state.spec=spec
       state.lease=await this.runtime.pool.acquire(spec,`human:${id}`,()=>this.guard(state))
-      if(this.runtime.config.network==='public-proxy')state.proxyHandle=await this.runtime.acquireProxy(spec,()=>{if(!this.runtime.pool.hasHolders(meta.ownerKey,meta.environmentId))throw new HttpError(410,'电脑控制权已结束','computer_control_expired')})
+      if(this.runtime.network!=='none')state.proxyHandle=await this.runtime.acquireProxy(spec,()=>{if(!this.runtime.pool.hasHolders(meta.ownerKey,meta.environmentId))throw new HttpError(410,'电脑控制权已结束','computer_control_expired')})
       await check();this.guard(state);state.mode='human'
     })().catch(async()=>{if(!state.valid)return;state.mode='error';state.error='接管未完成，请等待当前操作结束后重试';await this.stop(state).catch(()=>{})})
     return this.status(meta)
@@ -136,5 +137,6 @@ export class ComputerControls {
     })().catch(error=>{state.mode='error';state.error='电脑停止状态待确认';state.stopping=undefined;throw error})
     return state.stopping
   }
-  async close(){clearInterval(this.timer);await Promise.allSettled([...this.manual.values()].map(state=>this.stop(state)))}
+  async stopAll(){await Promise.all([...this.manual.values()].map(state=>this.stop(state)))}
+  async close(){clearInterval(this.timer);await this.stopAll().catch(()=>{})}
 }

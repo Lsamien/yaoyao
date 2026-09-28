@@ -20,11 +20,32 @@ const runnerBundle=()=>[resolve(dirname(fileURLToPath(import.meta.url)),'runner-
 const input = z.object({ name:z.string().trim().min(1).max(100),sourceNodeId:z.string().min(1).max(100).default('local'),
   allowedProfiles:z.array(z.string().min(1).max(100)).min(1).max(256) }).strict()
 interface Pending { command:RunnerCommand; resolve(value:any):void; reject(error:Error):void; timer:ReturnType<typeof setTimeout>; nextDelivery:number; valid():boolean }
-interface GatewayConnection { runnerId:string;computer?:{environmentId:string;ownerKey:string;agentId:string};cleanupOnly?:boolean;publishArtifact?:(name:string,bytes:Buffer)=>Promise<unknown>; valid():boolean; onEvent(frame:GatewayFrame):void; onDisconnect():void }
+interface GatewayConnection { taskEnvironment?:()=>import('../shared/executionEnvironment.js').TaskEnvironment; runnerId:string;computer?:{environmentId:string;ownerKey:string;agentId:string};cleanupOnly?:boolean;publishArtifact?:(name:string,bytes:Buffer)=>Promise<unknown>; valid():boolean; onEvent(frame:GatewayFrame):void; onDisconnect():void }
 interface Lease { runnerId:string; input:LeaseInput; calls:Map<string,{fingerprint:string;result:Promise<unknown>}> }
+
+// Only expose known diagnostics; arbitrary transport errors can contain credentials.
+function networkFailure(error:unknown,fallback:string){
+  if(!(error instanceof HttpError))return fallback
+  if(error.code==='computer_network_upgrade_required')return '缺少虚拟机网络网关，请在 Bot 设置 → 本地虚拟机中重新准备网络镜像；Compose 节点请更新网络网关'
+  if(error.code==='computer_network_cleanup_failed')return '旧网络任务未完成清理，请重试保存代理'
+  return fallback
+}
 
 /** Outbound-only machine transport. Browser auth and machine auth remain separate. */
 export class RunnerHub {
+  executionSettings?:import('./executionSettings.js').ExecutionSettings
+  private networkApplied=new Map<string,{revision:number;error?:string}>()
+  networkStatus(){return this.records().filter(r=>r.enabled).map(r=>{const s=this.summary(r),applied=this.networkApplied.get(r.id);return {id:r.id,name:r.name,online:s.online,status:!s.online?'离线':!s.features.includes('vm-egress-v1')?'需要更新 Runner':applied?.error?`未生效：${applied.error}`:applied?.revision===this.executionSettings?.proxy().revision?'已同步，启动时校验出口':'待更新'}})}
+  private networkSupported(id:string){return !this.executionSettings?.proxy().enabled||this.online.get(id)?.features.includes('vm-egress-v1')===true}
+  private networkCommandAllowed(id:string,kind:RunnerCommand['kind'],payload:Record<string,unknown>){return kind!=='computer.control'||this.networkSupported(id)||!(payload.op==='autostart'||payload.op==='take'||payload.op==='input'||payload.op==='lifecycle'&&!['stop','remove'].includes(String(payload.action)))}
+  async configureNetworks(){await Promise.all(this.records().filter(r=>r.enabled&&this.summary(r).online).map(async r=>{
+    if(!this.summary(r).features.includes('vm-egress-v1')){
+      if(!this.networkSupported(r.id))await Promise.all([...this.connections].filter(([,c])=>c.runnerId===r.id&&c.computer).map(async([id,c])=>{this.connections.delete(id);c.onDisconnect();await this.request(r.id,'gateway.close',{connectionId:id}).catch(()=>{})}))
+      return
+    }
+    try{const result=await this.request(r.id,'network.configure',{});this.networkApplied.set(r.id,{revision:result.revision})}catch(error){this.networkApplied.set(r.id,{revision:-1,error:networkFailure(error,'网络配置未生效，请检查执行节点后重试保存')})}
+  }))}
+  async testNetworks(){const nodes=this.records().filter(r=>r.enabled&&this.summary(r).online&&this.summary(r).features.includes('vm-egress-v1'));if(!nodes.length)throw new HttpError(409,'没有支持代理的在线执行节点','proxy_node_unavailable');return {nodes:await Promise.all(nodes.map(async r=>{try{await this.request(r.id,'network.test',{});return {id:r.id,name:r.name,ok:true}}catch(error){return {id:r.id,name:r.name,ok:false,error:networkFailure(error,'代理连接失败，请核对地址、认证和执行节点网络')}}}))}}
   composeDesktops=new ComposeDesktops([])
   get idleForUpdate(): boolean { return this.localVmActivity.size === 0 && [...this.pending.values()].every(commands => commands.size === 0) && [...this.artifacts.values()].every(upload => upload.result !== undefined) }
   private localVmActivity = new Map<string, { owner: string; runnerId: string }>()
@@ -103,6 +124,7 @@ export class RunnerHub {
   }
   private request(id:string,kind:RunnerCommand['kind'],payload:Record<string,unknown>,valid:()=>boolean=()=>true):Promise<any> {
     if(!this.online.has(id))return Promise.reject(new HttpError(503,'执行节点未连接','runner_offline'))
+    if(!this.networkCommandAllowed(id,kind,payload))return Promise.reject(new HttpError(409,'全局代理需要新版 Runner，请更新后操作虚拟机','proxy_runner_required'))
     const queue=this.pending.get(id)??new Map<string,Pending>();this.pending.set(id,queue)
     if(queue.size>=64)return Promise.reject(new HttpError(429,'执行节点请求过多','runner_busy'))
     // Allow Hermes' 60-second binding budget plus transport overhead.
@@ -154,11 +176,14 @@ export class RunnerHub {
       runner:{id:record.id,computer:!!computer,hermesComputer:!!computer&&this.online.get(record.id)?.features.includes('hermes-computer-v2')===true,helperRetirement:this.online.get(record.id)?.features.includes('helper-retirement-v1')===true,fileTransfer:this.online.get(record.id)?.features.includes('file-transfer-v1')===true,
         open:async(onEvent,onDisconnect,scope)=>{
           requireComputer()
+          if(computer&&!scope?.cleanupOnly&&!this.networkSupported(record.id))throw new HttpError(409,'全局代理需要新版 Runner，请更新后使用虚拟机','proxy_runner_required')
+          if(scope?.taskEnvironment&&!this.online.get(record.id)?.features.includes('execution-context-v1'))throw new HttpError(409,'请更新 Runner 以提供系统环境与授权','execution_runner_required')
           if(computer&&!scope)throw new HttpError(403,'隔离执行缺少任务授权','computer_scope_required')
           const version=this.auth.pushAuthorizationVersion(owner)
           const valid=()=>{
             try{
               scope?.authorize()
+              if(computer&&!scope?.cleanupOnly&&!this.networkSupported(record.id))return false
               if(computer&&!scope?.cleanupOnly){
                 const agent=this.store.get<import('../shared/workspace.js').WorkspaceAgent>(owner,'agent',computer.agentId)
                 if(!agent)return false
@@ -170,7 +195,7 @@ export class RunnerHub {
               return (scope?.cleanupOnly||(this.auth.isUserActive(owner)&&this.auth.pushAuthorizationVersion(owner)===version))&&this.store.get<RunnerRecord>('_system','runner',record.id)?.enabled===true
             }catch{return false}
           }
-          const id=randomUUID();this.connections.set(id,{runnerId:record.id,computer,valid,onEvent,onDisconnect,publishArtifact:scope?.publishArtifact,cleanupOnly:scope?.cleanupOnly})
+          const id=randomUUID();this.connections.set(id,{runnerId:record.id,computer,valid,onEvent,onDisconnect,taskEnvironment:scope?.taskEnvironment,publishArtifact:scope?.publishArtifact,cleanupOnly:scope?.cleanupOnly})
           try {await this.request(record.id,'gateway.open',{connectionId:id,computer,workId:scope?.workId,cleanupOnly:scope?.cleanupOnly})} catch(error){this.connections.delete(id);void this.request(record.id,'gateway.close',{connectionId:id}).catch(()=>{});throw error}
           let closed=false
           return {rpc:async(method,params)=>{
@@ -188,14 +213,16 @@ export class RunnerHub {
           }}
         },
         lease:async(options)=>{
-          requireComputer();requireProfile(options.profile);options.assertActive()
+          requireComputer()
+          requireProfile(options.profile);options.assertActive()
+          if(options.computerPolicy&&['none','virtual'].includes(options.computerPolicy.mode)&&!this.online.get(record.id)?.features.includes('execution-context-v1'))throw new HttpError(409,'请更新 Runner 以执行环境限制','execution_runner_required')
           if(options.workspaceMemory&&!this.online.get(record.id)?.features.includes('workspace-memory-bind-v1'))throw new HttpError(409,'请更新配套 Runner，以支持工具桥会话的独立记忆。','workspace_memory_runner_required')
           const id=randomUUID();this.leases.set(id,{runnerId:record.id,input:options,calls:new Map()})
           let disposed=false
           const dispose=async()=>{if(disposed)return;disposed=true;this.leases.delete(id);options.signal.removeEventListener('abort',abort);await this.request(record.id,'lease.close',{leaseId:id}).catch(()=>{})}
           const abort=()=>{void dispose()};options.signal.addEventListener('abort',abort,{once:true})
           try {
-            await this.request(record.id,'lease.create',{leaseId:id,profile:options.profile,workId:options.workId,session:options.session(),catalog:options.catalog(),workspaceMemory:options.workspaceMemory===true})
+            await this.request(record.id,'lease.create',{leaseId:id,profile:options.profile,workId:options.workId,session:options.session(),catalog:options.catalog(),workspaceMemory:options.workspaceMemory===true,computerPolicy:options.computerPolicy})
             options.assertActive()
             if(options.signal.aborted)throw new Error('执行已停止')
             return {bind:async()=>{options.assertActive();await this.request(record.id,'lease.bind',{leaseId:id,session:options.session()});options.assertActive()},dispose} satisfies WorkspaceToolLease
@@ -263,7 +290,7 @@ export class RunnerHub {
   }
   middleware():Koa.Middleware {
     return async(ctx,next)=>{
-      const match=/^\/api\/runner\/v1\/([0-9a-f-]{36})\/(poll|admit|result|event|tool|check|artifact|control-check|local-vm-check|browser-check|desktop)$/.exec(ctx.path)
+      const match=/^\/api\/runner\/v1\/([0-9a-f-]{36})\/(poll|admit|result|event|tool|check|artifact|control-check|local-vm-check|browser-check|desktop|execution-context|network-settings)$/.exec(ctx.path)
       if(!match)return next()
       const record=this.store.get<RunnerRecord>('_system','runner',match[1]!),token=ctx.get('authorization').replace(/^Bearer /,'')
       if(ctx.get('origin')||!record?.enabled||!ctx.get('authorization').startsWith('Bearer ')||!timingSafeEqual(Buffer.from(record.tokenHash),Buffer.from(hash(token))))
@@ -280,7 +307,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['execution-context-v1','vm-egress-v1','workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')
@@ -301,22 +328,25 @@ export class RunnerHub {
       let body:any
       try {body=JSON.parse(Buffer.concat(chunks).toString())}catch{throw new HttpError(400,'JSON 无效','invalid_json')}
       if(!body||typeof body!=='object'||Array.isArray(body))throw new HttpError(400,'请求必须是对象','invalid_json')
+      if(match[2]==='network-settings'){if(Number.isInteger(body.appliedRevision)&&body.appliedRevision===this.executionSettings?.proxy().revision)this.networkApplied.set(record.id,{revision:body.appliedRevision});ctx.set('Cache-Control','no-store');ctx.body={proxy:this.executionSettings?.proxy()};return}
+      if(match[2]==='execution-context'){const connection=this.connections.get(String(body.connectionId));if(!connection?.computer||connection.runnerId!==record.id||!connection.valid())throw new HttpError(403,'任务环境授权已结束','execution_grant_revoked');ctx.set('Cache-Control','no-store');ctx.body={environment:connection.taskEnvironment?.()};return}
       if(match[2]==='desktop'){
         if(record.sourceNodeId!=='local'||record.sourceOwner!=='_system'||!state.features.includes('compose-desktops-v1'))throw new HttpError(403,'该节点不能访问 Compose 桌面','compose_desktop_forbidden')
-        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute','cancel','skills-install']),ownerKey:z.string().optional()}).passthrough(),body)
+        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute','cancel','skills-install','network-open','network-exchange','network-close','network-health']),ownerKey:z.string().optional()}).passthrough(),body)
         if(operation==='list'){ctx.body=await this.composeDesktops.status();return}
+        if(operation==='network-health'){ctx.body=await this.composeDesktops.call(id,operation);return}
         const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',id)
         if(!claim||claim.runnerId!==record.id||hash(claim.owner)!==ownerKey)throw new HttpError(403,'没有该共享桌面的使用权限','compose_desktop_forbidden')
         const valid=()=>this.auth.isUserActive(claim.owner)&&this.store.list<import('../shared/workspace.js').WorkspaceAgent>(claim.owner,'agent').some(a=>!a.archived&&a.computerEnvironmentId===id&&this.auth.canUseSource(claim.owner,a.nodeId,a.profile))
         const active=()=>[...this.connections.values()].some(c=>c.runnerId===record.id&&c.computer?.environmentId===id&&c.computer.ownerKey===ownerKey&&c.valid())||this.store.list<any>('_system','computer-control').some(g=>g.owner===claim.owner&&g.runnerId===record.id&&g.environmentId===id&&this.controlAllowed(g.id,record.id))
-        if(!['release','cancel'].includes(operation)&&(!valid()||(!['health','frame'].includes(operation)&&!active())))throw new HttpError(403,'桌面操作缺少当前任务或接管授权','compose_desktop_forbidden')
+        if(!['release','cancel','network-close'].includes(operation)&&(!valid()||(!['health','frame'].includes(operation)&&!active())))throw new HttpError(403,'桌面操作缺少当前任务或接管授权','compose_desktop_forbidden')
         const result=await this.composeDesktops.call(id,operation,{...payload,owner:ownerKey})
         if(operation==='acquire'&&(!valid()||!active())){await this.composeDesktops.call(id,'release',{...result,cancel:true}).catch(()=>{});throw new HttpError(410,'桌面操作已取消','computer_control_expired')}
         ctx.body=result;return
       }
       if(match[2]==='browser-check'){ctx.body={allowed:state.features.some(feature=>['managed-browser-v1','managed-browser-setup-v1'].includes(feature))&&this.browserAllowed(record.id,body.scope,typeof body.grantId==='string'?body.grantId:undefined)};return}
       if(match[2]==='local-vm-check'){ctx.body={allowed:typeof body.id==='string'&&this.localVmAllowed(body.id,record.id)};return}
-      if(match[2]==='control-check'){ctx.body={allowed:typeof body.controlId==='string'&&this.controlAllowed(body.controlId,record.id)};return}
+      if(match[2]==='control-check'){ctx.body={allowed:this.networkSupported(record.id)&&typeof body.controlId==='string'&&this.controlAllowed(body.controlId,record.id)};return}
       if(match[2]==='artifact'){
         const value=parse(z.object({connectionId:z.string().uuid(),id:z.string().uuid(),phase:z.enum(['begin','append','finish']),name:z.string().min(1).max(240).optional(),size:z.number().int().min(0).max(25*1024*1024).optional(),digest:z.string().regex(/^[a-f0-9]{64}$/).optional(),index:z.number().int().min(0).optional(),data:z.string().max(1024*1024).optional()}).strict(),body)
         const connection=this.connections.get(value.connectionId)
@@ -349,7 +379,7 @@ export class RunnerHub {
       if(match[2]==='check'){const connection=this.connections.get(body.connectionId);ctx.body={allowed:connection?.runnerId===record.id&&connection.valid(),fileTransferMaxBytes:readHostTools(this.store.home).fileTransferMaxMiB*1024*1024};return}
       if(match[2]==='admit') {
         const pending=this.pending.get(record.id)?.get(body.id),command=pending?.command
-        let allowed=!!command&&command.expiresAt>Date.now()&&pending!.valid()
+        let allowed=!!command&&command.expiresAt>Date.now()&&pending!.valid()&&this.networkCommandAllowed(record.id,command.kind,command.payload)
         if(command?.kind==='gateway.rpc'||command?.kind==='gateway.open'){const connection=this.connections.get(String(command.payload.connectionId));allowed&&=connection?.runnerId===record.id&&(command.kind==='gateway.rpc'&&['session.interrupt','session.close'].includes(String(command.payload.method))||connection.valid())}
         if(command?.kind==='lease.create'||command?.kind==='lease.bind') {
           const lease=this.leases.get(String(command.payload.leaseId))

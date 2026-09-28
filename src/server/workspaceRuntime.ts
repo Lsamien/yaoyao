@@ -1,3 +1,5 @@
+import type {ExecutionSettings} from './executionSettings.js'
+import {isLocalAuthorizationTarget} from './loopbackAuthorization.js'
 import {type ManagedBrowsers,type BrowserTurn} from './managedBrowsers.js'
 import {ToolOperationJournal} from './toolOperationJournal.js'
 import {browserOwnedFile,browserVmFile} from './browserFiles.js'
@@ -42,6 +44,7 @@ import { WorkspaceScheduler, type Work, NO_REPLY, HOST_FALLBACK, WORKSPACE_CONCU
 import type { WorkspacePlugins, OpenBotPlugins } from './botPlugins/workspacePlugins.js'
 import { mentionedAgents } from './workspaceMentions.js'
 import { WorkspaceTeamTools, TEAM_TOOL_RULES } from './workspaceTeamTools.js'
+import { WorkspaceRoutineTools, ROUTINE_TOOL_RULES } from './workspaceRoutineTools.js'
 import { createWorkspaceToolLease, type WorkspaceToolLease } from './workspaceToolLease.js'
 import { WorkspaceTaskCoordinator } from './taskCoordinator.js'
 import { isDiscussion, discussionRounds } from './workspaceDiscussion.js'
@@ -54,6 +57,8 @@ export { mentionedAgents } from './workspaceMentions.js'
 type Run = WorkspaceRun
 
 export interface WorkspaceBinding {
+  executionRevision?:number
+  executionPolicyVersion?:number
   memoryVersion?: string
   memoryState?: MemoryContextState
   memoryPending?: boolean
@@ -112,6 +117,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   readonly collaboration: WorkspaceCollaboration
   readonly knowledgeTools: WorkspaceKnowledgeTools
   onMemoryCandidate: (owner: string, run: Run) => void = () => {}
+  private executionTurns=new Map<string,{agentId:string;mode:import('../shared/executionEnvironment.js').ExecutionMode;revision:number}>()
+  activeExecutionTurns(){return [...this.executionTurns.values()]}
+  executionSettings?:ExecutionSettings
   plugins?: WorkspacePlugins
   managedBrowsers?:ManagedBrowsers
   private operationJournal:ToolOperationJournal
@@ -126,6 +134,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   inspector?:import('./workspaceInspector.js').WorkspaceInspector
   private live = new Map<string, LiveTurn>()
   readonly teamTools: WorkspaceTeamTools
+  routineTools?: WorkspaceRoutineTools
   readonly tasks: WorkspaceTaskCoordinator
   retireHelper:(owner:string,helper:Agent)=>Promise<void>=async()=>{throw new Error('电脑清理服务未连接')}
   publishArtifact:(owner:string,message:Message,agent:Agent,name:string,bytes:Buffer)=>import('../shared/workspace.js').WorkspaceFile=()=>{throw new Error('产物服务未初始化')}
@@ -313,6 +322,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const key = this.bindingKey(c.id, run.conversationTaskId, agent.id),
       chatExecution = 'profile',
       target = this.nodes.target(owner, agent.nodeId)
+    const execution=this.executionSettings?.selection()
+    const systemTurn=this.executionSettings?.openTurn(owner,agent.id)
     let vmTools: VmToolSession | undefined
     let browserTurn:BrowserTurn|undefined
     const gateway = new WorkspaceGateway(target,{workId:run.id,publishArtifact:async(name,bytes)=>{
@@ -348,7 +359,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       : undefined
     const sourceReset = !!this.store.get(owner,'binding-reset',key)
     const movedRunner=sourceReset||!!binding&&(binding.runnerId!==target.runner?.id||(binding.execution??'profile')!==chatExecution||!!binding.hermesComputer!==!!target.runner?.hermesComputer)
-    const resetReason = memoryReset ?? (sourceReset ? 'source_changed' : movedRunner ? 'runner_changed' : undefined)
+    // Rebuild old exclusive-environment sessions once: their Hermes Agent may
+    // still retain restricted native context even after a new tool binding.
+    const resetReason = (execution&&(binding?.executionRevision!==execution.revision||binding?.executionPolicyVersion!==2)?'execution_environment_changed':undefined) ?? memoryReset ?? (sourceReset ? 'source_changed' : movedRunner ? 'runner_changed' : undefined)
     if(resetReason) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
       this.inspector?.record(owner, c.id, { method: 'bot.session-reset', direction: 'event', agentId: agent.id, runId: run.runId, taskId: run.conversationTaskId,
@@ -407,7 +420,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     })
     // Register rejection immediately; setup RPCs can still be awaiting a reply.
     void completion.catch(() => {})
-    const finish = (error?: Error) => {
+    const finish = async (error?: Error) => {
       if (settled) return
       settled = true
       // End browser task authority before aborting the shared tool lease. A
@@ -421,7 +434,14 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       clearTimeout(flushTimer)
       flushTimer = undefined
       this.live.delete(key)
+      this.executionTurns.delete(run.id)
       try {
+        // Retention requires the still-active work grant. Complete the VM
+        // channel before persisting terminal status or ending system resources.
+        if(!error&&vmTools)try{await vmTools.complete()}catch(failure){
+          resultMessage.serviceWarnings??=[]
+          resultMessage.serviceWarnings.push({service:'虚拟机',code:'computer_completion_failed',message:`虚拟机未能保留运行：${failure instanceof Error?failure.message:'执行节点收尾失败'}`.slice(0,1000)})
+        }
         const current = this.getWork(owner, run.id)
         if (current.cancelRequested && current.status === 'interrupted') {
           resultMessage.status = 'interrupted'
@@ -777,10 +797,13 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         runId: run.runId,
         conversationTaskId: run.conversationTaskId,
         taskId: run.id,
+        executionRevision:execution?.revision,
+        executionPolicyVersion:execution?2:undefined,
         contextSeq: binding?.contextSeq ?? 0,
         messageId: resultMessage.id,
       }
       this.store.put(owner, 'binding', key, binding)
+      if(execution)this.executionTurns.set(run.id,{agentId:agent.id,mode:execution.mode,revision:execution.revision})
       this.live.set(key, { gateway, runtimeId, runId: run.runId, conversationTaskId: run.conversationTaskId, taskId: run.id, agentId: agent.id, done: finish })
       if (this.closing || this.getWork(owner, run.id).cancelRequested || this.getWork(owner, run.id).status === 'interrupted')
         throw new Error('运行已停止')
@@ -800,12 +823,13 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const globals=globalComputers(this.store.home)
         const desktopSnapshot=this.desktopEnvironments?.snapshot(owner,agent,root.deviceHost,{script:globals.scriptMachine,server:globals.serverComputer,maxMiB:globals.fileTransferMaxMiB})
           ??{capturedAt:Date.now(),sourceHost:root.deviceHost,hosts:[]}
-        const environment=buildWorkspaceEnvironment({agent,globals,desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent),managedBrowser:this.managedBrowsers?.available(owner,agent)})
+        const environment=buildWorkspaceEnvironment({agent,globals,execution,serverDesktop:agent.nodeId==='local'&&isLocalAuthorizationTarget(target.url),desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent),managedBrowser:this.managedBrowsers?.available(owner,agent)})
         const {cloud,plugins,vm:dispatchedVm}=environment.tools
         const desktop=environment.tools.desktopView||environment.tools.desktopFile
-        const desktopEpochs=Object.fromEntries(desktopSnapshot.hosts.map(host=>[host.id,host.epoch??'']))
+        const desktopEpochs=Object.fromEntries(environment.desktop.hosts.map(host=>[host.id,host.epoch??'']))
         const environmentCatalog=workspaceEnvironmentTools(environment)
         const knowledge = botCapabilities.tools && !agent.remoteAgentId
+        const routines = botCapabilities.tools && !agent.temporaryGoalId && !agent.remoteAgentId && !!this.routineTools
         const vmHolder:{session?:VmToolSession}={}
         const requireVm=()=>{if(!globalComputers(this.store.home).vm)throw new HttpError(403,'全局设置未开放虚拟机。','computer_disabled')}
         const callVm=async(name:string,args:unknown,callId?:string)=>{
@@ -813,7 +837,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           if(!vmHolder.session){
             const vmTarget=this.nodes.targetForAgent(owner,{...agent,execution:'computer'})
             vmHolder.session=new VmToolSession(vmTarget,agent.profile,run.id,()=>{
-              requireVm();this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
+              systemTurn?.check();requireVm();this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,agent)
               const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id),conversation=this.store.require<Conversation>(owner,'conversation',c.id)
               if(this.closing||conversation.archived||!this.store.taskMemberIds(owner,conversation,run.conversationTaskId).includes(agent.id)||this.store.require<Run>(owner,'run',run.runId).stopRequested||current.cancelRequested||['interrupted','complete','failed'].includes(current.status)||latest.archived||latest.computerEnvironmentId!==agent.computerEnvironmentId)throw new HttpError(403,'本轮机器人或任务授权已结束','run_authorization_revoked')
             },async(name,bytes)=>{
@@ -822,18 +846,18 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
               if(!resultMessage.attachments.some(item=>item.id===file.id))resultMessage.attachments.push(file)
               this.store.saveMessage(owner,resultMessage)
               return {...file,url:`/api/app/files/${file.id}/download`}
-            })
+            },systemTurn?()=>systemTurn.vmTaskEnvironment():undefined)
             vmTools=vmHolder.session
           }
           return name==='__file_transfer'?vmHolder.session.transfer(args as Record<string,unknown>):vmHolder.session.call(name,args,callId)
         }
-        if(team||cloud||desktop||plugins||knowledge||dispatchedVm||environment.tools.managedBrowser){
+        if(team||cloud||desktop||plugins||knowledge||routines||dispatchedVm||environment.tools.managedBrowser||(execution&&botCapabilities.tools)){
           if(team){const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)}
           if(desktop)await this.desktopEnvironments!.requireAvailable(owner,agent,target)
           if(cloud)await this.cloud!.requireAvailable(owner,agent,target)
           const assertActive=()=>{
             if(settled||this.closing||toolController.signal.aborted)throw new HttpError(410,'本轮运行已结束，请发起新一轮对话后重试。','run_finished')
-            this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,this.store.require<Agent>(owner,'agent',agent.id))
+            systemTurn?.check();this.requireAuthorization(owner,run.runId);this.nodes.requireSource(owner,this.store.require<Agent>(owner,'agent',agent.id))
             if(team)this.teamTools.assertTurn(owner,run.id)
             if(plugins){const current=this.getWork(owner,run.id),latest=this.store.require<Agent>(owner,'agent',agent.id);if(current.cancelRequested||this.store.require<Run>(owner,'run',run.runId).stopRequested||latest.archived||!['running','waiting'].includes(current.status))throw new HttpError(403,'本轮插件授权已结束','plugin_grant_revoked')}
           }
@@ -845,10 +869,15 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           toolLease=await createWorkspaceToolLease({
             target,profile:agent.profile,workId:run.id,signal:toolController.signal,
             workspaceMemory:botCapabilities.memory,
+            // Native tools retain the Profile's permissions independently of
+            // the preferred target. Each dispatched environment checks its grants.
+            ...(execution?{computerPolicy:{mode:'profile',hostAccess:true}}:{}),
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
-            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...environmentCatalog,...(pluginLease?.catalog()??[])],
+            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(routines?this.routineTools!.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...environmentCatalog,...(systemTurn?.catalog()??[]),...(pluginLease?.catalog()??[])],
             call:async(toolId,args,callId)=>{
               assertActive()
+              if(toolId==='yaoyao_service_request'&&systemTurn)return systemTurn.call(args,toolController.signal)
+              if(this.routineTools?.handles(toolId)) return this.routineTools.call(owner,run.id,toolId,args)
               if(toolId.startsWith('managed_browser_')&&environment.tools.managedBrowser&&this.managedBrowsers){
                 browserTurn??=this.managedBrowsers.openTurn(owner,agent,{workId:run.id,signal:toolController.signal,authorize:assertActive,
                   onCard:card=>{
@@ -941,10 +970,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             run: this.store.require<Run>(owner, 'run', run.runId), goal,
             environment, pluginServices, pluginWarnings:resultMessage.serviceWarnings,
             teamRules: team ? TEAM_TOOL_RULES : undefined,
+            routineRules: routines ? ROUTINE_TOOL_RULES : undefined,
             knowledgeRules: knowledge ? BOT_KNOWLEDGE_RULES : undefined,
             memory: memoryDelta(memory, binding.memoryState), noReply: NO_REPLY,
             marker: `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
-            content: text, contentKind: c.kind === 'group' || !!resetReason ? 'history' : 'user', attachmentRefs,
+            content: text+(systemTurn?.description.length?'\n[本轮系统服务目录，仅含元数据]\n'+JSON.stringify(systemTurn.description):''), contentKind: c.kind === 'group' || !!resetReason ? 'history' : 'user', attachmentRefs,
           })
           this.inspector?.record(owner,c.id,{method:'bot.environment',direction:'request',agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId,
             data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id),pluginServices,pluginWarnings:resultMessage.serviceWarnings}})

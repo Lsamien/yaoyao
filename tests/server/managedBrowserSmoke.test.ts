@@ -19,6 +19,7 @@ import {ManagedBrowsers,type BrowserTurn} from '../../src/server/managedBrowsers
 import {HttpError} from '../../src/server/errors'
 import {UpstreamClient} from '../../src/server/upstream'
 import {UploadStore} from '../../src/server/uploads'
+import {ExecutionSettings} from '../../src/server/executionSettings'
 import {WorkspaceRuntime} from '../../src/server/workspaceRuntime'
 import type {RunnerConfiguration} from '../../src/shared/runner'
 import type {WorkspaceConversation,WorkspaceMessage,WorkspaceRun} from '../../src/shared/workspace'
@@ -93,6 +94,11 @@ it.skipIf(process.env.YAOYAO_BROWSER_SMOKE!=='1')('upgrades a legacy Runner with
     const credentials={controlId:taken.controlId,token:taken.token}
     const frame=await ui(base+'/computer/frame?backend=managed-browser')
     expect(frame).toMatchObject({generation:taken.generation,width:1280,height:800})
+    const dragFrame={...credentials,generation:frame.generation,frameId:frame.id},gestureId=randomUUID()
+    for(const phase of ['start','move','end'])await ui(base+'/computer/input?backend=managed-browser',{...dragFrame,requestId:randomUUID(),action:{kind:'pointer',phase,gestureId,x:120,y:180}})
+    const nextFrame=await ui(base+'/computer/frame?backend=managed-browser')
+    await ui(base+'/computer/input?backend=managed-browser',{...dragFrame,frameId:nextFrame.id,requestId:randomUUID(),action:{kind:'drag',fromX:10,fromY:20,toX:120,toY:180}})
+    frame.id=(await ui(base+'/computer/frame?backend=managed-browser')).id
     await ui(base+'/computer/input?backend=managed-browser',{...credentials,requestId:randomUUID(),generation:frame.generation,frameId:frame.id,action:{kind:'key',key:'Tab'}})
     let completed=false
     const waiting=task.call('managed_browser_state',{},'state-after').finally(()=>{completed=true})
@@ -152,7 +158,7 @@ it.skipIf(process.env.YAOYAO_BROWSER_SMOKE!=='1')('persists live Bot browser car
     let body='';for await(const part of req)body+=part
     const payload=body?JSON.parse(body):{},path=new URL(req.url!,'http://fixture').pathname
     if(path.endsWith('/bind'))bindings.push(payload)
-    const result=path==='/api/auth/ws-ticket'?{ticket:'fixture'}:path.endsWith('/capabilities')?{version:1,ready:true,in_process:true,native_tools:true}:path==='/api/profiles'?{profiles:[{name:'default'}]}:{ok:true,native_tools:true,terminal:{cwd:home}}
+    const result=path==='/api/auth/ws-ticket'?{ticket:'fixture'}:path.endsWith('/capabilities')?{version:1,ready:true,in_process:true,native_tools:true}:path==='/api/profiles'?{profiles:[{name:'default'}]}:{ok:true,native_tools:true,computer_runtime_version:2,terminal:{cwd:home}}
     res.setHeader('Content-Type','application/json');res.end(JSON.stringify(result))
   })
   const hermesURL=await listen(hermes),ws=new WebSocketServer({server:hermes})
@@ -175,6 +181,8 @@ it.skipIf(process.env.YAOYAO_BROWSER_SMOKE!=='1')('persists live Bot browser car
   nodes.sourceAllowed=()=>auth.canUseSource()
   const hub=new RunnerHub(store,auth,target),service=new ManagedBrowsers(store,auth,nodes,hub),runtime=new WorkspaceRuntime(store,nodes,uploads,()=>auth.isUserActive(),()=>auth.version)
   runtime.managedBrowsers=service
+  runtime.executionSettings=new ExecutionSettings(store,nodes,auth)
+  runtime.executionSettings.saveSelection({mode:'server',revision:1})
   hub.browserAllowed=(runnerId,scope,grantId)=>service.allowed(runnerId,scope,grantId)
   nodes.runnerTarget=(owner,nodeId,computer)=>hub.target(owner,nodeId,computer)
   const stopObserving=store.observe((_owner,event)=>{if(event.type==='message.changed')messages.push(structuredClone(event.data as WorkspaceMessage))})
@@ -212,6 +220,7 @@ it.skipIf(process.env.YAOYAO_BROWSER_SMOKE!=='1')('persists live Bot browser car
     rootRun=runtime.send('owner',conversation.id,{requestId:randomUUID(),content:'打开网页，等待我接管，然后继续原任务。'})
     await vi.waitFor(()=>expect(rpc.some(call=>call.method==='prompt.submit')).toBe(true),{timeout:10000})
     expect(bindings).toHaveLength(1)
+    expect(rpc.find(call=>call.method==='prompt.submit')?.params.text).toContain('默认使用 managed_browser_open')
     expect((await bridge('/tools/list',{},'invalid-token')).status).toBe(401)
     const catalog=await bridge('/tools/list',{})
     expect(catalog.status).toBe(200)

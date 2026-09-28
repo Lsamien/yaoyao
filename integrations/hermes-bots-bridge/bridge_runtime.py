@@ -116,7 +116,18 @@ def _refresh_agent_tools(agent, binding):
         reset_hermes_home_override(context)
 
 
+def _hermes_cron_tool(tool_name):
+    name = str(tool_name or "")
+    return name in {"cron", "cronjob"} or name.startswith(("cron_", "cronjob_"))
+
+
+def _block_hermes_cron():
+    return {"action": "block", "message": "此 Bot 的定时任务使用 workspace_list_routines、workspace_create_routine、workspace_update_routine 和 workspace_delete_routine。不要使用 Hermes cron。到点后在该 Bot 的单聊中执行。"}
+
+
 def _refresh_profile_agent_tools(agent, binding):
+    # Bot sessions keep their own routines. Hermes cron stays available to ordinary profile chat.
+    agent.disabled_toolsets = list(dict.fromkeys([*(getattr(agent, "disabled_toolsets", None) or []), "cron", "cronjob"]))
     if binding.workspace_memory:
         _isolate_profile_memory(agent, binding)
     _isolate_profile_context(agent, binding)
@@ -373,7 +384,7 @@ def capabilities(profile: str = "default") -> dict:
             if not {"yaoyao_tools", "yaoyao_call"} <= names:
                 raise BridgeError(f"Profile {profile} 尚未安装或启用夭夭工具桥，请检查该 Profile 的插件与工具集设置", 503, "profile_tools_unavailable")
             return {"version": VERSION, "ready": True, "in_process": True, "profile": profile, "native_tools": True,
-                    "computer_runtime_version": 2, "plugin_version": PLUGIN_VERSION, "plugin_fingerprint": PLUGIN_FINGERPRINT,
+                    "computer_runtime_version": 2, "execution_policy_version": 1, "plugin_version": PLUGIN_VERSION, "plugin_fingerprint": PLUGIN_FINGERPRINT,
                     "memory_isolation": True, "memory_isolation_transport": "bridge-bind-v1", "memory_extraction": True,
                     "isolated_context_files": True, "skill_learning": True, "model_settings_version": 1, "file_transfer_version": 1}
         finally:
@@ -497,7 +508,7 @@ def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dic
         raise BridgeError("记忆隔离设置格式无效", 400, "invalid_memory_policy")
     policy = body.get("computer_policy")
     if policy is not None and (not isinstance(policy, dict) or set(policy) != {"mode", "hostAccess"}
-                               or policy.get("mode") not in {"isolated", "profile"}
+                               or policy.get("mode") not in {"isolated", "profile", "none", "virtual"}
                                or type(policy.get("hostAccess")) is not bool):
         raise BridgeError("电脑会话权限格式无效", 400, "invalid_computer_policy")
     server = _server()
@@ -566,7 +577,7 @@ def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dic
             current.expires_at = max(current.expires_at, expiry)
             current.stored_session_id = stored
             return {"ok": True, "generation": generation, "expires_at": current.expires_at,
-                    "native_tools": bool(current.toolset), "computer_runtime_version": 2, "workspace_memory": current.workspace_memory}
+                    "native_tools": bool(current.toolset), "computer_runtime_version": 2, "execution_policy_version": 1, "workspace_memory": current.workspace_memory}
         previous = _generations.get(sid)
         seen = previous[1] if previous and previous[0] is session else set()
         if generation in seen:
@@ -601,7 +612,7 @@ def bind(owner: tuple[str, str], body: dict, *, wait_seconds: float = 20) -> dic
                 _retire(binding)
                 raise
         return {"ok": True, "generation": generation, "expires_at": expiry, "native_tools": bool(binding.toolset),
-                "computer_runtime_version": 2, "workspace_memory": binding.workspace_memory}
+                "computer_runtime_version": 2, "execution_policy_version": 1, "workspace_memory": binding.workspace_memory}
 
 
 def unbind(owner: tuple[str, str], body: dict) -> dict:
@@ -852,7 +863,7 @@ def _isolate_profile_context(agent, binding):
     Apply on every bind/rebuild, including inherited children, before the model
     runs. Skills have their own loader; history and Profile config stay intact.
     """
-    if (binding.computer_policy or {}).get("mode") != "isolated":
+    if (binding.computer_policy or {}).get("mode") not in {"isolated", "none", "virtual"}:
         return
     invalidate = getattr(agent, "_invalidate_system_prompt", None)
     if not all(hasattr(agent, name) for name in ("skip_context_files", "load_soul_identity")) or not callable(invalidate):
@@ -934,6 +945,8 @@ class _SkillReviewParent:
 
 def _enable_skill_review(agent, binding):
     """Use Hermes' native trigger/queue/review, while allowing skills only."""
+    if (binding.computer_policy or {}).get("mode") in {"none", "virtual"}:
+        return  # Background review must not write skills into the unselected host.
     native = getattr(agent, "_spawn_background_review_now", None)
     required = ("skip_context_files", "load_soul_identity", "_background_review_agent", "_background_review_run")
     if (not all(hasattr(agent, name) for name in required) or not callable(native)
@@ -981,6 +994,13 @@ def computer_directive(session_id=None, tool_name=None, args=None, **kwargs):
     scope = _skill_review_scope.get()
     if scope is not None:
         return _skill_review_directive(scope, session_id, tool_name)
+    if _hermes_cron_tool(tool_name):
+        try:
+            _resolve(session_id)
+        except BridgeError:
+            pass
+        else:
+            return _block_hermes_cron()
     try:
         server = _server()
     except BridgeError:
@@ -1005,6 +1025,13 @@ def computer_directive(session_id=None, tool_name=None, args=None, **kwargs):
         return {"action": "block", "message": "此 Bot 使用独立记忆，请使用本轮授权的 workspace 记忆工具。"}
     if not policy:
         return None if binding.workspace_memory else {"action": "block", "message": "当前轮次缺少电脑权限声明。"}
+    if policy["mode"] in {"none", "virtual"}:
+        # Unknown native tools are denied too. A newly installed plugin must not
+        # regain access to Profile credentials or launch unrestricted children.
+        dynamic = tool_name in binding.native_names
+        if dynamic or tool_name in {"skills_list", "skill_view"}:
+            return None
+        return {"action": "block", "message": "系统未选择服务器本机，请使用本轮授权的虚拟环境或系统服务工具。"}
     if policy["mode"] == "profile" or policy["hostAccess"]:
         return None
     # Skill discovery, vision, and authenticated services retain the Profile's
@@ -1028,6 +1055,8 @@ def computer_file(owner, body):
     binding = _resolve(_string(body, "session_id"))
     if binding.owner != owner or binding.generation != _string(body, "generation") or not binding.computer_policy:
         raise BridgeError("文件请求不属于当前电脑会话")
+    if binding.computer_policy.get("mode") in {"none", "virtual"}:
+        raise BridgeError("当前环境禁止访问 Hermes 宿主文件")
     action, raw = body.get("action"), _string(body, "path", 4096)
     transfer = body.get("transfer") if action == "transfer" else None
     if action == "transfer":

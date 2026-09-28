@@ -58,6 +58,29 @@ describe('upstream service validation lease', () => {
     expect((await f.session.request('/api/sessions/s', { method: 'POST', body: { text: 'once' } })).status).toBe(500)
     expect(f.fetch.mock.calls.length - before).toBe(1)
   })
+  it.each(['GET', 'POST'])('reports a persistent service 401 as an upstream failure for %s requests', async method => {
+    const f = fixture()
+    await f.session.ensure()
+    const fetch = f.fetch.getMockImplementation()!
+    f.fetch.mockImplementation(async (input, init) => new URL(String(input)).pathname === '/api/sessions/rejected'
+      ? Response.json({ error: 'service session rejected' }, { status: 401 }) : fetch(input, init))
+    try {
+      await expect(f.client.request('/api/sessions/rejected', f.session.jar, { method })).rejects.toMatchObject({
+        status: 502, code: 'upstream_auth_unavailable',
+      })
+      expect(f.fetch.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/api/sessions/rejected')).toHaveLength(2)
+      expect(f.paths.filter(path => path === '/auth/password-login')).toHaveLength(1)
+    } finally { f.client.close() }
+  })
+
+  it('preserves auth-endpoint 401s for service credential renewal', async () => {
+    const f = fixture()
+    await f.session.ensure()
+    f.fetch.mockResolvedValue(Response.json({ error: 'expired' }, { status: 401 }))
+    try {
+      expect((await f.session.request('/api/auth/ws-ticket', { method: 'POST' })).status).toBe(401)
+    } finally { f.client.close() }
+  })
   it('invalidates validation and cached data on configured credential changes', async () => {
     const f = fixture()
     let password = 'first'

@@ -37,6 +37,7 @@ export interface DesktopEnvironmentSnapshot {
   hosts: BotDeviceSnapshot[]
 }
 export interface WorkspaceEnvironment {
+  selection?:import('./executionEnvironment.js').ExecutionSelection
   version: 1
   capturedAt: number
   execution: { nodeId: string; profile: string }

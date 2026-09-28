@@ -138,11 +138,11 @@ export class LocalVmImages {
         const ids=(await this.images.run(this.images.runtime,['image','ls','--no-trunc','--quiet','--filter','label=cn.samien.yaoyao.computer-image=1'])).trim().split(/\s+/).filter(Boolean)
         let image
         for(const value of [this.state.images?.[key],...ids].filter((id):id is string=>!!id&&id!==UNCONFIGURED_COMPUTER_IMAGE)) { try{const candidate=await this.images.inspect(value);if((candidate.imageKey??'standard')===key){image=candidate;break}}catch{} }
-        if(image)await verify(image)
+        const recipe=[join(dirname(this.runtime.script),'computer-image'),join(dirname(this.runtime.script),'../computers/computer-image'),resolve('deploy/computer')].find(p=>existsSync(join(p,'Dockerfile')))
+        if(!recipe)throw new Error('缺少本地虚拟机资源，请重新安装 App')
+        if(image){progress('正在准备虚拟机网络网关');await this.images.prepareNetwork(recipe);await check();await verify(image)}
         else {
           progress('正在准备托管桌面镜像，首次下载可能需要数分钟')
-          const recipe=[join(dirname(this.runtime.script),'computer-image'),join(dirname(this.runtime.script),'../computers/computer-image'),resolve('deploy/computer')].find(p=>existsSync(join(p,'Dockerfile')))
-          if(!recipe)throw new Error('缺少本地虚拟机资源，请重新安装 App')
           image=await this.images.prepare(recipe,key)
         }
         await check();const previous=this.state.images![key];this.state.images![key]=image.imageId

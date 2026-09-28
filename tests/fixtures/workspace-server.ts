@@ -1,4 +1,3 @@
-import {nativeEnvironmentFixture} from './native-environment.js'
 import {FixtureGrokAuthProvider} from './grok-auth-provider.js'
 import { FixtureBotPlugins } from './bot-plugins.js'
 import { defaultAgentIdentity, encodeAgentAvatar } from '../../src/shared/agentIdentity.js'
@@ -380,7 +379,7 @@ const auth = new LocalAuthStore(home, false)
 const grokAuth=process.env.WORKSPACE_FIXTURE_GROK_AUTH==='1'?new FixtureGrokAuthProvider():undefined
 const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch, pluginFetch: pluginsFixture?.fetch }),
   node = createNodeServer(runtime)
-const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?nativeEnvironmentFixture(runtime,home,port):undefined
+const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?(await import('./native-environment.js')).nativeEnvironmentFixture(runtime,home,port):undefined
 if (process.env.WORKSPACE_FIXTURE_COMMUNICATION === '1') {
   const owner = JSON.parse(readFileSync(usersPath, 'utf8')).users[0].id as string
   const store = runtime.workspace

@@ -8,6 +8,7 @@ export class ComposeComputerProvider extends ContainerComputerProvider {
   constructor(runnerId:string,home:string,readonly relay:DesktopRelay){super('docker',runnerId,home)}
   async inventory(){return this.relay('','list',{})}
   async verifyRuntime(){await this.inventory()}
+  async verifyNetwork(){for(const desktop of await this.inventory()){const health=await this.relay(desktop.id,'network-health',{});if(health.ready!==true)throw new ComputerError('computer_network_upgrade_required','请更新 Compose 网络网关')}}
   async inspect(spec:ComputerSpecification):Promise<ComputerState|undefined>{
     this.validateSpecification(spec)
     const state=await this.relay(spec.id,'health',{ownerKey:spec.ownerKey})

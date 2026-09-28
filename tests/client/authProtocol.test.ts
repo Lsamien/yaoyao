@@ -109,6 +109,41 @@ describe('authentication and CSRF protocol', () => {
     }
   })
 
+  it.each(['user-1', 'user-2'])('ignores a late 401 after a fresh login as %s', async accountId => {
+    setApiCsrfToken('old-token', 'user-1')
+    let finishOldRequest!: (value: Response) => void
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finishOldRequest = resolve })))
+    const expired = vi.fn(), unsubscribe = onApiUnauthorized(expired)
+    try {
+      const oldRequest = apiRequest('/api/app/profiles')
+      clearApiSecurityContext()
+      setApiCsrfToken('new-token', accountId)
+      finishOldRequest(Response.json({ code: 'authentication_required' }, { status: 401 }))
+      await expect(oldRequest).rejects.toMatchObject({ status: 401 })
+      expect(expired).not.toHaveBeenCalled()
+    } finally { unsubscribe() }
+  })
+
+  it('still expires the current session when its own request requires login', async () => {
+    setApiCsrfToken('current-token', 'user-1')
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ code: 'authentication_required' }, { status: 401 })))
+    const expired = vi.fn(), unsubscribe = onApiUnauthorized(expired)
+    try {
+      await expect(apiRequest('/api/app/profiles')).rejects.toMatchObject({ status: 401 })
+      expect(expired).toHaveBeenCalledOnce()
+    } finally { unsubscribe() }
+  })
+
+  it('preserves login when the upstream service cannot authenticate', async () => {
+    setApiCsrfToken('current-token', 'user-1')
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ code: 'upstream_auth_unavailable' }, { status: 502 })))
+    const expired = vi.fn(), unsubscribe = onApiUnauthorized(expired)
+    try {
+      await expect(apiRequest('/api/app/models')).rejects.toMatchObject({ status: 502, code: 'upstream_auth_unavailable' })
+      expect(expired).not.toHaveBeenCalled()
+    } finally { unsubscribe() }
+  })
+
   it('surfaces the first structured upstream validation error', async () => {
     setApiCsrfToken('csrf-validation')
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({

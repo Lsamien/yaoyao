@@ -1,3 +1,6 @@
+import {ManagedProxy} from '../network/managedProxy.js'
+import type {VmProxySettings} from '../../shared/executionEnvironment.js'
+import {TASK_COMMAND,redactTaskOutput} from './taskEnvironment.js'
 import {randomUUID,createHash} from 'node:crypto'
 import {join,dirname,posix} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -50,8 +53,36 @@ const PROFILE_COMPUTER_RULES='当前使用本机协作模式：沿用基础 Prof
 const HERMES_COMPUTER_RULES='本轮由 Hermes 管理模型、配置、识图、技能和授权资源。使用 Hermes 原生 skills_list、skill_view 和 skill_manage 发现、读取和维护技能；遵循当前 Profile 的技能规则。技能依赖本机登录态、环境变量或授权文件时，使用 Hermes 原生工具完成相应步骤；适合 Linux 的脚本与输入文件可经 computer_copy_file 传入虚拟机，再用 computer_shell 执行。路径、软件和登录态在本机与虚拟机之间不通用。不要自行复制 Profile 配置或凭据到虚拟机。'
 const ISOLATED_COMPUTER_RULES='当前环境是虚拟环境，也就是服务端上的隔离虚拟机。先看 computer_desktop_state，再按截图像素用 computer_action 点击、输入、按键或滚动。命令和文件也通过 computer_* 在这台 Linux 电脑内部完成。不要使用服务器或已连接电脑的终端、文件或桌面，也不要在节点离线时改去服务器或电脑。电脑和云虚拟机是另外勾选的环境，不从这台虚拟机里打开。人工接管期间停止操作，交还后先检查当前状态。'
 const ISOLATED_HERMES_RULES='本轮由 Hermes 管理模型、配置和这次会话。使用 Hermes 原生 skills_list、skill_view 和 skill_manage 发现、读取和维护技能。技能和 computer_* 都留在这台虚拟机里；不要把 Profile 的本机登录、文件或凭据复制进来。'
-export interface ProxyHandle {readonly proxy:ComputerPublicProxy;release():Promise<void>}
+export interface ProxyHandle {readonly proxy:ComputerPublicProxy|ManagedProxy;release():Promise<void>}
 export class ComputerRuntime {
+  private proxyPreparedRevision=-1
+  private proxyUpdate:Promise<void>=Promise.resolve()
+  private proxyUpdating=false
+  proxySettings?:VmProxySettings
+  updateProxy(value:VmProxySettings|undefined):Promise<void>{
+    const next=value?{...value}:undefined
+    const update=this.proxyUpdate.then(async()=>{
+      const revision=next?.revision??0,current=this.proxySettings?.revision??0
+      if(revision<current||revision===current&&this.proxyPreparedRevision===revision)return
+      this.proxyUpdating=true;this.proxyPreparedRevision=-1
+      try{
+        // Close with the old specification: cleanup must still address the old
+        // container namespace. Concurrent updates and new leases cannot race it.
+        const proxies=await Promise.allSettled([...this.proxyShares.values()].map(async share=>(await share.started.catch(()=>undefined))?.close()))
+        this.proxyShares.clear()
+        const controls=await Promise.allSettled([this.controls.stopAll()])
+        const gateways=await Promise.allSettled([...this.gateways.values()].flatMap(group=>[...group].map(gateway=>gateway.close())))
+        this.proxySettings=next
+        if([...proxies,...controls,...gateways].some(result=>result.status==='rejected'))throw new HttpError(409,'旧网络任务未完成清理，请重试代理配置','computer_network_cleanup_failed')
+        if(next?.enabled)await this.provider.verifyNetwork()
+        this.proxyPreparedRevision=revision
+      }finally{this.proxyUpdating=false}
+    })
+    this.proxyUpdate=update.catch(()=>{})
+    return update
+  }
+  assertNetworkReady(){if(this.proxyUpdating||this.proxySettings&&this.proxyPreparedRevision!==this.proxySettings.revision)throw new HttpError(409,'虚拟机代理正在更新或尚未就绪，请重试','computer_network_unavailable')}
+  get network(){return this.proxySettings?.enabled?'managed-proxy' as const:this.config.network??'none'}
   retainDesktops=false
   readonly controls:ComputerControls
   readonly provider:ContainerComputerProvider
@@ -62,7 +93,7 @@ export class ComputerRuntime {
   readonly workers=new Map<string,{environmentId:string;ownerKey:string;process:HermesWorkerProcess}>()
   readonly script:string
   readonly proxyScript:string
-  private proxyShares=new Map<string,{started:Promise<ComputerPublicProxy>;users:number}>()
+  private proxyShares=new Map<string,{started:Promise<ComputerPublicProxy|ManagedProxy>;users:number}>()
   constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,relay?:DesktopRelay,readonly hermesTarget?:GatewayTarget){
     if(!config.computers)throw new HttpError(409,'执行节点尚未配置隔离电脑','computer_unavailable')
     this.config=config.computers
@@ -86,9 +117,11 @@ export class ComputerRuntime {
   /** One guest proxy per environment, shared by every holder; the guest
    * reserves port 3128, so concurrent holders must never start their own. */
   acquireProxy(spec:ComputerSpecification,authorize:()=>void):Promise<ProxyHandle>{
+    this.assertNetworkReady()
     let share=this.proxyShares.get(spec.id)
     if(!share){
-      const started=ComputerPublicProxy.start(this.provider,spec,this.proxyScript,authorize,async()=>authorize(),()=>{if(this.proxyShares.get(spec.id)===share)this.proxyShares.delete(spec.id)})
+      const forget=()=>{if(this.proxyShares.get(spec.id)===share)this.proxyShares.delete(spec.id)}
+      const started=spec.network==='managed-proxy'?ManagedProxy.start(this.provider,spec,this.proxySettings!,authorize,forget):ComputerPublicProxy.start(this.provider,spec,this.proxyScript,authorize,async()=>authorize(),forget)
       share={started,users:0};this.proxyShares.set(spec.id,share)
       void started.catch(()=>{if(this.proxyShares.get(spec.id)===share)this.proxyShares.delete(spec.id)})
     }
@@ -176,6 +209,12 @@ export class ComputerRuntime {
     const abort=()=>{void resolver.close()};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort()
     try{const result=await resolver.wait('resolved');return this.provider.fixedCapacity?{...result,cwd:COMPUTER_WORKSPACE}:result}finally{signal?.removeEventListener('abort',abort);await resolver.close()}
   }
+  async restoreDesktop(meta:ComputerTarget,authorize:()=>void){
+    if(this.provider.fixedCapacity)return
+    this.assertTarget(meta);authorize();this.assertNetworkReady()
+    const spec=this.pool.definition(meta.ownerKey,meta.environmentId)
+    if(spec)await this.pool.desktop({...spec,network:this.network},'restore',authorize)
+  }
   async desktop(meta:ComputerTarget,profile:string,action:'create'|'start'|'stop'|'recreate'|'remove',authorize:()=>void){
     if(this.provider.fixedCapacity)throw new HttpError(409,'桌面由 Compose 创建和管理，不能在界面增删或重建','compose_desktop_managed')
     this.assertTarget(meta);authorize()
@@ -186,8 +225,9 @@ export class ComputerRuntime {
       if(spec)await this.pool.desktop(spec,action,authorize)
       return
     }
-    const resolved=await this.resolveWorkspace(profile);authorize()
-    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.config.network??'none'},action,authorize)
+    this.assertNetworkReady()
+    const resolved=await this.resolveWorkspace(profile);authorize();this.assertNetworkReady()
+    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.network},action,authorize)
   }
 }
 export class ComputerGateway {
@@ -220,6 +260,7 @@ export class ComputerGateway {
       return JSON.parse(result.stdout)
     })
   }
+  taskEnvironment?:()=>Promise<import('../../shared/executionEnvironment.js').TaskEnvironment|undefined>
   private get hermesManaged(){return this.meta.hermesRuntime===true}
   private get rules(){const sharing=this.meta.environmentId!==this.meta.agentId?'多个机器人共用这台虚拟机：命令和文件操作并行执行，桌面操作交替进行；动手前注意其他机器人可能正在使用同一桌面，避免覆盖彼此的工作。':'';if(this.meta.profileSession)return `${sharing}${PROFILE_COMPUTER_RULES}\n${this.hermesManaged?HERMES_COMPUTER_RULES:SKILL_RULES}`;return `${sharing}${ISOLATED_COMPUTER_RULES}\n${this.hermesManaged?ISOLATED_HERMES_RULES:SKILL_RULES}`}
   private team?:{id:string;catalog:WorkerTool[];call(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;workspaceMemory:boolean}
@@ -228,7 +269,7 @@ export class ComputerGateway {
   private async authorized(){try{await this.check();this.guard()}catch(error){const stopping=this.interrupt().catch(()=>{});if(!this.profileSession)await stopping;if(!this.closed)this.onDisconnect();throw error}}
   private guard(){if(this.closed||this.live?.controller.signal.aborted)throw new HttpError(410,'电脑任务授权已结束','computer_cancelled')}
   private event(type:string,payload:Record<string,unknown>){if(!this.closed&&this.live)this.onEvent({type,session_id:this.live.session.id,payload})}
-  private spec(session:WorkerSession):ComputerSpecification{return {id:this.meta.environmentId,ownerKey:this.meta.ownerKey,imageId:this.runtime.imageFor(this.meta),cwd:session.cwd,network:this.runtime.config.network??'none'}}
+  private spec(session:WorkerSession):ComputerSpecification{return {id:this.meta.environmentId,ownerKey:this.meta.ownerKey,imageId:this.runtime.imageFor(this.meta),cwd:session.cwd,network:this.runtime.network}}
   async rpc(method:string,params:Record<string,any>):Promise<any>{
     if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.live?.session.id){await this.interrupt();return {status:'interrupted'}}
     if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.recoverySession?.id){await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {status:'interrupted'}}
@@ -256,6 +297,21 @@ export class ComputerGateway {
       return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:profile}}
     }
     const live=this.live
+    if(method==='computer.complete'){
+      if(!live?.toolsOnly||params.session_id!==live.session.id)throw new HttpError(403,'完成请求不属于当前虚拟机工具会话','computer_session_forbidden')
+      // Normal Bot completion releases its holder into the idle policy. An
+      // unexpected disconnect still takes the interrupt/fencing path.
+      live.received=true
+      live.finishing??=(async()=>{
+        await Promise.allSettled([...live.toolCalls])
+        await this.authorized()
+        await this.release(live,this.runtime.retainDesktops)
+        live.session.outcome='complete';this.runtime.save(live.session)
+      })()
+      await live.finishing
+      return {status:'complete'}
+    }
+    if(live?.toolsOnly&&live.received)throw new HttpError(410,'本轮虚拟机工具会话已结束','computer_cancelled')
     if(method==='computer.transfer'){
       if(!live||params.session_id!==live.session.id)throw new HttpError(403,'文件传输不属于当前电脑会话','computer_session_forbidden')
       const call=this.transferFile(live,z.record(z.string(),z.unknown()).parse(params.action))
@@ -266,7 +322,9 @@ export class ComputerGateway {
       if(!live||params.session_id!==live.session.id)throw new HttpError(403,'电脑会话不属于当前通道','computer_session_forbidden')
       const name=String(params.name??'')
       if(!TOOLS.some(tool=>tool.name===name))throw new HttpError(403,'本轮未授权该工具','computer_tool_forbidden')
-      return this.tool(live,name,params.arguments??{},typeof params.id==='string'&&params.id?params.id:randomUUID())
+      const call=this.tool(live,name,params.arguments??{},typeof params.id==='string'&&params.id?params.id:randomUUID())
+      live.toolCalls.add(call);void call.finally(()=>live.toolCalls.delete(call)).catch(()=>{})
+      return call
     }
     if(!live||params.session_id!==live.session.id)throw new HttpError(403,'电脑会话不属于当前通道','computer_session_forbidden')
     if(method==='session.interrupt'||method==='session.close'){await this.interrupt();return {status:'interrupted'}}
@@ -352,7 +410,7 @@ export class ComputerGateway {
       live.received=false;live.running=true;live.session.outcome='uncertain';live.session.history.push({role:'user',content:prompt});this.runtime.save(live.session)
       const directory=join(this.runtime.home,'workers',live.session.id,this.workId,String(live.segment=(live.segment??0)+1))
       await mkdir(directory,{recursive:true,mode:0o700})
-      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.config.network??'none',tools:[...TOOLS,...SKILL_TOOLS,...(this.meta.hostAccess?HOST_TOOLS.map(tool=>tool.name==='computer_copy_file'?{...tool,description:tool.description.replace('25 MiB',`${(this.meta.fileTransferMaxBytes??25*1024*1024)/1024/1024} MiB`)}:tool):[]),...(this.team?.catalog??[])],skillInstructions:SKILL_RULES,prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
+      const worker=new HermesWorkerProcess(this.runtime.config.python,this.runtime.script,{mode:'run',home:directory,hermesSource:this.runtime.config.hermesSource,model:live.model,contextConfig:live.contextConfig,proxyEnv:live.proxyEnv,sessionId:live.session.id,taskId:this.workId,cwd:live.session.cwd,...(this.meta.hostAccess?{host:{cwd:this.hostCwd,platform:platform()}}:{}),network:this.runtime.network,tools:[...TOOLS,...SKILL_TOOLS,...(this.meta.hostAccess?HOST_TOOLS.map(tool=>tool.name==='computer_copy_file'?{...tool,description:tool.description.replace('25 MiB',`${(this.meta.fileTransferMaxBytes??25*1024*1024)/1024/1024} MiB`)}:tool):[]),...(this.team?.catalog??[])],skillInstructions:SKILL_RULES,prompt:live.images.length?[{type:'text',text:prompt},...live.images]:prompt,history})
       live.worker=worker
       this.runtime.workers.set(this.workId,{environmentId:this.meta.environmentId,ownerKey:this.meta.ownerKey,process:worker});void worker.exited.then(()=>{if(this.runtime.workers.get(this.workId)?.process===worker)this.runtime.workers.delete(this.workId)})
       worker.onTool=(name,args,id,callId)=>{
@@ -374,6 +432,8 @@ export class ComputerGateway {
   installTeamLease(id:string,catalog:WorkerTool[],call:(name:string,args:Record<string,unknown>,callId:string)=>Promise<unknown>,workspaceMemory=false){this.team={id,catalog,call,workspaceMemory}}
   removeTeamLease(id:string){if(this.team?.id===id)this.team=undefined}
   private ensureLease(live:Live):Promise<ComputerLease>{
+    this.runtime.assertNetworkReady()
+    if(live.proxyHandle?.proxy instanceof ManagedProxy&&live.proxyHandle.proxy.closed)throw new HttpError(409,'虚拟机代理连接已断开，请开始新一轮任务','computer_network_disconnected')
     if(live.lease)return Promise.resolve(live.lease)
     live.acquiring??=(async()=>{
       if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
@@ -382,7 +442,7 @@ export class ComputerGateway {
       const lease=await this.runtime.pool.acquire(this.spec(live.session),this.workId,()=>{this.guard();if(live.controller.signal.aborted)throw new Error('cancelled')},live.controller.signal)
       if(this.closed){await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
       live.lease=lease
-      if(this.runtime.config.network==='public-proxy'){
+      if(this.runtime.network!=='none'){
         try{live.proxyHandle=await this.runtime.acquireProxy(this.spec(live.session),()=>{if(!this.runtime.pool.hasHolders(this.meta.ownerKey,this.meta.environmentId))throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')})}
         catch(error){await this.runtime.pool.release(lease).catch(()=>{});live.lease=undefined;throw error}
       }
@@ -458,7 +518,8 @@ export class ComputerGateway {
         }
         if(name==='computer_shell'){
           const body=z.object({command:z.string().min(1).max(65536),user:z.enum(['cua','root']).default('cua')}).strict().parse(args)
-          try{return {exitCode:0,...await execute(['/bin/bash','-lc',body.command],undefined,undefined,body.user)}}catch(error){if(typeof(error as any).code==='number')return {exitCode:(error as any).code,stdout:String((error as any).stdout??''),stderr:String((error as any).stderr??'')};throw error}
+          const environment=await this.taskEnvironment?.()
+          try{const result=environment?await execute(['python3','-c',TASK_COMMAND],Buffer.from(JSON.stringify({command:body.command,environment})),undefined,body.user):await execute(['/bin/bash','-lc',body.command],undefined,undefined,body.user);await this.authorized();return redactTaskOutput({exitCode:0,...result},environment)}catch(error){if(typeof(error as any).code==='number')return redactTaskOutput({exitCode:(error as any).code,stdout:String((error as any).stdout??''),stderr:String((error as any).stderr??'')},environment);throw error}
         }
         if(name==='computer_read_file'){
           const body=z.object({path:pathField}).strict().parse(args)

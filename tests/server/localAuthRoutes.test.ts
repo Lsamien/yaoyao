@@ -31,6 +31,52 @@ function cookies(response: request.Response): string {
 }
 
 describe('15300 local authentication routes', () => {
+  it('keeps desktop and native account sessions when Hermes rejects its service session', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'yaoyao-upstream-auth-')); roots.push(home)
+    const config: ServerConfig = {
+      host: '127.0.0.1', port: 15300, upstream: new URL('http://127.0.0.1:9119'),
+      allowedHosts: new Set(), home, mediaRoot: home, attachmentsRoot: home, imagesRoot: home,
+      mediaOwner: 'tester', allowInsecureLan: false, insecureLan: false, production: true,
+      superviseDashboard: true, upstreamUsername: 'service', upstreamPassword: 'fixture-password',
+    }
+    let rejected = true, modelRequests = 0
+    const runtime = createApplication({ config, fetchImpl: async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/status') return Response.json({ auth_required: true })
+      if (path === '/api/auth/me') return new Headers(init?.headers).get('cookie')
+        ? Response.json({ user_id: 'service' }) : Response.json({}, { status: 401 })
+      if (path === '/api/auth/providers') return Response.json({ providers: [] })
+      if (path === '/auth/password-login') return Response.json({ ok: true }, {
+        headers: { 'set-cookie': 'hermes_service=fixture; Path=/; HttpOnly' },
+      })
+      if (path === '/api/model/options') {
+        modelRequests += 1
+        return rejected ? Response.json({ error: 'service login required' }, { status: 401 })
+          : Response.json({ models: [] })
+      }
+      return Response.json({ profiles: [{ name: 'default', is_default: true }] })
+    } }); runtimes.push(runtime)
+    const server = await listen(runtime), agent = request.agent(server)
+    const host = '127.0.0.1:15300'
+    const boot = await agent.get('/api/app/bootstrap').set('Host', host).expect(200)
+    const setup = await agent.post('/api/app/setup').set('Host', host).set('Origin', `http://${host}`)
+      .set('X-CSRF-Token', boot.body.csrfToken).send({ username: 'owner', password: 'fixture-password' }).expect(200)
+
+    for (const path of ['/api/app/models', '/api/model/options']) {
+      const failed = await agent.get(path).set('Host', host).expect(502)
+      expect(failed.body.code).toBe('upstream_auth_unavailable')
+      expect(failed.headers['set-cookie']).toBeUndefined()
+    }
+    expect(modelRequests).toBe(4)
+    expect((await agent.get('/api/app/bootstrap?inspectOnly=1').set('Host', host).expect(200)).body)
+      .toMatchObject({ authenticated: true, user: { id: setup.body.user.id } })
+    expect((await agent.get('/api/auth/me').set('Host', host).expect(200)).body.user_id).toBe(setup.body.user.id)
+
+    rejected = false
+    await agent.get('/api/app/models').set('Host', host).expect(200)
+    await request(server).get('/api/app/models').set('Host', host).expect(401)
+  })
+
   it('installs without upstream credentials while keeping local login and CSRF mandatory', async () => {
     const home = mkdtempSync(join(tmpdir(), 'yaoyao-local-token-')); roots.push(home)
     const token = 'fixture_local_only_session_token_123456'

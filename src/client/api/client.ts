@@ -201,7 +201,9 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
           continue
         }
         if (response.status === 401
+          && generation === securityGeneration
           && options.notifyUnauthorized !== false) {
+          // A response from before logout/account switching cannot expire a new login.
           for (const listener of unauthorizedListeners) listener()
         }
         throw new ApiError(

@@ -54,6 +54,27 @@ describe('Bot environment routing', () => {
     for (const tool of ['desktop_file_copy', 'desktop_environment_view', 'computer_shell', 'cloud_computer_*']) expect(text).not.toContain(tool)
   })
 
+  it.each(['none','server','virtual'] as const)('uses default %s as a preference and prioritizes the enabled managed browser',mode=>{
+    const env=environment()
+    env.selection={mode,revision:2,credentialSource:mode==='server'?'native':'yaoyao'}
+    env.tools.managedBrowser=true
+    const text=workspaceEnvironmentPrompt(env)
+    expect(text).toContain('不限制其他已开放且获授权的环境')
+    expect(text).toContain('用户明确指定目标时优先使用该目标')
+    expect(text).toContain('「本机」只指本轮消息来源电脑')
+    expect(text).toContain('默认使用 managed_browser_open')
+    expect(text).toContain('此规则优先于服务器或虚拟机的默认运行环境')
+    expect(text).toContain('不要仅因历史曾用过其他浏览器而覆盖本轮默认')
+    expect(text).toContain('继续操作已经明确指定的页面')
+    expect(text).toContain('computer_shell')
+    expect(text).toContain('cloud_computer_*')
+    expect(text).not.toContain('只使用所选环境')
+    expect(text).not.toContain('执行位置已由系统固定')
+    expect(text).not.toContain('虚拟环境不可用')
+    env.tools.managedBrowser=false
+    expect(workspaceEnvironmentPrompt(env)).not.toContain('managed_browser_open')
+  })
+
   it('does not require a screenshot for file-only computers', () => {
     const env = environment()
     env.tools.desktopView = false

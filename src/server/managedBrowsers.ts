@@ -317,7 +317,10 @@ export class ManagedBrowsers {
           else{if(!body.path||body.fileId||!options.fromVm)throw new HttpError(403,'本轮未开放虚拟机文件传输','browser_vm_unavailable');file=await options.fromVm(body.path)}
           const id=randomUUID();upload={id,name:file.name,mimeType:file.mimeType,data:file.buffer.toString('base64')};action={kind:'upload',snapshotId:body.snapshotId,ref:body.ref,fileId:id}
         }else if(name==='managed_browser_snapshot')action={kind:'snapshot'}
-        else if(name==='managed_browser_action')action=z.object({action:z.record(z.string(),z.unknown())}).strict().parse(args).action
+        else if(name==='managed_browser_action'){
+          action=z.object({action:z.record(z.string(),z.unknown())}).strict().parse(args).action
+          if((action as {kind?:unknown}).kind==='pointer')throw new HttpError(400,'机器人拖动请使用 drag 动作','browser_input_unsupported')
+        }
         else throw new HttpError(403,'本轮未授权此浏览器工具','browser_tool_forbidden')
         const value=await this.request(g,'execute',{operation:{generation:r.state.generation,operationId:callId??randomUUID(),action},...(upload?{upload}:{})})
         if(name==='managed_browser_action'&&!['snapshot','screenshot','downloads','state'].includes(String((action as {kind?:unknown})?.kind)))await this.request(g,'status')
@@ -365,11 +368,16 @@ export class ManagedBrowsers {
       if(r.taking||r.transition)throw new HttpError(409,'请等待当前操作结束后接管','browser_control_pending')
       if(body.generation!==r.state.generation)throw new HttpError(409,'控制代次已改变，请刷新','browser_generation_expired')
       let action=body.action
+      if(navigation&&action.kind==='pointer')throw new HttpError(400,'连续拖动需要画面与人工控制凭据','browser_input_unsupported')
       if(!navigation){
         const frame=r.frames?.get(body.frameId??'')
-        if(!frame||frame.generation!==body.generation||frame.capturedAt<Date.now()-30000)throw new HttpError(409,'画面已改变，请刷新后操作','browser_frame_stale')
+        const cancelling=action.kind==='pointer'&&action.phase==='cancel'
+        if(!cancelling&&(!frame||frame.generation!==body.generation||frame.capturedAt<Date.now()-30000))throw new HttpError(409,'画面已改变，请刷新后操作','browser_frame_stale')
         const a=body.action
+        const x=z.number().finite().min(0).max(Math.min(1279,(frame?.width??1280)-1)),y=z.number().finite().min(0).max(Math.min(799,(frame?.height??800)-1))
         if(a.kind==='click')action={kind:'coordinate',x:a.x,y:a.y,...(a.button?{button:a.button}:{}),...(a.count?{clickCount:a.count}:{})}
+        else if(a.kind==='drag')action=parse(z.object({kind:z.literal('drag'),fromX:x,fromY:y,toX:x,toY:y}).strict(),a)
+        else if(a.kind==='pointer')action=parse(z.object({kind:z.literal('pointer'),gestureId:z.string().uuid(),phase:z.enum(['start','move','end','cancel']),x,y}).strict(),a)
         else if(a.kind==='key'){
           const names:Record<string,string>={Return:'Enter',BackSpace:'Backspace',Up:'ArrowUp',Down:'ArrowDown',Left:'ArrowLeft',Right:'ArrowRight',space:'Space'}
           const modifiers=z.array(z.enum(['ctrl','alt','shift','super'])).max(4).parse(a.modifiers??[]),key=z.string().max(40).parse(a.key)
@@ -379,7 +387,10 @@ export class ManagedBrowsers {
           action={kind:'scroll',deltaX:direction==='left'?-amount:direction==='right'?amount:0,deltaY:direction==='up'?-amount:direction==='down'?amount:0}
         }else if(a.kind!=='text')throw new HttpError(422,'托管浏览器暂不支持此输入','browser_input_unsupported')
       }
-      const value=await this.request(g,'execute',{operation:{generation:body.generation,operationId:body.requestId,action}});r.frame=undefined;r.frames?.clear();return value
+      const value=await this.request(g,'execute',{operation:{generation:body.generation,operationId:body.requestId,action}})
+      // Recent frames remain usable between phases of the same held gesture.
+      if(action.kind!=='pointer'||!['start','move'].includes(String(action.phase))){r.frame=undefined;r.frames?.clear()}
+      return value
       })
     }
     router.post('/api/app/agents/:id/computer/input',async(ctx,next)=>{if(!matches(ctx))return next();ctx.body=await input(this.auth.require(ctx).id,ctx.params.id,(ctx.request as any).body,false)})

@@ -21,7 +21,7 @@ export interface WorkspaceNode {
   fingerprint?: string
   deviceId?: string
 }
-export interface GatewayExecutionScope {workId:string;cleanupOnly?:boolean;sessionId?:string;authorize():void;publishArtifact?(name:string,bytes:Buffer):Promise<unknown>}
+export interface GatewayExecutionScope {taskEnvironment?:()=>import('../shared/executionEnvironment.js').TaskEnvironment;workId:string;cleanupOnly?:boolean;sessionId?:string;authorize():void;publishArtifact?(name:string,bytes:Buffer):Promise<unknown>}
 export interface GatewayTarget {
   url: URL
   client: UpstreamClient

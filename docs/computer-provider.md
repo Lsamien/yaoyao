@@ -12,7 +12,7 @@
 - 默认 `--network none`，不发布任何端口。容器只有 loopback 网卡，不能直接访问宿主服务或外网。自己的主机名映射到 loopback，保证 XFCE/VNC 在无网络环境下正常启动。可通过专属进程通道启用受控公网代理，仍不增加外部网卡或端口。详见 `docs/computer-network.md`。
 - 桌面通过容器内的 CUA socket 操作；验收已读取真实截图。查看和人工接管已接入账号鉴权及独立控制租约，见 `docs/computer-control.md`。
 - 取消或无法确认的 guest 命令会停止所属私有容器，确认停止后才释放串行执行位置。仅终止 `docker exec` 客户端不能证明 guest 进程已停止。
-- 删除容器保留工作目录，重建后可继续读取工作文件。停止后的工作区备份、校验恢复和重建见 `docs/computer-maintenance.md`；可信共享电脑见 `docs/shared-computers.md`。
+- 删除容器保留工作目录、用户主目录、软件用户配置、钥匙串和设备标识。旧容器删除前先迁移用户目录，失败保留原容器。停止后的备份、校验恢复和重建见 `docs/computer-maintenance.md`；可信共享电脑见 `docs/shared-computers.md`。
 
 权限校验以回调传入，在异步检查与实际执行的前后重验。ComputerPool 在 SQLite 中保存持有者、租约代次、期限与停止状态，默认每个 Runner 同时 2 个环境、总计最多 32 个环境。启动时必须先恢复未确认停止的资源；旧租约先失效，再停止并删除旧容器身份，保留工作区。不确认停止的环境保持占用，不能交给新任务。当前 Provider 与资源池都不作为裸命令接口对浏览器或模型开放，通过 Worker 和任务授权检查使用。
 

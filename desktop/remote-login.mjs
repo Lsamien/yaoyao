@@ -24,7 +24,10 @@ async function requestServer(fetchImpl,url,options){
 class CookieJar{
   constructor(){this.cookies=new Map();this.details=new Map()}
   absorb(response){
-    for(const line of response.headers.getSetCookie?.()??[]){
+    // Electron net.fetch can fold multiple cookies into one getSetCookie entry.
+    // Split only before a cookie name, preserving commas inside Expires dates.
+    const lines=(response.headers.getSetCookie?.()??[]).flatMap(value=>value.split(/,(?=\s*[^;,\s]+=)/g))
+    for(const line of lines){
       const pair=line.split(';')[0],eq=pair.indexOf('=')
       if(eq<=0)continue
       const name=pair.slice(0,eq).trim(),value=pair.slice(eq+1).trim()

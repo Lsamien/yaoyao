@@ -23,10 +23,10 @@ import { HttpError } from './errors.js'
 interface Grant {id:string;owner:string;runnerId:string;version:number;expiresAt:number}
 const exec=promisify(execFile)
 
-/** Settings owns preparation. Chats own each Agent's desktop and its lifecycle. */
+/** Settings owns preparation; service startup restores configured desktops. */
 export class LocalVmService {
   private url?:string
-  private managed?:{agent:RunnerAgent;abort:AbortController;done:Promise<void>}
+  private managed?:{agent:RunnerAgent;abort:AbortController;done:Promise<void>;warmup:Promise<void>}
   private starting?:Promise<void>
   private problem?:string
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,
@@ -58,6 +58,29 @@ export class LocalVmService {
     }
   }
   private record(){return this.hub.records().find(r=>r.enabled&&r.sourceNodeId==='local'&&r.sourceOwner==='_system')}
+  private async restoreDesktops(runnerId:string,signal:AbortSignal){
+    const restored=new Set<string>()
+    for(const owner of this.store.owners()){
+      if(signal.aborted||!readHostTools(this.store.home).vm)return
+      if(!this.auth.isUserActive(owner))continue
+      this.reconcile(owner,this.record())
+      for(const agent of this.store.list<WorkspaceAgent>(owner,'agent')){
+        const environmentId=agent.computerEnvironmentId??agent.id,key=`${owner}:${environmentId}`
+        if(agent.nodeId!=='local'||agent.archived||agent.remoteAgentId||agent.temporaryGoalId||restored.has(key))continue
+        const authorize=()=>{
+          const current=this.store.require<WorkspaceAgent>(owner,'agent',agent.id)
+          if(signal.aborted||!readHostTools(this.store.home).vm||current.archived||current.remoteAgentId||current.temporaryGoalId||current.nodeId!=='local'||current.profile!==agent.profile||(current.computerEnvironmentId??current.id)!==environmentId)throw new HttpError(403,'虚拟机启动授权已失效','local_vm_disabled')
+          this.nodes.requireSource(owner,current)
+          if(this.hub.computerRunner(owner,current).id!==runnerId)throw new HttpError(409,'虚拟机执行节点已变化','local_vm_runner_changed')
+        }
+        try{authorize()}catch{continue}
+        restored.add(key)
+        try{await this.hub.computer(owner,agent,'autostart',{},authorize)}catch{
+          if(!signal.aborted)this.problem='部分已配置虚拟机未能自动启动，请检查 Docker、镜像和运行数量上限，或在电脑面板手动启动。'
+        }
+      }
+    }
+  }
   async start(url:string) {
     this.url=url
     if(this.fixed||this.config.localVmHost==='runner')return
@@ -68,8 +91,18 @@ export class LocalVmService {
     config.serverURL=url
     const home=join(this.config.home,'runner-state','local-vm',config.runnerId)
     mkdirSync(home,{recursive:true,mode:0o700})
-    const abort=new AbortController(),agent=new RunnerAgent(config,home)
-    const state={agent,abort,done:Promise.resolve()}
+    this.problem=undefined
+    const abort=new AbortController()
+    let warming=false
+    const agent=new RunnerAgent(config,home)
+    agent.onConnected=()=>{
+      // A transport reconnect must not undo a manual stop or idle expiry.
+      if(!warming&&!abort.signal.aborted){
+        warming=true
+        state.warmup=this.restoreDesktops(config.runnerId,abort.signal).catch(()=>{if(!abort.signal.aborted)this.problem='虚拟机自动启动未完成，请在电脑面板检查状态。'})
+      }
+    }
+    const state={agent,abort,done:Promise.resolve(),warmup:Promise.resolve()}
     this.managed=state
     state.done=agent.run(abort.signal).catch(error=>{this.problem=error instanceof Error?error.message:'本地虚拟机服务已断开'}).finally(()=>{if(this.managed===state)this.managed=undefined})
   }
@@ -141,7 +174,7 @@ export class LocalVmService {
       if(!summary.features?.includes('local-vm-v1'))return {configured:true,executionHost,runnerName:record.name,setupRequired:'worker',daemonUp:false,image:false,mode:this.mode(owner),maxInstances:2,busy:false,problem:'执行节点已连接，但未启用虚拟桌面或版本过旧。请启用隔离电脑 Worker 并使用配套版本的 Runner。'}
       const state=await this.hub.localVm(owner,record.id,{op:'status'}) as LocalVmStatus
       const agents=this.store.list<WorkspaceAgent>(owner,'agent'),groups=this.store.list<{id:string;name:string}>(owner,'shared-computer')
-      return {...state,executionHost,runnerName:record.name,mode:this.mode(owner),instances:state.instances?.map(instance=>{
+      return {...state,problem:state.problem??this.problem,executionHost,runnerName:record.name,mode:this.mode(owner),instances:state.instances?.map(instance=>{
         const agent=agents.find(a=>!a.archived&&(a.computerEnvironmentId??a.id)===instance.id)
         return {...instance,name:agent?.computerEnvironmentName??agent?.name??groups.find(g=>g.id===instance.id)?.name??'保留的虚拟机',orphaned:!agent}
       })}
@@ -233,5 +266,5 @@ export class LocalVmService {
     })
     return router
   }
-  async close(){this.managed?.abort.abort();await this.managed?.done}
+  async close(){const managed=this.managed;managed?.abort.abort();await managed?.done;await managed?.warmup}
 }

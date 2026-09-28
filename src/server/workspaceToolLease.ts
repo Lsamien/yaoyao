@@ -65,7 +65,7 @@ export interface LeaseInput {
   catalog(): Catalog
   call(toolId: string, args: unknown, callId?:string): Promise<unknown>
   onFailure(error: Error): void
-  computerPolicy?: { mode: 'isolated' | 'profile'; hostAccess: boolean }
+  computerPolicy?: { mode: 'isolated' | 'profile' | 'none' | 'virtual'; hostAccess: boolean }
   workspaceMemory?: boolean
 }
 
@@ -191,6 +191,8 @@ export async function createWorkspaceToolLease(input: LeaseInput): Promise<Works
           ...(input.workspaceMemory ? {workspace_memory: true} : {}) })
         if(input.workspaceMemory&&result.workspace_memory!==true)
           throw new HttpError(409,'请更新工具桥并重启 Hermes Dashboard 服务，以启用 Bot 会话的独立记忆。','workspace_memory_bridge_required')
+        if (input.computerPolicy && ['none','virtual'].includes(input.computerPolicy.mode) && result.execution_policy_version !== 1)
+          throw new HttpError(409,'请更新工具桥以启用强制环境隔离','execution_bridge_required')
         if (input.computerPolicy && result.computer_runtime_version !== 2)
           throw new HttpError(409, '请更新 Hermes 的夭夭工具桥，当前版本尚未接管隔离电脑会话。', 'computer_bridge_upgrade_required')
         if (!bound && result.native_tools !== true)

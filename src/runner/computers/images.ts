@@ -36,7 +36,11 @@ export class ComputerImages {
     if(image?.Id!==id||image.Os!=='linux'||image.Config?.Labels?.['com.openmausbot.cua-driver']!=='0.20.0'||image.Config?.Labels?.['com.openmausbot.image-layer']!=='5')throw new Error('镜像身份或电脑驱动不兼容')
     return imageManifest.parse({protocol:1,imageId:id,architecture:image.Architecture,driver:'0.20.0',layer:'5',imageKey:image.Config.Labels['cn.samien.yaoyao.image-key']??'standard',createdAt:Date.now()})
   }
+  async prepareNetwork(recipe:string):Promise<void>{
+    await this.run(this.runtime,['build','--pull=false','--file',join(resolve(recipe),'Dockerfile.network'),'--tag','localhost/yaoyao/network:1',resolve(recipe)])
+  }
   async prepare(recipe:string,key:LocalVmImageKey='standard'):Promise<ComputerImageManifest>{
+    await this.prepareNetwork(recipe)
     const tag=`localhost/yaoyao/computer:prepare-${randomUUID()}`
     await this.run(this.runtime,['build','--pull=false',...(key==='cursor'?['--platform','linux/amd64','--file',join(resolve(recipe),'Dockerfile.cursor')]:[]),'--tag',tag,resolve(recipe)])
     const id=JSON.parse(await this.run(this.runtime,['image','inspect',tag]))[0]?.Id

@@ -1,0 +1,9 @@
+# Source/version fixed; Go module downloads are verified by the module checksum database.
+FROM golang:1.24.4-bookworm AS builder
+RUN CGO_ENABLED=0 GOBIN=/out go install github.com/xjasonlyu/tun2socks/v2@v2.6.0
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends python3 iproute2 && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/tun2socks /usr/local/bin/tun2socks
+COPY network_gateway.py /usr/local/libexec/yaoyao/network_gateway.py
+LABEL cn.samien.yaoyao.network-gateway="1"
+ENTRYPOINT ["python3","/usr/local/libexec/yaoyao/network_gateway.py"]

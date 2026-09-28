@@ -1,4 +1,5 @@
 import type {BrowserContext,LaunchOptions} from 'playwright'
+import type {BrowserPointerAction} from '../../shared/managedBrowser.js'
 
 export interface BrowserScope {ownerKey:string;environmentId:string;profile:'persistent'|'temporary'}
 export interface BrowserUpload {name:string;mimeType:string;buffer:Buffer}
@@ -8,6 +9,7 @@ export interface BrowserLauncher {
   launchPersistentContext(directory:string,options:LaunchOptions & {acceptDownloads:boolean;viewport:{width:number;height:number};serviceWorkers:'block'}):Promise<BrowserContext>
 }
 export type BrowserAction=
+  |BrowserPointerAction
   |{kind:'state'|'downloads'|'snapshot'|'screenshot'|'back'|'forward'|'reload'}
   |{kind:'navigate'|'new-tab';url:string}
   |{kind:'select-tab'|'close-tab';tabId:string}
@@ -15,6 +17,7 @@ export type BrowserAction=
   |{kind:'fill';snapshotId:string;ref:string;text:string}
   |{kind:'upload';snapshotId:string;ref:string;fileId:string}
   |{kind:'coordinate';x:number;y:number;button?:'left'|'right'|'middle';clickCount?:1|2}
+  |{kind:'drag';fromX:number;fromY:number;toX:number;toY:number}
   |{kind:'key';key:string}
   |{kind:'text';text:string}
   |{kind:'scroll';deltaX?:number;deltaY:number}

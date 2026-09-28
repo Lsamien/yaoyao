@@ -73,6 +73,40 @@ async function channel(){
   await gateway.connect();const session=await gateway.rpc('session.create',{profile:'default'})
   return {gateway,session}
 }
+it('blocks old Runner control paths when the global VM proxy is enabled',async()=>{
+  hub.executionSettings={proxy:()=>({enabled:true,revision:1})} as any
+  hub.controlAllowed=()=>true
+  for(const payload of [{op:'take'},{op:'input'},{op:'autostart'},{op:'lifecycle',action:'start'}])await expect((hub as any).request(config.runnerId,'computer.control',payload)).rejects.toMatchObject({code:'proxy_runner_required'})
+  expect(await (runner as any).api('control-check',{controlId:randomUUID()})).toEqual({allowed:false})
+  expect((hub as any).networkCommandAllowed(config.runnerId,'computer.control',{op:'lifecycle',action:'stop'})).toBe(true)
+})
+it('reports missing network prerequisites for saved proxy settings and clears the error after applying them',async()=>{
+  hub.executionSettings={proxy:()=>({enabled:true,revision:4})} as any
+  ;(hub as any).online.get(config.runnerId).features.push('vm-egress-v1')
+  const request=vi.spyOn(hub as any,'request').mockRejectedValue(new HttpError(502,'private transport details','computer_network_upgrade_required'))
+  try{
+    await hub.configureNetworks()
+    expect(hub.networkStatus()[0]?.status).toContain('缺少虚拟机网络网关')
+    const result=await hub.testNetworks()
+    expect(result.nodes[0]).toMatchObject({ok:false,error:expect.stringContaining('重新准备网络镜像')})
+    expect(JSON.stringify(result)).not.toContain('private transport details')
+    request.mockRejectedValue(new Error('http://user:secret@proxy.invalid'))
+    expect(JSON.stringify(await hub.testNetworks())).not.toContain('secret')
+    request.mockResolvedValue({revision:4})
+    await hub.configureNetworks()
+    expect(hub.networkStatus()[0]?.status).toBe('已同步，启动时校验出口')
+  }finally{request.mockRestore()}
+})
+it('does not report a successful VM proxy test when the network gateway is missing',async()=>{
+  hub.executionSettings={proxy:()=>({enabled:true,revision:4})} as any
+  const verifyNetwork=vi.fn().mockRejectedValue(new HttpError(409,'缺少网络网关','computer_network_upgrade_required'))
+  const original=(runner as any).computers
+  ;(runner as any).computers={provider:{verifyNetwork},config:{imageId:'sha256:'+'a'.repeat(64)}}
+  try{
+    await expect((runner as any).execute({kind:'network.test',payload:{}})).rejects.toMatchObject({code:'computer_network_upgrade_required'})
+    expect(verifyNetwork).toHaveBeenCalledOnce()
+  }finally{(runner as any).computers=original}
+})
 it('admits virtual computer calls only on a computer gateway with an owned session',async()=>{
   const connectionId=randomUUID(),sessionId=randomUUID(),rpc=vi.fn(async()=>({ok:true}))
   const computer=Object.assign(Object.create(ComputerGateway.prototype),{rpc,close:()=>{}}) as ComputerGateway
@@ -81,10 +115,31 @@ it('admits virtual computer calls only on a computer gateway with an owned sessi
   const command=(method:string,id=sessionId)=>({kind:'gateway.rpc',payload:{connectionId,method,params:{session_id:id,name:'computer_desktop_state',arguments:{}}}})
   expect(await (runner as any).execute(command('computer.invoke'))).toEqual({ok:true})
   expect(await (runner as any).execute(command('computer.transfer'))).toEqual({ok:true})
+  expect(await (runner as any).execute(command('computer.complete'))).toEqual({ok:true})
   await expect((runner as any).execute(command('computer.invoke',randomUUID()))).rejects.toMatchObject({code:'runner_session_forbidden'})
+  await expect((runner as any).execute(command('computer.complete',randomUUID()))).rejects.toMatchObject({code:'runner_session_forbidden'})
   connection.gateway=Object.assign(Object.create(WorkspaceGateway.prototype),{rpc,close:()=>{}}) as ComputerGateway
   await expect((runner as any).execute(command('computer.invoke'))).rejects.toMatchObject({code:'runner_command_forbidden'})
-  expect(rpc).toHaveBeenCalledTimes(2)
+  await expect((runner as any).execute(command('computer.complete'))).rejects.toMatchObject({code:'runner_command_forbidden'})
+  expect(rpc).toHaveBeenCalledTimes(3)
+})
+it('waits for local VM recovery before restoring a saved desktop and skips unconfigured targets',async()=>{
+  const original=(runner as any).computers,oldManager=(runner as any).localVm,id=randomUUID()
+  const sync=vi.spyOn(runner as any,'syncNetworkSettings').mockResolvedValue(undefined)
+  let ready!:()=>void
+  const definition=vi.fn(()=>({id})),restoreDesktop=vi.fn(async(_target:any,authorize:()=>void)=>authorize())
+  ;(runner as any).computers={ready:Promise.resolve(),pool:{definition},restoreDesktop}
+  ;(runner as any).localVm={ready:new Promise<void>(done=>{ready=done})}
+  const command={kind:'computer.control',expiresAt:Date.now()+30000,payload:{target:{environmentId:id,agentId:id,ownerKey:'a'.repeat(64)},profile:'default',op:'autostart'}}
+  try{
+    const pending=(runner as any).execute(command)
+    await Promise.resolve();expect(restoreDesktop).not.toHaveBeenCalled()
+    ready();await pending
+    expect(sync).toHaveBeenCalledOnce();expect(restoreDesktop).toHaveBeenCalledWith(command.payload.target,expect.any(Function))
+    definition.mockReturnValue(undefined as any)
+    expect(await (runner as any).execute(command)).toMatchObject({skipped:true})
+    expect(restoreDesktop).toHaveBeenCalledOnce()
+  }finally{ready();sync.mockRestore();(runner as any).computers=original;(runner as any).localVm=oldManager}
 })
 it('requires an upgraded Runner before granting mixed host and VM tools',()=>{
  const id=randomUUID()

@@ -9,6 +9,7 @@ import { defaultAgentIdentity, encodeAgentAvatar, decodeAgentAvatar } from '../.
 import {readHostTools,saveHostTools} from '../../src/server/hostToolSettings'
 import {DesktopEnvironments} from '../../src/server/desktopEnvironments'
 import {HttpError} from '../../src/server/errors'
+import {ExecutionSettings} from '../../src/server/executionSettings'
 import {WorkspaceAssets} from '../../src/server/workspaceAssets'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
 import { WorkspaceRuntime, mentionedAgents } from '../../src/server/workspaceRuntime'
@@ -1824,13 +1825,15 @@ it('snapshots each message origin and uses inherited provenance for internal dis
  expect(store.require<any>(owner,'message',delegated.messageId).deviceHost).toBe(a)
 })
 
-it('offers a direct host-to-host copy through the real Bot tool bridge without publishing chat files',async()=>{
+it.each(['none','server','virtual'] as const)('copies between allowed hosts and preserves message-local aliases with default %s',async mode=>{
+ runtime.executionSettings=new ExecutionSettings(store,nodes,{isUserActive:()=>true} as any)
+ runtime.executionSettings.saveSelection({mode,revision:1})
  const bot=agent('传文件'),c=direct(bot.id),target=nodes.target(owner,'local'),originalRequest=target.session.request.bind(target.session)
  let binding:any,integrationError:unknown
  vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>{
   if(path.startsWith('/api/plugins/yaoyao-bot-bridge/')){
    if(path.endsWith('/bind'))binding=options?.body
-   return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,native_tools:true,in_process:true}))}
+   return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,native_tools:true,in_process:true,computer_runtime_version:2}))}
   }
   return originalRequest(path,options)
  })
@@ -1842,7 +1845,7 @@ it('offers a direct host-to-host copy through the real Bot tool bridge without p
   {key:'mac1',host:{...info,id:randomUUID(),name:'mac1'},exchange:(body:unknown)=>desktop.remoteExchange(clientId,body)}]
  const timers=machines.map(machine=>{let results:any[]=[];machine.exchange({host:machine.host,results});return setInterval(()=>{
   const response=machine.exchange({host:machine.host,results})
-  results=response.commands.map((command:any)=>{commands.push({host:machine.key,op:command.action.op});return {id:command.id,value:command.action.op==='read'
+  results=response.commands.map((command:any)=>{commands.push({host:machine.key,op:command.operation==='shell'?'shell':command.action.op});return {id:command.id,value:command.operation==='shell'?{stdout:machine.key,stderr:'',exitCode:0}:command.action.op==='read'
    ? {size:payload.length,data:payload.toString('base64')}
    : {path:command.action.path,size:Buffer.from(command.action.data,'base64').length,sha256:createHash('sha256').update(Buffer.from(command.action.data,'base64')).digest('hex')}}})
  },5)})
@@ -1859,13 +1862,23 @@ it('offers a direct host-to-host copy through the real Bot tool bridge without p
    expect(result.structuredContent).toMatchObject({copied:true,source:{host:clientId},target:{host:'local'},size:payload.length,sha256})
    expect(JSON.stringify(result).length).toBeLessThan(1500)
    expect(await http('/tools/call',call)).toEqual(result)
+   const shell=catalog.tools.find((tool:any)=>tool.name==='desktop_shell')
+   for(const args of [{command:'pwd'},{host:'local',command:'pwd'},{host:clientId,command:'pwd'}]){
+    const result=await http('/tools/call',{toolId:shell.id,callId:randomUUID(),arguments:args})
+    expect(result.isError).not.toBe(true)
+    expect(result.structuredContent.stdout).toBe('mac1')
+   }
+   saveHostTools(home,{scriptMachine:false})
+   const denied=await http('/tools/call',{toolId:shell.id,callId:randomUUID(),arguments:{host:clientId,command:'pwd'}})
+   expect(denied.isError).toBe(true)
+
   }catch(error){integrationError=error}
   socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'文件复制完成',status:'complete'}}}))
  })()}
  try{
-  await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'帮我把 mac1 桌面的 a.txt 放到服务器桌面'}).id)
+  await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'帮我把 mac1 桌面的 a.txt 放到服务器桌面',deviceHost:clientId}).id)
   if(integrationError)throw integrationError
-  expect(commands).toEqual([{host:'mac1',op:'read'},{host:'server',op:'receive'}])
+  expect(commands).toEqual([{host:'mac1',op:'read'},{host:'server',op:'receive'},...Array.from({length:3},()=>({host:'mac1',op:'shell'}))])
   expect(publish).not.toHaveBeenCalled();expect(store.list(owner,'file')).toEqual([])
  }finally{timers.forEach(clearInterval);desktop.close()}
 })
@@ -2036,4 +2049,69 @@ it('submits capability-based Bot context with current origins, confirmed cwd and
       expect(prompt).toContain('屏幕控制=就绪；文件与命令=未授权')
     }
   } finally { desktop.close() }
+})
+
+
+it.each(['none','server','virtual'] as const)('dispatches browser and VM tools with default %s and migrates exclusive sessions once',async mode=>{
+ const bot=agent('多环境回归'),c=direct(bot.id),target=nodes.target(owner,'local'),original=target.session.request.bind(target.session)
+ runtime.executionSettings=new ExecutionSettings(store,nodes,{isUserActive:()=>true} as any)
+ runtime.executionSettings.saveSelection({mode,revision:1})
+ saveHostTools(home,{managedBrowser:true,vm:true,cloud:false,scriptMachine:false,serverComputer:false})
+ let binding:any,integrationError:unknown
+ vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>{
+  if(path.startsWith('/api/plugins/yaoyao-bot-bridge/')){
+   if(path.endsWith('/bind'))binding=options?.body
+   return {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,native_tools:true,in_process:true,computer_runtime_version:2}))}
+  }
+  return original(path,options)
+ })
+ const vmTarget=vi.fn(()=>target);nodes.targetForAgent=vmTarget
+ const browserCall=vi.fn(async()=>({open:true,tabs:[{url:'https://example.com/'}]})),browserOpen=vi.fn(()=>({call:browserCall,close:async()=>{}}))
+ runtime.managedBrowsers={available:()=>true,openTurn:browserOpen} as any
+ const pluginOpen=vi.fn(async()=>({services:()=>[{name:'测试 stdio',transport:'stdio',toolCount:1}],warnings:()=>[],catalog:()=>[],dispose:async()=>{}}))
+ runtime.plugins={selected:()=>true,open:pluginOpen} as any
+ const http=async(path:string,body:unknown)=>{
+  const response=await fetch(binding.bridge_url+path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${binding.token}`},body:JSON.stringify(body)})
+  expect(response.status).toBe(200);return response.json()
+ }
+ reply=(socket,p)=>{void(async()=>{
+  try{
+   expect(binding.computer_policy).toEqual({mode:'profile',hostAccess:true})
+   expect(p.text).toContain('默认使用 managed_browser_open')
+   expect(p.text).toContain('不限制其他已开放且获授权的环境')
+   expect(p.text).toContain('测试 stdio')
+   const catalog=await http('/tools/list',{})
+   const call=async(name:string,args:unknown)=>{
+    const tool=catalog.tools.find((tool:any)=>tool.name===name);expect(tool).toBeDefined()
+    return http('/tools/call',{toolId:tool.id,callId:randomUUID(),arguments:args})
+   }
+   expect((await call('managed_browser_open',{url:'https://example.com/'})).isError).not.toBe(true)
+   expect((await call('computer_shell',{command:'pwd'})).isError).not.toBe(true)
+   saveHostTools(home,{vm:false})
+   expect((await call('computer_shell',{command:'pwd'})).isError).toBe(true)
+   saveHostTools(home,{vm:true})
+  }catch(error){integrationError=error}
+  socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'回归完成',status:'complete'}}}))
+ })()}
+ let statusAtVmCompletion:string|undefined
+ observeGatewayRequest=frame=>{if(frame.method==='computer.complete')statusAtVmCompletion=store.list<any>(owner,'turn').find(work=>work.agentId===bot.id)?.status}
+ await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'打开网页，然后在虚拟机执行 pwd'}).id)
+ if(integrationError)throw integrationError
+ expect(browserOpen).toHaveBeenCalledOnce();expect(browserCall).toHaveBeenCalledWith('managed_browser_open',{url:'https://example.com/'},expect.any(String))
+ expect(vmTarget).toHaveBeenCalledWith(owner,expect.objectContaining({id:bot.id,execution:'computer'}))
+ expect(requests.filter(call=>call.method==='computer.invoke')).toHaveLength(1)
+ expect(requests.find(call=>call.method==='computer.invoke')?.params).toMatchObject({name:'computer_shell',arguments:{command:'pwd'}})
+ expect(requests.filter(call=>call.method==='computer.complete')).toHaveLength(1)
+ expect(statusAtVmCompletion).toBe('running')
+ const saved=store.list<any>(owner,'binding')[0]
+ store.put(owner,'binding',saved.id,{...saved,executionPolicyVersion:undefined})
+ reply=(socket,p)=>socket.send(JSON.stringify({method:'event',params:{type:'message.complete',session_id:p.session_id,payload:{text:'完成',status:'complete'}}}))
+ const before=requests.length
+ await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'继续'}).id)
+ expect(requests.slice(before).filter(call=>call.method==='session.create')).toHaveLength(1)
+ expect(store.list<any>(owner,'binding')[0].executionPolicyVersion).toBe(2)
+ const afterReset=requests.length
+ await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'再次继续'}).id)
+ expect(requests.slice(afterReset).some(call=>call.method==='session.create')).toBe(false)
+ expect(requests.slice(afterReset).some(call=>call.method==='session.resume')).toBe(true)
 })

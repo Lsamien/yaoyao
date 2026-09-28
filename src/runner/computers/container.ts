@@ -5,6 +5,8 @@ import { join, resolve, posix, dirname, basename } from 'node:path'
 import { z } from 'zod'
 import {recoverWorkspace} from './workspaceRecovery.js'
 import {COMMAND_ROOT,GUEST_COMMAND} from './commandProcess.js'
+import {ComputerUserData,COMPUTER_HOME} from './userData.js'
+import {CLOSE_DESKTOP} from './desktopClose.js'
 
 export const COMPUTER_WORKSPACE = '/home/cua/workspace'
 export const CUA_DRIVER = '/usr/local/libexec/openmausbot/cua-driver'
@@ -25,11 +27,11 @@ const command:ContainerCommand=(runtime,args,options={})=>new Promise((resolveRe
   child.stdin.end(options.input)
 })
 const schema=z.object({
-  network:z.enum(['none','public-proxy']).default('none'),
+  network:z.enum(['none','public-proxy','managed-proxy']).default('none'),
   id:z.string().uuid(),ownerKey:z.string().min(1).max(256),
   imageId:z.string().regex(/^sha256:[a-f0-9]{64}$/),
   cpus:z.number().int().min(1).max(8).default(2),memoryMiB:z.number().int().min(1024).max(16384).default(4096),
-  cwd:z.string().max(4096).refine(value=>!/[\u0000-\u001f,]/.test(value)&&posix.isAbsolute(value)&&posix.normalize(value)===value&&value!=='/'&&!/^\/(?:proc|sys|dev|run|tmp|etc|usr|bin|sbin)(?:\/|$)/.test(value)&&value!=='/home/cua','电脑工作目录不受支持').default(COMPUTER_WORKSPACE),
+  cwd:z.string().max(4096).refine(value=>!/[\u0000-\u001f,]/.test(value)&&posix.isAbsolute(value)&&posix.normalize(value)===value&&value!=='/'&&!/^\/(?:proc|sys|dev|run|tmp|etc|usr|bin|sbin)(?:\/|$)/.test(value)&&!['/home/cua','/root','/var/lib/dbus/machine-id'].includes(value),'电脑工作目录不受支持').default(COMPUTER_WORKSPACE),
   pids:z.number().int().min(64).max(1024).default(512),
 }).strict()
 export type ComputerSpecification=z.input<typeof schema>
@@ -104,12 +106,14 @@ const capabilities=(values:unknown)=>Array.isArray(values)?values.map(value=>Str
 /** A private container per environment. No tools, filesystem operations or
  * process execution fall back to the host. Remote hosts run their own Runner. */
 export class ContainerComputerProvider implements ComputerProvider {
+  readonly userData:ComputerUserData
   readonly fixedCapacity:boolean=false
   private lanes=new Map<string,Lane>()
   readonly capabilities={isolation:'container',shell:true,desktop:true,persistentWorkspace:true,sharedDesktop:false,snapshots:false,network:'none'} as const
   constructor(readonly runtime:'docker'|'podman',readonly runnerId:string,readonly home:string,readonly run:ContainerCommand=command,readonly environment:NodeJS.ProcessEnv=process.env) {
     z.string().uuid().parse(runnerId)
     if(!['docker','podman'].includes(runtime))throw new ComputerError('runtime_unsupported','电脑运行时不受支持')
+    this.userData=new ComputerUserData(home,runtime,run)
   }
   protected lane(id:string):Lane{let lane=this.lanes.get(id);if(!lane){lane=new Lane();this.lanes.set(id,lane)}return lane}
   async verifyRuntime() {
@@ -127,6 +131,7 @@ export class ContainerComputerProvider implements ComputerProvider {
     if(!parsed.success)throw new ComputerError('computer_spec_invalid','电脑环境配置无效')
     return parsed.data
   }
+  private networkIds=new Map<string,string>()
   private name(spec:Spec){return `yaoyao-computer-${digest([this.runnerId,spec.id]).slice(0,24)}`}
   private labels(spec:Spec){return {[managedLabel]:spec.id,[runnerLabel]:this.runnerId,[ownerLabel]:digest(spec.ownerKey),[specLabel]:digest(spec)}}
   private async workspace(spec:Spec) {
@@ -151,19 +156,21 @@ export class ContainerComputerProvider implements ComputerProvider {
     if(!detail||!/^[a-f0-9]{64}$/.test(String(detail.Id))||Object.entries(this.labels(spec)).filter(([key])=>key!==specLabel).some(([key,value])=>detail.Config?.Labels?.[key]!==value))
       throw new ComputerError('computer_owner_mismatch','电脑实例不属于当前执行节点或配置已变化')
   }
-  private assertConfiguration(spec:Spec,detail:any,workspace:string) {
+  private assertConfiguration(spec:Spec,detail:any,workspace:string,legacy=false) {
     this.assertOwned(spec,detail)
+    if(legacy&&detail.Config?.Labels?.['cn.samien.yaoyao.userdata'])throw new ComputerError('computer_configuration_unsafe','电脑用户资料挂载缺失，已保留原实例')
     const host=detail.HostConfig??{},expectedCaps=this.runtime==='podman'?['SETGID','SETUID','SYS_CHROOT']:['SETGID','SETUID']
     const nanoCPUs=host.NanoCpus??(host.CpuPeriod>0?host.CpuQuota/host.CpuPeriod*1e9:0)
     const ports=Object.entries(host.PortBindings??{}),mounts=detail.Mounts??[]
     const destinations=spec.cwd===COMPUTER_WORKSPACE?[COMPUTER_WORKSPACE]:[COMPUTER_WORKSPACE,spec.cwd]
+    const expected=[...destinations.map(destination=>({source:workspace,destination,rw:true})),...(legacy?[]:this.userData.mounts(resolve(dirname(workspace),'..','computer-userdata',spec.id)))]
     if(detail.Config?.Labels?.[specLabel]!==digest(spec)||detail.Image!==spec.imageId||host.Privileged!==false||host.Memory!==spec.memoryMiB*mib||host.MemorySwap!==spec.memoryMiB*mib
       ||nanoCPUs!==spec.cpus*1e9||host.PidsLimit!==spec.pids||host.IpcMode!=='private'||host.CgroupnsMode!=='private'
-      ||host.NetworkMode!=='none'||host.PidMode==='host'||host.UsernsMode==='host'||host.UTSMode==='host'
+      ||(spec.network==='managed-proxy'?![`container:${this.name(spec)}-network`,`container:${this.networkIds.get(spec.id)}`].includes(host.NetworkMode):host.NetworkMode!=='none')||host.PidMode==='host'||host.UsernsMode==='host'||host.UTSMode==='host'
       ||(host.SecurityOpt??[]).some((value:string)=>/^no-new-privileges(?::true)?$/.test(value)||/unconfined/.test(value))
       ||JSON.stringify(capabilities(host.CapAdd))!==JSON.stringify(expectedCaps)||!capabilities(host.CapDrop).includes('ALL')
       ||(host.Devices??[]).length||(host.DeviceRequests??[]).length||host.RestartPolicy?.Name!=='no'
-      ||mounts.length!==destinations.length||mounts.some((mount:any)=>mount.Type!=='bind'||mount.Source!==workspace||!destinations.includes(mount.Destination)||mount.RW!==true)||new Set(mounts.map((mount:any)=>mount.Destination)).size!==destinations.length
+      ||mounts.length!==expected.length||mounts.some((mount:any)=>mount.Type!=='bind'||!expected.some(item=>item.source===mount.Source&&item.destination===mount.Destination&&item.rw===mount.RW))||new Set(mounts.map((mount:any)=>mount.Destination)).size!==expected.length
       ||ports.length!==0)
       throw new ComputerError('computer_configuration_unsafe','电脑实例的隔离、资源或数据目录不符合要求，请先停止并核对')
   }
@@ -173,7 +180,7 @@ export class ContainerComputerProvider implements ComputerProvider {
     return {id:spec.id,containerId:detail.Id,running:detail.State?.Running===true,workspace,isolation:'container'}
   }
   private async migratedContainer(spec:Spec,detail:any,workspace:string) {
-    if(!detail || detail.Mounts?.every((mount:any)=>mount.Source===workspace))return detail
+    if(!detail || detail.Mounts?.some((mount:any)=>mount.Destination===COMPUTER_WORKSPACE&&mount.Source===workspace))return detail
     let root=resolve(this.home)
     while(dirname(root)!==root&&basename(root)!=='.yaoyao')root=dirname(root)
     if(basename(root)!=='.yaoyao')return detail
@@ -181,8 +188,9 @@ export class ContainerComputerProvider implements ComputerProvider {
     try{migration=JSON.parse(await readFile(join(root,'.data-home-migration.json'),'utf8'))}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return detail;throw error}
     if(migration.phase!=='complete'||migration.target!==root||migration.source!==join(dirname(root),'.hermes-yaoyao'))return detail
     const oldWorkspace=migration.source+workspace.slice(root.length)
-    this.assertConfiguration(spec,detail,oldWorkspace)
+    this.assertConfiguration(spec,detail,oldWorkspace,!this.hasUserData(detail))
     if(detail.State?.Running)throw new ComputerError('computer_migration_busy','旧目录的虚拟机仍在运行，请停止后再迁移')
+    await this.userData.capture(spec,detail.Id,true)
     // Preserve the old writable layer as a stopped backup; only the verified name changes.
     await this.run(this.runtime,['rename',detail.Id,`${this.name(spec)}-before-data-move-${detail.Id.slice(0,8)}`])
     return undefined
@@ -190,17 +198,25 @@ export class ContainerComputerProvider implements ComputerProvider {
   async inspect(value:ComputerSpecification):Promise<ComputerState|undefined> {
     await this.verifyRuntime()
     const spec=this.validateSpecification(value),workspace=await this.workspace(spec),detail=await this.migratedContainer(spec,await this.inspectRaw(this.name(spec)),workspace)
+    if(detail&&spec.network==='managed-proxy'){const gateway=await this.inspectRaw(this.name(spec)+'-network');this.assertNetwork(spec,gateway);this.networkIds.set(spec.id,gateway.Id)}
+    if(detail&&!this.hasUserData(detail)){
+      this.assertConfiguration(spec,detail,workspace,true)
+      return {id:spec.id,containerId:detail.Id,running:detail.State?.Running===true,workspace,isolation:'container'}
+    }
+    if(detail)await this.userData.existing(spec).then(path=>{if(!path)throw new ComputerError('computer_data_missing','电脑用户资料缺失，已停止自动重建')})
     return detail?this.state(spec,detail,workspace):undefined
   }
-  private args(spec:Spec,workspace:string) {
-    return ['create','--name',this.name(spec),'--hostname',this.name(spec),// The XFCE/VNC startup resolves its own hostname even without a network.
-      '--add-host',`${this.name(spec)}:127.0.0.1`,
+  private hasUserData(detail:any){return detail.Mounts?.some((mount:any)=>mount.Destination===COMPUTER_HOME)}
+  private args(spec:Spec,workspace:string,userData?:string) {
+    return ['create','--name',this.name(spec),...(spec.network==='managed-proxy'?[]:['--hostname',this.name(spec),'--add-host',`${this.name(spec)}:127.0.0.1`]),
       ...Object.entries(this.labels(spec)).flatMap(([key,value])=>['--label',`${key}=${value}`]),
-      '--restart','no','--network','none','--ipc','private','--cgroupns','private',
+      ...(userData?['--label','cn.samien.yaoyao.userdata=1']:[]),
+      '--restart','no','--network',spec.network==='managed-proxy'?`container:${this.name(spec)}-network`:'none','--ipc','private','--cgroupns','private',
       '--memory',`${spec.memoryMiB}m`,'--memory-swap',`${spec.memoryMiB}m`,'--cpus',String(spec.cpus),'--pids-limit',String(spec.pids),
       '--shm-size','512m','--cap-drop','ALL','--cap-add','SETUID','--cap-add','SETGID',
       ...(this.runtime==='podman'?['--userns','keep-id:uid=1000,gid=1000','--user','root','--cap-add','SYS_CHROOT']:[]),
       ...[...new Set([COMPUTER_WORKSPACE,spec.cwd])].flatMap(destination=>['--mount',`type=bind,source=${workspace},target=${destination}${this.runtime==='podman'?',relabel=private':''}`]),
+      ...(userData?this.userData.mounts(userData).flatMap(mount=>['--mount',`type=bind,source=${mount.source},target=${mount.destination}${mount.rw?'':',readonly'}${this.runtime==='podman'?',relabel=private':''}`]):[]),
       ...(spec.network==='public-proxy'?['--env','HTTP_PROXY=http://127.0.0.1:3128','--env','HTTPS_PROXY=http://127.0.0.1:3128','--env','http_proxy=http://127.0.0.1:3128','--env','https_proxy=http://127.0.0.1:3128','--env','NO_PROXY=localhost,127.0.0.1,::1','--env','no_proxy=localhost,127.0.0.1,::1']:[]),
       '--env',`VNC_PW=${randomBytes(24).toString('base64url')}`,spec.imageId]
   }
@@ -209,7 +225,19 @@ export class ContainerComputerProvider implements ComputerProvider {
     return this.lane(spec.id).write(async()=>{
       authorize();await this.verifyRuntime();authorize()
       const workspace=await this.workspace(spec)
+      if(spec.network==='managed-proxy')await this.ensureNetwork(spec,authorize)
       let detail=await this.migratedContainer(spec,await this.inspectRaw(this.name(spec)),workspace)
+      if(detail&&!this.hasUserData(detail)){
+        // Verify the old boundary before copying private data. A single legacy
+        // flag is relaxed only for this one-time migration.
+        const checked={...detail,HostConfig:{...detail.HostConfig,SecurityOpt:(detail.HostConfig?.SecurityOpt??[]).filter((value:string)=>!/^no-new-privileges(?::true)?$/.test(value))}}
+        this.assertConfiguration(spec,checked,workspace,true)
+        await this.stopOwned(spec,detail.Id)
+        await this.userData.capture(spec,detail.Id,true)
+        authorize()
+        await this.run(this.runtime,['rm','--',detail.Id])
+        detail=undefined
+      }
       if(detail?.HostConfig?.SecurityOpt?.some((value:string)=>/^no-new-privileges(?::true)?$/.test(value))) {
         await this.stopOwned(spec,detail.Id)
         await this.run(this.runtime,['rm','--',detail.Id])
@@ -220,12 +248,26 @@ export class ContainerComputerProvider implements ComputerProvider {
         if(image?.Id!==spec.imageId||image.Config?.Labels?.['com.openmausbot.cua-driver']!=='0.20.0'||image.Config?.Labels?.['com.openmausbot.image-layer']!=='5')
           throw new ComputerError('computer_image_incompatible','电脑镜像缺少已验证的驱动，请先安装兼容镜像')
         authorize()
-        const created=await this.run(this.runtime,this.args(spec,workspace))
+        let userData=await this.userData.existing(spec)
+        if(!userData){
+          // Seed from an unstarted image container, so its desktop defaults and
+          // user-installed tools are available before the home is over-mounted.
+          const seed=await this.run(this.runtime,this.args(spec,workspace))
+          const seedId=seed.stdout.trim(),seedDetail=await this.inspectRaw(seedId)
+          this.assertConfiguration(spec,seedDetail,workspace,true)
+          await this.stopOwned(spec,seedId)
+          userData=await this.userData.capture(spec,seedId,false)
+          await this.run(this.runtime,['rm','--',seedId])
+        }
+        await this.userData.beforeImageChange(spec,workspace)
+        authorize()
+        const created=await this.run(this.runtime,this.args(spec,workspace,userData))
         const id=created.stdout.trim()
         if(!/^[a-f0-9]{64}$/.test(id))throw new ComputerError('computer_creation_uncertain','电脑创建结果不确定，请核对实例')
         detail=await this.inspectRaw(id)
       }
       let state=this.state(spec,detail,workspace)
+      if(!await this.userData.existing(spec))throw new ComputerError('computer_data_missing','电脑用户资料缺失，已停止自动重建')
       authorize()
       if(!state.running)await this.run(this.runtime,['start','--',state.containerId])
       try {
@@ -235,10 +277,11 @@ export class ContainerComputerProvider implements ComputerProvider {
       }catch(error){await this.stopOwned(spec,state.containerId).catch(()=>{});throw error}
     })
   }
-  private async stopOwned(spec:Spec,id:string) {
+  private async stopOwned(spec:Spec,id:string,graceful=true) {
     const detail=await this.inspectRaw(id)
     if(!detail)return
     this.assertOwned(spec,detail)
+    if(detail.State?.Running&&graceful)await this.run(this.runtime,['exec','--user','1000:1000','--',id,'python3','-c',CLOSE_DESKTOP],{timeout:6000}).catch(()=>{})
     if(detail.State?.Running)await this.run(this.runtime,['stop','--time','10','--',id],{timeout:15000})
     const stopped=await this.inspectRaw(id)
     if(stopped?.State?.Running)throw new ComputerError('computer_stop_uncertain','尚未确认电脑环境已停止')
@@ -247,13 +290,45 @@ export class ContainerComputerProvider implements ComputerProvider {
     const spec=this.validateSpecification(value)
     return this.lane(spec.id).write(async()=>{await this.verifyRuntime();const detail=await this.inspectRaw(this.name(spec));if(detail){this.assertOwned(spec,detail);await this.stopOwned(spec,detail.Id)}})
   }
+  /** Called by the updater while the old Web service is quiesced. Old versions
+   * remove containers on shutdown, so waiting until the new service boots loses
+   * their writable homes. Leave the verified source intact until shutdown. */
+  async preserveUserData(value:ComputerSpecification):Promise<boolean>{
+    const spec=this.validateSpecification(value)
+    return this.lane(spec.id).write(async()=>{
+      if(await this.userData.existing(spec))return false
+      await this.verifyRuntime()
+      const detail=await this.inspectRaw(this.name(spec))
+      if(!detail)return false
+      this.assertOwned(spec,detail)
+      if(this.hasUserData(detail)){if(!await this.userData.existing(spec))throw new Error('电脑用户资料缺失');return false}
+      if(spec.network==='managed-proxy'){
+        const gateway=await this.inspectRaw(this.name(spec)+'-network')
+        this.assertNetwork(spec,gateway);this.networkIds.set(spec.id,gateway.Id)
+      }
+      this.assertConfiguration(spec,detail,await this.workspace(spec),true)
+      await this.stopOwned(spec,detail.Id)
+      await this.userData.capture(spec,detail.Id,true)
+      return true
+    })
+  }
   async remove(value:ComputerSpecification):Promise<void> {
     const spec=this.validateSpecification(value)
     return this.lane(spec.id).write(async()=>{
       await this.verifyRuntime()
-      const detail=await this.inspectRaw(this.name(spec));if(!detail)return
-      this.assertOwned(spec,detail);await this.stopOwned(spec,detail.Id)
-      await this.run(this.runtime,['rm','--',detail.Id])
+      const detail=await this.inspectRaw(this.name(spec))
+      if(detail){
+        this.assertOwned(spec,detail);await this.stopOwned(spec,detail.Id)
+        // Shutdown, cancellation and image changes also pass through remove.
+        // Preserve legacy homes before any of those paths delete a container.
+        if(!this.hasUserData(detail)){
+          const workspace=await this.workspace(spec)
+          if((detail.Mounts??[]).some((mount:any)=>mount.Type!=='bind'||mount.Source!==workspace))throw new ComputerError('computer_configuration_unsafe','旧电脑的数据挂载不符合要求，已保留原容器')
+          await this.userData.capture(spec,detail.Id,true)
+        }
+        await this.run(this.runtime,['rm','--',detail.Id])
+      }
+      if(spec.network==='managed-proxy'){const gateway=await this.inspectRaw(this.name(spec)+'-network');if(gateway){this.assertNetwork(spec,gateway);await this.run(this.runtime,['rm','-f','--',gateway.Id])}this.networkIds.delete(spec.id)}
       // Persistent workspace deletion is a separate, explicit operation.
     })
   }
@@ -316,7 +391,7 @@ export class ContainerComputerProvider implements ComputerProvider {
     },options.lane==='gui'?this.lane(spec.id).gui:undefined)
   }
   /** Escalates to the lifecycle lane so the stop never runs under live operations. */
-  private fence(spec:Spec,id:string){void this.lane(spec.id).write(async()=>{await this.stopOwned(spec,id).catch(()=>{})}).catch(()=>{})}
+  private fence(spec:Spec,id:string){void this.lane(spec.id).write(async()=>{await this.stopOwned(spec,id,false).catch(()=>{})}).catch(()=>{})}
   async installSkill(value:ComputerSpecification,bundle:SkillInstallation,script:string,options:{authorize():void;signal?:AbortSignal}):Promise<{path:string;revision:string}> {
     const spec=this.validateSpecification(value)
     return this.lane(spec.id).read(async()=>{
@@ -349,12 +424,45 @@ export class ContainerComputerProvider implements ComputerProvider {
     return this.lane(spec.id).write(async()=>{
       if(await this.inspectRaw(this.name(spec)))throw new ComputerError('computer_busy','删除工作区前必须移除电脑实例')
       const base=await realpath(resolve(this.home,'computer-workspaces')).catch(error=>{if(error.code==='ENOENT')return undefined;throw error})
-      if(!base)return
-      const path=join(base,spec.id),info=await lstat(path).catch(error=>{if(error.code==='ENOENT')return undefined;throw error})
-      if(!info)return
-      if(!info.isDirectory()||info.isSymbolicLink()||await realpath(path)!==path)throw new ComputerError('computer_path_unsafe','拒绝删除非预期的电脑工作区')
-      await rm(path,{recursive:true})
+      const userData=await this.userData.existing(spec)
+      if(base){
+        const path=join(base,spec.id),info=await lstat(path).catch(error=>{if(error.code==='ENOENT')return undefined;throw error})
+        if(info){
+          if(!info.isDirectory()||info.isSymbolicLink()||await realpath(path)!==path)throw new ComputerError('computer_path_unsafe','拒绝删除非预期的电脑工作区')
+          await rm(path,{recursive:true})
+        }
+      }
+      if(userData)await rm(userData,{recursive:true})
+      await rm(this.userData.path(spec.id)+'.required',{force:true})
     })
+  }
+  private assertNetwork(spec:Spec,gateway:any){
+    const host=gateway?.HostConfig??{}
+    if(!gateway||gateway.Config?.Labels?.['cn.samien.yaoyao.network-owner']!==digest({id:spec.id,ownerKey:spec.ownerKey})||host.NetworkMode!=='none'||host.Privileged!==false||host.PidMode==='host'||(gateway.Mounts??[]).some((m:any)=>m.Type!=='tmpfs')||JSON.stringify(capabilities(host.CapAdd))!==JSON.stringify(['NET_ADMIN'])||!capabilities(host.CapDrop).includes('ALL')||(host.Devices??[]).length!==1||host.Devices[0].PathInContainer!=='/dev/net/tun'||Object.keys(host.PortBindings??{}).length)throw new ComputerError('computer_network_unsafe','网络网关隔离配置不匹配')
+  }
+  async verifyNetwork(){
+    await this.verifyRuntime()
+    try{const image=JSON.parse((await this.run(this.runtime,['image','inspect','localhost/yaoyao/network:1'])).stdout)[0];if(image?.Config?.Labels?.['cn.samien.yaoyao.network-gateway']!=='1')throw new Error()}catch{throw new ComputerError('computer_network_upgrade_required','请在本地虚拟机设置中重新准备网络镜像')}
+  }
+  private async ensureNetwork(spec:Spec,authorize:()=>void){
+    const name=this.name(spec)+'-network'
+    let gateway=await this.inspectRaw(name)
+    if(gateway){
+      this.assertNetwork(spec,gateway)
+    }else{
+      const image=JSON.parse((await this.run(this.runtime,['image','inspect','localhost/yaoyao/network:1'])).stdout)[0]
+      if(image?.Config?.Labels?.['cn.samien.yaoyao.network-gateway']!=='1')throw new ComputerError('computer_network_upgrade_required','请重新准备虚拟机网络镜像')
+      authorize()
+      await this.run(this.runtime,['create','--name',name,'--label',`cn.samien.yaoyao.network-owner=${digest({id:spec.id,ownerKey:spec.ownerKey})}`,'--network','none','--dns','198.18.0.1','--cap-drop','ALL','--cap-add','NET_ADMIN','--device','/dev/net/tun','--memory','128m','--pids-limit','64','--read-only','--tmpfs','/run',image.Id,'--init'])
+      gateway=await this.inspectRaw(name)
+    }
+    this.assertNetwork(spec,gateway);this.networkIds.set(spec.id,gateway.Id)
+    authorize();if(!gateway?.State?.Running)await this.run(this.runtime,['start',name])
+  }
+  async openNetworkPipe(value:ComputerSpecification,authorize:()=>void){
+    const spec=this.validateSpecification(value);authorize()
+    await this.ensureNetwork(spec,authorize)
+    return spawn(this.runtime,['exec','-i','--user','0:0','--',this.name(spec)+'-network','python3','/usr/local/libexec/yaoyao/network_gateway.py'],{stdio:'pipe'})
   }
   async openPipe(value:ComputerSpecification,argv:string[],authorize:()=>void){
     const spec=this.validateSpecification(value)

@@ -4,6 +4,8 @@
 
 这是独立浏览器进程，不是新增 Linux 虚拟机或 Docker 浏览器服务。Web 与 macOS 电脑面板提供查看和人工接管，窄屏 Web 可用；本次没有新增 iOS/Android 原生浏览器界面，也没有替换现有 UI 技术栈。
 
+开启且可用后，未指定浏览器或设备的网页任务默认使用托管浏览器，包括“打开百度”“用浏览器”，不受服务器／虚拟机默认运行环境影响。用户明确指定浏览器、设备或已有登录态，或继续操作已指定的页面时，使用对应的已授权环境；不会仅因历史曾用过其他浏览器而改变新网页任务的默认选择。
+
 ## 启用
 
 全局 Bot 工具开关默认关闭。节点启动时自动检查配套浏览器；检查可能短暂启动无用户资料的沙箱进程，不会自动下载或打开网页，也不改变已有虚拟机、云电脑或本机电脑设置。
@@ -55,13 +57,17 @@ node .runner-build/node_modules/playwright/cli.js install chromium
 
 ## 工具与文件
 
-工具使用独立的 `managed_browser_*` 前缀：打开、状态、DOM 快照、页面操作、附件上传、下载导出。页面操作支持导航、标签页、点击、填写、键盘、滚动和截图。普通网页先使用 DOM 快照与元素引用，确有视觉需求时再截图。
+工具使用独立的 `managed_browser_*` 前缀：打开、状态、DOM 快照、页面操作、附件上传、下载导出。页面操作支持导航、标签页、点击、填写、拖动、键盘、滚动和截图。普通网页先使用 DOM 快照与元素引用，确有视觉需求时再截图。
+
+Bot 拖动使用 `managed_browser_action` 的 `drag` 动作，传入当前截图坐标 `fromX/fromY/toX/toY`；Runner 执行按下、经过中间位置、到达终点和松开，支持滑块、文字拖选与 HTML 元素拖放。人工接管在移动超过 5 个屏幕像素后开始连续拖动，按住期间更新页面画面；只保留待发送的最新移动位置，最终松手位置独立发送，移出画面时限制在画面边界。拖动沿用控制凭据、代次和近期截图校验；中间阶段保留近期截图，结束后作废。
+
+Esc、窗口失焦、取消触摸或交还控制权会取消拖动并释放鼠标。控制切换、页面跳转和动作失败时 Runner 同样清理按键；前端按住不动时每秒续报位置，超过 5 秒未收到有效更新则自动释放。界面基于请求和截图更新，实际跟随速度受节点往返与截图耗时影响。拖动功能需要同时更新 Web 和执行节点的 Runner。
 
 下载先取得 `downloadId`，通过 `managed_browser_export` 作为现有对话附件交付。上传使用当前账号有权访问的附件 `fileId`，模型不传宿主文件路径。单文件上限 25 MiB。
 
 同一轮已授权 VM 时，额外提供 `managed_browser_to_vm` 与 `managed_browser_upload_vm`。复制使用现有 VM 分块文件协议、摘要校验和路径边界；默认不覆盖文件，也不挂载宿主目录。跨环境文件还受全局文件传输大小设置约束。
 
-网页网络请求走经鉴权的公网代理，拒绝回环、私网与重新解析到私网的目的地址；既有连接也定期检查授权。当前禁用 Service Worker 和 WebSocket，因此依赖这些功能的网站可能不完整。DOM 元素快照目前针对主页面；拖拽等高级输入尚未接入。浏览器不支持通过任意 JavaScript、CDP 或宿主命令接口绕过这些边界。
+网页网络请求走经鉴权的公网代理，拒绝回环、私网与重新解析到私网的目的地址；既有连接也定期检查授权。当前禁用 Service Worker 和 WebSocket，因此依赖这些功能的网站可能不完整。DOM 元素快照目前针对主页面；拖动使用截图坐标。浏览器不支持通过任意 JavaScript、CDP 或宿主命令接口绕过这些边界。
 
 ## 与已有功能的兼容
 
@@ -95,10 +101,10 @@ npm run desktop:test
 真实 Chromium 验收（先安装配套浏览器）：
 
 ```sh
-YAOYAO_BROWSER_SMOKE=1 npx vitest run tests/runner/browserSmoke.test.ts tests/server/managedBrowserSmoke.test.ts
+YAOYAO_BROWSER_SMOKE=1 npx vitest run tests/runner/browserSmoke.test.ts tests/runner/browserDragSmoke.test.ts tests/server/managedBrowserSmoke.test.ts
 ```
 
-这两项覆盖真实页面操作、上传下载、登录资料恢复，以及 HTTP Runner 领取/准入/结果/授权检查、无 VM 浏览器握手、人工接管与交还。会话保留回归覆盖同一上下文和页面内容得以保留、空闲网络阻断、重新授权恢复、旧代次输入拒绝、只读轮询不延长空闲时间，以及临时会话和撤权后的清理。HTTP 测试使用 Hermes fixture，不代表真实模型自主选择工具的评测。macOS Chromium 和临时 Docker 命令取消已实测；Linux Chromium 沙箱与 Windows 安装仍需目标平台验证，尚无与完整 VM 的性能基准数字。
+这些测试覆盖真实页面操作、滑块与文字拖选、HTML 拖放、按住期间移动及取消释放、上传下载、登录资料恢复，以及 HTTP Runner 领取/准入/结果/授权检查、无 VM 浏览器握手、人工接管与交还。会话保留回归覆盖同一上下文和页面内容得以保留、空闲网络阻断、重新授权恢复、旧代次输入拒绝、只读轮询不延长空闲时间，以及临时会话和撤权后的清理。HTTP 测试使用 Hermes fixture，不代表真实模型自主选择工具的评测。macOS Chromium 和临时 Docker 命令取消已实测；Linux Chromium 沙箱与 Windows 安装仍需目标平台验证，尚无与完整 VM 的性能基准数字。
 
 首次安装和聊天卡片验收：
 
@@ -107,4 +113,4 @@ YAOYAO_BROWSER_INSTALL_SMOKE=1 NODE_OPTIONS=--no-experimental-webstorage npx vit
 YAOYAO_BROWSER_UI_SMOKE=1 NODE_OPTIONS=--no-experimental-webstorage npx vitest run tests/client/managedBrowserCardSmoke.test.ts --maxWorkers=1
 ```
 
-首次安装测试在独立 Node 进程和全新临时浏览器缓存中实际下载，验证 missing → installing → ready，再打开浏览器截图，结束后删除临时缓存。聊天 UI 测试使用真实 Chromium、隔离服务与浏览器接口 fixture，覆盖结构卡刷新保留、准备后接管、交还、375px、暗色与横屏；该 UI fixture 不代表真实 Runner 安装测试。
+首次安装测试在独立 Node 进程和全新临时浏览器缓存中实际下载，验证 missing → installing → ready，再打开浏览器截图，结束后删除临时缓存。聊天 UI 测试使用真实 Chromium、隔离服务与浏览器接口 fixture，覆盖结构卡刷新保留、准备后接管、连续拖动、移出画面松手、Esc 取消、交还、375px、暗色与横屏；该 UI fixture 不代表真实 Runner 安装测试。

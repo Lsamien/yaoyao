@@ -1,3 +1,4 @@
+import {ExecutionSettings} from './executionSettings.js'
 import {ManagedBrowsers} from './managedBrowsers.js'
 import { isWorkspaceAccountPath } from './subaccountAccess.js'
 import { chatTranscriptRouter } from './chatTranscriptApi.js'
@@ -7,6 +8,7 @@ import type {GrokAuth} from './grokAuth.js'
 import {GrokCloud} from './grokCloud.js'
 import {WorkspaceInspector} from './workspaceInspector.js'
 import {WorkspaceRoutines} from './workspaceRoutines.js'
+import {WorkspaceRoutineTools} from './workspaceRoutineTools.js'
 import { WorkspacePlugins } from './botPlugins/workspacePlugins.js'
 import { nativeMessageFileText } from '../shared/messageFiles.js'
 import { hermesBotRelay } from './hermesBotRelay.js'
@@ -256,7 +258,14 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.localVmAllowed=(id,runnerId)=>localVm.allowed(id,runnerId)
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
+  const executionSettings=new ExecutionSettings(workspace,workspaceNodes,auth)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0, openVikingService)
+  workspaceRuntime.executionSettings=executionSettings
+  runners.executionSettings=executionSettings
+  executionSettings.onProxyChange=()=>runners.configureNetworks()
+  executionSettings.testProxy=()=>runners.testNetworks()
+  executionSettings.nodeStatus=()=>runners.networkStatus()
+  executionSettings.activeTurns=()=>workspaceRuntime.activeExecutionTurns()
   let pendingDashboardMutations=0
   const hermesBridge=options.hermesBridge??new HermesBridgeManager(config,upstreamSession,{
     dashboard:options.dashboardSupervisor,
@@ -290,6 +299,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const workspaceInspector=new WorkspaceInspector(workspace,auth)
   workspaceRuntime.inspector=workspaceInspector
   const workspaceRoutines=new WorkspaceRoutines(workspace,auth,workspaceNodes,workspaceRuntime)
+  workspaceRuntime.routineTools=new WorkspaceRoutineTools(workspaceRoutines,workspace,workspaceNodes,workspaceRuntime)
   workspaceRoutines.paused=()=>hermesBridge.dashboardRestarting
   const workspacePlugins=new WorkspacePlugins(workspace,workspaceNodes,auth,workspaceRuntime,config.home,options.pluginFetch)
   workspaceRuntime.plugins=workspacePlugins
@@ -481,7 +491,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     } else await next()
   })
 
-  for(const router of [managedBrowsers.router(),desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
+  for(const router of [executionSettings.router(),managedBrowsers.router(),desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
   const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
   const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
@@ -593,6 +603,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     desktopEnvironments.close()
     desktopHosts.close()
       grokCloud.authorization.close()
+      executionSettings.close()
       workspaceRoutines.close()
       workspacePlugins.close()
       workspaceRuntime.close()

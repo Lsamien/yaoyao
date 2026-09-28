@@ -2,6 +2,11 @@ import type { BotBrowserState } from './desktopEnvironment.js'
 
 export type ComputerBackend = 'desktop' | 'cloud' | 'vm' | 'managed-browser'
 
+/** A human gesture stays within one browser control generation and tab. */
+export interface BrowserPointerAction {
+  kind:'pointer'; gestureId:string; phase:'start'|'move'|'end'|'cancel'; x:number; y:number
+}
+
 export interface BrowserInstallation {
   status: 'checking' | 'missing' | 'installing' | 'ready' | 'failed'
   message: string

@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import {promisify} from 'node:util'
 import { randomUUID, createHash } from 'node:crypto'
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -152,6 +153,12 @@ export class LaunchAgentService {
     const record = this.record()
     if (record?.maintenanceProtocol === 1) await localRequest(`${this.url(record)}/desktop/service/quiesce`, record.token, 'DELETE').catch(() => {})
   }
+  async preserveComputerData(finalRoot){
+    const helper=join(finalRoot,'vm-data-migrate.mjs')
+    if(!existsSync(helper))return // Older release packages have no migration hook.
+    try{await promisify(execFile)(join(finalRoot,'node'),[helper,this.home],{timeout:600000,maxBuffer:32768})}
+    catch{throw new Error('虚拟机用户资料迁移未完成，已取消服务切换并保留原容器')}
+  }
   async stop() {
     const pid = this.pid()
     try { execFileSync('launchctl', ['print', `${this.domain}/${this.label}`], { stdio: 'ignore' }); command('launchctl', ['bootout', `${this.domain}/${this.label}`]) }
@@ -272,6 +279,8 @@ export async function transitionService({ home, releaseRoot, driver, finalRoot, 
   try {
     if (previous?.wasRunning) await driver.verify(undefined, 5000)
     await driver.quiesce(onProgress, waitForIdleMs)
+    onProgress('正在保留虚拟机用户资料…')
+    await driver.preserveComputerData?.(finalRoot)
     onProgress('正在备份数据并切换 Web 服务…')
     // Persist before stopping; recovery never mistakes a partial backup for a complete snapshot.
     writeJSON(path, journal)

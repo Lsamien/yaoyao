@@ -136,8 +136,8 @@ async function openPreview(){
  if(target&&frame.value)await openDesktop(target.backend,target.host)
 }
 function action(value:LocalVmAction){
- if(value==='recreate'&&!confirm('重建这台虚拟机？当前桌面程序将关闭，工作文件和浏览器资料会保留。'))return
- if(value==='remove'&&!confirm('移除这台虚拟机实例以切换镜像？工作文件和浏览器资料会保留。'))return
+ if(value==='recreate'&&!confirm('重建这台虚拟机？当前桌面程序将关闭，工作文件、软件配置和登录资料会保留。'))return
+ if(value==='remove'&&!confirm('移除这台虚拟机实例以切换镜像？工作文件、软件配置和登录资料会保留。'))return
  void run(()=>apiRequest(base()+'/'+value,{method:'POST',body:{}}))
 }
 async function cycle(){const version=revision;await refresh();if(!closed&&version===revision)timer=setTimeout(cycle,3000)}
@@ -164,7 +164,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
     <div class="computer-options">
     <section v-if="computers.managedBrowser" class="managed-browser-option" aria-label="托管浏览器">
       <strong>托管浏览器</strong>
-      <p>网页操作使用独立浏览器，虚拟机按任务需要单独启动。查看状态不会打开网页。</p>
+      <p>网页操作使用独立浏览器；服务启动时会启动已配置的本机虚拟机，任务也可按需启动。查看状态不会打开网页。</p>
       <p v-if="!managedBrowser?.available" class="hint" role="status">{{browserError||managedBrowser?.installation?.message||managedBrowser?.reason||'执行节点尚未提供浏览器能力，请检查节点配置与连接。'}}</p>
       <progress v-if="managedBrowser?.installation?.status==='installing'" :value="managedBrowser.installation.progress" max="100" aria-label="浏览器准备进度"/>
       <button v-if="!managedBrowser?.available" type="button" :disabled="busy||recheckingBrowser" :aria-busy="recheckingBrowser" @click="recheckBrowser">{{recheckingBrowser?'正在检测…':'重新检测'}}</button>
@@ -209,7 +209,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
       <p class="control-state">{{state.controlMode==='human'?'你或其他操作者正在控制电脑':state.inUse?'机器人正在操作':'仅查看 · 虚拟机空闲'}}</p>
      </template>
      <div v-if="!state.fixedCapacity&&state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button><button :disabled="busy||state.inUse" @click="action('remove')">移除实例</button></div>
-     <p class="hint">{{state.fixedCapacity?'桌面由 Compose 创建，数量固定。这里只连接已有共享桌面；工作目录为 /home/cua/workspace。':`重建会保留工作目录和浏览器资料。${vmIdleStopLabel(state.idleStopMinutes)}，可在设置中修改。`}}</p>
+     <p class="hint">{{state.fixedCapacity?'桌面由 Compose 创建，数量固定。这里只连接已有共享桌面；工作目录为 /home/cua/workspace。':`重建会保留工作文件、软件配置和登录资料。${vmIdleStopLabel(state.idleStopMinutes)}，可在设置中修改。`}}</p>
      <button v-if="isAdmin" class="settings-link" @click="emit('settings')"><AppIcon name="settings" :size="14"/>本地虚拟机设置</button>
     </template>
     </div>

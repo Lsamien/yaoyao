@@ -1,6 +1,7 @@
 // @vitest-environment node
 import {afterEach,describe,expect,it,vi} from 'vitest'
 import {EventEmitter} from 'node:events'
+import {randomUUID} from 'node:crypto'
 import {mkdir,mkdtemp,readFile,readdir,realpath,writeFile,stat,rm} from 'node:fs/promises'
 import {hostname,tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -12,7 +13,7 @@ const scope:BrowserScope={ownerKey:'account-a',environmentId:'bot-a',profile:'pe
 const deferred=<T=void>()=>{let resolve!:(value:T)=>void;const promise=new Promise<T>(yes=>{resolve=yes});return {promise,resolve}}
 class FakePage extends EventEmitter {
   closed=false;address='about:blank';visits:string[]=[];block?:Promise<void>;handles:ElementHandle<Element>[]=[]
-  mouse={click:vi.fn(async()=>{}),wheel:vi.fn(async()=>{})}
+  mouse={click:vi.fn(async()=>{}),wheel:vi.fn(async()=>{}),move:vi.fn(async(..._args:unknown[])=>{}),down:vi.fn(async()=>{}),up:vi.fn(async()=>{})}
   keyboard={press:vi.fn(async()=>{}),insertText:vi.fn(async()=>{})}
   url(){return this.address}isClosed(){return this.closed}async title(){return 'Page'}mainFrame(){return this}
   async goto(url:string){this.visits.push(url);if(this.block)await this.block;if(this.closed)throw new Error('Target closed');this.address=url;this.emit('framenavigated',this)}
@@ -43,7 +44,7 @@ async function fixture(extra:Partial<ConstructorParameters<typeof BrowserRuntime
   runtimes.push(runtime);return {runtime,launcher,contexts,directories,options,root,proxyAuthorize,proxyClose,proxyDisconnect}
 }
 function op(generation:number,operationId:string,action:BrowserOperation['action']):BrowserOperation{return {generation,operationId,action}}
-afterEach(async()=>{for(const runtime of runtimes.splice(0))await runtime.shutdown();for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
+afterEach(async()=>{vi.useRealTimers();for(const runtime of runtimes.splice(0))await runtime.shutdown();for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
 
 describe('Runner browser lifecycle and fencing',()=>{
   it('is disabled by default and does not start Chromium',async()=>{
@@ -196,6 +197,59 @@ describe('Runner browser lifecycle and fencing',()=>{
 })
 
 describe('Runner browser interactions and files',()=>{
+  it('performs one interpolated drag, keeps retries idempotent and rejects out-of-frame coordinates',async()=>{
+    const f=await fixture(),state=await f.runtime.open(scope),page=f.contexts[0]!.tab
+    const command=op(state.generation,'drag-once',{kind:'drag',fromX:10,fromY:20,toX:250,toY:200})
+    await Promise.all([f.runtime.execute(scope,command),f.runtime.execute(scope,command)])
+    expect(page.mouse.down).toHaveBeenCalledOnce();expect(page.mouse.up).toHaveBeenCalledOnce()
+    expect(page.mouse.move.mock.calls[0]).toEqual([10,20])
+    expect(page.mouse.move.mock.calls.slice(-2)).toEqual([[250,200],[250,200]])
+    expect(page.mouse.move).toHaveBeenCalledTimes(14)
+    await expect(f.runtime.execute(scope,op(state.generation,'outside',{kind:'drag',fromX:1280,fromY:20,toX:250,toY:200}))).rejects.toThrow()
+    expect(page.mouse.down).toHaveBeenCalledOnce()
+  })
+  it('releases an atomic drag when authorization changes between movements',async()=>{
+    const f=await fixture(),state=await f.runtime.open(scope),page=f.contexts[0]!.tab
+    let allowed=true
+    page.mouse.move.mockImplementation(async()=>{if(page.mouse.down.mock.calls.length)allowed=false})
+    await expect(f.runtime.execute(scope,op(state.generation,'revoked-drag',{kind:'drag',fromX:10,fromY:20,toX:250,toY:200}),{authorize:async()=>{if(!allowed)throw new Error('revoked')}})).rejects.toThrow('revoked')
+    expect(page.mouse.move).toHaveBeenCalledTimes(2)
+    expect(page.mouse.up).toHaveBeenCalledOnce();expect(page.keyboard.press).toHaveBeenCalledWith('Escape')
+  })
+  it('moves a held pointer before release and rejects delayed events from another gesture',async()=>{
+    const f=await fixture(),state=await f.runtime.open(scope),page=f.contexts[0]!.tab,gestureId=randomUUID()
+    const pointer=(phase:'start'|'move'|'end'|'cancel',id=gestureId)=>({kind:'pointer' as const,gestureId:id,phase,x:120,y:200})
+    await f.runtime.execute(scope,op(state.generation,'start',pointer('start')))
+    await f.runtime.execute(scope,op(state.generation,'move',pointer('move')))
+    expect(page.mouse.down).toHaveBeenCalledOnce();expect(page.mouse.up).not.toHaveBeenCalled()
+    expect(page.mouse.move).toHaveBeenLastCalledWith(120,200,{steps:3})
+    await f.runtime.execute(scope,op(state.generation,'view',{kind:'screenshot'}))
+    const oldId=randomUUID()
+    await f.runtime.execute(scope,op(state.generation,'old-cancel',pointer('cancel',oldId)))
+    await expect(f.runtime.execute(scope,op(state.generation,'old-move',pointer('move',oldId)))).rejects.toMatchObject({code:'browser_gesture_expired'})
+    expect(page.mouse.up).not.toHaveBeenCalled()
+    await f.runtime.execute(scope,op(state.generation,'end',pointer('end')))
+    expect(page.mouse.up).toHaveBeenCalledOnce()
+    await expect(f.runtime.execute(scope,op(state.generation,'late',pointer('move')))).rejects.toMatchObject({code:'browser_gesture_expired'})
+  })
+  it.each(['cancel','pause','park','navigate','failure','idle'] as const)('releases a held pointer on %s',async(reason)=>{
+    const f=await fixture(),state=await f.runtime.open(scope),page=f.contexts[0]!.tab,gestureId=randomUUID()
+    vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
+    await f.runtime.execute(scope,op(state.generation,'start',{kind:'pointer',phase:'start',gestureId,x:10,y:20}))
+    if(reason==='pause'||reason==='park')await f.runtime[reason](scope)
+    else if(reason==='cancel')await f.runtime.execute(scope,op(state.generation,'cancel',{kind:'pointer',phase:'cancel',gestureId,x:10,y:20}))
+    else if(reason==='navigate'){page.emit('framenavigated',page);await f.runtime.status(scope)}
+    else if(reason==='failure'){
+      page.mouse.move.mockRejectedValueOnce(new Error('transport failed'))
+      await expect(f.runtime.execute(scope,op(state.generation,'failed-move',{kind:'pointer',phase:'move',gestureId,x:20,y:20}))).rejects.toThrow('transport failed')
+    }else{
+      await vi.advanceTimersByTimeAsync(4000)
+      await f.runtime.execute(scope,op(state.generation,'keepalive',{kind:'pointer',phase:'move',gestureId,x:10,y:20}))
+      await vi.advanceTimersByTimeAsync(4000);expect(page.mouse.up).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+    expect(page.mouse.up).toHaveBeenCalledOnce();expect(page.keyboard.press).toHaveBeenCalledWith('Escape')
+  })
   it('requires fresh element refs and accepts only resolved upload bytes',async()=>{
     const resolveUpload=vi.fn(async()=>({name:'../../report.txt',mimeType:'text/plain',buffer:Buffer.from('approved')}))
     const f=await fixture({resolveUpload}),state=await f.runtime.open(scope),handle=element('file');f.contexts[0]!.tab.handles=[handle]

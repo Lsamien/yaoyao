@@ -163,15 +163,21 @@ export class ComputerPool {
     })
   }
   definition(ownerKey:string,id:string){const entry=this.get(id);if(entry&&entry.spec.ownerKey!==ownerKey)throw new ComputerError('computer_owner_mismatch','电脑环境归属不匹配');return entry?.spec}
-  async desktop(spec:ComputerSpecification,action:'create'|'start'|'stop'|'recreate'|'remove',authorize:()=>void){
+  async desktop(spec:ComputerSpecification,action:'create'|'start'|'stop'|'recreate'|'remove'|'restore',authorize:()=>void){
     spec=this.provider.validateSpecification(spec)
     await this.serial(spec.id,async()=>{
       authorize()
       if(!this.ready||this.closing||this.maintenance)throw new ComputerError('computer_busy','本地虚拟机正在维护')
       let entry=this.get(spec.id)
       if(entry?.spec.ownerKey!==undefined&&entry.spec.ownerKey!==spec.ownerKey)throw new ComputerError('computer_owner_mismatch','虚拟机归属不匹配')
+      // Startup only restores saved, stopped desktops. Serialize this check
+      // with manual removal and task acquisition so neither can be undone.
+      if(action==='restore'){
+        if(!entry||entry.status!=='free')return
+        spec={...entry.spec,network:spec.network}
+      }
       if(entry&&!['free','idle'].includes(entry.status))throw new ComputerError('computer_busy','请先停止机器人任务并交还控制权')
-      const starts=['create','start','recreate'].includes(action)
+      const starts=['create','start','recreate','restore'].includes(action)
       if(starts&&this.rows().filter(row=>row.status!=='free'&&row.spec.id!==spec.id).length>=this.limits.concurrent)throw new ComputerError('computer_quota','本地虚拟机数量已达上限，请先停止另一台桌面')
       if(!entry&&!starts)return
       entry??={spec,generation:0,status:'free',holders:new Map(),expiresAt:0,updatedAt:this.now()};this.entries.set(spec.id,entry)

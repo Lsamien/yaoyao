@@ -45,3 +45,13 @@ it('does not expose computer tools for an unavailable Bot or missing bridge',()=
  expect(workspaceEnvironmentTools(env)).toEqual([])
  expect(env.virtual.vm.status).toBe('bridge_unavailable')
 })
+it.each(['none','server','virtual'] as const)('keeps authorized computers with default %s without substituting a remote Hermes server',mode=>{
+ const computer={...structuredClone(desktop.hosts[0]!),id:'mac-id',target:'mac-id',name:'工作电脑',kind:'computer' as const}
+ const input={agent,globals:parseHostTools({}),desktop:{...desktop,hosts:[...desktop.hosts,computer]},bridge:true,cloud:false,plugins:false,execution:{mode,revision:1,credentialSource:'native' as const}}
+ const remote=buildWorkspaceEnvironment({...input,serverDesktop:false})
+ expect(remote.desktop.hosts.map(host=>host.id)).toEqual(['mac-id'])
+ expect(workspaceEnvironmentTools(remote).map(t=>t.id)).toEqual(expect.arrayContaining(['desktop_environment_view','computer_shell']))
+ const local=buildWorkspaceEnvironment({...input,serverDesktop:true})
+ expect(local.desktop.hosts.map(host=>host.id)).toEqual(['local','mac-id'])
+ expect(local.virtual.vm.status).toBe('on_demand')
+})

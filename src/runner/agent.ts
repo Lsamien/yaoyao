@@ -1,3 +1,4 @@
+import {checkProxy} from './network/upstreamProxy.js'
 import { randomUUID, createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { realpath } from 'node:fs/promises'
@@ -42,6 +43,7 @@ export class RunnerAgent {
   private controlTransport=new LoopbackTransport()
   private serverEpoch?:string
   private controlAbort=new AbortController()
+  onConnected:()=>void=()=>{}
   constructor(readonly config:RunnerConfiguration,home:string,readonly fetchImpl:typeof fetch=fetch,readonly onStatus:(message:string)=>void=()=>{}) {
     const web=new URL(config.serverURL),hermes=new URL(config.hermesURL)
     if(web.username||web.password||web.search||web.hash||!['http:','https:'].includes(web.protocol))throw new Error('Web 地址无效')
@@ -66,7 +68,7 @@ export class RunnerAgent {
     const toolId=body&&typeof body==='object'&&'toolId' in body?body.toolId:undefined
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
       method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:path==='tool'&&typeof toolId==='string'&&toolId.startsWith('managed_browser_')?600000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':(this.computers?'workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'workspace-memory-bind-v1')+(this.browsers?',managed-browser-setup-v1,managed-browser-retention-v1':',managed-browser-disabled-v1')+(this.browsers?.available?',managed-browser-v1':''),...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':(this.computers?'execution-context-v1,vm-egress-v1,workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'execution-context-v1,workspace-memory-bind-v1')+(this.browsers?',managed-browser-setup-v1,managed-browser-retention-v1':',managed-browser-disabled-v1')+(this.browsers?.available?',managed-browser-v1':''),...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
@@ -105,6 +107,11 @@ export class RunnerAgent {
     ]).then(()=>{}).finally(()=>{if(this.disconnecting===pending)this.disconnecting=undefined})
     this.disconnecting=pending;return pending
   }
+  private async syncNetworkSettings(){
+    const {proxy}=await this.api('network-settings',{})
+    await this.computers!.updateProxy(proxy)
+    await this.api('network-settings',{appliedRevision:this.computers!.proxySettings?.revision??0})
+  }
   private async execute(command:RunnerCommand):Promise<any> {
     const p=command.payload
     if(!this.active||!this.connected)throw new Error('执行节点已断开')
@@ -129,11 +136,18 @@ export class RunnerAgent {
     }
     if(command.kind==='computer.control'){
       if(!this.computers)throw new HttpError(409,'电脑服务未配置','computer_unavailable')
-      const input=z.object({target:z.object({environmentId:z.string().uuid(),agentId:z.string().uuid(),ownerKey:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),profile:z.string(),op:z.enum(['status','detail','image','lifecycle','frame','take','input','giveback']),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),controlId:z.string().uuid().optional(),requestId:z.string().uuid().optional(),generation:z.number().int().optional(),frameId:z.string().uuid().optional(),action:z.unknown().optional(),notes:z.string().max(4000).optional()}).strict().parse(p)
+      const input=z.object({target:z.object({environmentId:z.string().uuid(),agentId:z.string().uuid(),ownerKey:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),profile:z.string(),op:z.enum(['status','detail','image','lifecycle','autostart','frame','take','input','giveback']),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),controlId:z.string().uuid().optional(),requestId:z.string().uuid().optional(),generation:z.number().int().optional(),frameId:z.string().uuid().optional(),action:z.unknown().optional(),notes:z.string().max(4000).optional()}).strict().parse(p)
       this.requireProfile(input.profile)
       const check=async()=>{if(!this.connected||!input.controlId||(await this.api('control-check',{controlId:input.controlId})).allowed!==true)throw new HttpError(403,'电脑控制授权已失效','computer_control_expired')}
       const authorize=()=>{if(!this.connected||!this.active||Date.now()>command.expiresAt)throw new HttpError(403,'电脑请求已失效','computer_control_expired')}
       await this.computers.ready
+      if(input.op==='autostart'){
+        await this.localVm!.ready
+        if(!this.computers.pool.definition(input.target.ownerKey,input.target.environmentId))return {ok:true,skipped:true}
+        await this.syncNetworkSettings()
+        await this.computers.restoreDesktop(input.target,authorize)
+        return {ok:true}
+      }
       if(input.op==='detail'){
         const vm=await this.localVm!.status(),spec=this.computers.pool.definition(input.target.ownerKey,input.target.environmentId)??(this.computers.provider.fixedCapacity?{id:input.target.environmentId,ownerKey:input.target.ownerKey,imageId:this.computers.config.imageId}:undefined)
         const state=await this.computers.controls.status(input.target)
@@ -148,12 +162,13 @@ export class RunnerAgent {
       if(input.op==='image')return this.localVm!.select(input.target,z.enum(LOCAL_VM_IMAGE_KEYS).parse(input.imageKey),authorize)
       if(input.op==='lifecycle'){
         const action=z.enum(['create','start','stop','recreate','remove']).parse(input.action)
+        if(!['stop','remove'].includes(action))await this.syncNetworkSettings()
         await this.computers.desktop(input.target,input.profile,action,authorize)
         return {ok:true}
       }
       if(input.op==='status')return this.computers.controls.status(input.target)
       if(input.op==='frame')return this.computers.controls.frame(input.target,authorize)
-      if(input.op==='take')return this.computers.controls.take(input.target,input.profile,input.controlId!,check)
+      if(input.op==='take'){await this.syncNetworkSettings();return this.computers.controls.take(input.target,input.profile,input.controlId!,check)}
       if(input.op==='input')return this.computers.controls.input(input.target,input.controlId!,input.requestId!,input.generation!,input.frameId!,input.action)
       return this.computers.controls.giveBack(input.target,input.controlId!,input.notes??'')
     }
@@ -201,6 +216,16 @@ export class RunnerAgent {
       const response=await this.target.session.request(path,{search,maxResponseBytes:8*1024*1024})
       return {status:response.status,headers:Object.fromEntries(response.headers.entries()),body:response.body.toString('base64')}
     }
+    if(command.kind==='network.configure'||command.kind==='network.test'){
+      if(!this.computers)throw new Error('节点没有虚拟环境')
+      const {proxy}=await this.api('network-settings',{})
+      if(command.kind==='network.test'){
+        // A reachable upstream alone does not make the VM's network usable.
+        await this.computers.provider.verifyNetwork()
+        return checkProxy(proxy)
+      }
+      await this.computers.updateProxy(proxy);return {revision:proxy?.revision??0}
+    }
     const connectionId=String(p.connectionId??'')
     if(command.kind==='gateway.open') {
       if(this.closedConnections.has(connectionId)||this.connections.has(connectionId)||!/^[0-9a-f-]{36}$/.test(connectionId)||this.connections.size>=64)throw new Error('执行通道无效或已达上限')
@@ -208,10 +233,12 @@ export class RunnerAgent {
       if(p.computer){
         const meta=p.computer as ComputerTarget
         if(!this.computers||![meta.environmentId,meta.agentId,String(p.workId)].every(value=>/^[0-9a-f-]{36}$/.test(value))||!/^[a-f0-9]{64}$/.test(meta.ownerKey))throw new HttpError(409,'电脑任务配置或授权无效','computer_unavailable')
+        await this.syncNetworkSettings()
         const trustedMeta={...meta,hermesRuntime:true}
         gateway=new ComputerGateway(this.computers,trustedMeta,String(p.workId),async()=>{const state=await this.api('check',{connectionId});if(!this.active||!this.connected||state.allowed!==true)throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked');trustedMeta.fileTransferMaxBytes=Number.isInteger(state.fileTransferMaxBytes)&&state.fileTransferMaxBytes>=1024*1024&&state.fileTransferMaxBytes<=100*1024*1024?state.fileTransferMaxBytes:25*1024*1024},body=>this.api('artifact',{connectionId,...body}),this.target)
       }else gateway=new WorkspaceGateway(this.target)
       const connection:Connection={cleanupOnly:p.cleanupOnly===true,gateway,sessions:new Map(),running:new Set(),events:Promise.resolve()}
+      if(gateway instanceof ComputerGateway)gateway.taskEnvironment=async()=> (await this.api('execution-context',{connectionId})).environment
       this.connections.set(connectionId,connection)
       gateway.onEvent=(frame:GatewayFrame)=>{
         if(frame.session_id&&!connection.sessions.has(frame.session_id))return
@@ -225,7 +252,7 @@ export class RunnerAgent {
     if(command.kind==='gateway.close'){await this.closeConnection(connectionId);return {ok:true}}
     if(command.kind==='gateway.rpc') {
       const connection=this.connections.get(connectionId),method=String(p.method),params=p.params as Record<string,unknown>
-      const computerCommand=method==='computer.invoke'||method==='computer.transfer'
+      const computerCommand=method==='computer.invoke'||method==='computer.transfer'||method==='computer.complete'
       if(!connection||(!commands.has(method)&&!(computerCommand&&connection.gateway instanceof ComputerGateway))||!params||typeof params!=='object')throw new HttpError(403,'执行通道或命令无效','runner_command_forbidden')
       if(connection.cleanupOnly&&!['session.resume','session.interrupt','session.close'].includes(method))throw new HttpError(403,'清理通道不允许执行新工作','runner_cleanup_forbidden')
       if(method==='session.create'||method==='session.resume'){if(!connection.cleanupOnly)this.requireProfile(params.profile)}
@@ -254,7 +281,7 @@ export class RunnerAgent {
         this.leases.set(leaseId,{lease,controller,session,connectionId:source[0],profile:String(p.profile)});return {ok:true}
       }
       const lease=await createWorkspaceToolLease({target:this.target,profile:String(p.profile),workId:String(p.workId),session:()=>session,signal:controller.signal,
-        workspaceMemory:p.workspaceMemory===true,
+        workspaceMemory:p.workspaceMemory===true,computerPolicy:p.computerPolicy as import('../server/workspaceToolLease.js').LeaseInput['computerPolicy'],
         assertActive:()=>{if(!this.connected||controller.signal.aborted)throw new Error('工具授权已失效')},
         catalog:()=>p.catalog as any[],call:async(toolId,args,callId)=>(await this.api('tool',{leaseId,toolId,arguments:args,callId:callId??randomUUID()})).result,
         onFailure:()=>{controller.abort()},
@@ -317,7 +344,9 @@ export class RunnerAgent {
           await this.disconnecting
           if(revision!==this.disconnectRevision)continue
           if(this.serverEpoch&&this.serverEpoch!==response.epoch)await this.disconnect()
+          const newlyConnected=!this.connected
           this.serverEpoch=response.epoch;this.connected=true;this.status('执行节点已连接')
+          if(newlyConnected)this.onConnected()
           for(const command of response.commands as RunnerCommand[]){
             if(deliveries.has(command.id))continue
             const delivery=(async()=>{

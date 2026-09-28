@@ -29,7 +29,7 @@ services:
       HERMES_YAOYAO_ALLOW_INSECURE_LAN: "1"
       HERMES_YAOYAO_SUPERVISE_DASHBOARD: "0"
       HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
-      HERMES_YAOYAO_COMPOSE_DESKTOPS: "[{\"id\":\"647fbb98-0c40-4d96-91e0-3290eb9020eb\",\"name\":\"Cursor 开发桌面\",\"socketPath\":\"/run/yaoyao-desktops/desktop-cursor/desktop.sock\",\"imageKey\":\"cursor\"}]"
+      HERMES_YAOYAO_COMPOSE_DESKTOPS: "[{\"id\":\"647fbb98-0c40-4d96-91e0-3290eb9020eb\",\"name\":\"Cursor 开发桌面\",\"socketPath\":\"/run/yaoyao-desktops/desktop-cursor/desktop.sock\",\"networkSocketPath\":\"/run/yaoyao-networks/desktop-cursor/gateway.sock\",\"imageKey\":\"cursor\"}]"
       HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
       HERMES_YAOYAO_RELEASE_SOURCE: "${HERMES_YAOYAO_RELEASE_SOURCE:-https://github.com/Lsamien/yaoyao.git}"
       HERMES_YAOYAO_HOME: /home/node/.yaoyao
@@ -40,6 +40,7 @@ services:
     volumes:
       - yaoyao-data:/home/node/.yaoyao
       - desktop-cursor-ipc:/run/yaoyao-desktops/desktop-cursor:ro
+      - desktop-cursor-network-ipc:/run/yaoyao-networks/desktop-cursor:ro
     tmpfs:
       - /tmp:mode=1777
 
@@ -49,12 +50,12 @@ services:
     build:
       context: ./deploy/computer
       dockerfile: Dockerfile.cursor
-    hostname: desktop-cursor
-    extra_hosts:
-      - "desktop-cursor:127.0.0.1"
     init: true
     restart: unless-stopped
-    network_mode: none
+    network_mode: "service:desktop-cursor-network"
+    depends_on:
+      desktop-cursor-network:
+        condition: service_started
     shm_size: 512m
     mem_limit: 4g
     cpus: 2
@@ -71,9 +72,30 @@ services:
     volumes:
       - desktop-cursor-workspace:/home/cua/workspace
       - desktop-cursor-ipc:/run/yaoyao-private/bridge
+  desktop-cursor-network:
+    image: localhost/yaoyao/network:1
+    build:
+      context: ./deploy/computer
+      dockerfile: Dockerfile.network
+    command: ["--init", "--socket"]
+    init: true
+    restart: unless-stopped
+    network_mode: none
+    dns: ["198.18.0.1"]
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["NET_ADMIN"]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    mem_limit: 128m
+    pids_limit: 64
+    environment:
+      YAOYAO_COMPOSE_DESKTOP_ID: "647fbb98-0c40-4d96-91e0-3290eb9020eb"
+    volumes:
+      - desktop-cursor-network-ipc:/run/yaoyao-network
 
 volumes:
   yaoyao-data:
 
   desktop-cursor-workspace:
   desktop-cursor-ipc:
+  desktop-cursor-network-ipc:

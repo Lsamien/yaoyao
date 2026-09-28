@@ -6,6 +6,7 @@ import StandaloneDialog from '@/components/common/StandaloneDialog.vue'
 import WorkspaceKnowledgePanel from './WorkspaceKnowledgePanel.vue'
 import FileAccessPanel from '@/components/app/FileAccessPanel.vue'
 import HostToolsPanel from '@/components/app/HostToolsPanel.vue'
+import ExecutionSettingsPanel from '@/components/app/ExecutionSettingsPanel.vue'
 import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
 import type {WorkspaceAgent, WorkspaceConversation} from '@shared/workspace'
 
@@ -22,7 +23,7 @@ const pages = computed(() => [
   {id:'projects' as const, label:'项目', icon:'files' as const},
   {id:'user' as const, label:'用户记忆', icon:'users' as const},
   ...(props.isAdmin ? [
-    {id:'computers' as const, label:'电脑', icon:'monitor' as const},
+    {id:'computers' as const, label:'环境与授权', icon:'monitor' as const},
     {id:'files' as const, label:'文件访问', icon:'files' as const},
     {id:'memory' as const, label:'Bot 记忆', icon:'users' as const},
     {id:'vm' as const, label:'本地虚拟机', icon:'monitor' as const},
@@ -55,7 +56,7 @@ onBeforeUnmount(() => { closed = true })
         <button v-for="item in pages" :key="item.id" type="button" :aria-pressed="page === item.id" @click="page = item.id"><AppIcon :name="item.icon" :size="18" /><span>{{item.label}}</span></button>
       </nav>
       <section v-if="page === 'vm' && isAdmin" class="bot-settings__content bot-settings__vm"><header><h3>本地虚拟机</h3><p>为 Bot 配置隔离的工作环境。</p></header><LocalVmSettingsPanel /></section>
-      <section v-else-if="page === 'computers' && isAdmin" class="bot-settings__content"><header><h3>电脑</h3><p>电脑、服务器、虚拟环境和云虚拟机对所有机器人一起开关。</p></header><HostToolsPanel /></section>
+      <section v-else-if="page === 'computers' && isAdmin" class="bot-settings__content"><header><h3>运行环境与授权</h3><p>管理系统执行位置、共享服务授权和虚拟机网络。</p></header><ExecutionSettingsPanel /><HostToolsPanel /></section>
       <section v-else-if="page === 'files' && isAdmin" class="bot-settings__content"><header><h3>文件访问</h3><p>控制聊天里服务器文件的预览和下载。</p></header><FileAccessPanel /></section>
       <section v-else-if="page === 'memory' && isAdmin" class="bot-settings__content"><header><h3>Bot 记忆</h3><p>管理 Bot 使用的记忆服务。</p></header><SystemManagementPanel section="memory" :active="page === 'memory'" /></section>
       <section v-else class="bot-settings__content bot-settings__knowledge" :aria-label="page === 'projects' ? '项目设置' : '用户记忆设置'" :aria-busy="loading">

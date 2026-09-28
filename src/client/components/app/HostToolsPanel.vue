@@ -107,12 +107,13 @@ onMounted(() => { void load(); void loadNames() })
   <section class="host-tools" aria-label="电脑与服务端工具">
     <p>这些开关对所有机器人生效，不再按单个机器人勾选。所有 Bot 共用电脑权限和审批策略。设备是否在线、是否获得系统授权会单独显示。</p>
     <form @submit.prevent="save" @change="changed">
+      <p>这些开关决定允许使用哪些环境，可同时开启多个；上方默认运行环境不会关闭这里已允许的环境。</p>
       <label class="toggle"><input v-model="scriptMachine" type="checkbox" :disabled="loading || saving" /><span><strong>电脑</strong><small>连接服务器的 Mac 或 Windows 电脑。机器人按名称点名：文件走文件工具，命令走 shell，只有看窗口或点按时才截图。</small></span></label>
       <label class="toggle"><input v-model="serverComputer" type="checkbox" :disabled="loading || saving" /><span><strong>服务器</strong><small>夭夭正在运行的这台电脑。文件走文件工具，命令走 shell；只有看窗口或点按时才截图操作。</small></span></label>
       <label class="toggle"><input v-model="vm" type="checkbox" :disabled="loading || saving" /><span><strong>虚拟环境</strong><small>服务端上的隔离桌面。聊天留在夭夭，操作派到虚拟机里。</small></span></label>
       <label class="toggle"><input v-model="cloud" type="checkbox" :disabled="loading || saving" /><span><strong>云虚拟机</strong><small>共享的 Grok Bot 电脑。先看真实桌面，再点击、输入、按键或滚动。</small></span></label>
-      <label class="toggle"><input v-model="managedBrowser" type="checkbox" :disabled="loading || saving" /><span><strong>托管浏览器</strong><small>通过已启用浏览器能力的执行节点处理网页，无需启动虚拟机。默认关闭，打开后可在电脑面板查看和接管。</small></span></label>
-      <label>所有 Bot 的审批策略<select v-model="approvalPolicy" :disabled="loading || saving"><option value="ask">询问我</option><option value="allow">自动允许</option><option value="deny">自动拒绝</option></select><small>统一用于新的工具审批请求；已等待的请求仍由你答复。Hermes 原生终端和文件始终操作服务器。</small></label>
+      <label class="toggle"><input v-model="managedBrowser" type="checkbox" :disabled="loading || saving" /><span><strong>托管浏览器</strong><small>通过已启用浏览器能力的执行节点处理网页，无需启动虚拟机。默认关闭；开启后，未指定浏览器或设备的网页任务优先在这里打开，可在电脑面板查看和接管。</small></span></label>
+      <label>所有 Bot 的审批策略<select v-model="approvalPolicy" :disabled="loading || saving"><option value="ask">询问我</option><option value="allow">自动允许</option><option value="deny">自动拒绝</option></select><small>统一用于新的工具审批请求；已等待的请求仍由你答复。Hermes 原生终端和文件操作 Hermes 所在节点，沿用 Profile 已开放的工具权限。</small></label>
       <label for="file-transfer-limit">单文件传输上限（MiB）<input id="file-transfer-limit" v-model.number="fileTransferMaxMiB" type="number" min="1" max="100" step="1" :disabled="loading || saving" :aria-invalid="!!transferError" aria-describedby="file-transfer-help file-transfer-error" @input="changed" /><small id="file-transfer-help">1–100 MiB，默认 25 MiB。电脑、服务器和当前 Bot 虚拟机之间的复制共用此上限，从下一次传输生效。</small><small v-if="transferError" id="file-transfer-error" class="error" role="alert">{{ transferError }}</small></label>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
       <p v-if="saved" role="status">已保存。所有 Bot 的新操作将使用统一设置。</p>
