@@ -169,14 +169,15 @@ describe('historical Hermes media routes', () => {
     expect(fixture.calls).toHaveLength(0)
   })
 
-  it.each([401, 403, 404])('preserves upstream %s without a broader file-read fallback', async status => {
+  it.each([401, 403, 404])('handles upstream %s without expiring local login or broadening file access', async status => {
     const fixture = gateway(() => Response.json({ detail: `upstream-${status}` }, { status }))
     const runtime = runtimeFor(fixture)
     const response = await request(runtime.app.callback())
       .get('/Users/samien/.hermes/profiles/yaoer/cache/images/result.png')
-      .set('Host', HOST).expect(status)
+      .set('Host', HOST).expect(status === 401 ? 502 : status)
 
-    expect(response.body).toEqual({ detail: `upstream-${status}` })
+    if (status === 401) expect(response.body).toMatchObject({ code: 'upstream_auth_unavailable' })
+    else expect(response.body).toEqual({ detail: `upstream-${status}` })
     expect(fixture.downloads().length).toBeGreaterThan(0)
     expect(fixture.calls.some(call => call.url.pathname === '/api/fs/read-data-url' || call.url.pathname === '/api/media')).toBe(false)
   })

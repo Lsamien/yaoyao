@@ -117,7 +117,8 @@ describe('deleting sessions retained only in cache', () => {
     [401, 'Session not found'], [403, 'Session not found'], [500, 'Session not found'],
   ])('preserves cache on lookup failure %i: %s', async (status, error) => {
     const f = await fixture(() => Response.json({ error }, { status }))
-    await f.remove().expect(status)
+    const response = await f.remove().expect(status === 401 ? 502 : status)
+    if (status === 401) expect(response.body).toMatchObject({ code: 'upstream_auth_unavailable' })
     expect(f.store.localDetail(f.owner, 'default', sessionID)).toBeDefined()
     expect(f.store.messagePage(f.owner, 'default', sessionID, 0, 100)).toBeDefined()
     f.assertOtherCopies()
