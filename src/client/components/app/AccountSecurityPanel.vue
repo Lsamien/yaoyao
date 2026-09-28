@@ -53,7 +53,7 @@ const dirty = computed(() => (
 ))
 const canSave = computed(() => (
   !busy.value
-  && Boolean(currentPassword.value)
+  && Boolean(auth.user?.localDesktop || currentPassword.value)
   && newPassword.value.length >= 8
   && passwordsMatch.value
   && (!isAdmin.value || Boolean(username.value.trim()))
@@ -74,7 +74,7 @@ function reset() {
 async function save() {
   const normalizedUsername = username.value.trim()
   if (isAdmin.value && !normalizedUsername) { error.value = '管理员用户名不能为空'; return }
-  if (!currentPassword.value) { error.value = '请输入当前密码'; return }
+  if (!auth.user?.localDesktop && !currentPassword.value) { error.value = '请输入当前密码'; return }
   if (newPassword.value.length < 8) { error.value = '新密码至少需要 8 个字符'; return }
   if (!passwordsMatch.value) { error.value = '两次输入的新密码不一致'; return }
 
@@ -202,7 +202,8 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       </label>
 
       <h3 class="security-section-title security-section-title--password">修改密码</h3>
-      <label class="field">
+      <p v-if="auth.user?.localDesktop" class="muted">本机以管理员身份使用，无需登录。这里设置的密码用于其他设备连接此服务器。</p>
+      <label v-if="!auth.user?.localDesktop" class="field">
         <span>当前密码</span>
         <input v-model="currentPassword" name="current-password" type="password" autocomplete="current-password" :disabled="busy" />
         <small>用于确认是你本人；密码不会被回显或保存在浏览器中。</small>
@@ -238,10 +239,10 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       </footer>
     </form>
 
-    <section v-if="section !== 'profile'" class="logout-card" aria-label="退出登录">
+    <section v-if="section !== 'profile' && !auth.user?.localDesktop" class="logout-card" aria-label="退出登录">
       <div>
         <strong>退出当前账号</strong>
-        <p>只退出这个浏览器中的当前 Web 会话，不会停止服务，也不会影响其他设备。</p>
+        <p>退出当前设备的登录授权，不会停止服务，也不会影响其他设备。</p>
       </div>
       <button class="logout-button" type="button" :disabled="busy" @click="emit('logout')">
         <AppIcon name="logout" :size="15" />退出当前账号

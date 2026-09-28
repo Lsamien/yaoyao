@@ -15,6 +15,7 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
   const identityReady=new Promise(resolve=>{releaseIdentity=resolve})
   const local=createServer(async(req,res)=>{
     if(req.url==='/desktop/service'){await identityReady;res.setHeader('Content-Type','application/json');res.end(JSON.stringify(identity))}
+    else if(req.url==='/desktop/service/session'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({user:{username:'admin',role:'admin'},setCookies:['hermes_yaoyao_session=native; Path=/; HttpOnly']}))}
     else if(req.url.split('?')[0]==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
     else {res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<title>已登录的本机页面</title>')}
   })
@@ -23,14 +24,15 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
   const remote=createServer((_req,res)=>{
     if(_req.url.split('?')[0]==='/api/app/bootstrap'){
       res.setHeader('Content-Type','application/json')
-      res.setHeader('Set-Cookie',['session=remembered; Path=/; HttpOnly','csrf=fixture; Path=/; HttpOnly'])
+      res.setHeader('Set-Cookie',['hermes_yaoyao_session=remembered; Path=/; HttpOnly','csrf=fixture; Path=/; HttpOnly'])
       res.end(JSON.stringify({authenticated:true,csrfToken:'fixture',user:{id:'admin',role:'admin',username:'管理员'}}));return
     }
+    if(_req.url==='/api/app/desktop-session'){res.statusCode=404;res.end();return}
     if(_req.url==='/api/app/admin/desktop-hosts'&&_req.method==='POST'){
       enrollments++
       assert.equal(_req.headers.origin,remoteURL)
       assert.equal(_req.headers['x-csrf-token'],'fixture')
-      assert.match(_req.headers.cookie,/session=remembered/)
+      assert.match(_req.headers.cookie,/hermes_yaoyao_session=remembered/)
       res.setHeader('Content-Type','application/json')
       if(enrollmentFails){res.statusCode=503;res.end(JSON.stringify({error:'fixture enrollment unavailable'}));return}
       res.statusCode=201;res.end(JSON.stringify({host:{id:deviceId},token:deviceToken}));return
@@ -84,17 +86,14 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     await page.evaluate(()=>{void window.yaoyaoDesktop.openRemoteLogin()})
     await page.waitForURL('**/boot.html')
     assert.equal(app.windows().length,1)
+    await page.locator('#back').click()
     await page.getByRole('radio',{name:/本机运行/}).check()
+    await page.locator('#continue').click()
     await page.locator('#prepare-local').click()
-    await page.locator('#submit').click()
     await page.waitForURL(origin+'/**')
     enrollmentFails = false
     await app.evaluate(async (_electron, credentialsModule) => {
-      // Fixture credentials stay in this temporary directory; do not access Keychain.
       const module = process.getBuiltinModule('module')
-      const { DesktopCredentials } = module.createRequire(credentialsModule)(credentialsModule)
-      DesktopCredentials.prototype.encrypt = async value => Buffer.from(value)
-      DesktopCredentials.prototype.decrypt = async value => value.toString('utf8')
       globalThis.fetch = async () => { throw new Error('fixture Node transport is unavailable') }
       const http = process.getBuiltinModule('http')
       const originalRequest = http.request
@@ -111,9 +110,10 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     await page.evaluate(()=>{void window.yaoyaoDesktop.openRemoteLogin()})
     await page.waitForURL('**/boot.html')
     assert.equal(app.windows().length,1)
+    await page.locator('#back').click()
     await page.getByRole('radio',{name:/本机运行/}).check()
+    await page.locator('#continue').click()
     await page.locator('#prepare-local').click()
-    await page.locator('#submit').click()
     await page.waitForURL(origin+'/**')
     await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false,platform:'darwin',supportedModes:['client','server']})
   }finally{

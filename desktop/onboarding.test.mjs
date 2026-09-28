@@ -119,3 +119,15 @@ test('registration stays anonymous and does not enter or enroll a computer', asy
   await flow.prepare({ serverURL: 'http://another-server.test' })
   assert.equal(flow.snapshot().registrationNotice, '', 'registration belongs to the checked server')
 })
+
+test('local desktop entry uses native administrator authorization and skips all account forms', async () => {
+  const { flow, calls } = fixture({
+    localSession: async () => ({ authenticated: true, user: { username: 'admin', role: 'admin' } }),
+    inspect: async () => { throw new Error('local mode must not use remote login') },
+    authenticate: async () => { throw new Error('must not request a password') },
+  })
+  flow.select('local'); await flow.prepare({ remember: true })
+  assert.equal(flow.snapshot().phase, 'complete')
+  assert.equal(flow.snapshot().active, false)
+  assert.deepEqual(calls, ['prepare', {mode:'local',remember:true}, 'http://127.0.0.1:15300'])
+})

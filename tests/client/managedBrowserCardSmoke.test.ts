@@ -49,6 +49,11 @@ it.runIf(process.env.YAOYAO_BROWSER_UI_SMOKE==='1')('opens the structured chat c
       if(path.endsWith('/frame'))return route.fulfill({json:{id:'frame',generation:4,width:1000,height:650,data:image}})
       if(route.request().method()==='POST'){
         const op=path.split('/').at(-1)!;calls.push({op,body:route.request().postDataJSON()})
+        if(op==='input'){
+          const action=route.request().postDataJSON().action
+          const extra=Object.keys(action).filter(key=>!['gestureId','kind','phase','x','y'].includes(key))
+          if(extra.length)return route.fulfill({status:400,json:{error:'Unrecognized keys: '+extra.join(', ')}})
+        }
         if(op==='take'){expect(available).toBe(true);human=true;browserOpen=true}
         if(op==='giveback')human=false
       }
@@ -91,6 +96,9 @@ it.runIf(process.env.YAOYAO_BROWSER_UI_SMOKE==='1')('opens the structured chat c
     await browserExpect.poll(()=>calls.filter(call=>call.op==='input'&&call.body.action.phase==='move').length).toBeGreaterThan(0)
     const liveInputs=()=>calls.filter(call=>call.op==='input').map(call=>call.body.action)
     expect(liveInputs()[0]).toMatchObject({kind:'pointer',phase:'start'})
+    // The real server rejects extra fields. Matching only a subset masked the
+    // viewer's clientX/clientY/pointerId/element leaking into the start request.
+    expect(Object.keys(liveInputs()[0]).sort()).toEqual(['gestureId','kind','phase','x','y'])
     expect(liveInputs().some(action=>action.phase==='end')).toBe(false)
     // Pointer capture keeps a release outside the image, clamped to the frame.
     await page.mouse.move(bounds.x+bounds.width+20,centerY);await page.mouse.up()
@@ -103,6 +111,8 @@ it.runIf(process.env.YAOYAO_BROWSER_UI_SMOKE==='1')('opens the structured chat c
     await browserExpect.poll(()=>liveInputs().filter(action=>action.phase==='cancel').length).toBe(1)
     await page.mouse.up()
     expect(liveInputs().every(action=>action.kind==='pointer')).toBe(true)
+    for(const action of liveInputs())expect(Object.keys(action).sort()).toEqual(['gestureId','kind','phase','x','y'])
+    await browserExpect(panel.locator('.computer-error')).toHaveCount(0)
     await panel.getByRole('button',{name:'交还并收起',exact:true}).click()
     await browserExpect(panel).toHaveCount(0)
     expect(calls.filter(call=>call.op==='giveback')).toHaveLength(1)

@@ -73,6 +73,7 @@ export function normalizeUser(value: unknown): CurrentUser {
     role: string(source.role) || undefined,
     enabled: source.enabled === undefined ? undefined : bool(source.enabled),
     mustChangePassword: bool(pick(source, 'mustChangePassword', 'must_change_password')),
+    ...(source.localDesktop === true ? { localDesktop: true } : {}),
   }
 }
 

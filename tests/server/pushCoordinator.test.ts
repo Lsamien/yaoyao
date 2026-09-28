@@ -56,6 +56,50 @@ function register(coordinator: PushCoordinator, suffix = '1') {
 }
 
 describe('push configuration', () => {
+  it('delivers once to each device and resets only the opened device badge', async () => {
+    const sender = new FakeSender()
+    const coordinator = new PushCoordinator({ home: root(), apns, provider: sender, autoFlush: false })
+    register(coordinator, '1')
+    register(coordinator, '2')
+    expect(coordinator.enqueue({ eventId: 'shared-reply', userId: 'user-a', kind: 'chat.completed', title: '完成', body: '正文' })).toBe(2)
+    await coordinator.flushDue()
+    coordinator.resetBadge('user-a', 'phone-1', 'account-a')
+    expect(coordinator.enqueue({ eventId: 'next-reply', userId: 'user-a', kind: 'chat.completed', title: '完成', body: '正文' })).toBe(2)
+    await coordinator.flushDue()
+    const badges = sender.requests.slice(2).map(request => (request.payload.aps as { badge: number }).badge).sort()
+    expect(badges).toEqual([1, 2])
+    coordinator.close()
+  })
+
+  it('replaces an old installation for the same APNs endpoint and delivers one banner after reinstall', async () => {
+    const sender = new FakeSender()
+    const coordinator = new PushCoordinator({ home: root(), apns, provider: sender, autoFlush: false })
+    const endpoint = { userId: 'user-a', deviceToken: 'bc'.repeat(32), environment: 'production' as const }
+    coordinator.registerInstallation({ ...endpoint, installationId: 'old-native', clientAccountId: 'old-account' })
+    coordinator.enqueue({ eventId: 'old-pending', userId: 'user-a', kind: 'chat.completed', title: '旧通知', body: '已进入应用' })
+    coordinator.registerInstallation({ ...endpoint, installationId: 'expo', clientAccountId: 'new-account' })
+    expect(coordinator.status()).toMatchObject({ registrationCount: 1, pendingCount: 0 })
+    expect(coordinator.enqueue({ eventId: 'reply', userId: 'user-a', kind: 'chat.completed', title: '完成', body: '正文' })).toBe(1)
+    await coordinator.flushDue()
+    expect(sender.requests).toHaveLength(1)
+    expect(sender.requests[0]!.payload).toMatchObject({ clientAccountId: 'new-account', aps: { badge: 1 } })
+    expect(coordinator.resetBadge('user-a', 'expo', 'new-account')).toBe(0)
+    coordinator.close()
+  })
+
+  it('does not retire another account, environment, or device when replacing an endpoint', () => {
+    const coordinator = new PushCoordinator({ home: root(), apns, provider: new FakeSender(), autoFlush: false })
+    const endpoint = { userId: 'user-a', deviceToken: 'bc'.repeat(32), environment: 'production' as const }
+    coordinator.registerInstallation({ ...endpoint, installationId: 'phone', clientAccountId: 'a' })
+    coordinator.registerInstallation({ ...endpoint, userId: 'user-b', installationId: 'phone', clientAccountId: 'b' })
+    coordinator.registerInstallation({ ...endpoint, environment: 'development', installationId: 'debug', clientAccountId: 'a' })
+    coordinator.registerInstallation({ ...endpoint, deviceToken: 'de'.repeat(32), installationId: 'other-phone', clientAccountId: 'a' })
+    coordinator.registerInstallation({ ...endpoint, installationId: 'new-phone-id', clientAccountId: 'new-a' })
+    expect(coordinator.status().registrationCount).toBe(4)
+    expect(coordinator.enqueue({ eventId: 'reply', userId: 'user-a', kind: 'chat.completed', title: '完成', body: '正文' })).toBe(3)
+    coordinator.close()
+  })
+
   it('keeps APNs optional and reports partial configuration without preventing startup', () => {
     const home = root()
     expect(loadServerConfig({ HERMES_YAOYAO_HOME: home }).apns).toBeUndefined()

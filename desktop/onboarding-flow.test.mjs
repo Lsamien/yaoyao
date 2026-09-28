@@ -17,7 +17,7 @@ test('first launch, failed connection and remote login all stay in the only main
     const json = (value, status = 200) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value)) }
     if (req.url.split('?')[0] === '/api/app/bootstrap') {
       res.setHeader('set-cookie', 'csrf=fixture; Path=/; HttpOnly')
-      const reply = () => json({ authenticated: sessionValid && String(req.headers.cookie).includes('session=fixture'), setupRequired: false, registrationAvailable: true, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
+      const reply = () => json({ authenticated: sessionValid && String(req.headers.cookie).includes('hermes_yaoyao_session=fixture'), setupRequired: false, registrationAvailable: true, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
       if (holdBootstrap) { replyBootstrap = reply; return }
       return reply()
     }
@@ -38,7 +38,7 @@ test('first launch, failed connection and remote login all stay in the only main
         assert.ok(!String(req.headers.cookie).includes('session='))
         if (body.username !== 'user' || body.password !== 'correct-password') return json({ error: 'wrong' }, 401)
         if (req.headers['x-csrf-token'] !== 'fixture' || !String(req.headers.cookie).includes('csrf=fixture')) return json({ error: 'csrf' }, 403)
-        res.setHeader('set-cookie', 'session=fixture; Path=/; HttpOnly; Max-Age=3600; SameSite=Strict')
+        res.setHeader('set-cookie', 'hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=3600; SameSite=Strict')
         json({ user: { id: 'fixture-user', username: 'user', role: loginRole }, csrfToken: 'fixture' })
       }); return
     }
@@ -46,7 +46,7 @@ test('first launch, failed connection and remote login all stay in the only main
       enrollmentCount++
       assert.equal(req.headers.origin, url)
       assert.equal(req.headers['x-csrf-token'], 'fixture')
-      assert.ok(String(req.headers.cookie).includes('session=fixture'))
+      assert.ok(String(req.headers.cookie).includes('hermes_yaoyao_session=fixture'))
       // Exercise authorization without provisioning a real computer in the fixture.
       return json({ error: 'enrollment unavailable' }, 503)
     }
@@ -63,13 +63,15 @@ test('first launch, failed connection and remote login all stay in the only main
     // are unavailable (for example, after a macOS local-network permission change).
     await app.evaluate(({ session }, origin) => {
       globalThis.fetch = async () => { throw new TypeError('fetch failed', { cause: { code: 'EHOSTUNREACH' } }) }
-      return session.defaultSession.cookies.set({ url: origin, name: 'session', value: 'previous-account', httpOnly: true })
+      return session.defaultSession.cookies.set({ url: origin, name: 'hermes_yaoyao_session', value: 'previous-account', httpOnly: true })
     }, url)
     const errors = []; page.on('pageerror', error => errors.push(error.message))
     await expect(page.getByRole('heading', { name: '开始使用夭夭' })).toBeVisible()
     assert.equal(app.windows().length, 1)
     assert.equal((await page.evaluate(() => window.yaoyaoDesktop.status())).mode, null)
     await page.getByRole('radio', { name: /连接远程服务器/ }).check()
+    await page.locator('#remember').check()
+    await page.locator('#continue').click()
     await page.locator('#server').fill('http://127.0.0.1:1')
     await page.locator('#detect').click()
     await expect(page.locator('#status[role=alert]')).toBeVisible()
@@ -89,7 +91,7 @@ test('first launch, failed connection and remote login all stay in the only main
     assert.equal(registrationCount, 1)
     assert.equal(loginCount, 0, 'registration never signs in or authorizes this computer')
     assert.equal(await app.evaluate(async ({ session }, origin) =>
-      (await session.defaultSession.cookies.get({ url: origin, name: 'session' }))[0]?.value, url),
+      (await session.defaultSession.cookies.get({ url: origin, name: 'hermes_yaoyao_session' }))[0]?.value, url),
     'previous-account', 'registration does not replace the active browser session')
     assert.match(page.url(), /boot.html$/)
     await page.locator('#username').fill('user')
@@ -98,6 +100,7 @@ test('first launch, failed connection and remote login all stay in the only main
     await expect(page.locator('#login-error')).toContainText('用户名或密码不正确')
     assert.equal(await page.locator('#password').inputValue(), '')
     // Editing the address invalidates the checked target and hides credentials.
+    await page.locator('#change-server').click()
     await page.locator('#server').fill('http://another-server.test')
     await expect(page.locator('#login-form')).toBeHidden()
     await page.locator('#server').fill(url); await page.locator('#detect').click()
@@ -107,7 +110,6 @@ test('first launch, failed connection and remote login all stay in the only main
     await page.locator('#toggle-password').click()
     assert.equal(await page.locator('#password').getAttribute('type'), 'text')
     await page.locator('#toggle-password').click()
-    await page.locator('#remember').check()
     await mkdir(join(root, 'docs/design/desktop-onboarding'), { recursive: true })
     await page.emulateMedia({ colorScheme: 'light' })
     assert.equal(await page.evaluate(() => document.querySelector('footer').getBoundingClientRect().bottom <= innerHeight), true, 'default window shows its footer without scrolling')
@@ -157,7 +159,7 @@ test('first launch, failed connection and remote login all stay in the only main
       console.log('Fixture cookie metadata:', await app.evaluate(async ({ session }, url) => (await session.defaultSession.cookies.get({ url })).map(({ name, expirationDate, sameSite, session }) => ({ name, expirationDate, sameSite, session })), url))
       throw error
     }
-    assert.equal(loginCount, 2, 'a remembered session keeps the server-provided cookie expiry and is reused')
+    assert.equal(loginCount, 2, 'a remembered authorization is restored without another password login')
     assert.equal(guideFlashed, false, 'restoring a valid session never displays the guide')
     // An expired session still returns to the same page with usable login fields.
     sessionValid = false

@@ -12,6 +12,7 @@ interface ImportMeta {
 interface Window {
   yaoyaoDesktop?: {
     openLogin?(): Promise<unknown>
+    forgetLogin?(): Promise<unknown>
     openUpdates?(): Promise<void>
     modeState?(): Promise<{ mode: 'client' | 'server'; serverURL: string; switching: boolean; platform?: string; supportedModes?: ('client' | 'server')[] }>
     switchMode?(mode: 'client' | 'server'): Promise<{ ok: boolean; error?: string; pendingLogin?: boolean }>

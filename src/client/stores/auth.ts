@@ -136,6 +136,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout(): Promise<void> {
     try { await authApi.logout() } catch { /* local state still signs out */ }
+    await window.yaoyaoDesktop?.forgetLogin?.()
     status.value = 'anonymous'
     user.value = undefined
     serverIdentity.value = undefined; identityRequest++
@@ -173,7 +174,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function changeCredentials(input: { currentPassword: string; newPassword: string; username?: string }): Promise<void> {
+    const localDesktop = user.value?.localDesktop
     user.value = await authApi.changeCredentials(input)
+    if (window.yaoyaoDesktop && !localDesktop) await window.yaoyaoDesktop.forgetLogin?.()
     await bootstrap()
   }
   async function updateAccountAvatar(avatar: string | null): Promise<void> {

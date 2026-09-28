@@ -60,9 +60,9 @@ export function acquireServiceInstance(home: string, version: string, desktopOwn
       } catch { /* Never remove a lock that can no longer be identified. */ }
       finally { lock.close() }
     },
-    middleware(shutdown: () => Promise<void>, idle: () => boolean = () => true, environment?: (ctx:Koa.Context)=>Promise<void>, activation?: {readonly required:boolean;activate():void|Promise<void>}): Koa.Middleware {
+    middleware(shutdown: () => Promise<void>, idle: () => boolean = () => true, environment?: (ctx:Koa.Context)=>Promise<void>, activation?: {readonly required:boolean;activate():void|Promise<void>}, desktopSession?: (ctx: Koa.Context) => void): Koa.Middleware {
       return async (ctx, next) => {
-        const control = ctx.path === '/desktop/environment' || ctx.path === '/desktop/service' || ctx.path === '/desktop/service/quiesce' || ctx.path === '/desktop/service/activate'
+        const control = ctx.path === '/desktop/environment' || ctx.path === '/desktop/service' || ctx.path === '/desktop/service/quiesce' || ctx.path === '/desktop/service/activate' || ctx.path === '/desktop/service/session'
         if (!control) {
           if(stopping){ctx.status=503;ctx.body={error:'后台服务正在停止',code:'service_stopping'};return}
           if (quiesced() && !['/healthz', '/readyz', '/api/status'].includes(ctx.path)) {
@@ -79,6 +79,13 @@ export function acquireServiceInstance(home: string, version: string, desktopOwn
         const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ctx.req.socket.remoteAddress ?? '')
         if (!local || ctx.get('origin') || !timingSafeEqual(received, expected)) { ctx.status = 403; ctx.body = { error: '桌面服务授权无效' }; return }
         ctx.set('Cache-Control', 'no-store')
+        if (ctx.path === '/desktop/service/session') {
+          if (ctx.method !== 'POST' || !desktopSession) { ctx.status = 405; return }
+          if (stopping || quiesced()) { ctx.status = 503; return }
+          try { desktopSession(ctx) }
+          catch (error) { ctx.status = (error as any).status ?? 500; ctx.body = { error: '本机管理员会话未就绪' } }
+          return
+        }
         if(ctx.path==='/desktop/environment'){if(environment){try{await environment(ctx)}catch(error){ctx.status=(error as any).status??500;ctx.body={error:ctx.status<500?(error as Error).message:'桌面连接请求失败',code:(error as any).code??'desktop_error'}}}else ctx.status=404;return}
         if (ctx.path === '/desktop/service/activate') {
           if (ctx.method !== 'POST' || !activation) { ctx.status = 405; return }

@@ -14,10 +14,10 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
     const json = (body, status = 200) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)) }
     if (req.url.split('?')[0] === '/api/app/bootstrap') {
       res.setHeader('set-cookie', 'csrf=fixture; Path=/; HttpOnly')
-      return json({ authenticated: String(req.headers.cookie).includes('session=fixture'), setupRequired: false, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
+      return json({ authenticated: String(req.headers.cookie).includes('hermes_yaoyao_session=fixture'), setupRequired: false, csrfToken: 'fixture', serverKind: 'yaoyao-web' })
     }
     if (req.url === '/api/app/login') {
-      req.resume(); res.setHeader('set-cookie', 'session=fixture; Path=/; HttpOnly; Max-Age=3600')
+      req.resume(); res.setHeader('set-cookie', 'hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=3600')
       return json({ user: { id: 'fixture', username: 'admin', role: 'admin' }, csrfToken: 'fixture' })
     }
     if (req.url === '/api/app/admin/desktop-hosts') { req.resume(); return json({ host: { id: hostId }, token }) }
@@ -41,9 +41,10 @@ test('packaged Windows client logs in, encrypts pairing, restores its session an
     await expect(page.locator('#choice-section')).toBeHidden()
     assert.deepEqual((await page.evaluate(() => window.yaoyaoDesktop.status())).supportedModes, ['client'])
     assert.equal(await page.evaluate(async () => { try { await window.yaoyaoDesktop.selectServer('local'); return false } catch { return true } }), true)
+    await page.locator('#remember').check()
     await page.locator('#server').fill(url); await page.locator('#detect').click()
     await expect(page.locator('#login-form')).toBeVisible()
-    await page.locator('#username').fill('admin'); await page.locator('#password').fill('fixture-password'); await page.locator('#remember').check(); await page.locator('#submit').click()
+    await page.locator('#username').fill('admin'); await page.locator('#password').fill('fixture-password'); await page.locator('#submit').click()
     await page.waitForURL(url + '/**')
     const state = await page.evaluate(() => window.yaoyaoDesktop.modeState())
     assert.equal(state.mode, 'client'); assert.deepEqual(state.supportedModes, ['client'])

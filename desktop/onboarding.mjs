@@ -20,6 +20,7 @@ export class DesktopOnboarding {
     return this.snapshot()
   }
   select(mode) {
+    if (mode === null) return this.open({ remember: this.state.remember })
     if (!['local', 'remote'].includes(mode)) throw new Error('请选择运行方式')
     return this.open({ mode, serverURL: this.options.remoteServer(), remember: this.state.remember })
   }
@@ -53,12 +54,13 @@ export class DesktopOnboarding {
     try {
       const target = mode === 'local' ? await this.options.prepareLocal({ force }) : normalizeServerURL(serverURL)
       this.state.serverURL = target
-      const info = await this.options.inspect(target)
+      const info = mode === 'local' && this.options.localSession
+        ? await this.options.localSession(target) : await this.options.inspect(target)
       if (mode === 'remote' && info.setupRequired) throw new Error('远程服务器尚未初始化，请先在服务器本机创建管理员，再重新检测。')
       Object.assign(this.state, { phase: 'ready', stage: 'ready', setupRequired: info.setupRequired === true, registrationAvailable: info.registrationAvailable === true,
         authenticated: info.authenticated === true && !this.state.forceLogin, username: info.user?.username || '',
         message: mode === 'local' ? '本机服务已就绪' : '连接成功，服务器已就绪' })
-      if (autoEnter && this.state.authenticated) await this.enter()
+      if ((autoEnter || mode === 'local' && this.options.localSession) && this.state.authenticated) await this.enter()
     } catch (error) {
       this.state.phase = 'error'
       this.state.error = error.message || '准备未完成，请重试'

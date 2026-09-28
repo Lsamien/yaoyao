@@ -1,8 +1,12 @@
-/** Complete the real native first-run form; never bypass authentication. */
+/** Enter through the native local-admin flow, then set isolated fixture credentials. */
 export async function enterLocal(page, { username = 'desktop-fixture', password = 'desktop-fixture-password' } = {}) {
-  await page.locator('#login-form').waitFor({ timeout: 90000 })
-  await page.locator('#username').fill(username)
-  await page.locator('#password').fill(password)
-  if (await page.locator('#confirmation-field').isVisible()) await page.locator('#confirmation').fill(password)
-  await page.locator('#submit').click()
+  await page.waitForURL(url => url.protocol === 'http:' || url.protocol === 'https:', { timeout: 90000 })
+  await page.evaluate(async ({username,password}) => {
+    const bootstrap = await (await fetch('/api/app/bootstrap')).json()
+    if (!bootstrap.user?.localDesktop) throw new Error('Native administrator session was not established')
+    const response = await fetch('/api/app/account/credentials', { method: 'PUT',
+      headers: {'Content-Type':'application/json','X-CSRF-Token':bootstrap.csrfToken},
+      body: JSON.stringify({username,currentPassword:'',newPassword:password}) })
+    if (!response.ok) throw new Error('Fixture account configuration failed')
+  }, {username,password})
 }

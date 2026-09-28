@@ -107,3 +107,22 @@ describe('service ownership', () => {
     } finally { clock.mockRestore() }
   })
 })
+
+it('native administrator sessions require the private capability and reject web origins, remote callers and maintenance', async () => {
+  const instance = acquire(false), session = vi.fn(ctx => { ctx.body = { user: { role: 'admin' } } })
+  const app = new Koa().use(instance.middleware(async () => {}, () => true, undefined, undefined, session))
+  const api = request(app.callback()), auth = { 'x-yaoyao-desktop-token': instance.record.token }
+  await api.post('/desktop/service/session').expect(403)
+  await api.post('/desktop/service/session').set(auth).set('Origin', 'http://localhost').expect(403)
+  await api.post('/desktop/service/session').set('x-yaoyao-desktop-token', 'wrong').expect(403)
+  await api.get('/desktop/service/session').set(auth).expect(405)
+  expect(session).not.toHaveBeenCalled()
+  await api.post('/desktop/service/session').set(auth).expect(200)
+  expect(session).toHaveBeenCalledTimes(1)
+  await api.post('/desktop/service/quiesce').set(auth).expect(200)
+  await api.post('/desktop/service/session').set(auth).expect(503)
+  expect(session).toHaveBeenCalledTimes(1)
+  const remote = { path: '/desktop/service/session', method: 'POST', req: { socket: { remoteAddress: '192.168.1.20' } }, get: (key: string) => key === 'x-yaoyao-desktop-token' ? instance.record.token : '', set: () => {} } as any
+  await instance.middleware(async () => {}, () => true, undefined, undefined, session)(remote, async () => {})
+  expect(remote.status).toBe(403)
+})

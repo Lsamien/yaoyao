@@ -10,6 +10,7 @@ export type AuthStatus =
   | 'error'
 
 export interface CurrentUser {
+  localDesktop?: boolean
   id: string
   username: string
   avatar?: string

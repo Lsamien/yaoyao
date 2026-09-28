@@ -25,6 +25,7 @@ import { allowsLocalAuthorization, isLocalAuthorizationTarget, localSessionToken
 
 const SESSION_COOKIE = 'hermes_yaoyao_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
+const DESKTOP_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 400
 const USERNAME_PATTERN = /^[^\u0000-\u001f\u007f\s/@\\]{1,100}$/u
 
 export type LocalRole = 'admin' | 'user'
@@ -50,6 +51,8 @@ interface StoredUser {
 interface StoredUsers { version: 1; users: StoredUser[] }
 
 interface SessionRecord {
+  desktop?: boolean
+  localDesktop?: boolean
   userID: string
   authVersion: number
   expiresAt: number
@@ -57,6 +60,7 @@ interface SessionRecord {
 interface StoredSessions { version: 1; sessions: Array<SessionRecord & { tokenHash: string }> }
 
 export interface LocalUser {
+  localDesktop?: boolean
   registrationStatus?: RegistrationStatus
   id: string
   username: string
@@ -152,7 +156,7 @@ export class LocalAuthStore {
     return this.#issueSession(ctx, admin)
   }
 
-  login(ctx: Koa.Context, usernameValue: string, password: string): LocalUser {
+  login(ctx: Koa.Context, usernameValue: string, password: string, desktop = false): LocalUser {
     const normalized = usernameValue.trim().toLocaleLowerCase('en-US')
     const user = this.#users.find(candidate => candidate.normalizedUsername === normalized)
     if (!user || !this.#passwordMatches(user, password)) {
@@ -160,7 +164,27 @@ export class LocalAuthStore {
     }
     if (user.registrationStatus === 'pending') throw new HttpError(403, '账号尚未开通，请等待管理员分配机器人并开通。', 'account_pending_approval')
     if (!user.enabled) throw new HttpError(401, '用户名或密码错误', 'login_failed')
-    return this.#issueSession(ctx, user)
+    return this.#issueSession(ctx, user, desktop)
+  }
+
+  /** Called only behind the native service capability, never from public auth routes. */
+  localDesktopSession(ctx: Koa.Context): LocalUser {
+    let admin = this.#users.find(user => user.role === 'admin' && user.enabled)
+    if (!admin) {
+      if (!this.setupRequired) throw new HttpError(403, '本机管理员不可用', 'local_admin_unavailable')
+      admin = this.#newUser('admin', randomBytes(48).toString('base64url'), 'admin', false, Date.now())
+      this.#users.push(admin)
+      this.#saveUsers()
+    }
+    return this.#issueSession(ctx, admin, false, true)
+  }
+
+  persistDesktopSession(ctx: Koa.Context): LocalUser {
+    const current = this.require(ctx, true)
+    const user = this.#users.find(user => user.id === current.id)!
+    const previous = this.#token(ctx)
+    if (previous) this.#sessions.delete(this.#sessionKey(previous))
+    return this.#issueSession(ctx, user, true)
   }
 
   issueSession(ctx: Koa.Context, userID: string): LocalUser {
@@ -171,12 +195,14 @@ export class LocalAuthStore {
     return this.#issueSession(ctx, user)
   }
 
-  #issueSession(ctx: Koa.Context, user: StoredUser): LocalUser {
+  #issueSession(ctx: Koa.Context, user: StoredUser, desktop = false, localDesktop = false): LocalUser {
     const token = randomBytes(32).toString('base64url')
     this.#sessions.set(this.#sessionKey(token), {
       userID: user.id,
       authVersion: user.authVersion,
-      expiresAt: Date.now() + SESSION_TTL_SECONDS * 1_000,
+      expiresAt: desktop ? Number.MAX_SAFE_INTEGER : Date.now() + SESSION_TTL_SECONDS * 1_000,
+      ...(desktop ? { desktop: true } : {}),
+      ...(localDesktop ? { localDesktop: true } : {}),
     })
     this.#saveSessions()
     appendSetCookies(ctx, [serialize(SESSION_COOKIE, token, {
@@ -184,9 +210,9 @@ export class LocalAuthStore {
       secure: this.#secureCookie,
       sameSite: 'strict',
       path: '/',
-      maxAge: SESSION_TTL_SECONDS,
+      maxAge: desktop ? DESKTOP_COOKIE_TTL_SECONDS : SESSION_TTL_SECONDS,
     })])
-    const published = publicUser(user)
+    const published = { ...publicUser(user), ...(localDesktop ? { localDesktop: true, mustChangePassword: false } : {}) }
     ctx.state.localUser = published
     return published
   }
@@ -223,7 +249,7 @@ export class LocalAuthStore {
       this.#saveSessions()
       return undefined
     }
-    return publicUser(user)
+    return { ...publicUser(user), ...(session.localDesktop ? { localDesktop: true, mustChangePassword: false } : {}) }
   }
 
   require(ctx: Koa.Context, allowPasswordChange = false): LocalUser {
@@ -349,7 +375,7 @@ export class LocalAuthStore {
   ): LocalUser {
     const current = this.require(ctx, true)
     const user = this.#users.find(candidate => candidate.id === current.id)!
-    if (!this.#passwordMatches(user, currentPassword)) {
+    if (!current.localDesktop && !this.#passwordMatches(user, currentPassword)) {
       throw new HttpError(401, '当前密码错误', 'invalid_current_password')
     }
     const username = newUsername === undefined ? user.username : canonicalUsername(newUsername)
@@ -363,7 +389,14 @@ export class LocalAuthStore {
     user.mustChangePassword = false
     user.updatedAt = Date.now()
     this.#saveUsers()
+    const session = this.#sessions.get(this.#sessionKey(this.#token(ctx) ?? ''))
     this.#revokeUser(user.id)
+    if (current.localDesktop) return this.#issueSession(ctx, user, false, true)
+    if (session?.desktop) {
+      this.logout(ctx)
+      delete ctx.state.localUser
+      return publicUser(user)
+    }
     return this.login(ctx, username, newPassword)
   }
 
@@ -377,7 +410,7 @@ export class LocalAuthStore {
     else delete user.avatar
     user.updatedAt = Date.now()
     this.#saveUsers()
-    const published = publicUser(user)
+    const published = { ...publicUser(user), ...(current.localDesktop ? { localDesktop: true } : {}) }
     ctx.state.localUser = published
     return published
   }
@@ -494,6 +527,8 @@ export class LocalAuthStore {
         if (session.tokenHash && session.expiresAt > now) {
           this.#sessions.set(session.tokenHash, {
             userID: session.userID, authVersion: session.authVersion, expiresAt: session.expiresAt,
+            ...(session.desktop === true ? { desktop: true } : {}),
+            ...(session.localDesktop === true ? { localDesktop: true } : {}),
           })
         }
       }

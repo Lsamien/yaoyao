@@ -2,7 +2,7 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {randomUUID,randomBytes} from 'node:crypto'
-import {remoteSession,enrollDesktopHost,normalizeServerURL,inspectServer} from './remote-login.mjs'
+import {remoteSession,enrollDesktopHost,normalizeServerURL,inspectServer,persistRemoteSession} from './remote-login.mjs'
 
 test('server inspection requests local login metadata without binding Hermes', async () => {
   const calls = []
@@ -67,12 +67,31 @@ test('logs in with username and password and enrolls this Mac as a computer',asy
     assert.equal(bootstrap.url,'/api/app/bootstrap')
     assert.equal(login.origin,fake.url)
     assert.equal(login.csrf,fake.csrf)
+    assert.equal(JSON.parse(login.body).desktop,true)
     assert.equal(enroll.csrf,fake.csrf+'-rotated')
     assert.ok(enroll.cookie.includes(`session=${fake.session}`))
     assert.deepEqual(JSON.parse(enroll.body),{name:'书房 iMac',installId,previousHostId})
   }finally{
     fake.server.close();fake.server.closeAllConnections?.()
   }
+})
+
+test('existing desktop sessions upgrade with CSRF and retain only server-issued cookie policy', async () => {
+  const cookies = [{name:'hermes_yaoyao_session',value:'old'},{name:'csrf',value:'csrf-cookie'}]
+  const info = {csrfToken:'csrf-token'}
+  const upgraded = await persistRemoteSession('https://server.test', info, cookies, async (url, options) => {
+    assert.equal(url.pathname,'/api/app/desktop-session')
+    assert.equal(options.method,'POST')
+    assert.equal(options.headers.origin,'https://server.test')
+    assert.equal(options.headers['x-csrf-token'],'csrf-token')
+    assert.equal(options.headers.cookie,'hermes_yaoyao_session=old; csrf=csrf-cookie')
+    return Response.json({}, {headers:{'set-cookie':'hermes_yaoyao_session=new; Path=/; Max-Age=34560000; HttpOnly; Secure; SameSite=Strict'}})
+  })
+  assert.equal(upgraded[0].value,'new')
+  assert.equal(upgraded[0].httpOnly,true)
+  assert.equal(upgraded[0].sameSite,'strict')
+  assert.deepEqual(await persistRemoteSession('https://server.test', info, cookies, async () => new Response(null,{status:404})),cookies)
+  await assert.rejects(() => persistRemoteSession('https://server.test', info, cookies, async () => new Response(null,{status:401})),/重新登录/)
 })
 
 test('wrong credentials and non-admin accounts surface clear errors',async()=>{

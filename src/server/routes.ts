@@ -882,7 +882,7 @@ async function login(ctx: Koa.Context, dependencies: RouteDependencies): Promise
     throw new HttpError(400, 'Username and password are required', 'invalid_credentials')
   }
 
-  dependencies.auth.login(ctx, username, password)
+  dependencies.auth.login(ctx, username, password, request.desktop === true)
   await bootstrap(ctx, dependencies, true)
 }
 
@@ -1715,6 +1715,10 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   })
   router.post('/api/app/login', async (ctx) => {
     await login(ctx, dependencies)
+  })
+  router.post('/api/app/desktop-session', async ctx => {
+    dependencies.auth.persistDesktopSession(ctx)
+    await bootstrap(ctx, dependencies, true, true)
   })
   router.post('/api/app/register', ctx => {
     const retry = registrations.take(ctx.req.socket.remoteAddress ?? 'unknown')

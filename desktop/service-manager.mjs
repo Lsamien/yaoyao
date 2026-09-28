@@ -99,6 +99,15 @@ export class DesktopServiceManager {
     if (this.stopping || generation !== this.generation) throw new Error('本机服务状态已改变，请重试')
     this.activationRequested = true
   }
+  async adminSession() {
+    const generation = this.generation, record = await this.readRecord()
+    if (!record) throw new Error('请更新本机 Web 服务以启用管理员免登录')
+    const service = await this.verify(record)
+    if (this.stopping || generation !== this.generation) throw new Error('本机服务状态已改变，请重试')
+    const session = await localJSON(new URL('/desktop/service/session', service.url), { 'x-yaoyao-desktop-token': record.token }, 'POST')
+    if (this.stopping || generation !== this.generation) throw new Error('本机服务状态已改变，请重试')
+    return session
+  }
   async activateRecord(record, service) {
     if (service.activationRequired)
       await localJSON(new URL('/desktop/service/activate', service.url), { 'x-yaoyao-desktop-token': record.token }, 'POST')

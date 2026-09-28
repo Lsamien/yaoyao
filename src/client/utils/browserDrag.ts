@@ -14,7 +14,7 @@ export class BrowserDragSession {
   private heartbeat:ReturnType<typeof setInterval>
   private latest:Point
   constructor(start:Point,private send:(action:BrowserPointerAction)=>Promise<void>,private failed:(error:unknown)=>void){
-    this.latest=start;this.done=new Promise(resolve=>{this.resolve=resolve})
+    this.latest={x:start.x,y:start.y};this.done=new Promise(resolve=>{this.resolve=resolve})
     this.heartbeat=setInterval(()=>{if(!this.ending)this.move(this.latest)},1000)
     this.enqueue('start',start)
   }
@@ -26,8 +26,9 @@ export class BrowserDragSession {
     return this.done
   }
   private enqueue(phase:BrowserPointerAction['phase'],point:Point){
-    this.latest=point
-    const action:BrowserPointerAction={kind:'pointer',gestureId:this.id,phase,...point}
+    // Type annotations do not strip the viewer's DOM element and pointer metadata.
+    this.latest={x:point.x,y:point.y}
+    const action:BrowserPointerAction={kind:'pointer',gestureId:this.id,phase,x:point.x,y:point.y}
     if(phase==='move'&&this.queue.at(-1)?.phase==='move')this.queue[this.queue.length-1]=action
     else this.queue.push(action)
     void this.flush()

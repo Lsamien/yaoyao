@@ -11,7 +11,8 @@ import { synchronizeLocalService, stopLocalService, migrateLocalData } from './s
 import { resolveDataHome } from './data-home.mjs'
 import { DesktopEnvironmentHost, DesktopHostCore } from './environment-host.mjs'
 import { DesktopHostManager } from './host-manager.mjs'
-import { remoteRegistration, remoteSession, enrollDesktopHost, inspectServer } from './remote-login.mjs'
+import { remoteRegistration, remoteSession, enrollDesktopHost, inspectServer, persistRemoteSession, sessionCookieDetails } from './remote-login.mjs'
+import { DesktopLoginSessions } from './login-sessions.mjs'
 import { DesktopOnboarding } from './onboarding.mjs'
 import { DesktopUpdateManager } from './update-manager.mjs'
 import { DesktopAutoUpdateManager } from './auto-update-manager.mjs'
@@ -34,6 +35,7 @@ else {
   let remoteMode = false, remoteURL = '', serverModeActive = false, switchingMode = false
   let recoveringService = false
   let resumeLocalAfterUpdate = false
+  let checkRemoteAuthorization = async () => {}
   const serviceURL = () => remoteMode ? remoteURL : manager?.state.url
   // Use the same Chromium networking as server detection/navigation. Auth owns
   // its cookie jar: do not send or overwrite another account's browser cookies.
@@ -251,7 +253,7 @@ else {
             }
           }
           if (manager) stateChanged(manager.state)
-          timer=setInterval(()=>{if(serverModeActive)void manager.check()},10000);timer.unref()
+          timer=setInterval(()=>{if(serverModeActive)void manager.check();else void checkRemoteAuthorization()},10000);timer.unref()
           updater?.startChecking?.()
           show()
         }
@@ -284,7 +286,7 @@ else {
       }
     }
     clearInterval(timer)
-    timer = setInterval(() => { if (serverModeActive) void manager?.check() }, 10000); timer.unref()
+    timer = setInterval(() => { if (serverModeActive) void manager?.check(); else void checkRemoteAuthorization() }, 10000); timer.unref()
     window?.show(); updateWindow?.show()
   }
   app.on('before-quit', event => {
@@ -313,6 +315,46 @@ else {
     }
     app.setAboutPanelOptions({applicationName:'夭夭',applicationVersion:packageVersion,version:`${String(buildInfo.commit).slice(0,12)}${buildInfo.dirty?' · 工作区快照':''}`})
     const credentials=new DesktopCredentials({home,platform:platform.platform,safeStorage,helper:join(root,app.isPackaged?'keychain-helper':'keychain-helper-dev'),legacyDecrypt:async bytes=>(await safeStorage.decryptStringAsync(bytes)).result})
+    const loginSessions = new DesktopLoginSessions({ home, encrypt: value => credentials.encrypt(value), decrypt: value => credentials.decrypt(value) })
+    async function installSessionCookies(server, cookies) {
+      for (const cookie of cookies) await electronSession.defaultSession.cookies.set({ url: server, ...cookie,
+        httpOnly: true, secure: cookie.secure || server.startsWith('https://') })
+      await electronSession.defaultSession.cookies.flushStore()
+    }
+    // Serialize vault + Chromium changes so an in-flight restore cannot undo logout.
+    let loginOperation = Promise.resolve()
+    function synchronizeLogin(run) {
+      const next = loginOperation.then(run)
+      loginOperation = next.catch(() => {})
+      return next
+    }
+    async function clearLogin(server) {
+      await loginSessions.forget(server)
+      await electronSession.defaultSession.cookies.remove(server, 'hermes_yaoyao_session')
+      await electronSession.defaultSession.cookies.flushStore()
+    }
+    function forgetLogin(server) { return synchronizeLogin(() => clearLogin(server)) }
+    async function inspectRemote(server) {
+      return synchronizeLogin(async () => {
+        const saved = await loginSessions.read(server)
+        const info = await inspectServer(server, saved
+          ? (url, options) => authFetch(url, { ...options, headers: { ...options.headers, cookie: `${saved.cookie.name}=${saved.cookie.value}` } })
+          : (...args) => net.fetch(...args))
+        if (!info.authenticated) {
+          if (saved) await clearLogin(server)
+          return info
+        }
+        if (saved) {
+          await installSessionCookies(server, [{ ...saved.cookie, expirationDate: Date.now() / 1000 + 400 * 86400 }])
+        } else {
+          const cookies = await electronSession.defaultSession.cookies.get({ url: server })
+          const persistent = await persistRemoteSession(server, info, cookies, authFetch)
+          await loginSessions.save(server, persistent)
+          await installSessionCookies(server, persistent)
+        }
+        return info
+      })
+    }
     if (platform.server) {
     manager = new DesktopServiceManager({ home, port, version: packageVersion, log, onState: stateChanged,
       prepareHome: !fixtureHome ? onProgress => migrateLocalData({ home, port, root, onProgress }) : undefined,
@@ -426,7 +468,12 @@ else {
     onboarding = new DesktopOnboarding({
       platform: platform.platform, supportedModes: platform.supportedModes,
       remoteServer: () => preferences.value.remoteServer,
-      inspect: server => inspectServer(server, (...args) => net.fetch(...args)),
+      inspect: inspectRemote,
+      localSession: async server => {
+        const session = await manager.adminSession()
+        await installSessionCookies(server, sessionCookieDetails(session.setCookies))
+        return { authenticated: true, user: session.user }
+      },
       prepareLocal: async ({ force }) => {
         if (!platform.server) throw new Error('此客户端不支持在本机运行服务器')
         serverModeActive = true; remoteMode = false; remoteURL = ''
@@ -441,11 +488,8 @@ else {
       authenticate: async ({ mode, serverURL, setup, username, password }) => {
         authorizedOnboardingServer = ''
         const auth = await remoteSession(serverURL, { setup, username, password }, authFetch)
-        for (const cookie of auth.cookieDetails) {
-          await electronSession.defaultSession.cookies.set({ url: serverURL, ...cookie,
-            httpOnly: true, secure: cookie.secure || serverURL.startsWith('https://') })
-        }
-        await electronSession.defaultSession.cookies.flushStore()
+        if (mode === 'remote') await loginSessions.save(serverURL, auth.cookieDetails)
+        await installSessionCookies(serverURL, auth.cookieDetails)
         let warning
         if (mode === 'remote' && auth.user.role === 'admin') {
           try { await authorizeComputer(serverURL, auth); authorizedOnboardingServer = serverURL }
@@ -516,6 +560,30 @@ else {
       // A session expiry returns to the same main-page flow for the active server.
       return openOnboarding(remoteMode ? 'remote' : 'local', { autoPrepare: true })
     })
+    ipcMain.handle('desktop:forget-login', async event => {
+      requireModePage(event)
+      if (remoteMode && remoteURL) {
+        await forgetLogin(remoteURL)
+        await hostManager.stop()
+      }
+    })
+    let checkingAuthorization = false
+    checkRemoteAuthorization = async () => {
+      if (checkingAuthorization || closing || quitting || !remoteMode || onboarding.state.active) return
+      checkingAuthorization = true
+      const server = remoteURL
+      try {
+        const info = await inspectServer(server, (...args) => net.fetch(...args))
+        if (!info.authenticated && remoteURL === server && !onboarding.state.active && !closing && !quitting) {
+          // Chromium may expire its copy; the native authorization remains authoritative.
+          if ((await inspectRemote(server)).authenticated) return
+          await forgetLogin(server)
+          await hostManager.stop()
+          await openOnboarding('remote', { autoPrepare: true })
+        }
+      } catch { /* Network loss does not revoke a saved login. */ }
+      finally { checkingAuthorization = false }
+    }
     function syncModeMenu(){
       const menu=Menu.getApplicationMenu()
       const useRemote=menu?.getMenuItemById('desktop-host-use-remote'),useLocal=menu?.getMenuItemById('desktop-host-use-local'),ask=menu?.getMenuItemById('desktop-host-ask')
@@ -597,8 +665,8 @@ else {
       remember: preferences.value.startupChoice !== 'ask', restoring: restoreSession })
     // Finish the initial navigation before a remembered session enters its server.
     await createWindow()
-    powerMonitor.on('resume', () => { if (!closing && !quitting && serverModeActive) void manager.check() })
-    timer = setInterval(() => { if (serverModeActive) void manager.check() }, 10_000); timer.unref()
+    powerMonitor.on('resume', () => { if (!closing && !quitting) { if (serverModeActive) void manager.check(); else void checkRemoteAuthorization() } })
+    timer = setInterval(() => { if (serverModeActive) void manager.check(); else void checkRemoteAuthorization() }, 10_000); timer.unref()
     syncModeMenu()
     if (restoreSession)
       await onboarding.prepare({ autoEnter: true })

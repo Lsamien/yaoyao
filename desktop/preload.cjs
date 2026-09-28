@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('yaoyaoDesktop', Object.freeze({
   prepareServer: input => ipcRenderer.invoke('desktop:onboarding-prepare', input),
   login: input => ipcRenderer.invoke('desktop:onboarding-submit', input),
   openLogin: () => ipcRenderer.invoke('desktop:open-login'),
+  forgetLogin: () => ipcRenderer.invoke('desktop:forget-login'),
   retry: () => ipcRenderer.invoke('desktop:retry'),
   forceSync: () => ipcRenderer.invoke('desktop:force-sync'),
   logs: () => ipcRenderer.invoke('desktop:logs'),

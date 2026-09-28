@@ -60,6 +60,25 @@ export async function inspectServer(serverURL,fetchImpl=globalThis.fetch){
   return info
 }
 
+export function sessionCookieDetails(setCookies) {
+  const jar = new CookieJar()
+  jar.absorb({ headers: { getSetCookie: () => Array.isArray(setCookies) ? setCookies : [setCookies].filter(Boolean) } })
+  return [...jar.details.values()]
+}
+
+export async function persistRemoteSession(serverURL, info, cookies, fetchImpl=globalThis.fetch) {
+  const base = normalizeServerURL(serverURL)
+  const response = await requestServer(fetchImpl, new URL('/api/app/desktop-session', base), {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+    headers: { 'content-type': 'application/json', origin: base, 'x-csrf-token': info.csrfToken,
+      cookie: cookies.map(({name,value}) => `${name}=${value}`).join('; ') }, body: '{}',
+  })
+  // Older servers retain their original session lifetime until upgraded.
+  if (response.status === 404) return cookies
+  if (!response.ok) throw new Error('无法保存桌面登录授权，请重新登录')
+  return sessionCookieDetails(response.headers.getSetCookie())
+}
+
 export async function remoteSession(serverURL,{username,password,setup=false},fetchImpl=globalThis.fetch){
   const base=normalizeServerURL(serverURL)
   const user=String(username??'').trim(),pass=String(password??'')
@@ -73,7 +92,7 @@ export async function remoteSession(serverURL,{username,password,setup=false},fe
   const response=await requestServer(fetchImpl,new URL(setup?'/api/app/setup':'/api/app/login',base),{
     method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
     headers:{accept:'application/json','content-type':'application/json',cookie:jar.header(),'x-csrf-token':info.csrfToken,origin:base},
-    body:JSON.stringify({username:user,password:pass}),
+    body:JSON.stringify({username:user,password:pass,desktop:true}),
   })
   jar.absorb(response)
   if(!setup&&(response.status===401||response.status===403)) {

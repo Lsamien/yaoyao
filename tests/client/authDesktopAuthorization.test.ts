@@ -5,16 +5,20 @@ const mocks = vi.hoisted(() => ({
   login: vi.fn(),
   setup: vi.fn(),
   authorizeComputer: vi.fn(),
+  bootstrap: vi.fn(),
+  logout: vi.fn(),
+  changeCredentials: vi.fn(),
+  forgetLogin: vi.fn(),
 }))
 
 vi.mock('@/api/auth', () => ({
   login: mocks.login,
   setup: mocks.setup,
-  bootstrap: vi.fn(),
-  logout: vi.fn(),
+  bootstrap: mocks.bootstrap,
+  logout: mocks.logout,
   fetchProfiles: vi.fn(),
   fetchProfileIdentities: vi.fn(),
-  changeCredentials: vi.fn(),
+  changeCredentials: mocks.changeCredentials,
   updateAccountAvatar: vi.fn(),
 }))
 vi.mock('@/api/serverIdentity', () => ({ fetchServerIdentity: vi.fn(), onServerIdentity: () => () => {} }))
@@ -38,7 +42,11 @@ beforeEach(() => {
   mocks.login.mockReset()
   mocks.setup.mockReset()
   mocks.authorizeComputer.mockReset()
-  Object.defineProperty(window, 'yaoyaoDesktop', { configurable: true, value: { authorizeComputer: mocks.authorizeComputer } })
+  mocks.bootstrap.mockReset()
+  mocks.logout.mockReset()
+  mocks.changeCredentials.mockReset()
+  mocks.forgetLogin.mockReset()
+  Object.defineProperty(window, 'yaoyaoDesktop', { configurable: true, value: { authorizeComputer: mocks.authorizeComputer, forgetLogin: mocks.forgetLogin } })
 })
 
 it('re-authorizes the computer only after an explicit administrator login', async () => {
@@ -64,4 +72,39 @@ it('keeps the administrator signed in when computer authorization fails', async 
   const auth = useAuthStore()
   await expect(auth.login({ username: 'admin', password: 'secret' })).resolves.toBeUndefined()
   expect(auth.status).toBe('authenticated')
+})
+
+it('forgets native authorization on explicit logout even when the server is offline', async () => {
+  mocks.login.mockResolvedValue(response('user'))
+  const auth = useAuthStore()
+  await auth.login({ username: 'member', password: 'secret' })
+  mocks.logout.mockRejectedValue(new Error('offline'))
+  mocks.bootstrap.mockRejectedValue(new Error('offline'))
+  await auth.logout()
+  expect(mocks.forgetLogin).toHaveBeenCalledOnce()
+  expect(auth.status).toBe('anonymous')
+  expect(auth.user).toBeUndefined()
+})
+
+it('returns a remote desktop to login after changing its password', async () => {
+  mocks.login.mockResolvedValue(response('user'))
+  const auth = useAuthStore()
+  await auth.login({ username: 'member', password: 'secret' })
+  mocks.changeCredentials.mockResolvedValue(response('user').user)
+  mocks.bootstrap.mockResolvedValue({ authRequired: true, profiles: [], csrfToken: 'new-csrf' })
+  await auth.changeCredentials({ currentPassword: 'secret', newPassword: 'new-secret' })
+  expect(mocks.forgetLogin).toHaveBeenCalledOnce()
+  expect(auth.status).toBe('anonymous')
+})
+
+it('keeps the native local administrator active after setting a remote password', async () => {
+  const local = { ...response('admin'), user: { ...response('admin').user, localDesktop: true } }
+  mocks.bootstrap.mockResolvedValue(local)
+  const auth = useAuthStore()
+  await auth.bootstrap()
+  mocks.changeCredentials.mockResolvedValue(local.user)
+  await auth.changeCredentials({ currentPassword: '', newPassword: 'remote-password' })
+  expect(mocks.forgetLogin).not.toHaveBeenCalled()
+  expect(auth.status).toBe('authenticated')
+  expect(auth.user?.localDesktop).toBe(true)
 })

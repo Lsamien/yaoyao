@@ -820,6 +820,19 @@ export class PushCoordinator {
     }
     const updatedAt = new Date(this.now()).toISOString()
     const installation = this.store.mutate(state => {
+      // Reinstalls and the native-to-Expo migration can create a new local ID for
+      // the same APNs/FCM endpoint. Keep one registration per user/device/provider
+      // environment so a single event cannot produce two background banners.
+      const superseded = state.installations.filter(item => item.userId === userId
+        && !(item.installationId === installationId && item.clientAccountId === clientAccountId)
+        && (target.platform === 'ios'
+          ? item.platform === 'ios' && item.deviceToken === target.deviceToken && item.environment === target.environment
+          : item.platform === 'android' && item.fid === target.fid))
+      if (superseded.length) {
+        state.installations = state.installations.filter(item => !superseded.includes(item))
+        state.outbox = state.outbox.filter(item => !superseded.some(old => old.userId === item.userId
+          && old.installationId === item.installationId && old.clientAccountId === item.clientAccountId))
+      }
       const existingIndex = state.installations.findIndex(item => item.userId === userId
         && item.installationId === installationId
         && item.clientAccountId === clientAccountId)
