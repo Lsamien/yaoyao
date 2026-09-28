@@ -9,4 +9,6 @@ export async function enterLocal(page, { username = 'desktop-fixture', password 
       body: JSON.stringify({username,currentPassword:'',newPassword:password}) })
     if (!response.ok) throw new Error('Fixture account configuration failed')
   }, {username,password})
+  // Reload after credential rotation so callers attach to the final authorized document.
+  await page.goto(new URL('/conversations', page.url()).href)
 }

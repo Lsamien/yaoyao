@@ -31,6 +31,10 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
   const server = createServer(async (req, res) => {
     try {
       const path = new URL(req.url, 'http://localhost').pathname
+      if (path === '/api/app/desktop-session') {
+        res.setHeader('Set-Cookie', 'hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000')
+        res.setHeader('Content-Type', 'application/json'); res.end('{}'); return
+      }
       if (path === '/api/app/bootstrap') {
         const authenticated = !requireCookie || String(req.headers.cookie).includes('session=upgrade-fixture')
         if (requireCookie && authenticated) restored++
