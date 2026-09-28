@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { displayContentForMessage } from '@/utils/messageDisplay'
 import { normalizeChatMessage } from '@/utils/normalize'
 
+function expectImageDownload(url: string | undefined, path: string, profile = 'default') {
+  const parsed = new URL(url!, 'https://yaoyao.test')
+  expect(parsed.pathname).toBe('/api/files/download')
+  expect(parsed.searchParams.get('path')).toBe(path)
+  expect(parsed.searchParams.get('profile')).toBe(profile)
+  expect(parsed.searchParams.get('preview')).toBe('1')
+}
+
 describe('displayContentForMessage', () => {
   it('turns persisted user @file markers into attachment cards and removes marker text', () => {
     const message = normalizeChatMessage({
@@ -72,10 +80,10 @@ describe('displayContentForMessage', () => {
       expect.objectContaining({
         name: '照片-9270F5CF-2FE2-487F-8948-FA583F4C83B1.png',
         path: '/Users/samien/.hermes/images/upload_20260820_130901_1.png',
-        url: '/Users/samien/.hermes/images/upload_20260820_130901_1.png',
         kind: 'image',
       }),
     ])
+    expectImageDownload(message.attachments?.[0]?.url, '/Users/samien/.hermes/images/upload_20260820_130901_1.png')
   })
 
   it('keeps multiple iOS image uploads together as image attachments', () => {
@@ -93,7 +101,7 @@ describe('displayContentForMessage', () => {
     }, 'session-1', 'default')
 
     expect(message.content).toBe('')
-    expect(message.attachments?.map(attachment => attachment.url)).toEqual([
+    expect(message.attachments?.map(attachment => attachment.path)).toEqual([
       '/Users/samien/.hermes/images/upload_1.jpeg',
       '/Users/samien/.hermes/images/upload_2.jpeg',
     ])
@@ -113,12 +121,33 @@ describe('displayContentForMessage', () => {
     }, 'session-1', 'yaoer')
 
     expect(message.content).toBe('读取图片中的提示词')
-    expect(message.attachments?.map(({ name, path, url, kind }) => ({ name, path, url, kind })))
-      .toEqual(names.map((name, index) => ({ name, path: paths[index], url: paths[index], kind: 'image' })))
+    expect(message.attachments?.map(({ name, path, kind }) => ({ name, path, kind })))
+      .toEqual(names.map((name, index) => ({ name, path: paths[index], kind: 'image' })))
+    message.attachments?.forEach((attachment, index) => expectImageDownload(attachment.url, paths[index]!, 'yaoer'))
   })
 
   it.each([
-    '/Users/samien/.hermes/profiles/yaoer/config/image.png',
+    ['/home/user/.hermes/images/demo.png', '/home/user/.hermes/images/demo.png'],
+    ['/tmp/中文 照片.png', '/tmp/中文 照片.png'],
+    ['/Users/samien/.hermes/profiles/yaoer/config/image.png', '/Users/samien/.hermes/profiles/yaoer/config/image.png'],
+    ['file:///tmp/photo%20one.png', '/tmp/photo one.png'],
+    ['/api/files/download?path=%2Ftmp%2Fphoto%20one.png', '/tmp/photo one.png'],
+    ['/api/files/download?path=%2Ftmp%2F100%25.png', '/tmp/100%.png'],
+  ])('restores cross-client image reference %s through the authenticated download route', (reference, path) => {
+    const message = normalizeChatMessage({ role: 'user', content: `说明\n[用户附加图片：照片.png]\n@image:${reference}\n[screenshot]` }, 's', 'yaoer')
+    expect(message.content).toBe('说明')
+    expect(message.attachments).toHaveLength(1)
+    expect(message.attachments?.[0]?.path).toBe(path)
+    expectImageDownload(message.attachments?.[0]?.url, path, 'yaoer')
+  })
+
+  it.each([
+    '/api/app/files/id/preview',
+    'file://remote/tmp/image.png',
+    'file:///tmp/../secret.png',
+    'file:///tmp/%2e%2e/secret.png',
+    'https://other.test/image.png',
+    '/api/files/download?path=%2Ftmp%2F..%2Fsecret.png',
     '/Users/samien/.hermes/profiles/../images/image.png',
     '/Users/samien/.hermes/profiles/yaoer/images/%2e%2e/image.png',
     '/Users/samien/.hermes/profiles/yaoer%2Fother/images/image.png',

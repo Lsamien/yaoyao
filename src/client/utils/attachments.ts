@@ -1,4 +1,24 @@
+import { serverFilePath } from '@shared/serverFiles'
+
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+/** Use the authenticated file route for uploads from any Hermes home. */
+export function imageAttachmentReference(raw: string, profile?: string): { path: string; url: string } | undefined {
+  let source = raw.trim().replace(/^[`'"]|[`'"]$/g, '')
+  let decode = true
+  if (/^\/api\/(?:files\/(?:download|stream)|hermes\/download|media)\?/.test(source)) {
+    source = new URL(source, 'https://local.invalid').searchParams.get('path') || ''
+    decode = false // URLSearchParams already decoded the path.
+  }
+  // Encoded separators must not change the meaning of a path segment.
+  if (/%2f|%5c|[\\\u0000-\u001f\u007f]/i.test(source)
+    || source.split('/').some(segment => /^(?:\.|%2e){1,2}$/i.test(segment))) return
+  const path = serverFilePath(source, decode)
+  if (!path || path.split('/').some(segment => segment === '.')) return
+  if (decode && !/^(?:file:|sandbox:)/i.test(source)
+    && /^\/(?:api|assets|icons|brand|attachments|uploads|media|chat|history|conversations|kanban|files|artifacts|settings)(?:\/|$)/.test(path)) return
+  return { path, url: `/api/files/download?${new URLSearchParams({ path, preview: '1', ...(profile ? { profile } : {}) })}` }
+}
 
 export interface EncodedAttachment {
   name: string

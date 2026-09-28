@@ -11,7 +11,7 @@ import { ChatRpcSocket, RpcError } from '@/api/realtime'
 import { ChatTranscriptClient } from '@/api/chatTranscript'
 import type { TranscriptMessage, TranscriptSnapshot } from '@shared/chatTranscript'
 import { ApiError } from '@/api/client'
-import { encodeAttachment } from '@/utils/attachments'
+import { encodeAttachment, imageAttachmentReference } from '@/utils/attachments'
 import { ScopedCache } from '@/utils/cache'
 import { createId, routeKey } from '@/utils/id'
 import { applyChatEvent, chatHasUnfinishedOutput, mergeChatMessages, settleChatMessages } from '@/utils/messageReducer'
@@ -808,13 +808,19 @@ export const useChatStore = defineStore('chat', () => {
         persistFastMode(state)
       }
       const parts = trimmed ? [trimmed] : []
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
         const encoded = await encodeAttachment(file)
         if (encoded.kind === 'image') {
-          await socket.request('image.attach_bytes', {
+          const result = resultRecord(await socket.request('image.attach_bytes', {
             session_id: runtimeId, content_base64: encoded.base64, filename: encoded.name, ext: encoded.extension,
-          })
-          parts.push(`[用户附加图片：${encoded.name}]`)
+          }))
+          const path = string(result.image_path) || string(result.path) || string(result.ref_path)
+          const reference = imageAttachmentReference(path, state.route.profile)
+          if (reference) {
+            attachments[index] = { ...attachments[index]!, ...reference }
+            updateDelivery(state, clientMessageId, { attachments: [...attachments] })
+          }
+          parts.push([`[用户附加图片：${encoded.name}]`, path ? `@image:${path}` : '', '[screenshot]'].filter(Boolean).join('\n'))
         } else if (encoded.kind === 'pdf') {
           await socket.request('pdf.attach', { session_id: runtimeId, content_base64: encoded.base64, filename: encoded.name })
           parts.push(`[用户附加 PDF：${encoded.name}]`)

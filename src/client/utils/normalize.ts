@@ -1,4 +1,5 @@
 import { toolStatus } from '@shared/chatTools'
+import { imageAttachmentReference } from './attachments'
 import type {
   ChatAttachment,
   ChatMessage,
@@ -200,23 +201,6 @@ function persistedAttachmentUrl(path: string): { path: string; url: string } | u
   return { path, url: `/${segments.map(encodeURIComponent).join('/')}` }
 }
 
-function persistedImageUrl(path: string): { path: string; url: string } | undefined {
-  if (!path.startsWith('/')) return undefined
-  const segments = path.slice(1).split('/')
-  const normalizedSegments = segments.map(segment => {
-    try { return decodeURIComponent(segment) } catch { return '' }
-  })
-  const rootImages = normalizedSegments[3] === 'images' && segments.length >= 5
-  const profileImages = normalizedSegments[3] === 'profiles'
-    && normalizedSegments[5] === 'images' && segments.length >= 7
-  // User uploads belong to either the default Hermes home or the selected
-  // Profile. Keep the full path so the Web media route reaches that Profile.
-  if (normalizedSegments[0] !== 'Users' || normalizedSegments[2] !== '.hermes'
-    || (!rootImages && !profileImages)
-    || normalizedSegments.some(segment => !segment || segment === '.' || segment === '..' || /[/\\\u0000-\u001f\u007f]/.test(segment))) return undefined
-  return { path, url: `/${segments.map(encodeURIComponent).join('/')}` }
-}
-
 function extractPersistedAttachments(content: string): { content: string; attachments: ChatAttachment[] } {
   const attachments: ChatAttachment[] = []
   const extracted = content.replace(
@@ -238,7 +222,7 @@ function extractPersistedAttachments(content: string): { content: string; attach
   return { content: cleaned, attachments }
 }
 
-function extractPersistedImages(content: string): { content: string; attachments: ChatAttachment[] } {
+function extractPersistedImages(content: string, profile?: string): { content: string; attachments: ChatAttachment[] } {
   const lines = content.split(/\r?\n/)
   const attachments: ChatAttachment[] = []
   const imageMarker = /^\[用户附加图片\s*：\s*([^\]\r\n]+)\]\s*$/
@@ -268,7 +252,7 @@ function extractPersistedImages(content: string): { content: string; attachments
       paths.push(reference[1]!.trim().replace(/^[`'"]|[`'"]$/g, ''))
       cursor += 1
     }
-    const references = paths.map(persistedImageUrl)
+    const references = paths.map(path => imageAttachmentReference(path, profile))
     if (!paths.length || names.length !== paths.length || references.some(reference => !reference)) {
       index = start + 1
       continue
@@ -312,7 +296,7 @@ export function normalizeChatMessage(value: unknown, sessionId: string, fallback
   const role = ['user', 'assistant', 'tool', 'system'].includes(roleValue) ? roleValue as ChatMessage['role'] : 'system'
   if (role === 'user' && (content.includes('@file:') || content.includes('@image:'))) {
     const persistedFiles = extractPersistedAttachments(content)
-    const persistedImages = extractPersistedImages(persistedFiles.content)
+    const persistedImages = extractPersistedImages(persistedFiles.content, string(source.profile, fallbackProfile) || undefined)
     content = persistedImages.content
     const known = new Set(attachments.map(item => item.path || item.url || item.name))
     attachments.push(...[...persistedFiles.attachments, ...persistedImages.attachments]

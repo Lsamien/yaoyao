@@ -137,6 +137,46 @@ describe('ordinary v2 cross-client store', () => {
     await vi.waitFor(() => expect(wire.clients.some((c) => c.id === id)).toBe(true))
     return wire.clients.filter((c) => c.id === id).at(-1)!
   }
+  it.each(['image_path', 'path', 'ref_path'])('preserves uploaded image %s in pending and canonical messages', async field => {
+    const client = await open()
+    const paths = ['/home/user/.hermes/images/照片 one.png', '/tmp/photo-two.png']
+    let uploaded = 0
+    wire.request.mockImplementation((method: string) => Promise.resolve(
+      method === 'image.attach_bytes' ? { [field]: paths[uploaded++] } : {},
+    ))
+    await chat.send('查看图片', paths.map((_, index) => new File(['image'], `photo-${index}.png`, { type: 'image/png' })))
+    const submission = wire.request.mock.calls.find(([method]) => method === 'prompt.submit')![1]
+    expect(submission.text).toBe([
+      '查看图片',
+      `[用户附加图片：photo-0.png]\n@image:${paths[0]}\n[screenshot]`,
+      `[用户附加图片：photo-1.png]\n@image:${paths[1]}\n[screenshot]`,
+    ].join('\n\n'))
+    const pending = chat.messages.find(message => message.role === 'user')!
+    expect(pending.attachments?.map(file => file.path)).toEqual(paths)
+    const checkDownloads = () => chat.messages[0]!.attachments?.forEach((file, index) => {
+      const url = new URL(file.url!, 'https://yaoyao.test')
+      expect(url.pathname).toBe('/api/files/download')
+      expect(url.searchParams.get('path')).toBe(paths[index])
+      expect(url.searchParams.get('profile')).toBe('p')
+    })
+    checkDownloads()
+    await client.changed(snapshot([{
+      id: 'canonical-image', seq: 1, revision: 1, role: 'user', status: 'complete',
+      client_message_id: pending.clientMessageId, content: submission.text,
+    }]))
+    expect(chat.messages).toHaveLength(1)
+    expect(chat.messages[0]!.content).toBe('查看图片')
+    expect(chat.messages[0]!.attachments?.map(file => file.path)).toEqual(paths)
+    checkDownloads()
+  })
+  it('does not fabricate an image path when an older upload response omits it', async () => {
+    await open()
+    wire.request.mockResolvedValue({})
+    await chat.send('', [new File(['image'], 'photo.png', { type: 'image/png' })])
+    const submission = wire.request.mock.calls.find(([method]) => method === 'prompt.submit')![1]
+    expect(submission.text).toBe('[用户附加图片：photo.png]\n[screenshot]')
+    expect(chat.messages[0]!.attachments?.[0]?.url).toBeUndefined()
+  })
   it('renders only canonical messages and ignores raw upstream bodies and completions', async () => {
     const client = await open()
     await client.changed(snapshot([answer('前半', { status: 'streaming' })], 's', { running: true }))
