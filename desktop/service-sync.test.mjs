@@ -88,13 +88,10 @@ test('App first launch installs an independent Web; Web remains up after quit an
       assert.equal(marker.action, 'upgrade')
       assert.equal(driver.snapshot().plist.EnvironmentVariables.YAOYAO_TEST_PRESERVE, 'historical-release-settings')
     }
-    const support = await page.evaluate(async () => {
-      const bootstrap = await (await fetch('/api/app/bootstrap')).json()
-      const setup = await fetch('/api/app/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': bootstrap.csrfToken },
-        body: JSON.stringify({ username: 'sync-fixture', password: 'sync-fixture-password' }) })
-      if (!setup.ok) throw new Error('验收账号创建失败')
-      return (await fetch('/api/app/system/update/status')).json()
-    })
+    // Credential setup can overlap the SPA's first route navigation; retry only this read.
+    const support = await until(() => page.evaluate(async () =>
+      (await fetch('/api/app/system/update/status')).json()), value => value.installationMode === 'release')
+
     assert.equal(support.installationMode, 'release'); assert.equal(support.supported, true)
     await nativeQuit(app); app = undefined
     assert.equal((await localRequest(`http://127.0.0.1:${port}/healthz`)).body.ok, true)

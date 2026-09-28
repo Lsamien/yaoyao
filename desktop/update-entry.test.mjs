@@ -16,6 +16,8 @@ test('the main local app can open the native updater and repeated requests reuse
   let releaseIdentity
   const identityReady = new Promise(resolve => { releaseIdentity = resolve })
   const server = createServer(async (req, res) => {
+    if (req.url === '/desktop/service/session') { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({user:{role:'admin',localDesktop:true},setCookies:['hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000']})); return }
+    if (req.url === '/api/app/desktop-session') { res.setHeader('Set-Cookie','hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000'); res.end('{}'); return }
     if (req.url === '/desktop/service') { await identityReady; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(identity)) }
     else if(req.url.split('?')[0]==='/api/app/bootstrap'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({authenticated:true,csrfToken:'fixture'}))}
     else { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end('<title>Update entry fixture</title><button onclick="window.yaoyaoDesktop.openUpdates()">检测更新</button>') }
@@ -57,6 +59,8 @@ test('client mode opens local App updates without a local service or admin role'
   const root = resolve(import.meta.dirname, '..')
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-client-update-')))
   const remote = createServer((req, res) => {
+    if (req.url === '/desktop/service/session') { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({user:{role:'admin',localDesktop:true},setCookies:['hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000']})); return }
+    if (req.url === '/api/app/desktop-session') { res.setHeader('Set-Cookie','hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000'); res.end('{}'); return }
     if (req.url.split('?')[0] === '/api/app/bootstrap') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ authenticated: true, csrfToken: 'fixture', user: { role: 'member' } })) }
     else { res.setHeader('Content-Type', 'text/html'); res.end('<title>Remote member</title><button onclick="window.yaoyaoDesktop.openUpdates()">App update</button>') }
   })

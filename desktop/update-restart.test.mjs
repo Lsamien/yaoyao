@@ -7,14 +7,16 @@ import { createServer } from 'node:http'
 import { _electron as electron, expect } from '@playwright/test'
 import { dataKey } from './service-manager.mjs'
 
-for (const scenario of ['remote', 'local', 'remote-failure', 'local-failure', 'local-checking-failure']) test(`${scenario} restart releases the lock, preserves independent servers and recovers on failure`, { timeout: 60000 }, async () => {
-  const mode = scenario.startsWith('local') ? 'local' : 'remote', fail = scenario.endsWith('failure'), checking = scenario === 'local-checking-failure'
+for (const scenario of ['remote', 'local', 'remote-failure', 'local-failure', 'remote-checking-failure']) test(`${scenario} restart releases the lock, preserves independent servers and recovers on failure`, { timeout: 60000 }, async () => {
+  const mode = scenario.startsWith('local') ? 'local' : 'remote', fail = scenario.endsWith('failure'), checking = scenario === 'remote-checking-failure'
   const root = resolve(import.meta.dirname, '..'), home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-update-restart-')))
   const version = JSON.parse(await readFile(join(root, 'release.json'), 'utf8')).webVersion
   const identity = { protocol: 1, instanceId: 'update-restart', pid: process.pid, dataKey: dataKey(home), version }
   let activationRequired = true, activations = 0, inspections = 0
   let releaseIdentity; const identityReady = new Promise(resolve => { releaseIdentity = resolve })
   const server = createServer(async (req, res) => {
+    if (req.url === '/desktop/service/session') { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({user:{role:'admin',localDesktop:true},setCookies:['hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000']})); return }
+    if (req.url === '/api/app/desktop-session') { res.setHeader('Set-Cookie','hermes_yaoyao_session=fixture; Path=/; HttpOnly; Max-Age=31536000'); res.end('{}'); return }
     res.setHeader('Content-Type', 'application/json')
     if (req.url === '/desktop/service') { await identityReady; inspections++; res.end(JSON.stringify({ ...identity, activationRequired })) }
     else if (req.url === '/desktop/service/activate') { assert.equal(req.method, 'POST'); assert.equal(req.headers['x-yaoyao-desktop-token'], 'fixture'); if (activationRequired) activations++; activationRequired = false; res.end(JSON.stringify({ activated: true })) }
