@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 
-test('model confirmation survives transcript reconnects and the Allow button completes the switch', async ({ page }) => {
+test('model confirmation survives reconnects and failed inputs retain their position after Allow, new replies and reload', async ({ page, browser }) => {
   const modelCommands: Record<string, unknown>[] = []
   let nativeApprovals = 0
   await page.route('**/api/realtime/channels/*/commands', async route => {
@@ -43,4 +43,20 @@ test('model confirmation survives transcript reconnects and the Allow button com
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
   await expect(page.locator('.message__content').filter({ hasText: '这是来自假 Gateway 的流式回复。' })).toHaveCount(1)
   expect(modelCommands).toHaveLength(2)
+  const relevantMessages = ['等待模型确认', '模型确认后发送', '这是来自假 Gateway 的流式回复。']
+  const visibleOrder = async () => (await page.locator('.message__content').allTextContents())
+    .map(text => text.trim()).filter(text => relevantMessages.includes(text))
+  await expect.poll(visibleOrder).toEqual(relevantMessages)
+  await page.reload()
+  await expect.poll(visibleOrder).toEqual(relevantMessages)
+  await expect(page.locator('.message--failed').filter({ hasText: '等待模型确认' })).toHaveCount(1)
+
+  // A fresh device gets the accepted transcript, not this browser's unsent outbox.
+  const other = await browser.newContext({ storageState: await page.context().storageState() })
+  try {
+    const otherPage = await other.newPage()
+    await otherPage.goto(page.url())
+    await expect(otherPage.locator('.message__content').filter({ hasText: '模型确认后发送' })).toHaveCount(1)
+    await expect(otherPage.locator('.message__content').filter({ hasText: '等待模型确认' })).toHaveCount(0)
+  } finally { await other.close() }
 })

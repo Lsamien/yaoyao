@@ -178,6 +178,35 @@ describe('ordinary v2 cross-client store', () => {
     expect(chat.messages[0]!.attachments?.[0]?.url).toBeUndefined()
   })
 
+  it.each(['failed', 'unknown-receipt'] as const)('keeps an older %s input before newer messages through sync and cache restoration', async stage => {
+    const client = await open()
+    const oldAnswer = answer('之前的回复', { timestamp: 10 })
+    await client.changed(snapshot([oldAnswer]))
+    chat.activeRouteState!.messages.push({
+      id: 'local-failed', clientMessageId: 'local-failed', sessionId: 's', profile: 'p',
+      role: 'user', content: '再试试', timestamp: 15, stage,
+    })
+    const newerUser = { id: 'new-user', seq: 3, revision: 1, role: 'user', content: '再试试', timestamp: 20, status: 'complete' }
+    const newerAnswer = answer('新的回复', { id: 'new-answer', seq: 4, timestamp: 21 })
+    const expected = ['canonical-answer', 'local-failed', 'new-user', 'new-answer']
+    await client.changed(snapshot([oldAnswer, newerUser, newerAnswer], 's', { cursor: 2 }))
+    expect(chat.messages.map(m => m.id)).toEqual(expected)
+    await client.changed(snapshot([oldAnswer, newerUser, { ...newerAnswer, revision: 2 }], 's', { cursor: 3 }))
+    expect(chat.messages.map(m => m.id)).toEqual(expected)
+    const cached = await new ScopedCache<{ messages: { id: string }[] }>('chat-history-v1').get(`v2-viewer-${wire.owner}:p`, 's')
+    expect(cached?.messages.map(m => m.id)).toEqual(expected)
+
+    chat.disconnect()
+    setActivePinia(createPinia())
+    chat = useChatStore()
+    chat.sessions = [session()]
+    wire.clients = []
+    const restored = await open()
+    expect(chat.messages.map(m => m.id)).toEqual(expected)
+    await restored.changed(snapshot([oldAnswer, newerUser, newerAnswer], 's', { cursor: 4 }))
+    expect(chat.messages.map(m => m.id)).toEqual(expected)
+    expect(chat.messages.find(m => m.id === 'local-failed')?.stage).toBe(stage)
+  })
   it('keeps a model-switch confirmation through transcript updates and sends after confirmation', async () => {
     const client = await open()
     const model = { id: 'model-b', name: 'Model B', provider: 'provider-b' }
