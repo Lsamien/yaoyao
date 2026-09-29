@@ -177,6 +177,56 @@ describe('ordinary v2 cross-client store', () => {
     expect(submission.text).toBe('[用户附加图片：photo.png]\n[screenshot]')
     expect(chat.messages[0]!.attachments?.[0]?.url).toBeUndefined()
   })
+
+  it('keeps a model-switch confirmation through transcript updates and sends after confirmation', async () => {
+    const client = await open()
+    const model = { id: 'model-b', name: 'Model B', provider: 'provider-b' }
+    chat.models = [model]
+    wire.request.mockImplementation(async (method, params) => {
+      if (method === 'session.resume') return { session_id: 'runtime', stored_session_id: 's', running: false }
+      if (method === 'config.set' && params.key === 'model') return params.confirm_expensive_model
+        ? { value: model.id, scope: 'session' }
+        : { confirm_required: true, confirm_message: 'Switching this long conversation loses its cached input.' }
+      return {}
+    })
+    await chat.setModel(model)
+    await expect(chat.send('待发送')).rejects.toThrow('请先确认模型切换')
+    const confirmation = chat.pendingApproval
+    expect(confirmation?.message).toContain('cached input')
+    await client.changed(snapshot([answer()], 's', { pendingApproval: null }))
+    expect(chat.pendingApproval).toEqual(confirmation)
+
+    await chat.respondToApproval(confirmation!.id, 'once')
+    expect(wire.request).toHaveBeenCalledWith('config.set', expect.objectContaining({
+      key: 'model', confirm_expensive_model: true,
+    }))
+    expect(chat.pendingApproval).toBeUndefined()
+    wire.request.mockClear()
+    await chat.send('确认后继续')
+    expect(wire.request).toHaveBeenCalledWith('prompt.submit', expect.objectContaining({ text: '确认后继续' }), expect.anything(), expect.anything())
+    expect(wire.request.mock.calls.some(([method, params]) => method === 'config.set' && params.key === 'model')).toBe(false)
+  })
+  it('keeps native approvals separate and dismisses a superseded model confirmation', async () => {
+    const client = await open()
+    const first = { id: 'model-b', provider: 'provider', name: 'B' }
+    const second = { id: 'model-c', provider: 'provider', name: 'C' }
+    wire.request.mockImplementation(async (method, params) => method === 'config.set' && params.key === 'model'
+      ? { confirm_required: true, confirm_message: `Confirm ${params.value}` } : {})
+    await chat.setModel(first)
+    const staleId = chat.pendingApproval!.id
+    await chat.setModel(second)
+    const confirmation = chat.pendingApproval!
+    expect(confirmation.id).not.toBe(staleId)
+    await client.changed(snapshot([], 's', { pendingApproval: { request_id: 'tool-approval', message: '允许工具' } }))
+    expect(chat.pendingApproval?.id).toBe(confirmation.id)
+    wire.request.mockClear()
+    await chat.respondToApproval(staleId, 'once')
+    expect(wire.request).not.toHaveBeenCalled()
+    await chat.respondToApproval(confirmation.id, 'deny')
+    expect(chat.pendingApproval?.id).toBe('tool-approval')
+    await chat.respondToApproval('tool-approval', 'once')
+    expect(wire.request).toHaveBeenCalledWith('approval.respond', expect.objectContaining({ choice: 'once' }))
+  })
   it('renders only canonical messages and ignores raw upstream bodies and completions', async () => {
     const client = await open()
     await client.changed(snapshot([answer('前半', { status: 'streaming' })], 's', { running: true }))

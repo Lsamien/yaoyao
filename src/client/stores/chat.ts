@@ -1,7 +1,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type {
-  ChatAttachment, ChatMessage, ChatRouteState, JsonValue, ModelOption, RealtimeConnectionState, SessionSummary,
+  ApprovalRequest, ChatAttachment, ChatMessage, ChatRouteState, JsonValue, ModelOption, RealtimeConnectionState, SessionSummary,
 } from '@shared/types'
 import {
   deleteSession as deleteSessionApi, getMessages, getSession, getSessions, getSessionUnread, markSessionRead, updateSession, requestHistorySync,
@@ -103,7 +103,9 @@ export const useChatStore = defineStore('chat', () => {
   const socket = new ChatRpcSocket()
   const runtimeRoutes = new Map<string, string>()
   const desiredModelRoutes = new Set<string>()
-  const pendingModelConfirmations = new Map<string, { routeKey: string; model: ModelOption }>()
+  // Model selection warnings are local config.set replies, not transcript approvals.
+  // Keep them separate so another viewer's transcript cannot dismiss them.
+  const pendingModelConfirmations = reactive(new Map<string, { routeKey: string; model: ModelOption; approval: ApprovalRequest }>())
   let connectPromise: Promise<void> | undefined
   let reconnectTimer: number | undefined
   let reconnectAttempt = 0
@@ -188,7 +190,12 @@ export const useChatStore = defineStore('chat', () => {
   const isStreaming = computed(() => activeRouteState.value?.isStreaming ?? false)
   const isQueued = computed(() => activeRouteState.value?.isQueued ?? false)
   const contextUsage = computed(() => activeRouteState.value?.usage)
-  const pendingApproval = computed(() => activeRouteState.value?.pendingApproval)
+  const pendingApproval = computed(() => {
+    const state = activeRouteState.value
+    if (!state) return undefined
+    const key = routeKey(state.route.profile, state.route.sessionId)
+    return [...pendingModelConfirmations.values()].find(value => value.routeKey === key)?.approval ?? state.pendingApproval
+  })
   const pendingClarification = computed(() => activeRouteState.value?.pendingClarification)
 
   function ensureRoute(profile: string, sessionId: string): ChatRouteState {
@@ -894,13 +901,12 @@ export const useChatStore = defineStore('chat', () => {
         } catch (cause) {
           desiredModelRoutes.delete(modelConfirmation.routeKey)
           restoreSelectedSessionModel(modelConfirmation.routeKey)
-          modelState.pendingApproval = undefined
           throw cause
         }
       }
-      modelState.pendingApproval = undefined
       return
     }
+    if (state.pendingApproval?.id !== requestId) return
     const current = await ensureRuntime(state)
     await socket.request('approval.respond', { session_id: current.runtimeSessionId!, choice })
     if (current.pendingApproval?.id === requestId) current.pendingApproval = undefined
@@ -980,14 +986,14 @@ export const useChatStore = defineStore('chat', () => {
     }))
     if (bool(result.confirm_required ?? result.confirmRequired)) {
       const requestId = createId('expensive-model')
-      pendingModelConfirmations.set(requestId, { routeKey: routeKey(state.route.profile, state.route.sessionId), model })
-      state.pendingApproval = {
+      const approval: ApprovalRequest = {
         id: requestId,
         sessionId: state.route.sessionId,
         message: string(result.confirm_message ?? result.confirmMessage ?? result.warning, '此模型可能产生较高费用，请确认后使用。'),
         choices: ['once', 'deny'],
         payload: result as Record<string, JsonValue>,
       }
+      pendingModelConfirmations.set(requestId, { routeKey: routeKey(state.route.profile, state.route.sessionId), model, approval })
       return false
     }
     // Match iOS: switching a model invalidates the cached fast-mode server
@@ -999,6 +1005,7 @@ export const useChatStore = defineStore('chat', () => {
   async function applyDesiredModel(state: ChatRouteState): Promise<boolean> {
     const key = routeKey(state.route.profile, state.route.sessionId)
     if (!desiredModelRoutes.has(key) || !selectedModel.value || !state.runtimeSessionId) return true
+    if ([...pendingModelConfirmations.values()].some(value => value.routeKey === key)) return false
     const applied = await configureModel(state, selectedModel.value, false)
     if (applied) desiredModelRoutes.delete(key)
     return applied
@@ -1009,6 +1016,9 @@ export const useChatStore = defineStore('chat', () => {
     const state = activeRouteState.value
     if (!state) return
     const key = routeKey(state.route.profile, state.route.sessionId)
+    for (const [id, pending] of pendingModelConfirmations) {
+      if (pending.routeKey === key) pendingModelConfirmations.delete(id)
+    }
     desiredModelRoutes.add(key)
     if (!state.runtimeSessionId) return
     try {
