@@ -1,5 +1,5 @@
-appId: cn.samien.yaoyao.desktop
-productName: 夭夭
+appId: cn.samien.yaoyao.desktop.full
+productName: 夭夭完整版
 afterPack: scripts/verify-desktop-runtime.mjs
 directories:
   output: desktop-release

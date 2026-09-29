@@ -57,7 +57,7 @@ export async function packageDesktopRelease() {
     publish: 'never', config: signing })
   const directory = join(root, 'desktop-release')
   const names = await verifyUpdateArtifacts(directory, version)
-  const app = join(directory, 'mac-arm64', '夭夭.app')
+  const app = join(directory, 'mac-arm64', '夭夭完整版.app')
   const feed = load(await readFile(join(app, 'Contents/Resources/app-update.yml'), 'utf8'))
   if (feed.provider !== 'github' || feed.owner !== 'Lsamien' || feed.repo !== 'yaoyao') throw new Error('安装包中的更新源不正确')
   execFileSync('codesign', ['--verify', '--deep', '--strict', app], { stdio: 'inherit' })

@@ -29,8 +29,12 @@ const clientOnly = app.isPackaged
 const platform = desktopPlatform(process.platform, { clientOnly })
 const loginOptions = loginItemOptions()
 // Fixture identity also isolates Chromium cookies, window state and the app lock.
+// The shell package name distinguishes the variants: the client keeps the
+// historical 夭夭 identity (userData, logs, single-instance lock) so upgrades
+// stay in place, while the full dual-mode build uses its own 夭夭完整版 home.
+const productName = JSON.parse(readFileSync(join(desktopRoot, 'package.json'), 'utf8')).productName || '夭夭'
 if (fixtureHome) app.setPath('userData', join(fixtureHome, 'desktop'))
-app.setName('夭夭')
+app.setName(productName)
 if (platform.windows) app.setAppUserModelId('cn.samien.yaoyao.desktop')
 if (!app.requestSingleInstanceLock()) { app.quit() }
 else {

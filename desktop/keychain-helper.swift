@@ -33,8 +33,9 @@ func signingInfo(_ code: SecCode) -> [String: Any] {
 let parentInfo = signingInfo(parentCode), ownInfo = signingInfo(ownCode)
 guard let team = ownInfo[kSecCodeInfoTeamIdentifier as String] as? String,
       parentInfo[kSecCodeInfoTeamIdentifier as String] as? String == team,
-      // The full desktop and the client-only build share one signing team.
-      ["cn.samien.yaoyao.desktop", "cn.samien.yaoyao.desktop.client"]
+      // The client keeps the historical identifier for upgrade continuity;
+      // the full dual-mode build moved to its own identifier.
+      ["cn.samien.yaoyao.desktop", "cn.samien.yaoyao.desktop.full"]
         .contains(parentInfo[kSecCodeInfoIdentifier as String] as? String ?? "") else { fail("App 签名身份不匹配") }
 #endif
 guard CommandLine.arguments.count == 3 else { fail("钥匙串请求格式无效") }

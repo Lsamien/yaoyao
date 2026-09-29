@@ -1,4 +1,4 @@
-appId: cn.samien.yaoyao.desktop.client
+appId: cn.samien.yaoyao.desktop
 productName: 夭夭
 directories:
   output: desktop-release-client
@@ -36,8 +36,8 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: 夭夭使用麦克风接收语音消息。
 dmg:
-  title: 夭夭客户端 ${version}
-artifactName: Yaoyao-Client-${version}-${arch}.${ext}
+  title: 夭夭 ${version}
+artifactName: Yaoyao-${version}-${arch}.${ext}
 publish:
   - provider: github
     owner: Lsamien

@@ -40,9 +40,25 @@ Web 数据默认保存在 `~/.yaoyao`，可用 `YAOYAO_HOME` 指定（兼容 `HE
 
 ## macOS 桌面版
 
-在 [v0.4.75 发布页](https://github.com/Lsamien/yaoyao/releases/tag/v0.4.75) 下载 `Yaoyao-0.4.75-arm64.dmg`，将“夭夭”拖到应用程序后打开。首次启动会核对并同步配套本机 Web 服务；普通退出保留后台运行，“停止后台服务并退出”可完整停止本应用管理的后台。详细说明见 [macOS App](docs/macos-app.md)。
+桌面版分两种，安装包均为 Apple Silicon（arm64）：
 
-桌面安装包的签名、公证状态及自动升级可用范围见对应版本的 GitHub 发布说明。
+- **夭夭（客户端）**：连接远程服务器使用，本机不运行 Web 服务。下载 `Yaoyao-<版本>-arm64.dmg`，拖到应用程序后打开，首次启动填写服务器地址并登录。适合服务器已部署（Docker 或 npm）的场景，也是此后主推的桌面形态。
+- **夭夭完整版**：内嵌本机 Web 服务与执行节点的双模式版本，可「本机运行」也可「连接远程」。适合希望一台 Mac 同时充当服务器与客户端的用户。
+
+两份 App 的安装目录与数据目录相互独立，可以并存。客户端沿用历史安装身份，从旧版「夭夭」升级安装时原地替换、保留登录与配置。
+
+桌面安装包的签名、公证状态及自动升级可用范围见对应版本的 GitHub 发布说明。详细说明见 [macOS App](docs/macos-app.md)。
+
+## npm 安装
+
+已有 Node.js 24 环境时，服务端可通过 npm 一条命令安装：
+
+```sh
+npm install -g @lsamien/yaoyao
+yaoyao service install
+```
+
+安装后访问 `http://127.0.0.1:15300` 创建管理员账号。macOS 通过 LaunchAgent 开机自启；Linux 的服务安装支持在路线图中。详见 [npm 安装说明](docs/npm-install.md)。
 
 ## Docker 安装
 

@@ -54,6 +54,6 @@ await chmod(resolve(service, 'node'), 0o755)
 await writeFile(resolve(service, 'package.json'), JSON.stringify({ name: 'yaoyao', version: manifest.webVersion, type: 'module' }))
 sealRuntime(service)
 await writeFile(resolve(shell, 'package.json'), JSON.stringify({ name: 'yaoyao-desktop', version: manifest.webVersion,
-  productName: '夭夭', description: '夭夭 AI：本地服务、多 Agent 团队与电脑工作空间',
+  productName: '夭夭完整版', description: '夭夭 AI：本地服务、多 Agent 团队与电脑工作空间',
   author: 'YaoYao contributors', license: 'Apache-2.0', main: 'main.mjs', type: 'module' }, null, 2))
 console.log('桌面服务和界面已打包到 .desktop-build')
