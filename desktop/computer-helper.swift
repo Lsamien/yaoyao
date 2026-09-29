@@ -34,7 +34,9 @@ func signingInfo(_ code: SecCode) -> [String: Any] {
 let parentInfo = signingInfo(parentCode), ownInfo = signingInfo(ownCode)
 guard let team = ownInfo[kSecCodeInfoTeamIdentifier as String] as? String,
       parentInfo[kSecCodeInfoTeamIdentifier as String] as? String == team,
-      parentInfo[kSecCodeInfoIdentifier as String] as? String == "cn.samien.yaoyao.desktop" else { fail("App 签名身份不匹配") }
+      // The full desktop and the client-only build share one signing team.
+      ["cn.samien.yaoyao.desktop", "cn.samien.yaoyao.desktop.client"]
+        .contains(parentInfo[kSecCodeInfoIdentifier as String] as? String ?? "") else { fail("App 签名身份不匹配") }
 #endif
 let bytes = FileHandle.standardInput.readDataToEndOfFile()
 guard bytes.count <= 131072,

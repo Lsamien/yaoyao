@@ -19,8 +19,11 @@ export class DesktopCredentials {
   async invoke(operation,input){
     if(input.length>1048576)throw new Error('执行节点配置超过加密大小上限')
     return new Promise((resolve,reject)=>{
-      const child=execFile(this.helper,[operation,this.account],{encoding:'buffer',timeout:30000,killSignal:'SIGKILL',maxBuffer:1048576},(error,stdout)=>{
-        if(error)reject(new Error('无法访问当前数据目录的系统加密密钥，请完成钥匙串授权后重试'))
+      const child=execFile(this.helper,[operation,this.account],{encoding:'buffer',timeout:30000,killSignal:'SIGKILL',maxBuffer:1048576},(error,stdout,stderr)=>{
+        if(error){
+          const detail=stderr&&stderr.length?stderr.toString('utf8').trim():''
+          reject(new Error(detail||'无法访问当前数据目录的系统加密密钥，请完成钥匙串授权后重试'))
+        }
         else resolve(stdout)
       })
       child.stdin.on('error',()=>{});child.stdin.end(input)
