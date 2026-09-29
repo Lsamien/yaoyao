@@ -18,11 +18,15 @@ import { DesktopUpdateManager } from './update-manager.mjs'
 import { DesktopAutoUpdateManager } from './auto-update-manager.mjs'
 import { createRequire } from 'node:module'
 import { installComputerViewer } from './computer-viewer.mjs'
-import { desktopPlatform, desktopMenu, loginItemOptions } from './platform.mjs'
+import { desktopPlatform, desktopMenu, loginItemOptions, clientOnlyRuntime } from './platform.mjs'
 
 const desktopRoot = dirname(fileURLToPath(import.meta.url))
 const fixtureHome = process.env.HERMES_YAOYAO_DESKTOP_TEST_HOME
-const platform = desktopPlatform()
+// Packaged: the runtime sits in Resources/runtime; dev: staged build roots.
+const clientOnly = app.isPackaged
+  ? clientOnlyRuntime(join(process.resourcesPath, 'runtime'))
+  : clientOnlyRuntime(join(app.getAppPath(), '.desktop-build-client'))
+const platform = desktopPlatform(process.platform, { clientOnly })
 const loginOptions = loginItemOptions()
 // Fixture identity also isolates Chromium cookies, window state and the app lock.
 if (fixtureHome) app.setPath('userData', join(fixtureHome, 'desktop'))
@@ -49,7 +53,8 @@ else {
   app.on('will-quit', closeComputerViewer)
   const updateURL = pathToFileURL(join(desktopRoot, 'update.html')).href
   const bootURL = pathToFileURL(join(desktopRoot, 'boot.html')).href
-  const root = app.isPackaged ? join(process.resourcesPath, 'runtime') : join(app.getAppPath(), '.desktop-build')
+  const root = app.isPackaged ? join(process.resourcesPath, 'runtime')
+    : join(app.getAppPath(), clientOnly ? '.desktop-build-client' : '.desktop-build')
   const logRoot = join(app.getPath('logs'), fixtureHome ? 'verification' : 'service')
   mkdirSync(logRoot, { recursive: true })
   const logFile = join(logRoot, 'server.log')
@@ -648,12 +653,12 @@ else {
         {id:'desktop-host-reconnect',label:'重新连接',click:()=>hostAction(()=>hostManager.start())},
         {id:'desktop-host-forget',label:'断开并忘记配置',click:()=>hostAction(()=>hostManager.forget())}]},
       { role: 'editMenu', label: '编辑' }, { role: 'viewMenu', label: '显示' }, { role: 'windowMenu', label: '窗口' },
-    ])))
+    ], platform.platform, { clientOnly: !platform.server })))
     const icon = nativeImage.createFromPath(join(desktopRoot, 'icon.png')).resize({ width: 20, height: 20 })
     if (!platform.windows) icon.setTemplateImage(true)
     tray = new Tray(icon)
     tray.setToolTip('夭夭')
-    tray.setContextMenu(Menu.buildFromTemplate(desktopMenu([{ label: '打开夭夭', click: show }, { label: '查看日志', click: () => shell.showItemInFolder(logFile) }, { type: 'separator' }, { label: '退出夭夭（后台继续运行）', click: () => requestQuit() }, { label: '停止后台服务并退出', click: () => requestQuit(true) }])))
+    tray.setContextMenu(Menu.buildFromTemplate(desktopMenu([{ label: '打开夭夭', click: show }, { label: '查看日志', click: () => shell.showItemInFolder(logFile) }, { type: 'separator' }, { label: '退出夭夭（后台继续运行）', click: () => requestQuit() }, { label: '停止后台服务并退出', click: () => requestQuit(true) }], platform.platform, { clientOnly: !platform.server })))
     tray.on('click', show)
     // Restore a saved session behind neutral loading feedback. The guide only
     // becomes visible if a connection or account actually needs attention.

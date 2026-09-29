@@ -17,8 +17,11 @@ hermes-yaoyao-*.tar
 .yaoyao/
 .codegraph/
 .desktop-build/
+.desktop-build-client/
 desktop-release/
+desktop-release-client/
 desktop/icon.png
+.tool-bin/
 
 # Hermes plugin runtime and Python test caches.
 hermes-plugins/**/__pycache__/

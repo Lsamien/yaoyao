@@ -1,0 +1,45 @@
+appId: cn.samien.yaoyao.desktop.client
+productName: 夭夭
+directories:
+  output: desktop-release-client
+  app: .desktop-build-client/shell
+files:
+  - '**/*'
+  - '!node_modules/**/*'
+extraResources:
+  - from: .desktop-build-client
+    to: runtime
+    filter:
+      - client-only.marker
+      - release.json
+      - build-info.json
+      - github-release.mjs
+      - electron-updater.cjs
+      - keychain-helper
+      - keychain-helper-dev
+      - computer-helper
+      - computer-helper-dev
+asar: true
+npmRebuild: false
+mac:
+  category: public.app-category.productivity
+  icon: .desktop-build-client/branding/icon.icns
+  target:
+    - target: dir
+      arch: [arm64]
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  extendInfo:
+    NSMicrophoneUsageDescription: 夭夭使用麦克风接收语音消息。
+dmg:
+  title: 夭夭客户端 ${version}
+artifactName: Yaoyao-Client-${version}-${arch}.${ext}
+publish:
+  - provider: github
+    owner: Lsamien
+    repo: yaoyao
+    releaseType: release
