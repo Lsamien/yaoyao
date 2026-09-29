@@ -1,6 +1,6 @@
 {
   "name": "@lsamien/yaoyao",
-  "version": "0.4.75",
+  "version": "0.4.76",
   "license": "Apache-2.0",
   "description": "夭夭 AI：聊天、多 Agent 团队、文件库与电脑工作空间",
   "type": "module",

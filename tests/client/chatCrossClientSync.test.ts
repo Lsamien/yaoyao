@@ -177,7 +177,6 @@ describe('ordinary v2 cross-client store', () => {
     expect(submission.text).toBe('[用户附加图片：photo.png]\n[screenshot]')
     expect(chat.messages[0]!.attachments?.[0]?.url).toBeUndefined()
   })
-
   it.each(['failed', 'unknown-receipt'] as const)('keeps an older %s input before newer messages through sync and cache restoration', async stage => {
     const client = await open()
     const oldAnswer = answer('之前的回复', { timestamp: 10 })
