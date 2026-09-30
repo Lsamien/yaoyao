@@ -421,6 +421,7 @@ export class WorkspaceStore {
     if(body.vmExecution==='profile')body.allowHostEnvironment=true
     if (origin?.createdByAgentId) this.require<Agent>(owner, 'agent', origin.createdByAgentId)
     return this.atomic(() => {
+      if (this.get(owner, 'agent-deletion', allocatedId)) throw new HttpError(409, '已删除的 Bot 编号不能复用', 'agent_deleted')
       if (
         this.list<Agent>(owner, 'agent').some(
           (a) => a.name.toLocaleLowerCase() === body.name.toLocaleLowerCase(),
@@ -517,13 +518,13 @@ export class WorkspaceStore {
       const hostPermissionChanged=patch.allowHostEnvironment!==undefined&&patch.allowHostEnvironment!==(agent.allowHostEnvironment===true)
       const destinationChanged=desktopHostChanged||hostPermissionChanged||(patch.vmExecution!==undefined&&patch.vmExecution!==(agent.vmExecution??'worker'))||(patch.computer!==undefined&&patch.computer!==agent.computer)||(patch.browserProfile!==undefined&&patch.browserProfile!==(agent.browserProfile??'persistent'))
       if(sourceChanged||destinationChanged){
-        if(this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['queued','running','waiting','uncertain','cancelling'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再修改机器人来源或电脑','agent_execution_busy')
+        if(this.list<{agentId:string;status:string;cleanupPending?:boolean}>(owner,'turn').some(work=>work.agentId===id&&(work.cleanupPending||['queued','running','waiting','uncertain','cancelling'].includes(work.status))))throw new HttpError(409,'请先确认当前任务停止，再修改机器人来源或电脑','agent_execution_busy')
         if(this.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(grant.agentId===id||grant.environmentId===(agent.computerEnvironmentId??id))))throw new HttpError(409,'请先交还电脑控制权','agent_execution_busy')
         if(sourceChanged&&agent.computerEnvironmentId){const shared=this.require<{nodeId:string;profile:string;managedLocalVm?:boolean;managedCompose?:boolean}>(owner,'shared-computer',agent.computerEnvironmentId);if((patch.nodeId??agent.nodeId)!==shared.nodeId||(!shared.managedLocalVm&&!shared.managedCompose&&shared.profile!=='*'&&(patch.profile??agent.profile)!==shared.profile))throw new HttpError(409,'请先解除电脑共享，再切换到其他来源','shared_computer_active')}
       }
       if(agent.temporaryGoalId&&(Object.keys(patch).some(key=>key!=='archived')||patch.archived===false))throw new HttpError(409,'临时助手由所属任务管理，不能修改权限或恢复为持久成员','helper_task_bound')
       if(agent.computerEnvironmentId&&patch.execution==='profile'&&(patch.envs?.vm??agent.envs?.vm)!==true)throw new HttpError(409,'请先解除电脑共享，再切换执行环境','shared_computer_active')
-      if(patch.execution&&patch.execution!==(agent.execution??'profile')&&this.list<{agentId:string;status:string}>(owner,'turn').some(work=>work.agentId===id&&['running','waiting','uncertain'].includes(work.status)))throw new HttpError(409,'请先停止当前任务，再切换执行环境','agent_execution_busy')
+      if(patch.execution&&patch.execution!==(agent.execution??'profile')&&this.list<{agentId:string;status:string;cleanupPending?:boolean}>(owner,'turn').some(work=>work.agentId===id&&(work.cleanupPending||['running','waiting','uncertain'].includes(work.status))))throw new HttpError(409,'请先确认当前任务停止，再切换执行环境','agent_execution_busy')
       if (agent.remoteAgentId && Object.keys(patch).some(key => key !== 'archived' && key !== 'approvalPolicy'))
         throw new HttpError(409, '引用机器人的配置由远端管理', 'remote_agent_read_only')
       if (
@@ -567,11 +568,16 @@ export class WorkspaceStore {
     }
   }
   private requireConversationIdle(owner: string, id: string): void {
+    if (this.hasPendingCleanup(owner, {conversationId:id})) throw new HttpError(409, '聊天原执行尚未确认停止，请稍后重试', 'conversation_stopping')
     if (['run', 'turn'].some(kind => this.list<{ conversationId: string; status: string }>(owner, kind).some(run => run.conversationId === id && !['complete', 'failed', 'interrupted', 'skipped'].includes(run.status))))
       throw new HttpError(409, '聊天仍有任务未结束，请停止任务后重试', 'conversation_running')
     if (this.list<{ conversationId: string; origin?: { conversationId: string }; status: string }>(owner, 'goal').some(goal =>
       (goal.conversationId === id || goal.origin?.conversationId === id) && !['complete', 'blocked', 'cancelled'].includes(goal.status)))
       throw new HttpError(409, '聊天仍有关联任务未结束，请停止任务后重试', 'conversation_running')
+  }
+  hasPendingCleanup(owner: string, scope: {agentId?: string; conversationId?: string; conversationTaskId?: string}): boolean {
+    return this.list<{agentId:string;conversationId:string;conversationTaskId?:string;cleanupPending?:boolean}>(owner,'turn')
+      .some(work => work.cleanupPending && Object.entries(scope).every(([key,value]) => work[key as keyof typeof work] === value))
   }
   changeConversationLifecycle(owner: string, id: string, action: WorkspaceLifecycleAction, confirmationToken?: string): void {
     this.atomic(() => {
@@ -590,6 +596,7 @@ export class WorkspaceStore {
       if (preview.groups.length && !confirmationToken)
         throw new HttpError(409, '此 Bot 仍是群聊成员，请确认退出群聊后再归档或删除', 'agent_in_group')
       if (agent?.temporaryGoalId) throw new HttpError(409, '临时助手由所属任务管理', 'helper_task_bound')
+      if (agent && this.hasPendingCleanup(owner, {agentId:agent.id})) throw new HttpError(409, 'Bot 原执行尚未确认停止，请稍后重试', 'agent_stopping')
       if (agent && this.list<{ agentId: string; status: string }>(owner, 'turn').some(turn => turn.agentId === agent.id && !['complete', 'failed', 'interrupted', 'skipped'].includes(turn.status)))
         throw new HttpError(409, 'Bot 仍有任务未结束，请停止任务后重试', 'agent_running')
       for (const conversationId of [id, ...preview.groups.map(group => group.id)]) this.requireConversationIdle(owner, conversationId)
@@ -607,6 +614,7 @@ export class WorkspaceStore {
     })
   }
   private detachAgentComputer(owner: string, agent: Agent): void {
+    if (this.hasPendingCleanup(owner, {agentId:agent.id})) throw new HttpError(409, 'Bot 原执行尚未确认停止，请稍后重试', 'agent_stopping')
     const environmentId = agent.computerEnvironmentId
     if (!environmentId) return
     if (this.list<{ agentId: string; status: string }>(owner, 'turn').some(work => work.agentId === agent.id && !['complete', 'failed', 'interrupted', 'skipped'].includes(work.status)))
@@ -629,6 +637,7 @@ export class WorkspaceStore {
       const agent = this.require<Agent>(owner, 'agent', id)
       if (!agent.archived) throw new HttpError(409, '请先归档 Bot，再删除', 'agent_not_archived')
       if (agent.temporaryGoalId) throw new HttpError(409, '临时助手由所属任务管理', 'helper_task_bound')
+      if (this.hasPendingCleanup(owner, {agentId:id})) throw new HttpError(409, 'Bot 原执行尚未确认停止，请稍后重试', 'agent_stopping')
       const conversations = this.list<Conversation>(owner, 'conversation')
       if (conversations.some(c => c.kind === 'group' && c.memberIds.includes(id)))
         throw new HttpError(409, '此 Bot 仍是群聊成员，请先从群聊移除或删除相关群聊', 'agent_in_group')
@@ -643,6 +652,7 @@ export class WorkspaceStore {
         this.put(owner, 'bot-mcp-plugin', plugin.id, { ...plugin, agentIds: plugin.agentIds.filter(agentId => agentId !== id), revision: plugin.revision + 1 })
       }
       this.remove(owner, 'agent', id)
+      this.put(owner, 'agent-deletion', id, {id,conversationIds:conversations.filter(c=>c.kind==='direct'&&c.memberIds[0]===id).map(c=>c.id),deletedAt:Date.now(),memoryCleanupPending:true})
       this.event(owner, 'agent.deleted', { id })
     })
   }
@@ -925,6 +935,7 @@ export class WorkspaceStore {
   deleteTask(owner: string, conversationId: string, taskId: string): void {
     this.atomic(() => {
       const task = this.requireTask(owner, conversationId, taskId)
+      if (this.hasPendingCleanup(owner, {conversationTaskId:taskId})) throw new HttpError(409, '任务原执行尚未确认停止，暂时无法移除', 'workspace_task_stopping')
       if (this.list<Run>(owner, 'run').some(run => run.conversationTaskId === taskId && !['complete', 'failed', 'interrupted'].includes(run.status)))
         throw new HttpError(409, '任务仍在运行，暂时无法移除', 'workspace_task_running')
       const messageIds = new Set(this.list<Message>(owner, 'message').filter(message => message.conversationTaskId === taskId).map(message => message.id))

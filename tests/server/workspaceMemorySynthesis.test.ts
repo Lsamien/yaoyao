@@ -30,6 +30,27 @@ function turn(content = '以后我喜欢简洁的中文回复') {
   synthesis.enqueue(owner, run)
   return { run, source: store.require<WorkspaceMessage>(owner, 'message', run.messageId), reply }
 }
+it('rotates accounts even when the first account always has eligible memory work', async () => {
+  vi.spyOn(store, 'owners').mockReturnValue(['first', 'second', 'inactive', '_internal'])
+  vi.spyOn(runtime, 'userActive').mockImplementation(account => account !== 'inactive')
+  vi.spyOn(runtime.knowledge, 'jobs').mockImplementation(account => [{
+    id: `${account}-job`, status: 'pending', nextAt: 0, createdAt: account === 'first' ? 100 : 0,
+  }] as any)
+  const run = vi.spyOn(synthesis, 'run').mockResolvedValue()
+  for (let index = 0; index < 6; index++) await synthesis.tick()
+  expect(run.mock.calls.map(([account]) => account)).toEqual(['first', 'second', 'first', 'second', 'first', 'second'])
+})
+it('does not reserve a fairness turn for accounts without due jobs and handles a removed account', async () => {
+  const owners = vi.spyOn(store, 'owners').mockReturnValue(['first', 'second'])
+  vi.spyOn(runtime.knowledge, 'jobs').mockImplementation(account => [{
+    id: `${account}-job`, status: 'pending', nextAt: account === 'first' ? Date.now() + 60_000 : 0, createdAt: 0,
+  }] as any)
+  const run = vi.spyOn(synthesis, 'run').mockResolvedValue()
+  await synthesis.tick()
+  owners.mockReturnValue(['third'])
+  await synthesis.tick()
+  expect(run.mock.calls.map(([account]) => account)).toEqual(['second', 'third'])
+})
 it('runs extraction on server Hermes even for a legacy computer Bot',async()=>{
   const request=vi.fn(async()=>({status:200,body:Buffer.from(JSON.stringify({text:'{"memories":[]}'}))}))
   const target={session:{request}}

@@ -14,9 +14,11 @@ import {ProfileSkillSession} from '../../src/runner/worker/skills'
 import {UpstreamClient} from '../../src/server/upstream'
 import {UpstreamServiceSession} from '../../src/server/localAuth'
 import type {GatewayFrame} from '../../src/server/workspaceGateway'
+import * as sessionStop from '../../src/server/sessionStop'
+import {HttpError} from '../../src/server/errors'
 
 async function fixture(hermesManaged=false,bridgeVersion=2){
-  const home=await mkdtemp(join(tmpdir(),'yaoyao-profile-computer-')),db=new DatabaseSync(':memory:')
+  const home=await mkdtemp(join(tmpdir(),'yaoyao-profile-computer-')),db=new DatabaseSync(join(home,'runner.sqlite'))
   const vmRoot=join(home,'vm'),hermesRoot=join(home,'hermes');await mkdir(vmRoot);await mkdir(hermesRoot);await writeFile(join(hermesRoot,'input.txt'),'hermes-authorized-file')
   const vmFiles=new FileTransferFiles(vmRoot),hermesFiles=new FileTransferFiles(hermesRoot)
   const calls:Array<{method:string;params:any}>=[],bindings:any[]=[],frames:GatewayFrame[]=[],gateways:ComputerGateway[]=[]
@@ -81,7 +83,7 @@ async function fixture(hermesManaged=false,bridgeVersion=2){
     expect(found,JSON.stringify(catalog)).toBeDefined()
     return post('/tools/call',{toolId:found.id,arguments:args,callId:randomUUID()})
   }
-  return {home,vmRoot,runtime,resolver,execute,meta,gateway,calls,frames,bindings,sessions,post,tool,emit,
+  return {home,vmRoot,runtime,resolver,execute,meta,gateway,calls,frames,bindings,sessions,post,tool,emit,target,
     setInterruptStops(value:boolean){interruptStops=value},revoke(){allowed=false},
     async close(){
       interruptStops=true;for(const session of sessions.values())session.running=false
@@ -170,6 +172,60 @@ it('waits for native termination and VM calls before human takeover, then resume
     expect(poll!.params).not.toHaveProperty('session_id')
     expect(poll!.params).toMatchObject({profile:'default'})
     await expect(f.post('/tools/list',{})).rejects.toThrow()
+  }finally{await f.close()}
+})
+
+it('keeps the holder and durable stop barrier on timeout or close, and retries the same gateway safely',async()=>{
+  const f=await fixture()
+  try{
+    const g=f.gateway();await g.connect();const session=await g.rpc('session.create',{profile:'default'})
+    await g.rpc('prompt.submit',{session_id:session.session_id,text:'Work until stopped'})
+    await f.tool('computer_shell',{command:'pwd'})
+    const holder=g.lease!.holderId,stored=f.runtime.session(session.session_id,f.meta,'default').profileSessionId
+    f.setInterruptStops(false)
+    const timeout=vi.spyOn(sessionStop,'waitForHermesSessionIdle').mockRejectedValue(new HttpError(409,'native stop timeout','session_still_stopping'))
+    await expect(g.rpc('session.interrupt',{session_id:session.session_id})).rejects.toMatchObject({code:'session_still_stopping'})
+    expect(f.runtime.pool.status(f.meta.ownerKey)[0]?.holderIds).toContain(holder)
+    expect(f.runtime.session(session.session_id,f.meta,'default')).toMatchObject({stopPending:true,profileSessionId:stored})
+    expect(()=>f.runtime.pool.renew(g.lease!)).not.toThrow()
+    await expect(g.rpc('prompt.submit',{session_id:session.session_id,text:'forbidden retry'})).rejects.toMatchObject({code:'computer_cancelled'})
+    await expect(g.takeControl(randomUUID(),()=>{})).rejects.toMatchObject({code:'computer_cancelled'})
+    await expect(f.runtime.controls.take(f.meta,'default',randomUUID(),async()=>{})).rejects.toMatchObject({code:'computer_stopping'})
+    const next=f.gateway();await next.connect()
+    await expect(next.rpc('session.create',{profile:'default',toolsOnly:true})).rejects.toMatchObject({code:'computer_stopping'})
+    await expect(g.close()).rejects.toMatchObject({code:'session_still_stopping'})
+    expect(f.runtime.pool.status(f.meta.ownerKey)[0]?.holderIds).toContain(holder)
+    expect(f.runtime.gateways.get(f.meta.environmentId)?.has(g)).toBe(true)
+    timeout.mockRestore();f.setInterruptStops(true)
+    await g.interrupt();await g.close()
+    expect(f.runtime.session(session.session_id,f.meta,'default').stopPending).toBe(false)
+    expect(f.runtime.pool.status(f.meta.ownerKey)[0]?.holderIds).not.toContain(holder)
+    expect(f.calls.filter(call=>call.method==='prompt.submit')).toHaveLength(1)
+  }finally{await f.close()}
+})
+
+it('restores a persisted stop barrier and clears it only through cleanup resume without submitting again',async()=>{
+  const f=await fixture()
+  try{
+    const g=f.gateway();await g.connect();const opened=await g.rpc('session.create',{profile:'default'})
+    await g.rpc('prompt.submit',{session_id:opened.session_id,text:'original work'})
+    await f.tool('computer_shell',{command:'pwd'})
+    const persisted=f.runtime.session(opened.session_id,f.meta,'default')
+    await g.close()
+    // Crash checkpoint: native work stopped, but its durable cleanup receipt
+    // was not committed yet. Re-open the real temporary sqlite file.
+    persisted.stopPending=true;f.runtime.save(persisted)
+    const db=new DatabaseSync(join(f.home,'runner.sqlite'))
+    const restarted=new ComputerRuntime(db,{protocol:1,runnerId:randomUUID(),serverURL:f.target.url.href,hermesURL:f.target.url.href,token:'test',allowedProfiles:['default'],artifactRoots:[],computers:f.runtime.config},f.home)
+    const recovering=new ComputerGateway(restarted,f.meta,g.workId,async()=>{},async()=>({}),f.target)
+    try{
+      await restarted.ready;await recovering.connect()
+      await expect(recovering.rpc('session.resume',{profile:'default',session_id:opened.session_id})).rejects.toMatchObject({code:'computer_stopping'})
+      await recovering.rpc('session.resume',{profile:'default',session_id:opened.session_id,recoverOnly:true})
+      expect(restarted.session(opened.session_id,f.meta,'default').stopPending).toBe(false)
+      expect(f.calls.filter(call=>call.method==='prompt.submit')).toHaveLength(1)
+      expect(f.calls.findLast(call=>call.method==='session.resume')?.params.session_id).toBe(persisted.profileSessionId)
+    }finally{await recovering.close();await restarted.controls.close();await restarted.pool.close();db.close()}
   }finally{await f.close()}
 })
 

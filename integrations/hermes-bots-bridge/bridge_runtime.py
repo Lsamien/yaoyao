@@ -13,6 +13,7 @@ import json
 import math
 import mimetypes
 import os
+import platform
 import re
 import sys
 import threading
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 VERSION = 1
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.3.1"
 def _plugin_fingerprint():
     root = Path(__file__).parent
     digest = hashlib.sha256()
@@ -351,6 +352,23 @@ def _transport_identity(transport) -> tuple[str, str]:
     return "local-session-token", "dashboard"
 
 
+def _runtime_environment(profile: str, definitions: list) -> dict:
+    # Only directory facts: never execute tools, probe desktops, or expose config
+    # credentials. Process metadata does not identify an SSH/container/UI backend.
+    names = {tool.get("function", {}).get("name") for tool in definitions if isinstance(tool, dict)}
+    names = {name for name in names if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", name)}
+    return {
+        "version": 1, "profile": profile, "platform": sys.platform,
+        "osRelease": platform.release(), "arch": platform.machine(),
+        "nativeTools": {
+            "terminal": sorted(names & {"terminal", "process", "process_manage", "execute_code", "code_execution"}),
+            "files": sorted(names & {"read_file", "write_file", "patch", "search_files"}),
+            "desktop": sorted(names & {"computer_use", "desktop_project"}),
+            "browser": sorted(name for name in names if name.startswith("browser_")),
+        },
+    }
+
+
 def capabilities(profile: str = "default") -> dict:
     in_process = False
     try:
@@ -386,7 +404,8 @@ def capabilities(profile: str = "default") -> dict:
             return {"version": VERSION, "ready": True, "in_process": True, "profile": profile, "native_tools": True,
                     "computer_runtime_version": 2, "execution_policy_version": 1, "plugin_version": PLUGIN_VERSION, "plugin_fingerprint": PLUGIN_FINGERPRINT,
                     "memory_isolation": True, "memory_isolation_transport": "bridge-bind-v1", "memory_extraction": True,
-                    "isolated_context_files": True, "skill_learning": True, "model_settings_version": 1, "file_transfer_version": 1}
+                    "isolated_context_files": True, "skill_learning": True, "model_settings_version": 1, "file_transfer_version": 1,
+                    "runtime_environment": _runtime_environment(profile, definitions)}
         finally:
             reset_hermes_home_override(context)
     except Exception as exc:

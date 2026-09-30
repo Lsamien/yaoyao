@@ -7,6 +7,7 @@ import type {BrowserUpload} from '../runner/browser/types.js'
 import {type DesktopEnvironments} from './desktopEnvironments.js'
 import {type GrokCloud} from './grokCloud.js'
 import {VmToolSession} from './vmComputer.js'
+import {waitForHermesSessionIdle} from './sessionStop.js'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readFileSync } from 'node:fs'
@@ -27,6 +28,8 @@ import type {
 } from '../shared/workspace.js'
 import { buildWorkspacePrompt } from './workspacePrompt.js'
 import { buildWorkspaceEnvironment, workspaceEnvironmentTools } from './workspaceEnvironment.js'
+import { parseHermesRuntimeMetadata } from './hermesRuntimeEnvironment.js'
+import type { HermesRuntimeMetadata } from '../shared/botEnvironment.js'
 import { readHostTools } from './hostToolSettings.js'
 import { resolveBotModelSettings, applyBotModelSettings, botModelTarget, BotModelConfirmationError } from './botModelSettings.js'
 function globalComputers(home: string) {
@@ -125,7 +128,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   private operationJournal:ToolOperationJournal
   assertCanSubmit:()=>void=()=>{}
   get idleForUpdate(): boolean {
-    return this.live.size === 0 && this.executing.size === 0 && !this.store.db.prepare("SELECT 1 FROM workspace_entities WHERE kind IN ('run','turn') AND COALESCE(json_extract(data,'$.status'),'unknown') NOT IN ('complete','failed','interrupted') LIMIT 1").get()
+    return this.live.size === 0 && this.executing.size === 0 && !this.store.db.prepare("SELECT 1 FROM workspace_entities WHERE kind IN ('run','turn') AND (COALESCE(json_extract(data,'$.status'),'unknown') NOT IN ('complete','failed','interrupted') OR coalesce(json_extract(data,'$.cleanupPending'),0)=1) LIMIT 1").get()
   }
   desktopEnvironments?:DesktopEnvironments
   cloud?:GrokCloud
@@ -133,6 +136,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   computerAvailable?:(owner:string,agent:Agent)=>boolean
   inspector?:import('./workspaceInspector.js').WorkspaceInspector
   private live = new Map<string, LiveTurn>()
+  private memoryCleanup?: Promise<void>
+  private memoryCleanupRetries=new Map<string,{attempt:number;after:number}>()
   readonly teamTools: WorkspaceTeamTools
   routineTools?: WorkspaceRoutineTools
   readonly tasks: WorkspaceTaskCoordinator
@@ -144,6 +149,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     super(store, userActive)
     this.operationJournal=new ToolOperationJournal(store)
     this.openViking = openViking
+    if(openViking)openViking.onConfigurationChanged=()=>{if(!this.closing)this.wake()}
     this.teamTools = new WorkspaceTeamTools(store, nodes, this)
     this.tasks = new WorkspaceTaskCoordinator(store, this)
     this.knowledge = new WorkspaceKnowledge(store.home, store, openViking)
@@ -158,19 +164,54 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     if (!this.openViking?.enabled) return
     await this.openViking.ensureUser(owner, { id, temporaryGoalId: undefined })
   }
+  protected override maintenance(): boolean {
+    if(!this.openViking?.enabled)return false
+    const pending=new Map<string,{owner:string;id:string}>()
+    for(const owner of this.store.owners()){
+      for(const item of this.store.list<{id:string;memoryCleanupPending?:boolean}>(owner,'agent-deletion'))
+        if(item.memoryCleanupPending)pending.set(`${owner}:${item.id}`,{owner,id:item.id})
+      for(const binding of this.store.list<{agentId:string;namespace:string;status:string;pendingRemoval?:boolean}>(owner,'openviking-binding'))
+        if(binding.namespace===this.openViking.namespace&&binding.status==='removed'&&binding.pendingRemoval)
+          pending.set(`${owner}:${binding.agentId}`,{owner,id:binding.agentId})
+    }
+    if(!this.memoryCleanup){
+      const next=[...pending.entries()].find(([key])=>(this.memoryCleanupRetries.get(key)?.after??0)<=Date.now())
+      if(next){
+        const [key,{owner,id}]=next
+        this.memoryCleanup=this.cleanupAgent(owner,id).then(()=>{this.memoryCleanupRetries.delete(key)})
+          .catch(error=>{
+            if(this.closing)return
+            const attempt=(this.memoryCleanupRetries.get(key)?.attempt??0)+1
+            this.memoryCleanupRetries.set(key,{attempt,after:Date.now()+Math.min(30_000,500*2**Math.min(attempt-1,6))})
+            const deletion=this.store.get<{id:string;memoryCleanupPending:boolean;cleanupError?:string}>(owner,'agent-deletion',id)
+            if(deletion){deletion.cleanupError=error instanceof Error?error.message:'远端记忆清理失败';this.store.put(owner,'agent-deletion',id,deletion)}
+          }).finally(()=>{this.memoryCleanup=undefined;this.wake()})
+      }
+    }
+    return pending.size>0
+  }
   async cleanupAgent(owner: string, id: string): Promise<void> {
-    if (!this.openViking) return
-    await this.openViking.removeUser(owner, { id, temporaryGoalId: undefined })
+    await this.openViking?.removeUser(owner, { id, temporaryGoalId: undefined })
+    const deletion=this.store.get<{id:string;memoryCleanupPending:boolean;cleanupError?:string}>(owner,'agent-deletion',id)
+    if(deletion){deletion.memoryCleanupPending=this.openViking?.binding(owner,id)?.pendingRemoval===true;delete deletion.cleanupError;this.store.put(owner,'agent-deletion',id,deletion)}
+  }
+  async deleteAgent(owner: string, id: string): Promise<void> {
+    // Commit all local validation/deletion before any destructive remote action.
+    // The durable tombstone also makes a repeated DELETE retry remote cleanup.
+    if(this.store.get(owner,'agent',id))this.store.deleteAgent(owner,id)
+    else if(!this.store.get(owner,'agent-deletion',id))this.store.require(owner,'agent',id)
+    try{await this.cleanupAgent(owner,id)}finally{this.wake()}
   }
   send(owner: string, conversationId: string, input: unknown): Run {
     return this.submit(owner, conversationId, input)
   }
-  async botCapabilities(owner: string, agent: Agent, target = this.nodes.target(owner, agent.nodeId)): Promise<{ tools: boolean; memory: boolean; extraction: boolean }> {
+  async botCapabilities(owner: string, agent: Agent, target = this.nodes.target(owner, agent.nodeId)): Promise<{ tools: boolean; memory: boolean; extraction: boolean; runtime?: HermesRuntimeMetadata }> {
     try {
       const response = await target.session.request('/api/plugins/yaoyao-bot-bridge/capabilities', { search: new URLSearchParams({ profile: agent.profile }) })
       const value = JSON.parse(response.body.toString())
       const tools = response.status === 200 && value.ready === true && value.native_tools === true && value.in_process === true
-      return { tools, memory: tools && value.memory_isolation === true, extraction: value.memory_extraction === true }
+      const runtime = response.status === 200 ? parseHermesRuntimeMetadata(value.runtime_environment, agent.profile) : undefined
+      return { tools, memory: tools && value.memory_isolation === true, extraction: value.memory_extraction === true, ...(runtime ? { runtime } : {}) }
     } catch (error) {
       if (error instanceof HttpError && RESOURCE_WAIT_CODES.has(error.code ?? '')) throw error
       return { tools: false, memory: false, extraction: false }
@@ -211,6 +252,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       if (projectId) for (const id of source?.targetAgentId ? [source.targetAgentId] : c.memberIds) this.knowledge.requireProjectMember(owner, projectId, id)
       const conversationTask = this.store.resolveTask(owner, conversationId, body.taskId),
         conversationTaskId = conversationTask?.id
+      if(this.store.hasPendingCleanup(owner,{conversationId,conversationTaskId}))throw new HttpError(409,'原执行尚未确认停止，请等待停止完成后再发消息','conversation_stopping')
       if (conversationTaskId) {
         const alreadyActive = this.store.list<Run>(owner, 'run').some(run => run.conversationTaskId === conversationTaskId && !['complete', 'failed', 'interrupted'].includes(run.status))
         if (!alreadyActive && this.store.activeTaskCount(owner, conversationId) >= WORKSPACE_CONCURRENCY_LIMIT)
@@ -823,7 +865,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         const globals=globalComputers(this.store.home)
         const desktopSnapshot=this.desktopEnvironments?.snapshot(owner,agent,root.deviceHost,{script:globals.scriptMachine,server:globals.serverComputer,maxMiB:globals.fileTransferMaxMiB})
           ??{capturedAt:Date.now(),sourceHost:root.deviceHost,hosts:[]}
-        const environment=buildWorkspaceEnvironment({agent,globals,execution,serverDesktop:agent.nodeId==='local'&&isLocalAuthorizationTarget(target.url),desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent),managedBrowser:this.managedBrowsers?.available(owner,agent)})
+        const environment=buildWorkspaceEnvironment({agent,globals,execution,runtime:{connected:gateway.connected,...(botCapabilities.runtime?{metadata:botCapabilities.runtime}:{})},serverDesktop:agent.nodeId==='local'&&isLocalAuthorizationTarget(target.url),desktop:desktopSnapshot,bridge:botCapabilities.tools,cloud:!!this.cloud?.selected(owner,agent),plugins:!!this.plugins?.selected(owner,agent),managedBrowser:this.managedBrowsers?.available(owner,agent)})
         const {cloud,plugins,vm:dispatchedVm}=environment.tools
         const desktop=environment.tools.desktopView||environment.tools.desktopFile
         const desktopEpochs=Object.fromEntries(environment.desktop.hosts.map(host=>[host.id,host.epoch??'']))
@@ -1085,7 +1127,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     const key = this.bindingKey(work.conversationId, work.conversationTaskId, work.agentId)
     const live = this.live.get(key)
     if (live?.taskId === work.id) {
-      try { await live.gateway.rpc('session.interrupt', { session_id: live.runtimeId }) }
+      try {
+        await live.gateway.rpc('session.interrupt', { session_id: live.runtimeId })
+        const binding=this.store.require<WorkspaceBinding>(owner,'binding',key)
+        if(binding.execution!=='computer')await waitForHermesSessionIdle((method,params)=>live.gateway.rpc(method,params),live.runtimeId,binding.profile)
+      }
       catch (error) { if (!live.gateway.connected) live.done(new Error('已停止')); throw error }
       const current = this.getWork(owner, work.id)
       if (['complete', 'failed', 'interrupted'].includes(current.status)) {
@@ -1107,6 +1153,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           await gateway.connect()
           const opened = await gateway.rpc('session.resume', { profile: binding.profile, session_id: binding.storedId, omit_messages: true, close_on_disconnect: false,...(binding.execution==='computer'?{recoverOnly:true}:{}) })
           if (opened.running) await gateway.rpc('session.interrupt', { session_id: opened.session_id })
+          if(binding.execution!=='computer')await waitForHermesSessionIdle((method,params)=>gateway.rpc(method,params),String(opened.session_id),binding.profile)
         } finally { gateway.close() }
       }
       const current = this.getWork(owner, work.id)

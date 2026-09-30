@@ -2,16 +2,19 @@ import { randomUUID, createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import {HttpError} from './errors.js'
+import { authorizeFileRead } from './fileAccess.js'
 import { lookup } from 'mime-types'
 import { messageFileReferences, type MessageFileOrigin } from '../shared/messageFiles.js'
 import { WorkspaceStore } from './workspaceStore.js'
-import { WorkspaceNodes } from './workspaceGateway.js'
+import { WorkspaceNodes, type WorkspaceNode } from './workspaceGateway.js'
 import type { WorkspaceAgent, WorkspaceFile, WorkspaceMessage } from '../shared/workspace.js'
 export interface StoredWorkspaceFile extends WorkspaceFile, MessageFileOrigin {
   path: string
   digest?: string
   sourceNodeId?:string
 }
+const archiveKey = (nodeId: string, profile: string, messageId: string, path: string) =>
+  createHash('sha256').update(JSON.stringify([nodeId, profile, messageId, path])).digest('hex')
 export function publicFile(f: StoredWorkspaceFile): WorkspaceFile {
   const { path: _path, digest: _digest, messageFileSource: _source, ...result } = f
   return result
@@ -83,15 +86,39 @@ export class WorkspaceAssets {
     readonly nodes: WorkspaceNodes,
     readonly home: string,
   ) {}
+  private requireCapacity(owner: string, messageId: string, bytes: number): void {
+    const count = Number(this.store.db.prepare("SELECT count(*) AS n FROM workspace_entities WHERE owner=? AND kind='file' AND json_extract(data,'$.messageId')=?").get(owner, messageId)?.n ?? 0)
+    if (bytes > 25 * 1024 * 1024 || count >= 8)
+      throw new HttpError(413, '每轮最多 8 个产物，每个不超过 25 MiB', 'artifact_limit')
+    const used = Number(this.store.db.prepare("SELECT coalesce(sum(json_extract(data,'$.size')),0) AS n FROM workspace_entities WHERE kind='file'").get()?.n ?? 0)
+    if (used + bytes > 2 * 1024 * 1024 * 1024) throw new HttpError(413, '产物存储空间已达上限', 'artifact_quota')
+  }
+  /** Legacy archives lost nodeId, but their immutable archive key includes it.
+   * Restore only a unique authorized match; never assume a file came from local. */
+  recoverFileSource(owner: string, file: StoredWorkspaceFile): StoredWorkspaceFile {
+    if (file.sourceNodeId || !file.sourcePath || !file.profile || !file.messageId) return file
+    const records = Number(this.store.db.prepare("SELECT count(*) AS n FROM workspace_entities WHERE owner=? AND kind='file' AND json_extract(data,'$.sourcePath')=? AND json_extract(data,'$.profile')=? AND json_extract(data,'$.messageId')=?").get(owner, file.sourcePath, file.profile, file.messageId)?.n ?? 0)
+    if (records !== 1) return file
+    const candidates = ['local', ...this.store.list<WorkspaceNode>(owner, 'node').map(node => node.id)]
+    let revokedMatch = false
+    const matches = [...new Set(candidates)].filter(nodeId => {
+      if (!this.store.get(owner, 'archived-path', archiveKey(nodeId, file.profile!, file.messageId!, file.sourcePath!))) return false
+      try { this.nodes.requireSource(owner, { nodeId, profile: file.profile! }) }
+      catch { revokedMatch = true; return false }
+      return true
+    })
+    if (revokedMatch || matches.length !== 1) return file
+    const recovered = { ...file, sourceNodeId: matches[0]! }
+    this.store.put(owner, 'file', file.id, recovered)
+    return recovered
+  }
   publish(owner:string,message:WorkspaceMessage,agent:WorkspaceAgent,name:string,bytes:Buffer):WorkspaceFile {
     const digest=createHash('sha256').update(bytes).digest('hex')
     name=basename(name).replace(/[\\/\u0000-\u001f\u007f]/g,'_').slice(0,240)||'artifact'
     const files=this.store.list<StoredWorkspaceFile>(owner,'file')
     const existing=files.find(file=>file.messageId===message.id&&file.name===name&&file.digest===digest)
     if(existing)return publicFile(existing)
-    if(bytes.length>25*1024*1024||files.filter(file=>file.messageId===message.id).length>=8)throw new HttpError(413,'每轮最多 8 个产物，每个不超过 25 MiB','artifact_limit')
-    const used=Number(this.store.db.prepare("SELECT coalesce(sum(json_extract(data,'$.size')),0) AS n FROM workspace_entities WHERE kind='file'").get()?.n??0)
-    if(used+bytes.length>2*1024*1024*1024)throw new HttpError(413,'产物存储空间已达上限','artifact_quota')
+    this.requireCapacity(owner, message.id, bytes.length)
     const dir=join(this.home,'workspace-files',owner);mkdirSync(dir,{recursive:true,mode:0o700})
     const path=join(dir,digest)
     try{writeFileSync(path,bytes,{mode:0o600,flag:'wx'})}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error}
@@ -143,19 +170,26 @@ export class WorkspaceAssets {
       }
     }
     for (const path of [...paths].slice(0, 8)) {
-      const key = createHash('sha256')
-        .update(JSON.stringify([nodeId, profile, messageId, path]))
-        .digest('hex')
+      const key = archiveKey(nodeId, profile, messageId, path)
       if (this.store.get(owner, 'archived-path', key) || this.pending.has(`${owner}:${key}`))
         continue
       this.pending.add(`${owner}:${key}`)
       try {
-        const response = await (remoteAgentId ? this.nodes.targetForAgent(owner,{nodeId,remoteAgentId}) : this.nodes.target(owner,nodeId))
-          .session.request('/api/files/download', {
-            search: new URLSearchParams({ profile, path }),
-            maxResponseBytes: 25 * 1024 * 1024,
-          })
+        this.nodes.requireSource(owner, { nodeId, profile })
+        this.requireCapacity(owner, messageId, 0)
+        const target = remoteAgentId ? this.nodes.targetForAgent(owner,{nodeId,remoteAgentId}) : this.nodes.target(owner,nodeId)
+        const authorizedPath = await authorizeFileRead({ home: this.home }, target.session, path, profile)
+        this.nodes.requireSource(owner, { nodeId, profile })
+        const response = await target.session.request('/api/files/download', {
+          search: new URLSearchParams({ profile, path: authorizedPath }),
+          maxResponseBytes: 25 * 1024 * 1024,
+        })
         if (response.status !== 200 || this.stopped) continue
+        // A download may outlive an assignment or directory-policy change.
+        this.nodes.requireSource(owner, { nodeId, profile })
+        if (await authorizeFileRead({ home: this.home }, target.session, path, profile) !== authorizedPath || this.stopped) continue
+        this.nodes.requireSource(owner, { nodeId, profile })
+        this.requireCapacity(owner, messageId, response.body.length)
         const dir = join(this.home, 'workspace-files', owner)
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         const digest = createHash('sha256').update(response.body).digest('hex')
@@ -177,6 +211,7 @@ export class WorkspaceAssets {
           size: response.body.length,
           sender,
           profile,
+          sourceNodeId: nodeId,
           conversationId,
           messageId,
           createdAt: Date.now(),

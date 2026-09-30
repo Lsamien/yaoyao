@@ -21,6 +21,7 @@ const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`
 const isUuid = (value: string): boolean => /^[0-9a-f]{32}$/.test(value)
 const memoryId = (requestId: string): string => requestId.replaceAll('-', '')
 const MEMORY_TAG = 'yaoyao_memory=true'
+const MEMORY_READ_CONCURRENCY = 8
 const activeUri = (scope: MemoryScopeInput, id: string): string => `viking://~/memories/yaoyao/${scope.scope}/${id}.json`
 const revisionsUri = (scope: MemoryScopeInput, id: string, revision: number): string => `viking://resources/yaoyao/${scope.scope}/${id}/revisions/${revision}.json`
 const tombstoneUri = (scope: MemoryScopeInput, fingerprint: string): string => `viking://resources/yaoyao/${scope.scope}/tombstones/${fingerprint}.json`
@@ -84,16 +85,28 @@ export class OpenVikingMemoryProvider {
     const client = this.service.userClient(owner, scope.agentId)
     const directory = `viking://~/memories/yaoyao/${scope.scope}`
     const entries = await notFoundAsUndefined(() => client.list(directory, { recursive: true })) ?? []
-    const records: WorkspaceMemory[] = []
-    for (const entry of entries) {
+    const ids = entries.flatMap(entry => {
       const name = uriName(entry)
       const match = /([0-9a-f]{32})\.json$/.exec(name ?? '')
-      if (!match) continue
-      const record = await this.readRecord(owner, scope, match[1]!)
-      if (record && record.memory.scope === scope.scope && record.memory.agentId === scope.agentId
-        && record.memory.projectId === scope.projectId) records.push(record.memory)
-    }
-    return records
+      return match ? [match[1]!] : []
+    })
+    const records: Array<WorkspaceMemory | undefined> = new Array(ids.length)
+    let next = 0, failed = false
+    // Preserve directory order and per-record scope checks without N serial round trips.
+    const reads = await Promise.allSettled(Array.from({ length: Math.min(ids.length, MEMORY_READ_CONCURRENCY) }, async () => {
+      while (!failed) {
+        const index = next++
+        if (index >= ids.length) return
+        let record: StoredRecord | undefined
+        try { record = await this.readRecord(owner, scope, ids[index]!) }
+        catch (error) { failed = true; throw error }
+        if (record && record.memory.scope === scope.scope && record.memory.agentId === scope.agentId
+          && record.memory.projectId === scope.projectId) records[index] = record.memory
+      }
+    }))
+    const failure = reads.find(read => read.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
+    return records.filter((memory): memory is WorkspaceMemory => memory !== undefined)
   }
   async list(owner: string, scopes: MemoryScopeInput[]): Promise<WorkspaceMemory[]> {
     const result: WorkspaceMemory[] = []

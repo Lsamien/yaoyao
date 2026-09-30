@@ -448,7 +448,7 @@ describe('loopback tool lease', () => {
 it('legacy VM managers create members on server Hermes and cannot rebind a running Agent',async()=>{
   store.put(owner,'agent',manager.id,{...manager,execution:'computer'})
   expect((await call('create_agent',{requestId:randomUUID(),name:'统一成员',profile:'default',execution:'profile'})).agent).toMatchObject({execution:'profile',canManageTeam:true})
-  expect(()=>store.updateAgent(owner,manager.id,{execution:'profile'})).toThrow('请先停止当前任务')
+  expect(()=>store.updateAgent(owner,manager.id,{execution:'profile'})).toThrowError(expect.objectContaining({code:'agent_execution_busy'}))
 })
 it('creates a task-scoped helper once and rejects promotion or use outside its goal',async()=>{
   const {team,task}=await buildTeam()

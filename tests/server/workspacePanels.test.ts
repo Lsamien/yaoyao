@@ -23,7 +23,7 @@ it('changes the foundation only when idle and retires old session bindings witho
  const agent=store.createAgent('owner',{name:'甲',profile:'default'}),conversation=store.list<any>('owner','conversation')[0]
  store.put('owner','binding',`${conversation.id}:${agent.id}`,{id:`${conversation.id}:${agent.id}`,storedId:'old-session'})
  store.put('owner','turn','busy',{agentId:agent.id,status:'queued'})
- expect(()=>store.updateAgent('owner',agent.id,{profile:'other'})).toThrow('先停止')
+ expect(()=>store.updateAgent('owner',agent.id,{profile:'other'})).toThrowError(expect.objectContaining({code:'agent_execution_busy'}))
  store.remove('owner','turn','busy')
  expect(store.updateAgent('owner',agent.id,{profile:'other'}).profile).toBe('other')
  expect(store.list('owner','binding')).toEqual([])
@@ -140,7 +140,7 @@ it('persists the separate Profile execution mode, checks its Runner capability a
  expect(opened).not.toHaveProperty('hostAccess')
  store.put('owner','turn','active-profile',{agentId:agent.id,status:'running'})
  await request(app.callback()).put(path).send({computer:'vm',vmExecution:'worker'}).expect(409)
- expect(()=>store.updateAgent('owner',agent.id,{vmExecution:'worker'})).toThrow('先停止当前任务')
+ expect(()=>store.updateAgent('owner',agent.id,{vmExecution:'worker'})).toThrowError(expect.objectContaining({code:'agent_execution_busy'}))
  store.remove('owner','turn','active-profile')
  const member=store.createAgent('owner',{name:'不继承模式',profile:'default',computer:'vm',execution:'computer',vmExecution:'profile'},{createdByAgentId:agent.id,createdFromRunId:'run'})
  expect(member.vmExecution).toBe('worker');expect(member.allowHostEnvironment).toBe(false)

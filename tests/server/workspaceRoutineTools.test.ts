@@ -82,7 +82,7 @@ it('tells every Bot not to use Hermes cron, and explains its own routine tools w
     members: [{ id: 'bot', name: '助手' }],
     work: { depth: 0, requiredReply: false, replyMode: 'mentioned', messageId: 'message' },
     run: { mentionIds: [] },
-    environment: { open: { computer: false, server: false, vm: false, cloud: false }, tools: { desktopView: false, desktopFile: false, vm: false, cloud: false, plugins: false }, version: 1, capturedAt: 1, execution: { nodeId: 'local', profile: 'dev' }, desktop: { capturedAt: 1, hosts: [] }, virtual: { vm: { status: 'disabled' }, cloud: { status: 'disabled' } }, fileTransferMaxMiB: 25 },
+    environment: { open: { computer: false, server: false, vm: false, cloud: false }, tools: { desktopView: false, desktopFile: false, vm: false, cloud: false, plugins: false }, version: 1, capturedAt: 1, execution: { nodeId: 'local', profile: 'dev' }, runtime: { connected: false }, desktop: { capturedAt: 1, hosts: [] }, virtual: { vm: { status: 'disabled' }, cloud: { status: 'disabled' } }, fileTransferMaxMiB: 25 },
     memory: '', noReply: '[[YAOYAO_NO_REPLY_V1]]', marker: '[yaoyao-run:run:result]', content: '每天提醒我', contentKind: 'user', attachmentRefs: [],
   } as WorkspacePromptInput
   expect(buildWorkspacePrompt(fixture)).toContain('不要调用 Hermes 的 cronjob')

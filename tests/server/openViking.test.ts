@@ -95,6 +95,46 @@ describe('OpenViking configuration', () => {
 })
 
 describe('OpenViking memory provider', () => {
+  it('serializes removal after in-flight registration and never resurrects a removed user',async()=>{
+    let release!:(value:{user_key:string})=>void
+    admin.adminRegisterUser.mockImplementationOnce(()=>new Promise(resolve=>{release=resolve}))
+    const registration=service.ensureUser(owner,a)
+    const removal=service.removeUser(owner,a)
+    await expect(service.ensureUser(owner,a)).rejects.toMatchObject({code:'openviking_user_removed'})
+    expect(admin.adminRemoveUser).not.toHaveBeenCalled()
+    release({user_key:'fixture-racing-key'})
+    await registration;await removal
+    expect(service.binding(owner,a.id)).toMatchObject({status:'removed',pendingRemoval:false})
+    await expect(service.ensureUser(owner,a)).rejects.toMatchObject({code:'openviking_user_removed'})
+    expect(admin.adminRegisterUser).toHaveBeenCalledTimes(1)
+    expect(admin.adminRemoveUser).toHaveBeenCalledTimes(1)
+  })
+  it('persists failed removal for an idempotent retry after restarting the service',async()=>{
+    await service.ensureUser(owner,a)
+    admin.adminRemoveUser.mockRejectedValueOnce(new Error('fixture offline'))
+    await expect(service.removeUser(owner,a)).rejects.toMatchObject({code:'openviking_unavailable'})
+    expect(service.binding(owner,a.id)).toMatchObject({status:'removed',pendingRemoval:true})
+    const restarted=new OpenVikingService(store,manager,()=>admin as unknown as OpenVikingClient)
+    await restarted.removeUser(owner,a);await restarted.removeUser(owner,a)
+    expect(restarted.binding(owner,a.id)).toMatchObject({status:'removed',pendingRemoval:false})
+    expect(admin.adminRemoveUser).toHaveBeenCalledTimes(2)
+    await expect(restarted.ensureUser(owner,a)).rejects.toMatchObject({code:'openviking_user_removed'})
+  })
+  it('does not lose removal when configuration is disabled during registration',async()=>{
+    let release!:(value:{user_key:string})=>void
+    admin.adminRegisterUser.mockImplementationOnce(()=>new Promise(resolve=>{release=resolve}))
+    const registration=service.ensureUser(owner,a)
+    service.configure(undefined)
+    const removal=service.removeUser(owner,a)
+    release({user_key:'fixture-register-before-disabled'})
+    await registration;await removal
+    expect(service.binding(owner,a.id)).toMatchObject({status:'removed',pendingRemoval:true})
+    expect(admin.adminRemoveUser).not.toHaveBeenCalled()
+    service.configure(manager.configuration())
+    await service.removeUser(owner,a)
+    expect(service.binding(owner,a.id)).toMatchObject({status:'removed',pendingRemoval:false})
+    expect(admin.adminRemoveUser).toHaveBeenCalledTimes(1)
+  })
   it('reports writes, duplicates and idempotent replays without changing the public memory shape', async () => {
     const input = { requestId: randomUUID(), scope: 'agent' as const, agentId: a.id, content: '开发环境为 studio', tier: 'log' as const }
     const first = await knowledge.writeMemoryWithResult(owner, input)

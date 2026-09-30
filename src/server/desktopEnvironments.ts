@@ -69,11 +69,11 @@ export const DESKTOP_ENVIRONMENT_TOOLS=[
  {id:'desktop_shell',name:'desktop_shell',description:'在这台电脑的用户主目录执行一条 shell 命令，返回 stdout、stderr 与退出码。长任务会超时终止；不要用它代替文件工具读写大文件。可用 host 指定目标电脑。',inputSchema:{type:'object',properties:{command:{type:'string'},cwd:{type:'string'},timeoutMs:{type:'integer'},host:{type:'string'}},required:['command'],additionalProperties:false}},
 ]
 export const DESKTOP_FILE_TOOL_IDS=new Set(['desktop_file_list','desktop_file_read','desktop_file_write','desktop_file_copy','desktop_shell'])
-export const DESKTOP_FILE_TRANSFER_RULES='电脑间传文件用 desktop_file_copy，一次指定 sourceHost、sourcePath、targetHost、targetPath；服务器用 server，当前 Bot 的虚拟机用 vm，设备名用设置里的名字，「本机」只指本轮消息来源电脑。例：把 mac1 桌面的 a.txt 放到 mac2 桌面，调用 {sourceHost:"mac1",sourcePath:"Desktop/a.txt",targetHost:"mac2",targetPath:"Desktop/a.txt"}。这是复制，保留原文件；只有用户明确要求覆盖时才传 overwrite:true。无需先截图，不要读取 base64 给模型、上传聊天附件或假设不同电脑共享文件路径。最大 25 MiB；工具返回已校验的成功结果后才报告完成。'
+export const DESKTOP_FILE_TRANSFER_RULES='电脑间传文件用 desktop_file_copy，一次指定 sourceHost、sourcePath、targetHost、targetPath；服务器桌面代理用 server，当前 Bot 的虚拟机用 vm，设备名用设置里的名字，「本机」只指本轮消息来源电脑。例：把 mac1 桌面的 a.txt 放到 mac2 桌面，调用 {sourceHost:"mac1",sourcePath:"Desktop/a.txt",targetHost:"mac2",targetPath:"Desktop/a.txt"}。这是复制，保留原文件；只有用户明确要求覆盖时才传 overwrite:true。无需先截图，不要读取 base64 给模型、上传聊天附件或假设不同电脑共享文件路径。最大 25 MiB；工具返回已校验的成功结果后才报告完成。'
 /** Macs connected to the server as computers. */
 export const DESKTOP_ENVIRONMENT_RULES='操作连接服务器的电脑时，使用本轮提供的 desktop_* 工具，并用 host 指定电脑名称或编号。Hermes 原生终端和文件工具不能代替该电脑上的操作。'
 /** Yaoyao host Mac — same look-then-act pattern as the cloud computer. */
-export const SERVER_COMPUTER_RULES='操作服务器桌面时，使用本轮提供的 desktop_* 工具并明确指定 host="server"。处理 Hermes 运行环境内的文件与命令时，使用实际提供的原生工具；处理服务器桌面用户主目录内的文件时，使用已授权的 desktop_file_* 或 desktop_shell，不假定两者共享路径。'
+export const SERVER_COMPUTER_RULES='操作客户端提供的服务器桌面代理时，使用本轮提供的 desktop_* 工具并明确指定 host="server"。处理 Hermes 原生工具实际控制的运行环境时，优先使用对应原生工具；处理服务器桌面代理用户主目录内的文件时，使用已授权的 desktop_file_* 或 desktop_shell，不假定两者共享路径或能力。'
 
 /** The loopback native transport is admitted only by serviceInstance's
  *  private capability; remote hosts are admitted by DesktopHostHub's bearer

@@ -1,5 +1,5 @@
 import {MANAGED_BROWSER_TOOLS,MANAGED_BROWSER_VM_TOOLS} from './managedBrowserTools.js'
-import type { DesktopEnvironmentSnapshot, WorkspaceEnvironment } from '../shared/botEnvironment.js'
+import type { DesktopEnvironmentSnapshot, HermesRuntimeSnapshot, WorkspaceEnvironment } from '../shared/botEnvironment.js'
 import type { WorkspaceAgent } from '../shared/workspace.js'
 import type { HostToolSettings } from './hostToolSettings.js'
 import { DESKTOP_ENVIRONMENT_TOOLS, DESKTOP_FILE_TOOL_IDS } from './desktopEnvironments.js'
@@ -14,6 +14,7 @@ export function buildWorkspaceEnvironment(input: {
   bridge: boolean
   cloud: boolean
   plugins: boolean
+  runtime?: HermesRuntimeSnapshot
   execution?:import('../shared/executionEnvironment.js').ExecutionSelection
   serverDesktop?:boolean
   managedBrowser?: boolean
@@ -28,6 +29,7 @@ export function buildWorkspaceEnvironment(input: {
   return {
     ...(input.execution?{selection:input.execution}:{}),
     version: 1, capturedAt: desktop.capturedAt, execution: { nodeId: agent.nodeId, profile: agent.profile },
+    runtime: input.runtime ? structuredClone(input.runtime) : { connected: false },
     open: { computer: globals.scriptMachine, server: globals.serverComputer, vm: globals.vm, cloud: globals.cloud },
     desktop:{...desktop,hosts},
     tools: {

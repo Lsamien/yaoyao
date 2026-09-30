@@ -7,6 +7,7 @@ function environment(): WorkspacePromptEnvironment {
     open: { computer: true, server: true, vm: true, cloud: true },
     tools: { desktopView: true, desktopFile: true, vm: true, cloud: true, plugins: false },
     version: 1, capturedAt: 1, execution: { nodeId: 'local', profile: 'dev' },
+    runtime: { connected: true },
     desktop: { capturedAt: 1, sourceHost: 'mac-id', hosts: [{ id: 'mac-id', target: 'mac-id', name: '工作 Mac', kind: 'computer', source: true, online: true, open: true,
       capabilities: { view: { enabled: true, status: 'ready' }, input: { enabled: true, status: 'ready' }, fileRead: { enabled: true, status: 'ready' }, fileWrite: { enabled: true, status: 'ready' }, shell: { enabled: true, status: 'ready' }, fileTransfer: { enabled: true, status: 'ready' } },
       transfer: { protocol: 'chunked', readMaxMiB: 50, writeMaxMiB: 50 } }] },
@@ -27,6 +28,25 @@ function input(): WorkspacePromptInput {
 }
 
 describe('Bot environment routing', () => {
+  it('keeps native Hermes operations available when a server desktop proxy is offline', () => {
+    const env = environment()
+    env.runtime.metadata = {version:1,profile:'dev',platform:'linux',osRelease:'6.8',arch:'x86_64',nativeTools:{terminal:['terminal'],files:['read_file'],desktop:['computer_use'],browser:[]}}
+    const offline = structuredClone(env.desktop.hosts[0]!)
+    offline.id='local';offline.target='server';offline.name='服务器';offline.kind='server';offline.source=false;offline.online=false
+    for(const capability of Object.values(offline.capabilities))Object.assign(capability,{enabled:false,status:'offline'})
+    env.desktop.hosts=[offline]
+    env.desktop.sourceHost=undefined
+    env.tools.desktopView=false;env.tools.desktopFile=false
+    const text=workspaceEnvironmentPrompt(env)
+    expect(text).toContain('服务端 Hermes 已连接')
+    expect(text).toContain('服务器桌面代理；host="server"；控制通道=离线')
+    expect(text).toContain('操作服务端运行环境时优先使用')
+    expect(text).toContain('"desktop":["computer_use"]')
+    expect(text).toContain('目录存在不保证后端连接就绪')
+    expect(text).toContain('「本机」无法确定')
+    expect(text).not.toContain('电脑桌面工具已挂载')
+  })
+
   it('describes all mounted environments conditionally without moving the model or the message origin', () => {
     const text = workspaceEnvironmentPrompt(environment())
     expect(text).toContain('模型会话运行在服务端 Hermes')

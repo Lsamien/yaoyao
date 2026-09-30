@@ -29,6 +29,7 @@ export function workspaceDetail(store: WorkspaceStore, runtime: WorkspaceRuntime
 /** Durable replay followed by live updates. A slow reader reconnects from its last applied cursor. */
 export function streamWorkspace(ctx: Koa.Context, store: WorkspaceStore, auth: LocalAuthStore): void {
   const owner = auth.require(ctx).id, version = auth.pushAuthorizationVersion(owner)
+  const cookie = ctx.get('cookie')
   const patches = store.messagePatchesEnabled && ctx.query.format === 'patch-v1'
   const res = ctx.res
   const raw = ctx.get('last-event-id') || String(ctx.query.after ?? '0')
@@ -38,7 +39,9 @@ export function streamWorkspace(ctx: Koa.Context, store: WorkspaceStore, auth: L
   const pending = new Map<string, WorkspaceEvent>()
   const knownMessages = new Set<string>()
   const valid = () => {
-    try { return auth.require(ctx).id === owner && auth.isUserActive(owner) && auth.pushAuthorizationVersion(owner) === version }
+    // Koa's localUser is a request snapshot; a long-lived stream must check the
+    // captured session itself so logout and expiry revoke this connection.
+    try { return auth.currentFromCookieHeader(cookie)?.id === owner && auth.isUserActive(owner) && auth.pushAuthorizationVersion(owner) === version }
     catch { return false }
   }
   const close = () => {

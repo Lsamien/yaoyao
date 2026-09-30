@@ -161,7 +161,7 @@ export class RealtimeBroker {
     if (existing) return this.commands.get(key) ?? Promise.resolve(this.completed.get(key)?.receipt ?? existing)
     const work = this.perform(c, frame, requestId).then(response => {
       const state = response.error ? 'rejected' : 'confirmed'
-      this.receipts.finish(c.principal.key, requestId, state, response)
+      this.receipts.finish(c.principal.key, requestId, state, response, frame)
       return { requestId, state, response } as CommandReceipt
     }, (error: unknown) => {
       if (error instanceof HttpError) {

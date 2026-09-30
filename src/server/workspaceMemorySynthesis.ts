@@ -39,6 +39,7 @@ export class WorkspaceMemorySynthesis {
   private timer?: ReturnType<typeof setInterval>
   private active = false
   private closed = false
+  private lastOwner?: string
   infer: (owner: string, agent: WorkspaceAgent, prompt: string) => Promise<string>
   constructor(readonly runtime: WorkspaceRuntime) {
     this.infer = async (owner, agent, prompt) => {
@@ -85,11 +86,13 @@ export class WorkspaceMemorySynthesis {
     if (this.active || this.closed) return
     this.active = true
     try {
-      for (const owner of this.runtime.store.owners()) {
+      const owners = this.runtime.store.owners()
+      const start = (owners.indexOf(this.lastOwner ?? '') + 1) % (owners.length || 1)
+      for (const owner of [...owners.slice(start), ...owners.slice(0, start)]) {
         if (this.closed || !this.runtime.userActive(owner) || owner.startsWith('_')) continue
         const jobs = this.runtime.knowledge.jobs(owner).filter(j => ['pending', 'running'].includes(j.status) && j.nextAt <= Date.now()).sort((a, b) => a.createdAt - b.createdAt)
         // One inference per tick keeps background work behind conversation work.
-        if (jobs[0]) { await this.run(owner, jobs[0]); break }
+        if (jobs[0]) { this.lastOwner = owner; await this.run(owner, jobs[0]); break }
       }
     } catch { /* Corrupt files remain untouched and are surfaced by the management API. */ }
     finally { this.active = false }

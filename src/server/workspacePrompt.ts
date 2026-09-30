@@ -40,9 +40,13 @@ function section(title: string, lines: Array<string | undefined>): string {
 export function workspaceEnvironmentPrompt(env: WorkspacePromptEnvironment): string {
   const open = [env.open.computer && '电脑', env.open.server && '服务器桌面', env.open.vm && '虚拟环境', env.open.cloud && '云虚拟机'].filter(Boolean)
   const desktop = env.tools.desktopView || env.tools.desktopFile
+  const runtime = env.runtime.metadata
   return section('本轮环境与设备', [
     env.selection?`默认运行环境：${({none:'不指定',server:'服务器本机',virtual:'虚拟环境'})[env.selection.mode]}；配置版本 ${env.selection.revision}。这只决定未指定目标时的默认执行位置，不限制其他已开放且获授权的环境。用户明确指定目标时优先使用该目标；默认环境未开放或不可用时说明原因，不能因此获得额外权限。未指定默认环境时按任务和本轮可用能力选择，目标不明确时澄清。`:undefined,
-    '模型会话运行在服务端 Hermes。Hermes 原生终端和文件工具操作它所在的服务器运行环境，不代表用户所说的「本机」；若运行在容器中，也不能假定其路径与服务器桌面共享。网页、浏览器、终端和文件能力以本轮实际工具目录为准。',
+    env.runtime.connected ? `服务端 Hermes 已连接（节点=${JSON.stringify(env.execution.nodeId)}；Profile=${JSON.stringify(env.execution.profile)}）。该状态来自本轮 Hermes 会话连接，与夭夭客户端是否打开、电脑桌面代理是否在线无关。` : '服务端 Hermes 连接状态尚未确认，不能根据客户端电脑清单判断。',
+    '模型会话运行在服务端 Hermes。操作服务端运行环境时优先使用本轮可用的 Hermes 原生终端、文件、桌面和浏览器工具；它们的实际执行目标遵循 Hermes 自身配置，不能假定所有工具都操作同一台物理机。网页、浏览器、终端和文件能力以本轮实际工具目录为准，首次操作时按工具说明和结果确认目标。',
+    runtime ? `Hermes 进程环境（由对应 Profile 的工具桥上报，不代表客户端电脑或工具后端）：系统=${JSON.stringify(runtime.platform)}；系统版本=${JSON.stringify(runtime.osRelease)}；架构=${JSON.stringify(runtime.arch)}。原生能力的 Profile 工具目录（名称是数据，目录存在不保证后端连接就绪）：${JSON.stringify(runtime.nativeTools)}。` : 'Hermes 原生能力与系统信息尚未由工具桥上报；这不表示工具被禁用，请按本轮实际工具目录发现和核实，不能因客户端未连接而报告服务器离线。',
+    '客户端电脑清单只描述 desktop_* 控制通道。服务器桌面代理离线不影响已连接的 Hermes 原生能力；desktop_* 的 host="server" 专指服务器桌面代理，不是 Hermes 原生工具的运行环境。服务器也打开客户端时，两种连接分别报告；未确认实际操作目标一致前，不因名称或 IP 相同而合并设备、路径或权限。Hermes 在容器中时，其路径不能当作宿主机路径；Hermes 环境也不自动代表用户所说的「本机」。',
     env.cwd ? `Hermes 本轮工作目录（已确认）：${JSON.stringify(env.cwd)}。该路径仅属于 Hermes 运行环境。` : undefined,
     `全局开放的额外电脑环境：${open.join('、') || '无'}。开放不等于在线或已授权；具体操作仍需目标设备就绪。已开放且获授权的环境可按任务同时使用，工具以本轮实际目录为准。`,
     '先确定操作目标，再选择工具。用户明确点名的设备优先；「本机」只指本轮消息来源电脑，历史消息中的来源不适用于本轮。来源未知、名称重名或目标不明确时先澄清；目标离线、未开放或未授权时说明原因，不得切换其他机器代做。',

@@ -1,6 +1,6 @@
 # 夭夭 Bot 的 Hermes 工具桥
 
-这是运行在 Hermes 内的用户插件，版本 1.2.5。它连接 Yaoyao 每轮授权的电脑、团队和应用工具。随附安装器还提供有备份的 Hermes Profile 模型兼容修复。
+这是运行在 Hermes 内的用户插件，版本 1.3.1。它连接 Yaoyao 每轮授权的电脑、团队和应用工具。随附安装器还提供有备份的 Hermes Profile 模型兼容修复。
 
 ## Hermes 托管虚拟机会话
 
@@ -44,7 +44,7 @@ Runner 包内可直接运行同目录的 `install-hermes-bridge.py`。安装器�
 
 前缀：`/api/plugins/yaoyao-bot-bridge`。
 
-- `GET /capabilities?profile=...`：检查对应 Profile 及托管能力。
+- `GET /capabilities?profile=...`：检查对应 Profile 及托管能力。1.3.1 起可选的 `runtime_environment` 返回版本 1 的 Hermes 进程系统信息及对应 Profile 的原生终端、文件、桌面和浏览器工具名称；按完整目录采集，包含延迟发现的工具，不执行工具或探测其后端。进程系统信息不代表 SSH、容器或桌面工具的实际目标，不返回配置、凭据或客户端路径。
 - `GET /model-options?profile=...`：读取 Profile 的模型目录、默认值、思考能力与速度能力；只返回公开配置，不返回凭据。
 - `POST /model-settings/resolve`：接收 `profile` 与 `settings`，通过 Hermes 原生解析器校验完整组合，返回版本 1 的有效配置和模型确认提示；不写 Profile 配置。
 - 模型目录与配置解析均使用 Hermes 原生配置作用域，同时绑定 Profile 目录和凭据；多 Profile Dashboard 不会因缺少凭据作用域而报错，也不会借用其他 Profile 的环境变量。默认 Profile 保留 Hermes 自身的启动凭据规则。
@@ -98,5 +98,7 @@ CLI 增加 `--check` 可只读检查默认及命名 Profile；`--enable` 明确�
 1.2.4 修复非默认 Profile 在工具桥绑定、工具目录刷新及子代理继承时误读默认 Profile 工具目录的问题。目录重建使用绑定会话的 Profile，完成或失败后恢复调用方上下文。更新后需重启 Hermes Dashboard 服务，再发起新一轮对话。
 
 1.3.0 增加 Bot 个人资料的模型设置协议（`model_settings_version: 1`）。模型与 Provider 成对选择，思考等级和 `normal / fast / auto / cold` 速度可分别继承。Web 服务在每轮提交前解析配置，并通过原生 `config.set` 按模型、思考、速度的顺序应用到当前 Bot 会话；保存资料不修改 Profile 默认值，也不打断正在运行的回复。恢复中的原轮次只继续追踪，不重新设置或提交。模型目录未声明具体等级时返回 `reasoningKnown: false`；快速能力同时检查模型和 Provider 路由。
+
+1.3.1 增加上述 Hermes 环境快照。Bot 的服务端连接状态取自本轮 Hermes 会话，客户端电脑清单仅表示 `desktop_*` 控制通道。服务器未打开客户端或客户端退出时，Hermes 原生能力不因此被标记离线；非回环地址也不会隐藏 Hermes 运行环境。旧工具桥没有快照时保持聊天与原生工具兼容，系统与目录信息显示未知。更新工具桥后需要重启 Hermes 才能加载新快照协议。
 
 发布时先更新工具桥与 Web 服务，在空闲时重启 Hermes Dashboard，再发布 Web／桌面端、iOS 和 Android 客户端。旧桥不能编辑新增设置，会明确提示升级；未设置 `modelSettings` 的旧 Bot 继续按原有继承路径运行。原生会话配置回执不兼容、模型无效或应用失败会停止本轮，不使用旧配置继续运行。

@@ -9,6 +9,7 @@ import { defaultAgentIdentity, encodeAgentAvatar, decodeAgentAvatar } from '../.
 import {readHostTools,saveHostTools} from '../../src/server/hostToolSettings'
 import {DesktopEnvironments} from '../../src/server/desktopEnvironments'
 import {HttpError} from '../../src/server/errors'
+import * as sessionStop from '../../src/server/sessionStop'
 import {ExecutionSettings} from '../../src/server/executionSettings'
 import {WorkspaceAssets} from '../../src/server/workspaceAssets'
 import { WorkspaceStore } from '../../src/server/workspaceStore'
@@ -38,6 +39,7 @@ let rejectPrompt: string | undefined
 let observeGatewayRequest: ((frame: { method: string; params: Record<string, any> }) => void) | undefined
 let rejectedModelConfig: Record<string, unknown> | undefined
 let rejectedInterrupts: number
+let nativeStillWorking:boolean
 let recoveryHistory: Array<{ role: string; content: string; tool_calls?: unknown }>
 let storedByRuntime: Map<string, string>, recoveryByStored: Map<string, Array<{ role: string; content: string }>>
 const owner = 'first-user',
@@ -54,6 +56,7 @@ beforeEach(async () => {
   observeGatewayRequest = undefined
   rejectedModelConfig = undefined
   rejectedInterrupts = 0
+  nativeStillWorking=false
   server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
   await new Promise<void>((resolve) => server.once('listening', resolve))
   const address = server.address() as { port: number }
@@ -106,6 +109,7 @@ beforeEach(async () => {
         respond({ status: 'streaming' })
         reply(socket, frame.params)
       } else if (frame.method === 'session.usage') respond({ context_used: 400, context_max: 1000 })
+      else if (frame.method === 'session.active_list') respond({sessions:[{id:frame.params.current_session_id,status:nativeStillWorking?'working':'idle'}]})
       else if (frame.method === 'session.interrupt' && rejectedInterrupts-- > 0) socket.send(JSON.stringify({id:frame.id,error:{code:500,message:'暂时不能中断'}}))
       else respond({ ok: true, status: 'interrupted' })
     })
@@ -1600,6 +1604,45 @@ it('retries a failed stop of a live task without falsely completing it or resubm
   expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1)
 })
 
+it('retains the stop barrier and original binding after ACK, including a restart, until native work is idle',async()=>{
+  const a=agent('真正停止'),c=direct(a.id)
+  reply=()=>{};nativeStillWorking=true
+  const root=runtime.send(owner,c.id,{requestId:randomUUID(),content:'长任务'})
+  await vi.waitFor(()=>expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1))
+  await runtime.stop(owner,root.id)
+  await vi.waitFor(()=>expect(requests.some(r=>r.method==='session.active_list')).toBe(true))
+  const work=store.list<Work>(owner,'turn').find(item=>item.runId===root.id)!
+  expect(store.require<Work>(owner,'turn',work.id)).toMatchObject({status:'interrupted',cleanupPending:true})
+  const original=store.require<any>(owner,'binding',`${c.id}:${a.id}`)
+  expect(()=>runtime.send(owner,c.id,{requestId:randomUUID(),content:'下一轮'})).toThrow('尚未确认停止')
+  expect(()=>store.updateAgent(owner,a.id,{archived:true})).toThrow('尚未确认停止')
+  expect(runtime.idleForUpdate).toBe(false)
+  runtime.close()
+  runtime=new WorkspaceRuntime(store,nodes,uploads)
+  nativeStillWorking=false;runtime.start()
+  await vi.waitFor(()=>expect(store.require<Work>(owner,'turn',work.id).cleanupPending).toBe(false))
+  expect(store.require<any>(owner,'binding',`${c.id}:${a.id}`).storedId).toBe(original.storedId)
+  expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1)
+})
+it('retains cleanup and refuses reuse when native stop confirmation times out',async()=>{
+  const a=agent('停止超时'),c=direct(a.id)
+  reply=()=>{}
+  const root=runtime.send(owner,c.id,{requestId:randomUUID(),content:'超时长任务'})
+  await vi.waitFor(()=>expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1))
+  const confirmation=vi.spyOn(sessionStop,'waitForHermesSessionIdle').mockRejectedValueOnce(new HttpError(409,'Hermes 原任务尚未停止','session_still_stopping'))
+  try{
+    await runtime.stop(owner,root.id)
+    const work=store.list<Work>(owner,'turn').find(item=>item.runId===root.id)!
+    await vi.waitFor(()=>expect(store.require<Work>(owner,'turn',work.id).cleanupError).toContain('原任务尚未停止'))
+    expect(store.require<Work>(owner,'turn',work.id).cleanupPending).toBe(true)
+    expect(store.get(owner,'binding',`${c.id}:${a.id}`)).toBeTruthy()
+    expect(()=>runtime.send(owner,c.id,{requestId:randomUUID(),content:'不能复用'})).toThrow('尚未确认停止')
+    expect(()=>store.changeConversationLifecycle(owner,c.id,'delete',store.conversationLifecycle(owner,c.id).confirmationToken)).toThrow('尚未确认停止')
+    expect(runtime.idleForUpdate).toBe(false)
+  }finally{confirmation.mockRestore()}
+  await vi.waitFor(()=>expect(store.list<Work>(owner,'turn').find(item=>item.runId===root.id)?.cleanupPending).toBe(false),{timeout:3000})
+  expect(requests.filter(r=>r.method==='prompt.submit')).toHaveLength(1)
+})
 it('marks a stopped administrator as interrupted without sending a false completion notification', async () => {
   const a=agent('管理员停止'),b=agent('普通成员'),g=store.createGroup(owner,{name:'停止管理员',memberIds:[a.id,b.id],administratorId:a.id})
   reply=()=>{}
@@ -1994,6 +2037,51 @@ it('applies Bot settings to the live agent after a cold resume restores its pers
     { model: 'base-model --provider base --session', reasoning: 'medium', fast: 'normal' },
   ])
   expect(requests.filter(r => r.method === 'session.resume')).toHaveLength(2)
+})
+
+it.each([
+  { hostname:'127.0.0.1', reported:true },
+  { hostname:'localhost', reported:true },
+  { hostname:'127.0.0.1', reported:false },
+  { hostname:'localhost', reported:false },
+])('keeps Hermes connected across client startup and shutdown at $hostname (metadata=$reported)', async ({hostname,reported}) => {
+  const bot=agent('独立服务器'),c=direct(bot.id),target=nodes.target(owner,'local')
+  target.url=new URL(`http://${hostname}:${target.url.port}`)
+  const original=target.session.request.bind(target.session)
+  const metadata={version:1,profile:'default',platform:'linux',osRelease:'6.8',arch:'x86_64',nativeTools:{terminal:['terminal'],files:['read_file','write_file'],desktop:['computer_use'],browser:['browser_navigate']}}
+  vi.spyOn(target.session,'request').mockImplementation(async(path,options)=>path.startsWith('/api/plugins/yaoyao-bot-bridge/')
+    ? {status:200,headers:new Headers(),body:Buffer.from(JSON.stringify({ok:true,version:1,ready:true,native_tools:true,in_process:true,...(reported?{runtime_environment:metadata}:{})}))}
+    : original(path,options))
+  configuredCwds.set('default','/hermes/project')
+  saveHostTools(home,{vm:false,cloud:false})
+  const desktop=new DesktopEnvironments(store,{pushAuthorizationVersion:()=>0} as any,{localNodeID:'fixture',requireSource:()=>{}} as any)
+  runtime.desktopEnvironments=desktop
+  const record=vi.fn();runtime.inspector={record} as any
+  const clientId=randomUUID()
+  try {
+    await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'检查服务端目录',deviceHost:null}).id)
+    desktop.remoteExchange(clientId,{host:{id:randomUUID(),name:'服务器',platform:'darwin',screen:false,accessibility:false,approved:[]},results:[]})
+    await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'检查服务端目录',deviceHost:clientId}).id)
+    desktop.dropHost(clientId)
+    await finished(runtime.send(owner,c.id,{requestId:randomUUID(),content:'检查服务端目录',deviceHost:clientId}).id)
+    const snapshots=record.mock.calls.map(([, ,entry])=>entry).filter(entry=>entry.method==='bot.environment').map(entry=>entry.data.snapshot)
+    expect(snapshots).toHaveLength(3)
+    expect(snapshots.every(snapshot=>snapshot.runtime.connected&&snapshot.cwd==='/hermes/project')).toBe(true)
+    expect(snapshots.map(snapshot=>snapshot.runtime.metadata)).toEqual(reported?[metadata,metadata,metadata]:[undefined,undefined,undefined])
+    expect(snapshots[0].desktop.hosts).toEqual([])
+    expect(snapshots[1].desktop.hosts[0]).toMatchObject({id:clientId,kind:'computer',platform:'darwin',online:true})
+    expect(snapshots[2].desktop.hosts[0]).toMatchObject({id:clientId,kind:'computer',online:false})
+    const prompts=requests.filter(request=>request.method==='prompt.submit').map(request=>String(request.params.text))
+    expect(prompts).toHaveLength(3)
+    for(const prompt of prompts){
+      expect(prompt).toContain('服务端 Hermes 已连接')
+      expect(prompt).toContain('操作服务端运行环境时优先使用')
+      expect(prompt).toContain('Hermes 本轮工作目录（已确认）："/hermes/project"')
+      expect(prompt).toContain(reported?'"desktop":["computer_use"]':'原生能力与系统信息尚未由工具桥上报')
+    }
+    expect(prompts[1]).toContain(`host="${clientId}"`)
+    expect(prompts[2]).toContain('当前离线或未连接')
+  } finally {desktop.close()}
 })
 
 it('submits capability-based Bot context with current origins, confirmed cwd and no keyword-selected environment', async () => {

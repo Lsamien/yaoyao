@@ -10,6 +10,7 @@ import { createApplication, type ApplicationRuntime } from '../../src/server/app
 import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth'
 import { WorkspaceAssets } from '../../src/server/workspaceAssets'
+import { saveFileAccess } from '../../src/server/fileAccess'
 import { WorkspaceTranscriptStore } from '../../src/client/components/workspace/transcriptStore'
 import { SharedComputers, type SharedComputer } from '../../src/server/sharedComputers'
 import type { WorkspaceAgent, WorkspaceConversation } from '../../src/shared/workspace'
@@ -353,6 +354,23 @@ describe('application workspace HTTP contract', () => {
     expect(store.require<WorkspaceAgent>('first', 'agent', bot.id).computerEnvironmentId).toBe(shared.id)
     expect(store.cursor('first')).toBe(cursor)
   })
+  it('retries remote cleanup through either delete endpoint after the local Bot and chat are gone',async()=>{
+    const store=runtime.workspace,bot=store.createAgent('first',{name:'远端清理重试',profile:'default'})
+    const direct=store.list<WorkspaceConversation>('first','conversation').find(c=>c.kind==='direct'&&c.memberIds[0]===bot.id)!
+    const path=`/api/app/conversations/${direct.id}/lifecycle`,preview=(await req('get',path).expect(200)).body
+    const cleanup=vi.spyOn(runtime.workspaceRuntime,'cleanupAgent').mockRejectedValueOnce(new Error('模拟远端清理失败')).mockResolvedValue(undefined)
+    await req('delete',`/api/app/agents/${bot.id}`).expect(409)
+    expect(cleanup).not.toHaveBeenCalled()
+    await req('post',path).send({action:'delete',confirmationToken:preview.confirmationToken}).expect(500)
+    expect(store.get('first','agent',bot.id)).toBeUndefined()
+    expect(store.get('first','conversation',direct.id)).toBeUndefined()
+    expect(store.get('first','agent-deletion',bot.id)).toBeTruthy()
+    await req('post',path).send({action:'delete',confirmationToken:preview.confirmationToken}).expect(200)
+    await req('delete',`/api/app/agents/${bot.id}`).expect(200)
+    expect(cleanup).toHaveBeenCalledTimes(3)
+    await req('delete',`/api/app/agents/${bot.id}`,'another').expect(404)
+    cleanup.mockRestore()
+  })
   it('deletes an unarchived group while preserving its member Bots', async () => {
     const store = runtime.workspace
     const a = store.createAgent('first', { name: '甲', profile: 'default' }), b = store.createAgent('first', { name: '乙', profile: 'default' })
@@ -500,6 +518,7 @@ describe('application workspace HTTP contract', () => {
   })
 
   it('archives native-chat uploads through the standard file API with user ownership', async () => {
+    saveFileAccess(home, { mode: 'all', folders: [] })
     const assets = new WorkspaceAssets(runtime.workspace, runtime.workspaceRuntime.nodes, home)
     await assets.archiveText(
       'first',

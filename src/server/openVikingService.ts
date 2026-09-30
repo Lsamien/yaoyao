@@ -38,6 +38,8 @@ export class OpenVikingService {
   readonly #clients = new Map<string, OpenVikingClient>()
   readonly #adminClients = new Map<string, OpenVikingClient>()
   readonly #registrations = new Map<string, Promise<OpenVikingUserBinding>>()
+  readonly #removals = new Map<string, Promise<void>>()
+  onConfigurationChanged: () => void = () => {}
   #configuration: OpenVikingConfiguration | undefined
   readonly #clientFactory: OpenVikingClientFactory
   constructor(private readonly store: WorkspaceStore, private readonly configurationManager: OpenVikingConfigurationManager, clientFactory?: OpenVikingClientFactory) {
@@ -51,11 +53,13 @@ export class OpenVikingService {
   }
   configure(config: OpenVikingConfiguration | undefined): void {
     const signature = config ? `${config.url}\0${config.accountId}\0${config.adminKey}` : ''
-    if (signature !== this.#signature) {
+    const changed=signature!==this.#signature
+    if (changed) {
       this.#clients.clear()
       this.#adminClients.clear()
     }
     this.#configuration = config
+    if(changed)this.onConfigurationChanged()
   }
   get #signature(): string { return this.#configuration ? `${this.#configuration.url}\0${this.#configuration.accountId}\0${this.#configuration.adminKey}` : '' }
   binding(owner: string, agentId: string): OpenVikingUserBinding | undefined {
@@ -92,6 +96,7 @@ export class OpenVikingService {
     return client
   }
   userClient(owner: string, agentId: string): OpenVikingClient {
+    if(this.store.get(owner,'agent-deletion',agentId))throw new HttpError(410,'Bot 已删除，记忆用户不可使用','openviking_user_removed')
     const config = this.#configuration
     if (!config) throw new HttpError(409, 'OpenViking 记忆服务未启用', 'openviking_disabled')
     const binding = this.binding(owner, agentId)
@@ -107,6 +112,8 @@ export class OpenVikingService {
   }
   async ensureUser(owner: string, agent: Pick<WorkspaceAgent, 'id' | 'temporaryGoalId'>): Promise<OpenVikingUserBinding> {
     const key = `${this.namespace}:${owner}:${agent.id}`
+    if(this.#removals.has(key)||this.store.get(owner,'agent-deletion',agent.id)||this.binding(owner,agent.id)?.status==='removed')
+      throw new HttpError(410,'Bot 已删除或正在移除记忆用户，不能重新注册','openviking_user_removed')
     const existing = this.#registrations.get(key)
     if (existing) return existing
     const pending = this.registerUser(owner, agent)
@@ -144,19 +151,30 @@ export class OpenVikingService {
     }
   }
   async removeUser(owner: string, agent: Pick<WorkspaceAgent, 'id' | 'temporaryGoalId'>): Promise<void> {
-    const binding = this.binding(owner, agent.id)
-    if (!binding || binding.status !== 'active' && !binding.pendingRemoval) return
-    if (!this.#configuration) {
-      // Disabled mode preserves the remote data, but this local Bot can no longer reach it.
-      this.saveBinding({ ...binding, status: 'removed', pendingRemoval: true, updatedAt: Date.now() })
-      return
-    }
-    try {
-      await this.adminClient().adminRemoveUser(this.#configuration.accountId, binding.userId)
-    } catch (error) {
-      if (!(error instanceof OpenVikingError) || ![404, 'NOT_FOUND'].includes(error.statusCode ?? error.code)) mapError(error, 'user 删除')
-    }
-    this.saveBinding({ ...binding, status: 'removed', pendingRemoval: false, updatedAt: Date.now() })
+    const namespace=this.namespace,key=`${namespace}:${owner}:${agent.id}`
+    const existing=this.#removals.get(key)
+    if(existing)return existing
+    const registrations=[...this.#registrations.entries()].filter(([registrationKey])=>registrationKey.endsWith(`:${owner}:${agent.id}`)).map(([,registration])=>registration)
+    const config=this.#configuration,admin=config?this.adminClient():undefined
+    const pending=Promise.resolve().then(async()=>{
+      // Registration can already have reached the remote server. Finish it before
+      // removal so its late receipt cannot recreate the deleted user's binding.
+      await Promise.allSettled(registrations)
+      // Keep the deletion attached to the configuration captured at admission.
+      const legacy=this.store.get<OpenVikingUserBinding>(owner,'openviking-binding',agent.id)
+      const binding=config
+        ? this.store.get<OpenVikingUserBinding>(owner,'openviking-binding',`${namespace}:${agent.id}`)??(legacy&&(!legacy.namespace||legacy.namespace===namespace)?legacy:undefined)
+        : legacy
+      if(binding?.status==='removed'&&!binding.pendingRemoval)return
+      const removed:OpenVikingUserBinding={...(binding??{provider:'openviking',owner,agentId:agent.id,userId:openVikingUserId(agent.id),encryptedUserKey:'',namespace}),status:'removed',pendingRemoval:true,updatedAt:Date.now()}
+      this.saveBinding(removed)
+      if(!config||!admin)return // Keep a durable pending removal while disabled.
+      try{await admin.adminRemoveUser(config.accountId,removed.userId)}
+      catch(error){if(!(error instanceof OpenVikingError)||!(error.statusCode===404||error.code==='NOT_FOUND'))mapError(error,'user 删除')}
+      this.saveBinding({...removed,pendingRemoval:false,updatedAt:Date.now()})
+    })
+    this.#removals.set(key,pending)
+    try{await pending}finally{this.#removals.delete(key)}
   }
 }
 

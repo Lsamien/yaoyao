@@ -29,8 +29,8 @@ import {FileTransferFiles} from '../../shared/fileTransferEndpoint.mjs'
 import {copyBetweenEndpoints} from '../../server/fileTransfer.js'
 
 export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean;profileSession?:boolean;hermesRuntime?:boolean;fileTransferMaxBytes?:number}
-export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain';vmExecution?:'profile';profileSessionId?:string;hermesRuntime?:boolean}
-interface Live {toolsOnly?:boolean;workMarker?:string;paused?:boolean;desktop?:{width:number;height:number};pauseJob?:Promise<void>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxyHandle?:ProxyHandle;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease?:ComputerLease;acquiring?:Promise<ComputerLease>;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
+export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain';vmExecution?:'profile';profileSessionId?:string;hermesRuntime?:boolean;stopPending?:boolean}
+interface Live {toolsOnly?:boolean;workMarker?:string;paused?:boolean;desktop?:{width:number;height:number};pauseJob?:Promise<void>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxyHandle?:ProxyHandle;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease?:ComputerLease;acquiring?:Promise<ComputerLease>;leaseController?:AbortController;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
 const text={type:'string'}
 const TOOLS:WorkerTool[]=[
@@ -113,7 +113,11 @@ export class ComputerRuntime {
   }
   attachGateway(gateway:ComputerGateway){let gateways=this.gateways.get(gateway.meta.environmentId);if(!gateways){gateways=new Set();this.gateways.set(gateway.meta.environmentId,gateways)}gateways.add(gateway)}
   detachGateway(gateway:ComputerGateway){const gateways=this.gateways.get(gateway.meta.environmentId);if(gateways){gateways.delete(gateway);if(!gateways.size)this.gateways.delete(gateway.meta.environmentId)}}
-  activeGateways(environmentId:string):ComputerGateway[]{return [...(this.gateways.get(environmentId)??[])].filter(gateway=>gateway.active||gateway.paused)}
+  activeGateways(environmentId:string):ComputerGateway[]{
+    if(this.stopPending(environmentId))throw new HttpError(409,'原电脑执行尚未确认停止，不能接管或复用','computer_stopping')
+    return [...(this.gateways.get(environmentId)??[])].filter(gateway=>gateway.active||gateway.paused)
+  }
+  stopPending(environmentId:string):boolean{return (this.db.prepare('SELECT value FROM computer_sessions').all() as {value:string}[]).some(row=>{const session:WorkerSession=JSON.parse(row.value);return session.environmentId===environmentId&&session.stopPending===true})}
   /** One guest proxy per environment, shared by every holder; the guest
    * reserves port 3128, so concurrent holders must never start their own. */
   acquireProxy(spec:ComputerSpecification,authorize:()=>void):Promise<ProxyHandle>{
@@ -272,12 +276,13 @@ export class ComputerGateway {
   private spec(session:WorkerSession):ComputerSpecification{return {id:this.meta.environmentId,ownerKey:this.meta.ownerKey,imageId:this.runtime.imageFor(this.meta),cwd:session.cwd,network:this.runtime.network}}
   async rpc(method:string,params:Record<string,any>):Promise<any>{
     if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.live?.session.id){await this.interrupt();return {status:'interrupted'}}
-    if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.recoverySession?.id){await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {status:'interrupted'}}
+    if((method==='session.interrupt'||method==='session.close')&&params.session_id===this.recoverySession?.id){await this.profileSession?.stop();await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);this.recoverySession!.stopPending=false;this.runtime.save(this.recoverySession!);return {status:'interrupted'}}
     this.guard()
     if(method==='session.create'||method==='session.resume'){
       if(this.live)throw new HttpError(409,'电脑通道已有会话','computer_session_busy')
       await this.authorized()
-      if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;if(session.profileSessionId){await this.openProfile(session,params);await this.profileSession!.stop()}const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderIds.includes(this.workId))await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
+      if(method==='session.resume'&&params.recoverOnly===true){const session=this.runtime.session(String(params.session_id),this.meta,String(params.profile));this.recoverySession=session;session.stopPending=true;this.runtime.save(session);if(session.profileSessionId){await this.openProfile(session,params);await this.profileSession!.stop()}const resource=this.runtime.pool.status(this.meta.ownerKey).find(item=>item.environmentId===this.meta.environmentId);if(resource?.holderIds.includes(this.workId))await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);session.stopPending=false;this.runtime.save(session);return {session_id:session.id,stored_session_id:session.id,running:false,info:{profile_name:session.profile}}}
+      if(this.runtime.stopPending(this.meta.environmentId))throw new HttpError(409,'原电脑执行尚未确认停止，不能复用','computer_stopping')
       const profile=String(params.profile),resolved=this.hermesManaged?{cwd:this.runtime.pool.definition(this.meta.ownerKey,this.meta.environmentId)?.cwd??COMPUTER_WORKSPACE,configuredCwd:'.'}:await (this.meta.profileSession?this.runtime.resolveWorkspace(profile,this.controller.signal):this.runtime.resolve(profile,this.controller.signal))
       if(this.meta.hostAccess){const configured=String(resolved.configuredCwd??'.');this.hostCwd=['.','auto','cwd'].includes(configured)?homedir():hostPath(homedir(),configured)}
       await this.authorized();this.guard()
@@ -439,14 +444,17 @@ export class ComputerGateway {
       if(this.runtime.imageFor(this.meta)===UNCONFIGURED_COMPUTER_IMAGE)throw new HttpError(409,'请先在应用设置的本地虚拟机页面完成准备','computer_image_required')
       await this.runtime.pool.configure(this.spec(live.session),()=>this.guard())
       await this.authorized()
-      const lease=await this.runtime.pool.acquire(this.spec(live.session),this.workId,()=>{this.guard();if(live.controller.signal.aborted)throw new Error('cancelled')},live.controller.signal)
+      // Tool cancellation must not discard the reservation before native Hermes
+      // termination is confirmed. Only this existing holder may renew for cleanup.
+      const leaseController=new AbortController();live.leaseController=leaseController
+      const lease=await this.runtime.pool.acquire(this.spec(live.session),this.workId,()=>{if(live.session.stopPending&&!live.releasing)return;this.guard()},leaseController.signal)
       if(this.closed){await this.runtime.pool.release(lease);throw new Error('电脑通道已关闭')}
       live.lease=lease
       if(this.runtime.network!=='none'){
         try{live.proxyHandle=await this.runtime.acquireProxy(this.spec(live.session),()=>{if(!this.runtime.pool.hasHolders(this.meta.ownerKey,this.meta.environmentId))throw new HttpError(403,'电脑任务授权已失效','computer_authorization_revoked')})}
         catch(error){await this.runtime.pool.release(lease).catch(()=>{});live.lease=undefined;throw error}
       }
-      this.timer=setInterval(()=>{if(this.checking||!this.live?.lease)return;this.checking=true;void this.authorized().then(()=>this.runtime.pool.renew(this.live!.lease!)).catch(async()=>{await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()}).finally(()=>{this.checking=false})},5000);this.timer.unref()
+      this.timer=setInterval(()=>{if(this.checking||!this.live?.lease)return;this.checking=true;void Promise.resolve().then(async()=>{if(!this.live!.session.stopPending)await this.authorized();this.runtime.pool.renew(this.live!.lease!)}).catch(async()=>{await this.interrupt().catch(()=>{});if(!this.closed)this.onDisconnect()}).finally(()=>{this.checking=false})},5000);this.timer.unref()
       return lease
     })().finally(()=>{live.acquiring=undefined})
     return live.acquiring
@@ -625,6 +633,7 @@ export class ComputerGateway {
    * records pending tool calls so the model can resume coherently. The pool
    * lease stays — the human acquires a holder of the same shared desktop. */
   async takeControl(controlId:string,authorize:()=>void):Promise<void>{
+    this.guard()
     const live=this.live
     if(!live||!this.active)throw new HttpError(409,'机器人已不在执行，请重新打开电脑','computer_not_active')
     if(live.pauseJob)await live.pauseJob
@@ -663,16 +672,21 @@ export class ComputerGateway {
     const live=this.live;if(!live)return
     if(live.stopping)return live.stopping
     live.stopping=(async()=>{
-      live.controller.abort();clearInterval(this.timer)
-      try{await this.profileSession?.stop()}
-      finally{
-        await this.profileSession?.close();await live.worker?.close()
-        try{await this.release(live)}catch(error){if((error as any).code!=='computer_lease_stale')throw error}
-        live.running=false
-      }
-    })()
+      live.session.stopPending=true;this.runtime.save(live.session)
+      live.controller.abort()
+      await this.profileSession?.stop()
+      await this.profileSession?.close();await live.worker?.close()
+      try{await this.release(live)}catch(error){if((error as any).code!=='computer_lease_stale')throw error}
+      live.running=false;live.session.stopPending=false;this.runtime.save(live.session)
+      if(this.closed)this.runtime.detachGateway(this)
+    })().finally(()=>{live.stopping=undefined})
     return live.stopping
   }
   async stopControl(){await this.interrupt();this.event('message.complete',{text:'电脑控制已结束，本轮已停止',status:'interrupted'})}
-  async close(){this.runtime.detachGateway(this);this.closed=true;this.controller.abort();this.team=undefined;clearInterval(this.timer);try{if(this.live?.running||this.live&&!this.live.releasing)await this.interrupt()}finally{await this.profileSession?.close()}}
+  async close(){
+    this.closed=true;this.controller.abort();this.team=undefined
+    if(this.live?.running||this.live&&!this.live.releasing)await this.interrupt()
+    if(this.recoverySession?.stopPending){await this.profileSession?.stop();await this.runtime.pool.stopHolder(this.meta.ownerKey,this.meta.environmentId,this.workId);this.recoverySession.stopPending=false;this.runtime.save(this.recoverySession)}
+    await this.profileSession?.close();clearInterval(this.timer);this.runtime.detachGateway(this)
+  }
 }

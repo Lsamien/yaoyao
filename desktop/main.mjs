@@ -25,14 +25,18 @@ const fixtureHome = process.env.HERMES_YAOYAO_DESKTOP_TEST_HOME
 // Packaged: the runtime sits in Resources/runtime; dev: staged build roots.
 const clientOnly = app.isPackaged
   ? clientOnlyRuntime(join(process.resourcesPath, 'runtime'))
-  : clientOnlyRuntime(join(app.getAppPath(), '.desktop-build-client'))
+  : process.env.HERMES_YAOYAO_DESKTOP_CLIENT_ONLY === '0'
+    ? false
+    : clientOnlyRuntime(join(app.getAppPath(), '.desktop-build-client'))
 const platform = desktopPlatform(process.platform, { clientOnly })
 const loginOptions = loginItemOptions()
 // Fixture identity also isolates Chromium cookies, window state and the app lock.
 // The shell package name distinguishes the variants: the client keeps the
 // historical 夭夭 identity (userData, logs, single-instance lock) so upgrades
 // stay in place, while the full dual-mode build uses its own 夭夭完整版 home.
-const productName = JSON.parse(readFileSync(join(desktopRoot, 'package.json'), 'utf8')).productName || '夭夭'
+const shellManifest = app.isPackaged ? join(desktopRoot, 'package.json')
+  : join(app.getAppPath(), clientOnly ? '.desktop-build-client' : '.desktop-build', 'shell', 'package.json')
+const productName = JSON.parse(readFileSync(shellManifest, 'utf8')).productName || '夭夭'
 if (fixtureHome) app.setPath('userData', join(fixtureHome, 'desktop'))
 app.setName(productName)
 if (platform.windows) app.setAppUserModelId('cn.samien.yaoyao.desktop')

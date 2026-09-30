@@ -1,4 +1,4 @@
-import {setTimeout as delay} from 'node:timers/promises'
+import {waitForHermesSessionIdle} from '../../server/sessionStop.js'
 import {HttpError} from '../../server/errors.js'
 import {WorkspaceGateway,type GatewayFrame,type GatewayTarget} from '../../server/workspaceGateway.js'
 import {createWorkspaceToolLease,requireTeamToolBridge,type WorkspaceToolLease} from '../../server/workspaceToolLease.js'
@@ -95,15 +95,7 @@ export class ProfileComputerSession {
   async stop(){
     if(!this.runtimeId||this.closed)return
     await this.rpc('session.interrupt')
-    // An interrupt acknowledgement precedes actual termination of native tools.
-    const deadline=Date.now()+20000
-    for(;;){
-      const state=await this.rpc('session.active_list')
-      const session=state.sessions?.find((item:{id:string})=>item.id===this.runtimeId)
-      if(session?.status==='idle')return
-      if(Date.now()>=deadline)throw new HttpError(409,'本机任务尚未停止，暂不能交出电脑控制权','computer_profile_stopping')
-      await delay(100,undefined,{signal:this.controller.signal})
-    }
+    await waitForHermesSessionIdle((method,params)=>this.rpc(method,params),this.runtimeId,this.profile,{signal:this.controller.signal})
   }
   async close(){
     if(this.closed)return

@@ -56,15 +56,19 @@ export function workspaceRouter(
         .get(user, id)?.n ?? 0,
     )
   const fileRecord = (user: string, id: string): StoredWorkspaceFile => {
+    const authorize = (file: StoredWorkspaceFile) => {
+      file = assets.recoverFileSource(user, file)
+      if ((file.sourcePath || file.sourceNodeId) && (!file.sourceNodeId || !file.profile)) throw new HttpError(403, '归档文件来源无法确认，请重新交付文件', 'archived_file_source_unknown')
+      if (file.sourceNodeId && file.profile) nodes.requireSource(user, { nodeId: file.sourceNodeId, profile: file.profile })
+      return file
+    }
     if (/^\d+$/.test(id)) {
       const row = store.db
         .prepare("SELECT data FROM workspace_entities WHERE owner=? AND kind='file' AND rowid=?")
         .get(user, Number(id))
-      if (row) {const file:StoredWorkspaceFile=JSON.parse(String(row.data));if(file.sourceNodeId&&file.profile)nodes.requireSource(user,{nodeId:file.sourceNodeId,profile:file.profile});return file}
+      if (row) return authorize(JSON.parse(String(row.data)))
     }
-    const file=store.require<StoredWorkspaceFile>(user,'file',id)
-    if(file.sourceNodeId&&file.profile)nodes.requireSource(user,{nodeId:file.sourceNodeId,profile:file.profile})
-    return file
+    return authorize(store.require<StoredWorkspaceFile>(user,'file',id))
   }
   router.get('/api/app/capabilities', (ctx) => {
     owner(ctx)
@@ -182,8 +186,7 @@ export function workspaceRouter(
   })
   router.delete('/api/app/agents/:id', async (ctx) => {
     const user = owner(ctx)
-    await runtime.cleanupAgent(user, ctx.params.id)
-    store.deleteAgent(user, ctx.params.id)
+    await runtime.deleteAgent(user, ctx.params.id)
     ctx.body = { ok: true }
   })
   router.get('/api/app/agents/:id/usage', (ctx) => {
@@ -219,13 +222,16 @@ export function workspaceRouter(
   router.post('/api/app/conversations/:id/lifecycle', async ctx => {
     const input = parse(z.object({ action: z.enum(['archive', 'restore', 'delete']), confirmationToken: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(), body(ctx))
     if (input.action !== 'restore' && !input.confirmationToken) throw new HttpError(409, '请先确认聊天操作', 'lifecycle_confirmation_required')
-    const user = owner(ctx), conversation = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id)
-    if (runtime.openViking?.enabled && input.action === 'delete' && conversation.kind === 'direct') {
-      const agent = store.require<WorkspaceAgent>(user, 'agent', conversation.memberIds[0]!)
-      store.changeConversationLifecycle(user, conversation.id, 'archive', input.confirmationToken)
-      await runtime.cleanupAgent(user, agent.id)
-      store.deleteAgent(user, agent.id)
-    } else store.changeConversationLifecycle(user, conversation.id, input.action, input.confirmationToken)
+    const user = owner(ctx), conversation = store.get<WorkspaceConversation>(user, 'conversation', ctx.params.id)
+    if(!conversation&&input.action==='delete'){
+      const deletion=store.list<{id:string;conversationIds:string[]}>(user,'agent-deletion').find(item=>item.conversationIds.includes(ctx.params.id))
+      if(deletion)await runtime.deleteAgent(user,deletion.id)
+      else store.require(user,'conversation',ctx.params.id)
+    }else{
+      const current=conversation??store.require<WorkspaceConversation>(user,'conversation',ctx.params.id)
+      store.changeConversationLifecycle(user,current.id,input.action,input.confirmationToken)
+      if(input.action==='delete'&&current.kind==='direct')await runtime.cleanupAgent(user,current.memberIds[0]!)
+    }
     runtime.wake()
     ctx.body = { ok: true }
   })

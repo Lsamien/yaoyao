@@ -47,7 +47,7 @@ beforeEach(async()=>{
     sockets.push(socket);socket.send(JSON.stringify({method:'event',params:{type:'gateway.ready'}}))
     socket.on('message',raw=>{
       const value=JSON.parse(String(raw));rpc.push(value)
-      const result=['session.create','session.resume'].includes(value.method)?{session_id:randomUUID(),stored_session_id:randomUUID(),info:{profile_name:value.params.profile}}:{ok:true}
+      const result=['session.create','session.resume'].includes(value.method)?{session_id:randomUUID(),stored_session_id:randomUUID(),info:{profile_name:value.params.profile}}:value.method==='session.active_list'?{sessions:[{id:value.params.current_session_id,status:'idle',title:'owned'},{id:'unowned',status:'working',title:'private'}]}:{ok:true}
       socket.send(JSON.stringify({id:value.id,result}))
     })
   })
@@ -363,6 +363,8 @@ it('keeps only stop operations available on an existing channel after task permi
   allowed=false
   await expect(gateway.rpc('prompt.submit',{session_id:session.session_id,text:'forbidden'})).rejects.toMatchObject({code:'runner_command_not_admitted'})
   expect(await gateway.rpc('session.interrupt',{session_id:session.session_id})).toEqual({ok:true})
+  expect(await gateway.rpc('session.active_list',{profile:'default',current_session_id:session.session_id})).toEqual({sessions:[{id:session.session_id,status:'idle'}]})
+  await expect(gateway.rpc('session.active_list',{profile:'default',current_session_id:'unowned'})).rejects.toMatchObject({code:'runner_session_forbidden'})
   expect(rpc.filter(call=>call.method==='prompt.submit')).toHaveLength(0)
 })
 

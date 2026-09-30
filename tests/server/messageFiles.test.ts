@@ -8,12 +8,14 @@ import { WorkspaceAssets, type StoredWorkspaceFile } from '../../src/server/work
 import type { WorkspaceNodes } from '../../src/server/workspaceGateway'
 import type { WorkspaceMessage, WorkspaceConversation } from '../../src/shared/workspace'
 import { messageFileReferences, nativeMessageFileText } from '../../src/shared/messageFiles'
+import { saveFileAccess } from '../../src/server/fileAccess'
 
 it('archives only message references and reconciles legacy associations without deleting bytes or logs', async () => {
   const home = mkdtempSync(join(tmpdir(), 'yaoyao-message-files-'))
   const store = new WorkspaceStore(home)
   const request = vi.fn(async (_route: string, _options: { search: URLSearchParams }) => ({ status: 200, body: Buffer.from('report'), headers: new Headers({ 'content-type': 'text/plain' }) }))
-  const assets = new WorkspaceAssets(store, { target: () => ({ session: { request } }) } as unknown as WorkspaceNodes, home)
+  saveFileAccess(home, { mode: 'all', folders: [] })
+  const assets = new WorkspaceAssets(store, { requireSource: () => {}, target: () => ({ session: { request } }) } as unknown as WorkspaceNodes, home)
   try {
     const agent = store.createAgent('owner', { name: 'Agent', profile: 'default' })
     const conversation = store.list<WorkspaceConversation>('owner', 'conversation')[0]!

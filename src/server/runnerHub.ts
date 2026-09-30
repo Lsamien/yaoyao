@@ -200,9 +200,9 @@ export class RunnerHub {
           let closed=false
           return {rpc:async(method,params)=>{
             if(closed)throw new Error('Runner gateway closed')
-            const cleanup=['session.interrupt','session.close'].includes(method)
+            const cleanup=['session.interrupt','session.close','session.active_list'].includes(method)
             if(method==='computer.transfer'&&!this.online.get(record.id)?.features.includes('file-transfer-v1'))throw new HttpError(409,'请更新 Runner 以使用虚拟机文件传输','computer_transfer_upgrade_required')
-            if(scope?.cleanupOnly&&(!['session.resume','session.interrupt','session.close'].includes(method)||(method==='session.resume'&&params.session_id!==scope.sessionId)))throw new HttpError(403,'清理通道只能操作原绑定会话','runner_cleanup_forbidden')
+            if(scope?.cleanupOnly&&(!['session.resume','session.interrupt','session.close','session.active_list'].includes(method)||(method==='session.resume'&&params.session_id!==scope.sessionId)))throw new HttpError(403,'清理通道只能操作原绑定会话','runner_cleanup_forbidden')
             if(!cleanup&&!valid())throw new HttpError(403,'本轮执行授权已失效','runner_command_not_admitted')
             if(!scope?.cleanupOnly&&(method==='session.create'||method==='session.resume'))requireProfile(String(params.profile??'default'))
             return this.request(record.id,'gateway.rpc',{connectionId:id,method,params})
@@ -380,7 +380,7 @@ export class RunnerHub {
       if(match[2]==='admit') {
         const pending=this.pending.get(record.id)?.get(body.id),command=pending?.command
         let allowed=!!command&&command.expiresAt>Date.now()&&pending!.valid()&&this.networkCommandAllowed(record.id,command.kind,command.payload)
-        if(command?.kind==='gateway.rpc'||command?.kind==='gateway.open'){const connection=this.connections.get(String(command.payload.connectionId));allowed&&=connection?.runnerId===record.id&&(command.kind==='gateway.rpc'&&['session.interrupt','session.close'].includes(String(command.payload.method))||connection.valid())}
+        if(command?.kind==='gateway.rpc'||command?.kind==='gateway.open'){const connection=this.connections.get(String(command.payload.connectionId));allowed&&=connection?.runnerId===record.id&&(command.kind==='gateway.rpc'&&['session.interrupt','session.close','session.active_list'].includes(String(command.payload.method))||connection.valid())}
         if(command?.kind==='lease.create'||command?.kind==='lease.bind') {
           const lease=this.leases.get(String(command.payload.leaseId))
           try {if(lease?.runnerId!==record.id)allowed=false;else lease.input.assertActive()}catch{allowed=false}

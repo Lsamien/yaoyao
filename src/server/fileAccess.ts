@@ -50,7 +50,7 @@ export async function fileAccessWorkingDirectory(upstream: FileHost, profile: st
   return path
 }
 
-export async function authorizeFileRead(config: ServerConfig, upstream: FileHost, raw: string, profile = 'default', directoryRequest = false): Promise<string> {
+export async function authorizeFileRead(config: Pick<ServerConfig, 'home'>, upstream: FileHost, raw: string, profile = 'default', directoryRequest = false): Promise<string> {
   const path = serverFilePath(raw, false)
   if (!path) throw new HttpError(400, '文件路径无效', 'invalid_file_path')
   const policy = readFileAccess(config.home)

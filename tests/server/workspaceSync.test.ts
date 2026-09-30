@@ -13,7 +13,7 @@ import type { Server } from 'node:http'
 import type { WorkspaceConversation, WorkspaceMessage } from '../../src/shared/workspace'
 
 let home: string, store: WorkspaceStore, server: Server, version: number
-const auth = { require: () => ({ id: 'owner' }), isUserActive: () => true, pushAuthorizationVersion: () => version } as unknown as LocalAuthStore
+const auth = { require: () => ({ id: 'owner' }), currentFromCookieHeader: () => ({ id: 'owner' }), isUserActive: () => true, pushAuthorizationVersion: () => version } as unknown as LocalAuthStore
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'workspace-sync-')); store = new WorkspaceStore(home); version = 1
   const app = new Koa(); app.use(ctx => streamWorkspace(ctx, store, auth))

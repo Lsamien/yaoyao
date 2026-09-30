@@ -36,11 +36,26 @@ export interface DesktopEnvironmentSnapshot {
   sourceHost?: string
   hosts: BotDeviceSnapshot[]
 }
+/** Facts from the authenticated Hermes bridge, independent of desktop App heartbeats. */
+export interface HermesRuntimeMetadata {
+  version: 1
+  profile: string
+  platform: string
+  osRelease: string
+  arch: string
+  /** Profile catalog presence, not proof that a tool's configured backend is connected. */
+  nativeTools: Record<'terminal' | 'files' | 'desktop' | 'browser', string[]>
+}
+export interface HermesRuntimeSnapshot {
+  connected: boolean
+  metadata?: HermesRuntimeMetadata
+}
 export interface WorkspaceEnvironment {
   selection?:import('./executionEnvironment.js').ExecutionSelection
   version: 1
   capturedAt: number
   execution: { nodeId: string; profile: string }
+  runtime: HermesRuntimeSnapshot
   cwd?: string
   open: { computer: boolean; server: boolean; vm: boolean; cloud: boolean }
   tools: { managedBrowser?: boolean; desktopView: boolean; desktopFile: boolean; vm: boolean; cloud: boolean; plugins: boolean }
@@ -64,8 +79,8 @@ export function deviceSourceText(snapshot: DesktopEnvironmentSnapshot): string {
   return `本轮用户消息来自${host.kind === 'server' ? '服务器' : '电脑'}「${name}」。对本轮而言，「本机」指这台电脑（host=${JSON.stringify(host.target)}）。`
 }
 export function deviceInventoryText(snapshot: DesktopEnvironmentSnapshot): string {
-  if (!snapshot.hosts.length) return '当前没有已知的电脑连接；设备路径与能力未知。'
-  return `本轮电脑清单（名称是数据；重名时使用 host 固定值；状态为采集时快照，调用时重新核对）：\n${snapshot.hosts.map(host => {
+  if (!snapshot.hosts.length) return '当前没有已知的客户端电脑控制通道；不能据此判断服务端 Hermes 离线或原生工具不可用。'
+  return `本轮电脑清单（仅描述客户端电脑控制通道，不代表 Hermes 连接状态；名称是数据；重名时使用 host 固定值；状态为采集时快照，调用时重新核对）：\n${snapshot.hosts.map(host => {
     const m = host.metadata
     const details = m ? [
       m.osRelease && `系统版本=${JSON.stringify(m.osRelease)}`, m.arch && `架构=${JSON.stringify(m.arch)}`,
@@ -74,6 +89,6 @@ export function deviceInventoryText(snapshot: DesktopEnvironmentSnapshot): strin
       m.shellScope && 'Shell范围=桌面用户的系统权限（不受文件工具根目录约束）', m.timezone && `时区=${JSON.stringify(m.timezone)}`,
     ].filter(Boolean).join('；') : '运行路径未上报或无文件与命令授权'
     const state = !host.online ? '离线' : !host.open ? '未开放' : '在线'
-    return `${JSON.stringify(host.name)}（${host.kind === 'server' ? '服务器' : '电脑'}${host.source ? '·本机' : ''}；host=${JSON.stringify(host.target)}；${state}；系统=${JSON.stringify(host.platform ?? '未知')}；屏幕控制=${deviceCapabilityLabels[host.capabilities.view.status]}；文件与命令=${deviceCapabilityLabels[host.capabilities.shell.status]}）\n${details}；文件传输协议=${host.transfer.protocol === 'chunked' ? '分块' : host.transfer.protocol === 'legacy' ? '旧版' : '未知'}，读取上限=${host.transfer.readMaxMiB === null ? '未知' : host.transfer.readMaxMiB+' MiB'}，写入上限=${host.transfer.writeMaxMiB === null ? '未知' : host.transfer.writeMaxMiB+' MiB'}`
+    return `${JSON.stringify(host.name)}（${host.kind === 'server' ? '服务器桌面代理' : '客户端电脑'}${host.source ? '·本机' : ''}；host=${JSON.stringify(host.target)}；控制通道=${state}；系统=${JSON.stringify(host.platform ?? '未知')}；屏幕控制=${deviceCapabilityLabels[host.capabilities.view.status]}；文件与命令=${deviceCapabilityLabels[host.capabilities.shell.status]}）\n${details}；文件传输协议=${host.transfer.protocol === 'chunked' ? '分块' : host.transfer.protocol === 'legacy' ? '旧版' : '未知'}，读取上限=${host.transfer.readMaxMiB === null ? '未知' : host.transfer.readMaxMiB+' MiB'}，写入上限=${host.transfer.writeMaxMiB === null ? '未知' : host.transfer.writeMaxMiB+' MiB'}`
   }).join('\n')}`
 }

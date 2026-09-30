@@ -20,7 +20,7 @@ import {BrowserRuntimeError} from './browser/types.js'
 import type { RunnerCommand, RunnerConfiguration } from '../shared/runner.js'
 import { LoopbackTransport, isLocalAuthorizationTarget } from '../server/loopbackAuthorization.js'
 
-const commands=new Set(['session.create','session.resume','session.close','session.usage','session.interrupt','session.cwd.set','prompt.submit','session.steer','image.attach_bytes','file.attach','approval.respond','clarify.respond'])
+const commands=new Set(['session.create','session.resume','session.close','session.usage','session.interrupt','session.active_list','session.cwd.set','prompt.submit','session.steer','image.attach_bytes','file.attach','approval.respond','clarify.respond'])
 interface Connection {cleanupOnly?:boolean;gateway:WorkspaceGateway|ComputerGateway;sessions:Map<string,string>;running:Set<string>;events:Promise<void>}
 interface Lease {connectionId:string;profile:string;lease:WorkspaceToolLease;controller:AbortController;session:{runtimeId:string;storedId:string}}
 
@@ -254,7 +254,15 @@ export class RunnerAgent {
       const connection=this.connections.get(connectionId),method=String(p.method),params=p.params as Record<string,unknown>
       const computerCommand=method==='computer.invoke'||method==='computer.transfer'||method==='computer.complete'
       if(!connection||(!commands.has(method)&&!(computerCommand&&connection.gateway instanceof ComputerGateway))||!params||typeof params!=='object')throw new HttpError(403,'执行通道或命令无效','runner_command_forbidden')
-      if(connection.cleanupOnly&&!['session.resume','session.interrupt','session.close'].includes(method))throw new HttpError(403,'清理通道不允许执行新工作','runner_cleanup_forbidden')
+      if(connection.cleanupOnly&&!['session.resume','session.interrupt','session.close','session.active_list'].includes(method))throw new HttpError(403,'清理通道不允许执行新工作','runner_cleanup_forbidden')
+      if(method==='session.active_list'){
+        const id=String(params.current_session_id??''),profile=connection.sessions.get(id)
+        if(!profile||params.profile!==profile||Object.keys(params).some(key=>!['profile','current_session_id'].includes(key)))throw new HttpError(403,'停止状态查询不属于这个通道','runner_session_forbidden')
+        if(connection.gateway instanceof ComputerGateway)throw new HttpError(409,'电脑通道使用独立停止确认','computer_method_unavailable')
+        const state=await connection.gateway.rpc(method,{profile,current_session_id:id})
+        if(!Array.isArray(state?.sessions))throw new HttpError(502,'Hermes 停止状态无效','session_stop_unconfirmed')
+        return {sessions:state.sessions.filter((item:{id:string})=>item.id===id).map((item:{id:string;status:string})=>({id:item.id,status:item.status}))}
+      }
       if(method==='session.create'||method==='session.resume'){if(!connection.cleanupOnly)this.requireProfile(params.profile)}
       else if(!connection.sessions.has(String(params.session_id)))throw new HttpError(403,'会话不属于这个通道','runner_session_forbidden')
       if(method==='prompt.submit')connection.running.add(String(params.session_id))

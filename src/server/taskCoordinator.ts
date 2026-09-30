@@ -233,6 +233,7 @@ export class WorkspaceTaskCoordinator {
       throw new HttpError(403,'恢复任务需要当前用户的新指令和有效管理员权限','goal_resume_forbidden')
     return this.store.command(owner,body.requestId,{actorId,operation:'goal.resume',goalId:goal.id,origin},()=>{
       if(goal.status==='cancelling')throw new HttpError(409,'旧执行尚未确认结束，请先核对状态','goal_still_running')
+      if(this.store.hasPendingCleanup(owner,{conversationTaskId:goal.id}))throw new HttpError(409,'旧执行尚未确认结束，请先核对状态','goal_still_running')
       if(!['blocked','waiting','cancelled'].includes(goal.status))throw new HttpError(409,'只能恢复受阻、等待或已停止的目标','goal_not_resumable')
       if(this.store.list<Run>(owner,'run').some(r=>r.conversationId===goal.conversationId&&r.conversationTaskId===goal.id&&r.id!==source.id&&!terminalRun(r.status)))
         throw new HttpError(409,'旧执行尚未确认结束，请先核对状态','goal_still_running')
@@ -291,7 +292,7 @@ export class WorkspaceTaskCoordinator {
       if(!helper.archived&&!terminalGoal(goal.status)&&helper.helperActivation===(goal.activation??1))continue
       if(!helper.archived){helper.archived=true;helper.revision++;helper.updatedAt=Date.now();helper.retiredAt=Date.now();helper.cleanupState='pending';this.store.put(owner,'agent',helper.id,helper);this.store.event(owner,'agent.changed',helper)}
       if(!helper.cleanupState){helper.cleanupState='pending';helper.retiredAt??=Date.now();this.store.put(owner,'agent',helper.id,helper)}
-      const works=this.store.list<{agentId:string;runId:string;status:string}>(owner,'turn').filter(work=>work.agentId===helper.id&&!terminalRun(work.status))
+      const works=this.store.list<{agentId:string;runId:string;status:string;cleanupPending?:boolean}>(owner,'turn').filter(work=>work.agentId===helper.id&&(!terminalRun(work.status)||work.cleanupPending))
       if(works.length){for(const runId of new Set(works.map(work=>work.runId)))void this.runtime.stop(owner,runId).catch(()=>{});continue}
       if(helper.cleanupState==='complete')continue
       const key=`${owner}:${helper.id}`

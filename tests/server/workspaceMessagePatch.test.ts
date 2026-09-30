@@ -13,7 +13,7 @@ import type { WorkspaceConversation, WorkspaceEvent, WorkspaceMessage } from '..
 import type { LocalAuthStore } from '../../src/server/localAuth'
 
 let home: string, store: WorkspaceStore, message: WorkspaceMessage, server: Server
-const auth = { require: () => ({ id: 'owner' }), isUserActive: () => true, pushAuthorizationVersion: () => 1 } as unknown as LocalAuthStore
+const auth = { require: () => ({ id: 'owner' }), currentFromCookieHeader: () => ({ id: 'owner' }), isUserActive: () => true, pushAuthorizationVersion: () => 1 } as unknown as LocalAuthStore
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'workspace-patches-'))
   store = new WorkspaceStore(home, { messagePatches: true })
@@ -87,7 +87,14 @@ it('sends a full live baseline then patches, with ordered legacy full frames and
     const response = await fetch(url(format), { headers: { 'Last-Event-ID': String(cursor) }, signal: controller.signal })
     const reader = response.body!.getReader(), decoder = new TextDecoder()
     let text = ''
-    const until = async (needle: string) => { while (!text.includes(needle)) text += decoder.decode((await reader.read()).value); return text }
+    const until = async (needle: string) => {
+      while (!text.includes(needle)) {
+        const chunk = await reader.read()
+        if (chunk.done) throw new Error(`Stream ended before ${needle}`)
+        text += decoder.decode(chunk.value)
+      }
+      return text
+    }
     await until('event: ready')
     return { controller, reader, until }
   }

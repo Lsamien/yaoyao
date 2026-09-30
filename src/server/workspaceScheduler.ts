@@ -156,6 +156,8 @@ export abstract class WorkspaceScheduler {
     this.updateRoot(owner, root.id)
   }
   start(): void { this.wake() }
+  /** Maintenance uses the same bounded retry loop as durable turn cleanup. */
+  protected maintenance(): boolean { return false }
   wake(): void {
     if (this.closing || this.wakePending) return
     this.wakePending = true
@@ -307,6 +309,7 @@ export abstract class WorkspaceScheduler {
     if (this.pumping || this.closing) return
     this.pumping = true
     try {
+      if(this.maintenance())this.retrySoon()
       let all = this.store.owners().flatMap(owner => this.pendingWorks(owner).map(work => ({ owner, work })))
       for (const { owner, work } of all) {
         if (terminal(work.status) && work.cleanupPending) this.scheduleInterruptCleanup(owner, work)
@@ -360,7 +363,7 @@ export abstract class WorkspaceScheduler {
         if (work.status === 'queued' && (c.archived || root.stopRequested || !this.store.taskMemberIds(owner,c,work.conversationTaskId).includes(work.agentId))) {
           work.status = 'interrupted'; work.error = '执行前成员已移除或聊天已停止'; this.saveWork(owner, work); this.wake(); continue
         }
-        const occupied = all.map(entry => this.getWork(entry.owner, entry.work.id)).filter(t => (['running', 'waiting', 'uncertain'].includes(t.status) || this.executing.has(t.id)) && t.id !== work.id)
+        const occupied = all.map(entry => this.getWork(entry.owner, entry.work.id)).filter(t => (t.cleanupPending || ['running', 'waiting', 'uncertain'].includes(t.status) || this.executing.has(t.id)) && t.id !== work.id)
         // Only the conversation/task/Agent binding shares mutable session state.
         // Other sessions may run concurrently; computer leases and tool queues
         // continue to serialize access to their actual shared resources.
