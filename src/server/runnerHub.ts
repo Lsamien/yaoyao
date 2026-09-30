@@ -95,6 +95,15 @@ export class RunnerHub {
     return result
   }
   records():RunnerRecord[] {return this.store.list('_system','runner')}
+  credentialBinding(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent) {
+    if(agent.archived||!this.auth.canUseSource(owner,agent.nodeId,agent.profile))throw new HttpError(403,'Bot 凭据授权已结束','vault_agent_forbidden')
+    const record=this.records().find(r=>r.enabled&&r.sourceNodeId===agent.nodeId&&(r.sourceOwner==='_system'||r.sourceOwner===owner))
+    const online=record&&this.online.get(record.id)
+    if(!record||!online||Date.now()-online.seen>=35000)throw new HttpError(503,'执行节点离线，请等待节点连接','vault_runner_offline')
+    if(!record.allowedProfiles.includes(agent.profile))throw new HttpError(403,'执行节点未授权当前 Profile','vault_agent_forbidden')
+    if(!online.features.includes('credential-ref-v1'))throw new HttpError(409,'请更新 Runner，旧节点不支持凭据引用授权','vault_runner_upgrade_required')
+    return {runnerId:record.id,runnerInstance:online.instance,runnerEpoch:online.epoch}
+  }
   enroll(owner:string,value:unknown) {
     const body=parse(input,value)
     body.allowedProfiles=this.auth.validateAssignedProfiles(body.allowedProfiles)
@@ -307,7 +316,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['execution-context-v1','vm-egress-v1','workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['execution-context-v1','vm-egress-v1','workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1','credential-ref-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')

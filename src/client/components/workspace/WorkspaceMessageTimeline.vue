@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {useVisibleMessages} from '@/utils/visibleMessages'
 import { useChatAppearance } from '@/stores/chatAppearance'
 import { bubbleVariables } from '@/utils/chatAppearance'
 import '@/styles/chat-bubbles.css'
@@ -91,6 +92,7 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
+  visibleMessages: [ids:string[]]
   loadOlder: []
   quote: [message: UiMessage]
   branch: [message: UiMessage]
@@ -102,6 +104,7 @@ const emit = defineEmits<{
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
+useVisibleMessages(scroller,ids=>emit('visibleMessages',ids))
 const pinnedToBottom = ref(true)
 const showJump = ref(false)
 const copiedMessageId = ref('')

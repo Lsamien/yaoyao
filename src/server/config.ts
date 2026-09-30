@@ -31,6 +31,7 @@ export interface FCMProviderConfig {
 }
 
 export interface ServerConfig {
+  credentialVault?: { socket: string; tokenFile: string; hermesUid: number }
   host: string
   port: number
   upstream: URL
@@ -211,6 +212,9 @@ export function loadServerConfig(
     attachmentsRoot,
     imagesRoot,
     mediaOwner: basename(homedir()),
+    ...(env.HERMES_YAOYAO_VAULT_SOCKET || env.HERMES_YAOYAO_VAULT_TOKEN_FILE ? { credentialVault: {
+      socket: env.HERMES_YAOYAO_VAULT_SOCKET || '', tokenFile: env.HERMES_YAOYAO_VAULT_TOKEN_FILE || '', hermesUid: Number(env.HERMES_YAOYAO_VAULT_HERMES_UID),
+    } } : {}),
     tlsCert,
     tlsKey,
     allowInsecureLan,

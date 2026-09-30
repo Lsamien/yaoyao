@@ -1,5 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('yaoyaoDesktop', Object.freeze({
+  unreadState: account => ipcRenderer.invoke('desktop:unread-state', account),
   status: () => ipcRenderer.invoke('desktop:status'),
   selectServer: mode => ipcRenderer.invoke('desktop:onboarding-select', mode),
   prepareServer: input => ipcRenderer.invoke('desktop:onboarding-prepare', input),

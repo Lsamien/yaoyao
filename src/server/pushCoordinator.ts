@@ -896,6 +896,8 @@ export class PushCoordinator {
     })
   }
 
+  private unreadCounter?: (owner: string) => number
+  setUnreadCounter(counter: (owner: string) => number): void { this.unreadCounter = counter }
   resetBadge(userIdValue: string, installationIdValue: string, clientAccountIdValue: string): number {
     const userId = requiredIdentifier(userIdValue, 'userId')
     const installationId = requiredIdentifier(installationIdValue, 'installationId')
@@ -904,8 +906,9 @@ export class PushCoordinator {
       const installation = state.installations.find(item => item.userId === userId
         && item.installationId === installationId
         && item.clientAccountId === clientAccountId)
-      if (installation) installation.badge = 0
-      return 0
+      const count = this.unreadCounter?.(userId) ?? 0
+      if (installation) installation.badge = count
+      return count
     })
   }
 
@@ -1258,7 +1261,7 @@ export class PushCoordinator {
       if (state.outbox.length + targets.length > MAX_OUTBOX_ITEMS) throw new Error('Push outbox limit reached')
       state.processedEvents[key] = now
       for (const target of targets) {
-        target.badge += 1
+        target.badge = this.unreadCounter ? this.unreadCounter(userId) : target.badge + 1
         state.outbox.push({
           id: randomUUID(),
           eventId,
@@ -1391,7 +1394,7 @@ export class PushCoordinator {
                 aps: {
                   alert: { title: item.title, body: item.body },
                   sound: 'default',
-                  badge: installation.badge,
+                  badge: this.unreadCounter ? this.unreadCounter(item.userId) : installation.badge,
                   ...(item.threadId ? { 'thread-id': item.threadId } : {}),
                 },
                 version: 1,

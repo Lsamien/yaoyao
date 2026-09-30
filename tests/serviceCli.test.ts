@@ -1,8 +1,122 @@
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bootstrapLaunchAgent, isMainModule, launchAgentPlist } from '../bin/hermes-yaoyao.mjs'
+
+describe('npm-installed CLI commands', () => {
+  const label = 'com.samien.hermes-yaoyao'
+  const domain = `gui/${process.getuid?.() ?? 501}`
+  const entry = join(process.cwd(), 'bin', 'hermes-yaoyao.mjs')
+  const { version } = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'))
+  let root: string
+  let plist: string
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'yaoyao-npm-cli-'))
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    const launchAgents = join(root, 'Library', 'LaunchAgents')
+    mkdirSync(launchAgents, { recursive: true })
+    plist = join(launchAgents, `${label}.plist`)
+    symlinkSync(entry, join(bin, 'yaoyao'))
+    writeFileSync(join(bin, 'launchctl'), `#!${process.execPath}
+import { appendFileSync } from 'node:fs'
+const args = process.argv.slice(2)
+appendFileSync(process.env.YAOYAO_CLI_TEST_LOG, JSON.stringify(args) + '\\n')
+if (args[0] === process.env.YAOYAO_CLI_TEST_FAIL) {
+  process.stderr.write('fixture launchctl failure\\n')
+  process.exit(1)
+}
+if (args[0] === 'print' && process.env.YAOYAO_CLI_TEST_LOADED !== '1') process.exit(1)
+`, { mode: 0o755 })
+  })
+
+  afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+
+  function runCli(args: string[], env: NodeJS.ProcessEnv = {}) {
+    return spawnSync(process.execPath, [join(root, 'bin', 'yaoyao'), ...args], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        ...process.env,
+        HOME: root,
+        PATH: `${join(root, 'bin')}:${process.env.PATH}`,
+        YAOYAO_HOME: join(root, 'data'),
+        HERMES_YAOYAO_SERVICE_ROOT: join(root, 'other-runtime'),
+        YAOYAO_CLI_TEST_LOG: join(root, 'launchctl.log'),
+        ...env,
+      },
+    })
+  }
+
+  function calls(): string[][] {
+    const log = join(root, 'launchctl.log')
+    return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []
+  }
+
+  it.each(['version', '--version', '-v'])('queries the package version through yaoyao: %s', command => {
+    const result = runCli([command])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe(`${version}\n`)
+    expect(result.stderr).toBe('')
+    expect(calls()).toEqual([])
+    expect(existsSync(join(root, 'data'))).toBe(false)
+  })
+
+  it('restarts the installed service while preserving its configuration and data', () => {
+    writeFileSync(plist, 'saved service configuration')
+    mkdirSync(join(root, 'data'))
+    const data = join(root, 'data', 'keep.txt')
+    writeFileSync(data, 'saved user data')
+
+    const result = runCli(['service', 'restart'], { YAOYAO_CLI_TEST_LOADED: '1' })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe(`已重启 ${label}\n`)
+    expect(calls()).toEqual([
+      ['print', `${domain}/${label}`],
+      ['bootout', `${domain}/${label}`],
+      ['bootstrap', domain, plist],
+    ])
+    expect(readFileSync(plist, 'utf8')).toBe('saved service configuration')
+    expect(readFileSync(data, 'utf8')).toBe('saved user data')
+  })
+
+  it('starts an installed service that was stopped', () => {
+    writeFileSync(plist, 'saved service configuration')
+
+    const result = runCli(['service', 'restart'])
+
+    expect(result.status).toBe(0)
+    expect(calls()).toEqual([['print', `${domain}/${label}`], ['bootstrap', domain, plist]])
+  })
+
+  it('explains how to install a missing service without invoking launchctl', () => {
+    const result = runCli(['service', 'restart'])
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('请先运行 yaoyao service install')
+    expect(result.stdout).toBe('')
+    expect(calls()).toEqual([])
+  })
+
+  it.each(['bootout', 'bootstrap'])('reports a failed %s without reporting restart success', command => {
+    writeFileSync(plist, 'saved service configuration')
+
+    const result = runCli(['service', 'restart'], {
+      YAOYAO_CLI_TEST_LOADED: '1',
+      YAOYAO_CLI_TEST_FAIL: command,
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('fixture launchctl failure')
+    expect(calls().at(-1)?.[0]).toBe(command)
+  })
+})
 
 describe('hermes-yaoyao LaunchAgent plist', () => {
   it('includes the local Hermes CLI directory in PATH', () => {

@@ -2,6 +2,7 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
 import ChatAppearancePanel from '@/components/app/ChatAppearancePanel.vue'
+import CredentialVaultPanel from '@/components/app/CredentialVaultPanel.vue'
 import AccountSecurityPanel from '@/components/app/AccountSecurityPanel.vue'
 import DesktopModePanel from '@/components/app/DesktopModePanel.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
@@ -22,6 +23,7 @@ type SettingsPage =
   | 'agent-models'
   | 'account-profile'
   | 'account-security'
+  | 'credential-vault'
   | 'account-mobile'
   | 'appearance'
   | 'chat-appearance'
@@ -106,6 +108,7 @@ const agentItems = computed<NavigationItem[]>(() => !props.isAdmin || props.botM
 const accountItems = computed<NavigationItem[]>(() => [
   { key: 'account-profile', label: '账号资料', icon: 'users' },
   { key: 'account-security', label: '登录与安全', icon: 'settings' },
+  ...(props.botMode ? [{ key:'credential-vault',label:'密码管理',icon:'settings' } satisfies NavigationItem] : []),
   ...(desktopModesAvailable ? [{ key: 'desktop-mode', label: '运行模式', icon: 'monitor' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
   ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
@@ -136,6 +139,7 @@ const activeTitle = computed(() => ({
   'agent-models': '模型与 Provider',
   'account-profile': '账号资料',
   'account-security': '登录与安全',
+  'credential-vault': '密码管理',
   'account-mobile': '手机登录',
   appearance: '外观',
   'chat-appearance': '聊天气泡',
@@ -358,6 +362,7 @@ function requestModeSwitch() {
                 />
                 <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择机器人。</p>
                 <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin && !botMode" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
+                <CredentialVaultPanel v-else-if="activePage === 'credential-vault' && botMode" />
                 <AccountSecurityPanel
                   v-else-if="activePage === 'account-security' || activePage === 'account-profile'"
                   :key="activePage"

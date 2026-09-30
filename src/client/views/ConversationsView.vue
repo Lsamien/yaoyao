@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useUnreadStore } from '@/stores/unread'
 import type { ComputerBackend } from '@shared/managedBrowser'
 import { WORKSPACE_PATCH_CAPABILITY } from '@shared/workspaceMessagePatch'
 import { setApiCsrfToken } from '@/api/client'
@@ -376,8 +377,9 @@ async function load(id = selected.value, append = false, signal?: AbortSignal) {
     if (!append || atBottom) {
       await nextTick()
       if (!current()) return
-      if (!append) timeline.value?.scrollToBottom('auto')
-      void markRead().catch(e => { if (current()) error.value = e instanceof Error ? e.message : '同步已读失败' })
+      if (!append && typeof route.query.unread!=='string') timeline.value?.scrollToBottom('auto')
+      if(typeof route.query.unread==='string')void locateUnread(route.query.unread)
+
     }
   } catch (e) {
     if (current() && requestedTask && e instanceof ApiError && e.status === 404) {
@@ -396,44 +398,20 @@ async function load(id = selected.value, append = false, signal?: AbortSignal) {
     if (own === generation) loading.value = false
   }
 }
+async function locateUnread(id:string){
+ for(let i=0;i<100&&active.value?.id===selected.value;i++){
+  await nextTick();if(timeline.value?.scrollToMessage(id)){const query={...route.query};delete query.unread;await router.replace({query});return}
+  if(!older.value||loadingOlder.value)return
+  await loadOlder()
+ }
+}
+const unread=useUnreadStore()
 const pendingReads = new Set<string>()
-async function markRead() {
-  const c = active.value
-  const read = activeTask.value ?? c
-  if (!c || !read || (!workspaceHasUnread(read) && read.readSeq >= read.lastSeq)) return
-  const task = activeTask.value, seq = read.lastSeq, version = read.unreadVersion
-  const key = `${c.id}:${task?.id ?? ''}:${version}:${seq}`
-  if (pendingReads.has(key)) return
-  pendingReads.add(key)
-  const previous = { unread: read.unread, unreadCount: read.unreadCount, readSeq: read.readSeq }
-  const previousConversation = { unread: c.unread, unreadCount: c.unreadCount }
-  read.unread = false;read.unreadCount = 0;read.readSeq = seq
-  if (task) tasks.value = tasks.value.map(t => t.id === task.id ? { ...t, unread: false, unreadCount: 0, readSeq: seq } : t)
-  const publishUnread = () => {
-    c.unread = task ? tasks.value.some(workspaceHasUnread) : read.unread
-    c.unreadCount = c.unread ? 1 : 0
-    const row = conversations.value.find(row => row.id === c.id)
-    if (row && row.unreadVersion === c.unreadVersion) { row.unread = c.unread;row.unreadCount = c.unreadCount }
-  }
-  publishUnread()
-  try {
-    const result = await apiRequest<{conversation: Conversation}>(`/api/app/conversations/${c.id}/read${task ? `?taskId=${task.id}` : ''}`, {
-      method: 'PUT', body: { seq, ...(version === undefined ? {} : {unreadVersion:version}) },
-    })
-    const row = conversations.value.find(row => row.id === c.id)
-    if (row && result.conversation && (row.unreadVersion ?? 0) <= (result.conversation.unreadVersion ?? 0)) {
-      row.unread = result.conversation.unread;row.unreadCount = result.conversation.unreadCount;row.unreadVersion = result.conversation.unreadVersion
-    }
-  } catch (error) {
-    const row = conversations.value.find(row => row.id === c.id)
-    if (row && row.unreadVersion === c.unreadVersion) Object.assign(row, previousConversation)
-    if (active.value?.id === c.id && activeTask.value?.id === task?.id && (activeTask.value ?? active.value)?.unreadVersion === version) {
-      Object.assign(activeTask.value ?? active.value!, previous)
-      if (task) tasks.value = tasks.value.map(t => t.id === task.id ? { ...t, ...previous, unreadCount: previous.unreadCount ?? 0 } : t)
-      publishUnread()
-    }
-    throw error
-  } finally { pendingReads.delete(key) }
+async function markVisible(ids:string[]) {
+ const c=active.value;if(!c||loading.value||computerOpen.value||typeof route.query.unread==='string')return
+ const key=`${c.id}:${ids.join(',')}`;if(pendingReads.has(key))return
+ const complete=new Set(messages.value.filter(m=>m.role==='assistant'&&m.status==='complete'&&m.visible!==false).map(m=>m.id))
+ pendingReads.add(key);try{await unread.visible('bot',c.id,undefined,ids.filter(id=>complete.has(id)))}catch{}finally{pendingReads.delete(key)}
 }
 async function selectTask(event:Event){
   const select=event.currentTarget as HTMLSelectElement,value=select.value
@@ -503,7 +481,7 @@ function presentDetail(detail: WorkspaceDetail) {
   run.value = detail.run; interactions.value = detail.interactions
   context.value = detail.context; assignments.value = detail.assignments ?? []
   older.value = detail.hasOlder ?? false
-  if (atBottom) void markRead().catch(() => {})
+
 }
 function flushEvents() {
   eventFrame = undefined
@@ -1025,7 +1003,7 @@ onBeforeUnmount(() => {
     /></template>
     <div v-show="!twoDesktops" class="conversation-with-computer">
     <section class="workspace-chat" aria-label="聊天" @click.capture="openTaskLink">
-      <MessageTimeline ref="timeline" :identity="`${selected}:${activeTask?.id ?? ''}`" :loading-older="loadingOlder" :messages="uiMessages" :title="activeHeaderTitle"
+      <MessageTimeline @visible-messages="markVisible" ref="timeline" :identity="`${selected}:${activeTask?.id ?? ''}`" :loading-older="loadingOlder" :messages="uiMessages" :title="activeHeaderTitle"
         :subtitle="active?.kind === 'group' ? `${members.length} 位成员` : ''"
         :header-avatar-name="activeHeaderAvatarName" :header-avatar="activeHeaderAvatar" :header-avatar-kind="active?.kind === 'group' ? 'team' : 'agent'"
         :header-avatar-members="activeHeaderAvatarMembers" :header-avatar-state="activeHeaderAgent ? workspaceAvatarState(active, activeHeaderAgent.id) : 'idle'" :header-avatar-activity-key="active?.lastSeq"
@@ -1060,8 +1038,6 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </MessageTimeline>
-      <p v-if="run?.status === 'queued'" class="task-queue-status" role="status">正在等待可用机器人</p>
-      <p v-if="active?.collaborationWaiting" class="task-queue-status" role="status"><button @click="knowledgePanel?.open('collaboration', active.memberIds[0])">等待同伴回复 · 查看协作</button></p>
       <p v-if="error" class="error" role="alert">{{ error }}<button class="icon-button" @click="error = ''" aria-label="关闭错误"><AppIcon name="close" /></button></p>
       <ComposerShell v-if="active" :key="composerKey" ref="composer" mode="group" :draft-key="composerKey"
         v-model:delivery-mode="deliveryMode" :delivery-available="active.kind === 'group' && !activeTask?.goal"
@@ -1071,6 +1047,10 @@ onBeforeUnmount(() => {
         :tool-trace-visible="showThinking" :reference="reference" :context-used="Number(context?.usedTokens || 0)" :context-limit="Number(context?.limitTokens || 0)"
         :mention-options="active.kind === 'group' ? members.map(a => ({id:a.id,label:a.name,insertText:`@${a.name} `})) : []"
         @send="sendFromComposer" @stop="control('stop')" @tool-trace-toggle="showThinking = !showThinking" @clear-reference="quoted = null" @error="error = $event">
+        <template #activity>
+          <p v-if="run?.status === 'queued'" class="task-queue-status" role="status">正在等待可用机器人</p>
+          <p v-else-if="active.collaborationWaiting" class="task-queue-status" role="status"><button @click="knowledgePanel?.open('collaboration', active.memberIds[0])">等待同伴回复 · 查看协作</button></p>
+        </template>
         <template #before-input>
           <div v-if="knowledgeEnabled" class="knowledge-shortcuts composer-knowledge">
             <label v-if="active.kind === 'direct' && projects.some(p => p.memberIds.includes(active!.memberIds[0]!))">当前项目<select v-model="directProjectId"><option value="">不关联项目</option><option v-for="project in projects.filter(p => !p.archived && p.memberIds.includes(active!.memberIds[0]!))" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
@@ -1285,7 +1265,7 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 .task-picker-shell{position:relative;display:inline-flex;align-items:center;max-width:210px;min-width:0}.task-picker-shell>.app-icon{position:absolute;right:11px;pointer-events:none;color:var(--text-muted)}.task-picker{width:100%;min-width:0;max-width:210px;min-height:38px;appearance:none;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--text-primary);padding:6px 34px 6px 14px;font:inherit;font-size:12px;font-weight:520;text-overflow:ellipsis;cursor:pointer;box-shadow:0 1px 2px color-mix(in srgb,var(--text-primary) 5%,transparent);transition:border-color 140ms ease,background-color 140ms ease,box-shadow 140ms ease}.task-picker:hover{border-color:var(--line-strong);background:var(--surface-hover)}.task-picker:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.task-picker:disabled{cursor:wait;opacity:.55}
-.task-queue-status{margin:0 20px 8px;font-size:13px;color:var(--text-muted)}
+.task-queue-status{min-width:0;overflow:hidden;margin:0;font-size:12px;line-height:20px;color:var(--text-muted);text-overflow:ellipsis;white-space:nowrap}.task-queue-status button{padding:0;border:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.task-queue-status button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .group-options{margin:12px 0;border-top:1px solid var(--line)}.group-options summary{min-height:44px;align-content:center;cursor:pointer;font-size:13px;color:var(--text-secondary)}.group-options summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.group-help{font-size:13px;line-height:1.6;color:var(--text-secondary)}
 @media(max-width:720px){.task-picker-shell,.task-picker{max-width:118px}.task-picker{min-height:44px;padding-left:12px}}
 .team-management-permission > span {

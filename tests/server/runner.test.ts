@@ -396,3 +396,12 @@ it('distinguishes automatically supported browsers from explicit node opt-out, o
     expect(()=>hub.browserRunner('owner',agent)).toThrow('尚未找到此 Bot 的执行节点')
   }finally{auth.allowed=true;state.features=features;states.set(record.id,state);store.put('_system','runner',record.id,record)}
 })
+it('advertises only vault references and binds them to the current Runner incarnation and source permission',()=>{
+  const agent={id:randomUUID(),nodeId:'local',profile:'default',archived:false} as any
+  const state=(hub as any).online.get(config.runnerId)
+  expect(state.features).toContain('credential-ref-v1');expect(state.features).not.toContain('credential-executor-v1')
+  expect(hub.credentialBinding('owner',agent)).toEqual({runnerId:config.runnerId,runnerInstance:state.instance,runnerEpoch:state.epoch})
+  auth.allowed=false;expect(()=>hub.credentialBinding('owner',agent)).toThrowError(expect.objectContaining({code:'vault_agent_forbidden'}));auth.allowed=true
+  state.features=state.features.filter((f:string)=>f!=='credential-ref-v1')
+  expect(()=>hub.credentialBinding('owner',agent)).toThrowError(expect.objectContaining({code:'vault_runner_upgrade_required'}))
+})

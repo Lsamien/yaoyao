@@ -4,13 +4,19 @@ import { useRoute, useRouter } from 'vue-router'
 import LoadingScreen from '@/components/app/LoadingScreen.vue'
 import LoginView from '@/views/LoginView.vue'
 import PasswordChangeView from '@/views/PasswordChangeView.vue'
+import { useUnreadStore } from '@/stores/unread'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useKanbanStore } from '@/stores/kanban'
 import { useThemeStore } from '@/stores/theme'
 import AgentIdentityFixture from '@/components/app/AgentIdentityFixture.vue'
 
+const unread=useUnreadStore()
 const auth = useAuthStore()
+watch(()=>auth.isAuthenticated ? `${auth.serverIdentity?.serverId ?? location.origin}:${auth.user?.id ?? ''}` : '',()=>{
+ if(auth.isAuthenticated&&auth.user)unread.start(auth.user.id)
+ else { unread.reset();void window.yaoyaoDesktop?.unreadState?.(null).catch(()=>{}) }
+},{immediate:true})
 const chat = useChatStore()
 const kanban = useKanbanStore()
 const theme = useThemeStore()

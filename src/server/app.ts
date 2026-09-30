@@ -1,4 +1,7 @@
+import { unreadSnapshot } from './unreadCenter.js'
 import {ExecutionSettings} from './executionSettings.js'
+import {CredentialVaultCoordinator} from './credentialVault/coordinator.js'
+import {CredentialVaultClient} from './credentialVault/transport.js'
 import {ManagedBrowsers} from './managedBrowsers.js'
 import { isWorkspaceAccountPath } from './subaccountAccess.js'
 import { chatTranscriptRouter } from './chatTranscriptApi.js'
@@ -98,6 +101,7 @@ export interface ApplicationOptions {
 }
 
 export interface ApplicationRuntime {
+  credentialVault: CredentialVaultCoordinator
   hermesBridge: HermesBridgeManager
   runners: RunnerHub
   workspace: WorkspaceStore
@@ -246,6 +250,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
   // The application owns group events. No Dashboard plugin is queried.
   const workspace = new WorkspaceStore(config.home)
+  push.setUnreadCounter(owner => unreadSnapshot(workspace, chatCache!.store, owner,(node,profile)=>auth.canUseSource(owner,node,profile)).total)
   const openVikingService = new OpenVikingService(workspace, openVikingConfiguration)
   const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
@@ -259,8 +264,10 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
   const executionSettings=new ExecutionSettings(workspace,workspaceNodes,auth)
+  const credentialVault=new CredentialVaultCoordinator(new CredentialVaultClient(config.credentialVault),workspace,auth,runners)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0, openVikingService)
   workspaceRuntime.executionSettings=executionSettings
+  workspaceRuntime.credentialVault=credentialVault
   runners.executionSettings=executionSettings
   executionSettings.onProxyChange=()=>runners.configureNetworks()
   executionSettings.testProxy=()=>runners.testNetworks()
@@ -491,7 +498,12 @@ export function createApplication(options: ApplicationOptions = {}): Application
     } else await next()
   })
 
-  for(const router of [executionSettings.router(),managedBrowsers.router(),desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
+  app.use(async(ctx,next)=>{
+    const user=ctx.state.localUser as {id:string}|undefined,cookie=ctx.get('cookie')
+    if(['/api/app/logout','/auth/logout'].includes(ctx.path)&&ctx.method==='POST'&&user)await credentialVault.logout(user.id,cookie)
+    await next()
+  })
+  for(const router of [credentialVault.router(),executionSettings.router(),managedBrowsers.router(),desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
   const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
   const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
   const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
@@ -560,6 +572,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
 
   return {
+    credentialVault,
     runners,
     hermesBridge,
     localVm,
@@ -594,6 +607,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     chatCache,
     startBackground,
     close: () => {
+      credentialVault.close()
       closed = true
       openVikingSessionSync.close()
       workspaceMemory.close()

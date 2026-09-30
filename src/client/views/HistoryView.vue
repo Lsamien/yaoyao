@@ -24,7 +24,6 @@ import { consumeLibraryItemForComposer, loadComposerFile } from '@/components/wo
 import { readAgentShowThinking, writeAgentShowThinking } from '@/utils/sessionPreferences'
 import { modelChoiceId, modelForChoiceId } from '@/utils/sessionModel'
 import { MODEL_CATALOG_CHANGED_EVENT, modelCatalogChangedProfile } from '@/utils/modelCatalogEvents'
-import { estimateConversationTokens } from '@/utils/contextUsage'
 import { isOwnedChatSession } from '@/utils/sessionOwnership'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -74,12 +73,6 @@ const sidebarItems = computed(() => sessions.value.map(session => sessionSidebar
   agentNames.value.get(session.profile || auth.activeProfile?.name || ''),
 )))
 const messages = computed(() => chatMessagesToUi(chat.messages, profile => profile ? agentNames.value.get(profile) : undefined))
-const reportedContextTokens = computed(() => chat.contextUsage?.contextTokens
-  || chat.contextUsage?.totalTokens
-  || (activeSession.value?.inputTokens ?? 0) + (activeSession.value?.outputTokens ?? 0))
-const estimatedContextTokens = computed(() => estimateConversationTokens(chat.messages))
-const contextUsed = computed(() => reportedContextTokens.value || estimatedContextTokens.value)
-const contextIsEstimated = computed(() => !reportedContextTokens.value && contextUsed.value > 0)
 const conversationMediaItems = computed(() => mediaItemsFromMessages(messages.value))
 const lightboxMedia = computed(() => conversationMediaItems.value.map(item => ({ url: item.previewUrl || item.downloadUrl || '', name: item.name, type: item.kind as 'image' | 'video' })).filter(item => item.url))
 const activeSession = computed(() => chat.activeSession)

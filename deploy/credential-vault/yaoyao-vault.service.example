@@ -1,0 +1,32 @@
+# Review-only Linux template. No installer runs this unit. Adjust all paths,
+# identities, browser sandbox and network policy after an independent review.
+[Unit]
+Description=Yaoyao manually unlocked credential broker
+After=network.target
+
+[Service]
+Type=simple
+User=yaoyao-control
+Group=yaoyao-control
+WorkingDirectory=/opt/yaoyao
+ExecStart=/opt/node24/bin/node /opt/yaoyao/dist-server/server/credentialVault/index.js --config /etc/yaoyao-control/vault.json
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+Environment=PATH=/opt/node24/bin:/usr/bin:/bin
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/yaoyao-browsers
+LimitCORE=0
+ReadWritePaths=/var/lib/yaoyao-control /run/yaoyao-control
+# The UID probe needs process-list metadata for Hermes. Standard different-UID
+# memory/ptrace denial must remain enforced; review host Yama/LSM settings.
+# Chromium and ps must work under the reviewed sandbox. Do not disable browser
+# sandbox or expose private IPC/public CDP just to make the unit start.
+# This unit alone does NOT restrict egress or isolate a same-UID Hermes process.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

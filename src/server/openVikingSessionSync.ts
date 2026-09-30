@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { OpenVikingError } from '@openviking/sdk'
 import type { WorkspaceAgent, WorkspaceConversation, WorkspaceMessage, WorkspaceRun } from '../shared/workspace.js'
 import type { OpenVikingSyncStatus } from '../shared/openVikingSync.js'
@@ -7,10 +7,35 @@ import type { OpenVikingService } from './openVikingService.js'
 import { visibleMessageText } from '../shared/messageFiles.js'
 
 type Payload = { role: string; content: string; createdAt: string }
-type Job = { id: string; namespace: string; owner: string; agent: string; conversation: string; task: string; status: string; attempts: number; next_at: number; error: string | null; updated_at: number }
+type Job = { id: string; namespace: string; owner: string; agent: string; conversation: string; task: string; status: string; attempts: number; synced_messages: number; next_at: number; error: string | null; updated_at: number }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const missing = (error: unknown) => error instanceof OpenVikingError && (error.statusCode === 404 || ['NOT_FOUND', 'ENOENT'].includes(error.code))
 class Paused extends Error {}
+const conflictMessage = 'OpenViking 会话记录与本地顺序不一致，已停止追加，请核对会话'
+class TranscriptConflict extends Error {
+  constructor(reason: string) {
+    super(`${conflictMessage}（${reason}）。请备份并核对本地与远端会话后重试；仍有冲突时需人工恢复。`)
+  }
+}
+
+function transcript(raw: string): Payload[] {
+  try {
+    return raw.split('\n').filter(line => line.trim()).map(line => {
+      const row = JSON.parse(line)
+      if (!row || typeof row.role !== 'string' || typeof row.created_at !== 'string') throw new Error()
+      let content: string
+      if (Array.isArray(row.parts)) {
+        // A transcript mirror contains text only. Do not hide foreign parts when comparing.
+        if (row.parts.some((part: any) => !part || part.type !== 'text' || typeof part.text !== 'string')) throw new Error()
+        content = row.parts.map((part: { text: string }) => part.text).join('')
+      } else {
+        if (typeof row.content !== 'string') throw new Error()
+        content = row.content
+      }
+      return { role: row.role, content, createdAt: new Date(row.created_at).toISOString() }
+    })
+  } catch { throw new TranscriptConflict('远端记录格式无法安全核对') }
+}
 
 /** A durable transcript mirror. Memory synthesis remains owned by WorkspaceMemorySynthesis. */
 export class OpenVikingSessionSync {
@@ -23,6 +48,8 @@ export class OpenVikingSessionSync {
       CREATE TABLE IF NOT EXISTS openviking_sync_state(namespace TEXT PRIMARY KEY, scan_row INTEGER NOT NULL DEFAULT 0, scanned INTEGER NOT NULL DEFAULT 0, event_seq INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS openviking_sync_jobs(id TEXT PRIMARY KEY, namespace TEXT NOT NULL, owner TEXT NOT NULL, agent TEXT NOT NULL, conversation TEXT NOT NULL, task TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, synced_messages INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, error TEXT, updated_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS openviking_sync_pending ON openviking_sync_jobs(namespace,status,next_at);
+      CREATE TABLE IF NOT EXISTS openviking_sync_appends(session TEXT PRIMARY KEY, expected INTEGER NOT NULL, fingerprint TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS openviking_sync_locks(session TEXT PRIMARY KEY, token TEXT NOT NULL, pid INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS openviking_sync_messages(session TEXT NOT NULL, message TEXT NOT NULL, seq INTEGER NOT NULL, ready INTEGER NOT NULL, payload TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(session,message));
     `)
   }
@@ -129,6 +156,38 @@ export class OpenVikingSessionSync {
     return !!this.store.get(job.owner, 'agent', job.agent) && !!this.store.get(job.owner, 'conversation', job.conversation)
       && (!job.task || !!this.store.get(job.owner, 'conversation-task', job.task))
   }
+  private claim(session: string): string | undefined {
+    return this.store.atomic(() => {
+      const lock = this.store.db.prepare('SELECT pid FROM openviking_sync_locks WHERE session=?').get(session)
+      if (lock) {
+        // Never steal a lock from a live writer, even if a remote request is slow.
+        // After a process crash, reconcile the remote prefix before writing again.
+        try { process.kill(Number(lock.pid), 0); return undefined }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return undefined }
+        this.store.db.prepare('DELETE FROM openviking_sync_locks WHERE session=?').run(session)
+      }
+      const token = randomUUID()
+      this.store.db.prepare('INSERT INTO openviking_sync_locks VALUES(?,?,?)').run(session, token, process.pid)
+      return token
+    })
+  }
+  private projection(job: Job): { desired: Payload[]; unfinished: boolean } {
+    const rows = this.store.db.prepare('SELECT * FROM openviking_sync_messages WHERE session=? ORDER BY seq,message').all(job.id)
+    const desired: Payload[] = []
+    for (const row of rows) {
+      if (!row.ready) return { desired, unfinished: true }
+      if (row.payload) desired.push(JSON.parse(String(row.payload)))
+    }
+    return { desired, unfinished: false }
+  }
+  private verify(remote: Payload[], desired: Payload[], acknowledged: number): void {
+    if (remote.length < acknowledged) throw new TranscriptConflict('远端记录少于已确认的同步记录')
+    for (let i = 0; i < remote.length; i++) {
+      const local = desired[i], actual = remote[i]!
+      if (!local || actual.role !== local.role || actual.content !== local.content || actual.createdAt !== local.createdAt)
+        throw new TranscriptConflict(`第 ${i + 1} 条记录内容或顺序不同`)
+    }
+  }
   private async sync(job: Job): Promise<void> {
     const check = () => this.current(job.namespace)
     check()
@@ -143,6 +202,7 @@ export class OpenVikingSessionSync {
       check()
       this.store.db.prepare("UPDATE openviking_sync_jobs SET status='deleted',error=NULL WHERE id=?").run(job.id)
       this.store.db.prepare('DELETE FROM openviking_sync_messages WHERE session=?').run(job.id)
+      this.store.db.prepare('DELETE FROM openviking_sync_appends WHERE session=?').run(job.id)
       return
     }
     const agent = this.store.require<WorkspaceAgent>(job.owner, 'agent', job.agent)
@@ -152,6 +212,7 @@ export class OpenVikingSessionSync {
     let info: Record<string, unknown>
     try { info = await client.getSession(job.id) } catch (error) {
       if (!missing(error)) throw error
+      if (job.synced_messages > 0) throw new TranscriptConflict('已确认同步的远端会话缺失')
       check()
       if (!this.exists(job)) return
       await client.createSession({ sessionId: job.id, memoryPolicy: { self: { enabled: false }, peer: { enabled: false }, working_memory: { enabled: false } } })
@@ -161,30 +222,57 @@ export class OpenVikingSessionSync {
     // Older servers have no auto-commit policy; newer servers may inherit one.
     if (info.auto_commit_policy) { await this.service.disableSessionAutoCommit(job.owner, job.agent, job.id); check() }
     const uri = typeof info.uri === 'string' ? info.uri : `viking://session/${job.id}`
-    let raw = ''
-    try { raw = await client.read(`${uri}/messages.jsonl`) } catch (error) { if (!missing(error) || Number(info.message_count ?? 0) > 0) throw error }
-    check()
-    const remote: Payload[] = raw.split('\n').filter(line => line.trim()).map(line => {
-      const row = JSON.parse(line)
-      return { role: row.role, content: Array.isArray(row.parts) ? row.parts.filter((part: any) => part.type === 'text').map((part: any) => part.text).join('') : row.content ?? '', createdAt: new Date(row.created_at).toISOString() }
-    })
-    const rows = this.store.db.prepare('SELECT * FROM openviking_sync_messages WHERE session=? ORDER BY seq,message').all(job.id)
-    const desired: Payload[] = []
-    let unfinished = false
-    for (const row of rows) {
-      if (!row.ready) { unfinished = true; break }
-      if (row.payload) desired.push(JSON.parse(String(row.payload)))
+    const readRemote = async (minimum: number) => {
+      let raw = ''
+      try { raw = await client.read(`${uri}/messages.jsonl`) }
+      catch (error) { if (!missing(error) || minimum > 0 || Number(info.message_count ?? 0) > 0) throw error }
+      check()
+      return transcript(raw)
     }
-    for (let i = 0; i < remote.length; i++) {
-      if (!desired[i] || JSON.stringify(remote[i]) !== JSON.stringify(desired[i])) throw new Error('OpenViking 会话记录与本地顺序不一致，已停止追加，请核对会话')
+    const acknowledged = Number(this.store.db.prepare('SELECT synced_messages FROM openviking_sync_jobs WHERE id=?').get(job.id)?.synced_messages ?? 0)
+    let remote = await readRemote(acknowledged)
+    // Network awaits let other clients revise/finish messages. Drain durable events
+    // before comparing so we never append using a stale local projection.
+    if (!this.discover(job.namespace) || !this.exists(job)) return
+    let { desired, unfinished } = this.projection(job)
+    this.verify(remote, desired, acknowledged)
+    const intent = this.store.db.prepare('SELECT expected,fingerprint FROM openviking_sync_appends WHERE session=?').get(job.id)
+    if (intent) {
+      // A timed-out/crashed writer may still be executing at the remote service.
+      // A short prefix cannot prove it stopped. Never replay an uncertain suffix.
+      const expected = Number(intent.expected)
+      if (remote.length < expected || hash(JSON.stringify(remote.slice(0, expected))) !== intent.fingerprint)
+        throw new TranscriptConflict('上次追加结果尚未确认，请先确认原写入已结束')
+      this.store.db.prepare('DELETE FROM openviking_sync_appends WHERE session=?').run(job.id)
     }
-    if (!this.exists(job)) return
+    const verified = remote.length
+    this.store.db.prepare('UPDATE openviking_sync_jobs SET synced_messages=? WHERE id=?').run(verified, job.id)
     const batch = desired.slice(remote.length, remote.length + 100)
-    if (batch.length) { await client.batchAddMessages(job.id, batch); check() }
-    if (!this.exists(job)) return
-    const complete = !unfinished && remote.length + batch.length === desired.length
+    if (batch.length) {
+      this.store.db.prepare('INSERT INTO openviking_sync_appends VALUES(?,?,?)')
+        .run(job.id, verified + batch.length, hash(JSON.stringify(desired.slice(0, verified + batch.length))))
+      try {
+        await client.batchAddMessages(job.id, batch)
+        this.store.db.prepare('DELETE FROM openviking_sync_appends WHERE session=?').run(job.id)
+      } catch (error) {
+        // An application HTTP error completed the request; a timeout, broken
+        // connection or gateway timeout leaves the write result uncertain.
+        if (error instanceof OpenVikingError && error.statusCode && ![408, 502, 503, 504].includes(error.statusCode))
+          this.store.db.prepare('DELETE FROM openviking_sync_appends WHERE session=?').run(job.id)
+        throw error
+      }
+      check()
+      // A successful HTTP response is not proof that the whole batch was stored.
+      // Partial failures and lost responses resume from this verified prefix.
+      remote = await readRemote(Math.max(verified, 1))
+      if (!this.discover(job.namespace) || !this.exists(job)) return
+      ;({ desired, unfinished } = this.projection(job))
+      this.verify(remote, desired, verified)
+      if (remote.length === verified) throw new Error('OpenViking 尚未确认新增记录，请稍后重试')
+    }
+    const complete = !unfinished && remote.length === desired.length
     this.store.db.prepare('UPDATE openviking_sync_jobs SET status=?,synced_messages=?,attempts=0,next_at=?,error=NULL,updated_at=? WHERE id=?')
-      .run(complete ? 'complete' : 'pending', remote.length + batch.length, unfinished && !batch.length ? Date.now() + 5000 : 0, Date.now(), job.id)
+      .run(complete ? 'complete' : 'pending', remote.length, unfinished && !batch.length ? Date.now() + 5000 : 0, Date.now(), job.id)
   }
   async tick(): Promise<void> {
     if (this.active || this.closed) return
@@ -196,6 +284,10 @@ export class OpenVikingSessionSync {
       // consuming durable events, including databases whose events were pruned.
       if (this.scanningNamespace !== namespace) {
         this.store.db.prepare('UPDATE openviking_sync_state SET scan_row=0,scanned=0 WHERE namespace=?').run(namespace)
+        // Recheck legacy order failures once on startup. A genuine divergence
+        // still fails closed; no remote records are replaced or reordered.
+        this.store.db.prepare("UPDATE openviking_sync_jobs SET status='pending',attempts=0,next_at=0 WHERE namespace=? AND status='failed' AND error=?")
+          .run(namespace, conflictMessage)
         this.scanningNamespace = namespace
       }
       if (!this.discover(namespace)) return
@@ -203,13 +295,22 @@ export class OpenVikingSessionSync {
       this.store.db.prepare("UPDATE openviking_sync_jobs SET status='pending',next_at=0 WHERE namespace=? AND status='complete' AND (NOT EXISTS(SELECT 1 FROM workspace_entities e WHERE e.owner=openviking_sync_jobs.owner AND e.kind='agent' AND e.id=openviking_sync_jobs.agent) OR NOT EXISTS(SELECT 1 FROM workspace_entities e WHERE e.owner=openviking_sync_jobs.owner AND e.kind='conversation' AND e.id=openviking_sync_jobs.conversation) OR (task!='' AND NOT EXISTS(SELECT 1 FROM workspace_entities e WHERE e.owner=openviking_sync_jobs.owner AND e.kind='conversation-task' AND e.id=openviking_sync_jobs.task)))").run(namespace)
       const jobs = this.store.db.prepare("SELECT * FROM openviking_sync_jobs WHERE namespace=? AND status='pending' AND next_at<=? ORDER BY updated_at LIMIT 4").all(namespace, Date.now()) as unknown as Job[]
       for (const job of jobs) {
-        try { await this.sync(job) } catch (error) {
+        const token = this.claim(job.id)
+        if (!token) continue
+        let currentJob = job
+        try {
+          currentJob = this.store.db.prepare('SELECT * FROM openviking_sync_jobs WHERE id=?').get(job.id) as unknown as Job
+          if (currentJob.status !== 'pending' || currentJob.next_at > Date.now()) continue
+          await this.sync(currentJob)
+        } catch (error) {
           if (error instanceof Paused || this.closed) break
-          const attempts = job.attempts + 1
+          const attempts = currentJob.attempts + 1
           // Remote errors can contain request details; expose only a short error message.
           const message = error instanceof Error ? error.message.slice(0, 400) : 'OpenViking 会话同步失败'
           this.store.db.prepare('UPDATE openviking_sync_jobs SET status=?,attempts=?,next_at=?,error=?,updated_at=? WHERE id=?')
-            .run(attempts >= 3 ? 'failed' : 'pending', attempts, Date.now() + 2000 * 2 ** attempts, message, Date.now(), job.id)
+            .run(error instanceof TranscriptConflict || attempts >= 3 ? 'failed' : 'pending', attempts, Date.now() + 2000 * 2 ** attempts, message, Date.now(), job.id)
+        } finally {
+          this.store.db.prepare('DELETE FROM openviking_sync_locks WHERE session=? AND token=?').run(job.id, token)
         }
       }
     } catch (error) {

@@ -30,9 +30,13 @@ yaoyao service install
 ```sh
 yaoyao service status     # 查看运行状态
 yaoyao service stop       # 停止服务
-yaoyao service start      # 重新启动
+yaoyao service start      # 启动服务
+yaoyao service restart    # 重启服务；已停止的服务会重新启动
 yaoyao service uninstall  # 卸载服务（数据保留）
+yaoyao --version          # 查看已安装的 npm 包版本
 ```
+
+版本查询也支持 `yaoyao version` 和 `yaoyao -v`，无需安装或启动服务。
 
 ## 配置
 
@@ -42,13 +46,14 @@ yaoyao service uninstall  # 卸载服务（数据保留）
 | `HERMES_YAOYAO_PORT` | Web 端口 | `15300` |
 | `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址 | `http://127.0.0.1:9119` |
 
-LaunchAgent 安装时的环境会写入 plist；修改配置后执行 `yaoyao service stop && yaoyao service start` 生效。
+LaunchAgent 安装时的环境会写入 plist；修改环境变量配置后，执行 `yaoyao service install` 重新写入配置并启动服务。`yaoyao service restart` 使用已保存的配置重启。
 
 ## 升级
 
 ```sh
 npm update -g @lsamien/yaoyao
-yaoyao service stop && yaoyao service start
+yaoyao service restart
+yaoyao --version
 ```
 
 Web 界面中的「系统更新」入口面向源码/发布包安装；npm 安装的服务请直接用上述 npm 命令升级，避免两套版本并存。

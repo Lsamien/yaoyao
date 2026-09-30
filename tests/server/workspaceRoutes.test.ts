@@ -4,12 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import request from 'supertest'
 import type Koa from 'koa'
 import { createApplication, type ApplicationRuntime } from '../../src/server/app'
 import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth'
 import { WorkspaceAssets } from '../../src/server/workspaceAssets'
+import type { StoredWorkspaceFile } from '../../src/server/workspaceAssets'
 import { saveFileAccess } from '../../src/server/fileAccess'
 import { WorkspaceTranscriptStore } from '../../src/client/components/workspace/transcriptStore'
 import { SharedComputers, type SharedComputer } from '../../src/server/sharedComputers'
@@ -656,6 +658,49 @@ describe('application workspace HTTP contract', () => {
     const response = await req('get', `/api/app/files/${f.id}/preview`).expect(200)
     expect(response.headers['content-type']).toContain('application/octet-stream')
     expect(response.headers['content-disposition']).toContain('attachment')
+  })
+  it.each([
+    '人工智能合同综合质量评估系统V2.0-信息采集表-待确认.docx',
+    'café-附件-📄.txt',
+  ])('preserves the UTF-8 upload name %s in metadata, library search and downloads', async name => {
+    const file = (await req('post', '/api/app/uploads')
+      .attach('files', Buffer.from('file contents'), { filename: name, contentType: 'application/octet-stream' })
+      .expect(201)).body.files[0]
+    expect(file.name).toBe(name)
+    expect(runtime.uploads.records([file.id], 'first')[0]?.name).toBe(name)
+    const library = await req('get', `/api/app/files?search=${encodeURIComponent(name)}`).expect(200)
+    expect(library.body.items[0]?.name).toBe(name)
+    const download = await req('get', `/api/app/files/${file.id}/download`).expect(200)
+    expect(download.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
+  })
+  it('recovers legacy upload names in history, events, search and downloads without changing stored files', async () => {
+    const name = '人工智能合同综合质量评估系统V2.0-信息采集表-待确认.docx'
+    const corrupted = Buffer.from(name, 'utf8').toString('latin1')
+    const uploaded = (await req('post', '/api/app/uploads')
+      .attach('files', Buffer.from('preserved file contents'), { filename: 'legacy.docx', contentType: 'application/octet-stream' })
+      .expect(201)).body.files[0]
+    const database = new DatabaseSync(join(home, 'uploads.sqlite3'))
+    try { database.prepare('UPDATE uploads SET name=? WHERE id=?').run(corrupted, uploaded.id) }
+    finally { database.close() }
+    const file = { ...runtime.workspace.require<StoredWorkspaceFile>('first', 'file', uploaded.id), name: corrupted }
+    runtime.workspace.put('first', 'file', file.id, file)
+    const agent = runtime.workspace.createAgent('first', { name: '附件测试', profile: 'default' })
+    const conversation = runtime.workspace.list<WorkspaceConversation>('first', 'conversation').find(c => c.memberIds[0] === agent.id)!
+    runtime.workspace.saveMessage('first', {
+      id: 'legacy-upload', conversationId: conversation.id, seq: 0, role: 'user', content: '请检查附件',
+      reasoning: '', tools: [], attachments: [file], status: 'complete', createdAt: 1,
+    })
+    expect(runtime.uploads.records([file.id], 'first')[0]?.name).toBe(name)
+    const history = (await req('get', `/api/app/conversations/${conversation.id}`).expect(200)).body
+    expect(history.messages[0]?.attachments[0]?.name).toBe(name)
+    const event = runtime.workspace.events('first', 0).find(event => event.type === 'message.changed' && (event.data as { id: string }).id === 'legacy-upload')!
+    expect((event.data as { attachments: { name: string }[] }).attachments[0]?.name).toBe(name)
+    const library = await req('get', `/api/app/files?search=${encodeURIComponent('信息采集表')}`).expect(200)
+    expect(library.body.items[0]?.name).toBe(name)
+    const download = await req('get', `/api/app/files/${file.id}/download`).expect(200)
+    expect(download.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
+    expect(readFileSync(file.path, 'utf8')).toBe('preserved file contents')
+    expect(runtime.workspace.require<StoredWorkspaceFile>('first', 'file', file.id).name).toBe(corrupted)
   })
   it('persists encrypted voice credentials while giving each user their own selected voice', async () => {
     await req('put', '/api/app/admin/duplex-voice')

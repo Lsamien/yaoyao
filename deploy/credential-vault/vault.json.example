@@ -1,0 +1,11 @@
+{
+  "home": "/var/lib/yaoyao-control/vault",
+  "socket": "/run/yaoyao-control/vault.sock",
+  "tokenFile": "/etc/yaoyao-control/control.token",
+  "hermesUid": 12345,
+  "execution": {
+    "approvalFile": "/etc/yaoyao-control/isolation-approval.json",
+    "hermesPid": 12345,
+    "home": "/var/lib/yaoyao-control/executor"
+  }
+}

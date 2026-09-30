@@ -20,6 +20,7 @@ import { bool, normalizeChatMessage, number, record, string, values } from '@/ut
 import { appendSessionPage, pinnedSessionsFirst } from '@/utils/sessionOrder'
 import { modelForSession, modelSelectionFromSessionInfo } from '@/utils/sessionModel'
 import { moveSessionFastMode, readSessionFastMode, writeSessionFastMode } from '@/utils/sessionPreferences'
+import { normalizeChatUsage } from '@/utils/contextUsage'
 import { useAuthStore } from './auth'
 
 interface CachedHistory { messages: ChatMessage[]; total: number; savedAt: number; transcript?: Omit<TranscriptSnapshot,'messages'> }
@@ -98,6 +99,7 @@ export const useChatStore = defineStore('chat', () => {
   const error = ref<string>()
   const models = ref<ModelOption[]>([])
   const unreadCounts = ref<Record<string, number>>({})
+  const contextUsageRequests = new Map<string, number>()
   const selectedModel = ref<ModelOption>()
   const reasoningEffort = ref<string>()
   const socket = new ChatRpcSocket()
@@ -158,6 +160,11 @@ export const useChatStore = defineStore('chat', () => {
         // Usage events replace the route while storage is pending. Commit to
         // the current route after both writes, preserving any newer local send.
         const latest=current();if(!latest)return
+        const usage=normalizeChatUsage(value.session)
+        if(usage && (['contextTokens','contextLimit','percentUsed'] as const)
+          .some(field => latest.usage?.[field] === undefined && usage[field] !== undefined)) {
+          latest.usage={...usage,...latest.usage}
+        }
         const latestPending=latest.messages.filter(m=>m.role==='user'&&m.stage!=='settled'&&!ids.has(m.id)&&!ids.has(m.clientMessageId))
         latest.messages=mergeChatMessages(canonical,latestPending);latest.messageTotal=value.total;latest.loadedMessageCount=canonical.length
         const approval=value.pendingApproval,clarification=value.pendingClarification
@@ -322,6 +329,7 @@ export const useChatStore = defineStore('chat', () => {
       if (active?.historySynced && (active.isStreaming || activeSession.value?.owned === true)
         && !active.route.sessionId.startsWith('draft-') && !active.runtimeSessionId && !reconnectResumePromise) {
         reconnectResumePromise = ensureRuntime(active)
+          .then(current => refreshContextUsage(current))
           .catch(cause => { active.error = errorMessage(cause) })
           .finally(() => { reconnectResumePromise = undefined })
       }
@@ -419,6 +427,8 @@ export const useChatStore = defineStore('chat', () => {
       if (liveSelection) {
         reconcileSessionModel(state.route.profile, state.route.sessionId, liveSelection.model, liveSelection.provider)
       }
+      const usage = normalizeChatUsage(payload)
+      if (usage) state.usage = { ...state.usage, ...usage }
     }
     const info = record(payload.info)
     const liveFastMode = optionalBoolean(payload.fast ?? info.fast)
@@ -644,10 +654,11 @@ export const useChatStore = defineStore('chat', () => {
     syncSelectedModel(refreshed?.model, refreshed?.provider)
     if (refreshed?.owned === true && !sessionId.startsWith('draft-')
       && activeSessionId.value === sessionId && activeProfileName.value === selectedProfile) {
-      await ensureRuntime(routes[routeKey(selectedProfile, sessionId)] ?? state).catch(cause => {
+      const current = await ensureRuntime(routes[routeKey(selectedProfile, sessionId)] ?? state).catch(cause => {
         const current = routes[routeKey(selectedProfile, sessionId)]
         if (current) current.error = errorMessage(cause)
       })
+      if (current) void refreshContextUsage(current).catch(() => undefined)
     }
   }
 
@@ -717,6 +728,8 @@ export const useChatStore = defineStore('chat', () => {
       if (!runtimeId || !storedId) throw new Error('Hermes 未返回新会话标识')
       const migrated = migrateRoute(initialKey, storedId, runtimeId)
       const info = record(result.info)
+      const usage = normalizeChatUsage(result)
+      if (usage) migrated.usage = { ...migrated.usage, ...usage }
       if (!desiredModelRoutes.has(routeKey(migrated.route.profile, migrated.route.sessionId))) {
         syncSelectedModel(string(result.model ?? info.model), string(result.provider ?? info.provider))
       }
@@ -739,6 +752,8 @@ export const useChatStore = defineStore('chat', () => {
     const migrated = migrateRoute(initialKey, storedId, runtimeId)
     migrated.error = undefined
     const info = record(result.info)
+    const usage = normalizeChatUsage(result)
+    if (usage) migrated.usage = { ...migrated.usage, ...usage }
     if (!desiredModelRoutes.has(routeKey(migrated.route.profile, migrated.route.sessionId))) {
       syncSelectedModel(string(result.model ?? info.model), string(result.provider ?? info.provider))
     }
@@ -1059,18 +1074,24 @@ export const useChatStore = defineStore('chat', () => {
     // Opening history is read-only. Resuming an old session merely to fetch
     // usage updates Hermes' last_active timestamp and incorrectly moves it
     // into today's sidebar group.
-    if (!initialState || initialState.route.sessionId.startsWith('draft-') || !initialState.runtimeSessionId) return
-    const current = initialState
-    const usage = resultRecord(await socket.request('session.usage', { session_id: current.runtimeSessionId! }))
-    current.usage = {
-      inputTokens: number(usage.input_tokens ?? usage.input) || undefined,
-      outputTokens: number(usage.output_tokens ?? usage.output) || undefined,
-      totalTokens: number(usage.total_tokens ?? usage.total) || undefined,
-      contextTokens: number(usage.context_tokens ?? usage.context_used ?? usage.used) || undefined,
-      contextLimit: number(usage.context_limit ?? usage.context_max ?? usage.limit) || undefined,
-      percentUsed: number(usage.percent_used ?? usage.context_percent) || undefined,
-      raw: usage as JsonValue,
-    }
+    if (!initialState || initialState.route.sessionId.startsWith('draft-') || !initialState.runtimeSessionId || initialState.isStreaming) return
+    const key = routeKey(initialState.route.profile, initialState.route.sessionId)
+    const runtimeId = initialState.runtimeSessionId
+    const generation = initialState.generation
+    const previousUsage = initialState.usage
+    const request = (contextUsageRequests.get(key) ?? 0) + 1
+    contextUsageRequests.set(key, request)
+    // Use the same source order as mobile. Breakdown can supply the gauge when
+    // session.usage only contains cumulative billing counters.
+    const results = await Promise.allSettled([
+      socket.request('session.usage', { session_id: runtimeId }, 15_000),
+      socket.request('session.context_breakdown', { session_id: runtimeId }, 15_000),
+    ])
+    const current = routes[key]
+    if (!current || current.generation !== generation || current.runtimeSessionId !== runtimeId
+      || current.usage !== previousUsage || contextUsageRequests.get(key) !== request) return
+    const usage = normalizeChatUsage(...results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
+    if (usage) current.usage = { ...current.usage, ...usage }
   }
 
   return {

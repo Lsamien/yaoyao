@@ -6,6 +6,7 @@ import { basename, extname, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import Busboy from 'busboy'
 import { HttpError } from './errors.js'
+import { normalizeUploadName } from '../shared/uploadNames.js'
 
 export const MAX_UPLOAD_FILE_BYTES = 25 * 1_024 * 1_024
 export const MAX_UPLOAD_REQUEST_BYTES = 50 * 1_024 * 1_024
@@ -161,7 +162,7 @@ export class UploadStore {
       return {
         id: row.id,
         accountKey: row.account_key,
-        name: row.name,
+        name: normalizeUploadName(row.name),
         mimeType: row.mime_type,
         size: Number(row.size),
         path: row.path,
@@ -230,6 +231,8 @@ export async function receiveGroupUploads(
 
   const busboy = Busboy({
     headers: request.headers,
+    // Browser FormData sends ordinary filename parameters as UTF-8 bytes.
+    defParamCharset: 'utf8',
     limits: {
       files: MAX_UPLOAD_FILES,
       fileSize: MAX_UPLOAD_FILE_BYTES,

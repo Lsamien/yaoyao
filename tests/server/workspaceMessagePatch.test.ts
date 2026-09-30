@@ -154,7 +154,7 @@ it('persists card-only messages and replays installation updates as full frames 
   store.saveMessage('owner',message)
   store.close();store=new WorkspaceStore(home,{messagePatches:true})
   expect(store.require<WorkspaceMessage>('owner','message',message.id)).toMatchObject({visible:true,status:'complete',content:'',browserCard:{status:'closed',title:'测试网页'}})
-  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).unread).toBe(true)
+  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).unread).toBe(false)
 })
 
 it('persists nonfatal service warnings independently of reply text and keeps terminal warning-only replies visible',()=>{
@@ -165,5 +165,5 @@ it('persists nonfatal service warnings independently of reply text and keeps ter
   expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).preview).toBe('部分服务暂时不可用')
   message.status='complete';store.saveMessage('owner',message)
   expect(store.require<WorkspaceMessage>('owner','message',message.id)).toMatchObject({visible:true,content:'',status:'complete',serviceWarnings:message.serviceWarnings})
-  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).unread).toBe(true)
+  expect(store.require<WorkspaceConversation>('owner','conversation',message.conversationId).unread).toBe(false)
 })

@@ -1,3 +1,5 @@
+import { acknowledgeUnread, unreadSnapshot } from './unreadCenter.js'
+import { z } from 'zod'
 import { RegistrationLimiter } from './subaccountAccess.js'
 import { readServerIdentity, updateServerIdentity } from './serverIdentity.js'
 import { authorizeFileRead, fileAccessWorkingDirectory, readFileAccess, saveFileAccess } from './fileAccess.js'
@@ -2152,6 +2154,19 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
   router.get('/api/app/sessions/pins', ctx => {
     const owner=dependencies.auth.require(ctx).id
     ctx.body={session_ids:dependencies.chatCache!.store.pins(owner,String(ctx.query.profile??''))}
+  })
+  const unreadInput=z.object({items:z.array(z.object({mode:z.enum(['bot','chat']),id:z.string().min(1).max(256),profile:z.string().max(256).optional(),messages:z.array(z.object({id:z.string().min(1).max(512),seq:z.number().int().nonnegative(),version:z.number().int().nonnegative().optional(),taskId:z.string().max(256).optional()}).strict()).max(20000)}).strict()).max(1000)}).strict()
+  router.get('/api/app/unread',ctx=>{
+    const owner=dependencies.auth.require(ctx).id
+    ctx.set('Cache-Control','no-store')
+    ctx.body=unreadSnapshot(dependencies.workspace,dependencies.chatCache!.store,owner,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
+  })
+  router.post('/api/app/unread/read',ctx=>{
+    const owner=dependencies.auth.require(ctx).id,input=unreadInput.safeParse(body(ctx))
+    if(!input.success)throw new HttpError(400,'未读快照格式无效','invalid_unread_snapshot')
+    acknowledgeUnread(dependencies.workspace,dependencies.chatCache!.store,owner,input.data.items,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
+    for(const item of input.data.items)if(item.mode==='chat')dependencies.onChatListChanged?.(owner,item.profile ?? 'default',item.id)
+    ctx.body=unreadSnapshot(dependencies.workspace,dependencies.chatCache!.store,owner,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
   })
   router.get('/api/app/sessions/unread', ctx => {
     const owner=dependencies.auth.require(ctx).id

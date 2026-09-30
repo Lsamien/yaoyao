@@ -179,6 +179,8 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  /** Completion version assigned once to the stable user-facing reply ID. */
+  chatUnreadVersion?: number
   browserCard?: import('./managedBrowser.js').ManagedBrowserCard
   /** Server-owned, nonfatal availability notices; never model-authored markup. */
   serviceWarnings?: Array<{code:string;service:string;message:string}>

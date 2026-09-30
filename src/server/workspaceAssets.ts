@@ -5,6 +5,7 @@ import {HttpError} from './errors.js'
 import { authorizeFileRead } from './fileAccess.js'
 import { lookup } from 'mime-types'
 import { messageFileReferences, type MessageFileOrigin } from '../shared/messageFiles.js'
+import { normalizeUploadName } from '../shared/uploadNames.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes, type WorkspaceNode } from './workspaceGateway.js'
 import type { WorkspaceAgent, WorkspaceFile, WorkspaceMessage } from '../shared/workspace.js'
@@ -17,7 +18,7 @@ const archiveKey = (nodeId: string, profile: string, messageId: string, path: st
   createHash('sha256').update(JSON.stringify([nodeId, profile, messageId, path])).digest('hex')
 export function publicFile(f: StoredWorkspaceFile): WorkspaceFile {
   const { path: _path, digest: _digest, messageFileSource: _source, ...result } = f
-  return result
+  return result.sender === 'user' ? { ...result, name: normalizeUploadName(result.name) } : result
 }
 export function libraryFile(
   f: WorkspaceFile,

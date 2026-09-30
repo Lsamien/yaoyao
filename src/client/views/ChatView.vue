@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {useUnreadStore} from '@/stores/unread'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -24,12 +25,12 @@ import { consumeLibraryItemForComposer, loadComposerFile } from '@/components/wo
 import { readAgentShowThinking, writeAgentShowThinking } from '@/utils/sessionPreferences'
 import { modelChoiceId, modelForChoiceId } from '@/utils/sessionModel'
 import { MODEL_CATALOG_CHANGED_EVENT, modelCatalogChangedProfile } from '@/utils/modelCatalogEvents'
-import { estimateConversationTokens } from '@/utils/contextUsage'
 import { isOwnedChatSession } from '@/utils/sessionOwnership'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { getSession } from '@/api/sessions'
 
+const unread=useUnreadStore()
 const auth = useAuthStore()
 const chat = useChatStore()
 const route = useRoute()
@@ -68,16 +69,10 @@ const agentAvatars = computed(() => Object.fromEntries(auth.profiles.flatMap(pro
 )))
 const sidebarItems = computed(() => sessions.value.map(session => sessionSidebarItem(
   session,
-  chat.unreadCounts[session.id] ?? 0,
+  unread.snapshot.conversations.find(c=>c.mode==='chat'&&c.id===session.id&&c.profile===session.profile)?.count ?? 0,
   agentNames.value.get(session.profile || auth.activeProfile?.name || ''),
 )))
 const messages = computed(() => chatMessagesToUi(chat.messages, profile => profile ? agentNames.value.get(profile) : undefined))
-const reportedContextTokens = computed(() => chat.contextUsage?.contextTokens
-  || chat.contextUsage?.totalTokens
-  || (activeSession.value?.inputTokens ?? 0) + (activeSession.value?.outputTokens ?? 0))
-const estimatedContextTokens = computed(() => estimateConversationTokens(chat.messages))
-const contextUsed = computed(() => reportedContextTokens.value || estimatedContextTokens.value)
-const contextIsEstimated = computed(() => !reportedContextTokens.value && contextUsed.value > 0)
 const conversationMediaItems = computed(() => mediaItemsFromMessages(messages.value))
 const lightboxMedia = computed(() => conversationMediaItems.value.map(item => ({ url: item.previewUrl || item.downloadUrl || '', name: item.name, type: item.kind as 'image' | 'video' })).filter(item => item.url))
 const activeSession = computed(() => chat.activeSession)
@@ -159,6 +154,23 @@ async function refreshSessions() {
   }
 }
 
+const readPending=new Set<string>()
+async function markVisible(ids:string[]){
+ if(preview.value||filePreview.value||outlineOpen.value||modelDialog.value||!chat.activeSessionId||typeof route.query.unread==='string')return
+ const session=chat.activeSessionId,profile=chat.activeProfileName,key=`${profile}:${session}:${ids.join(',')}`
+ if(readPending.has(key))return
+ readPending.add(key);try{await unread.visible('chat',session,profile,ids)}catch{}finally{readPending.delete(key)}
+}
+let unreadNavigation=0
+watch(()=>[route.params.id,route.query.unread,chat.messages.length],async()=>{
+ const id=route.query.unread;if(typeof id!=='string'||!chat.activeSessionId)return
+ const own=++unreadNavigation
+ for(let i=0;i<100&&own===unreadNavigation;i++){
+  await nextTick();if(timeline.value?.scrollToMessage(id)){const query={...route.query};delete query.unread;await router.replace({query});return}
+  if(!chat.hasMoreBefore)return
+  const before=chat.messages.length;await chat.loadOlder();if(chat.messages.length===before)return
+ }
+},{flush:'post'})
 async function chooseSession(id: string) {
   outlineOpen.value = false
   preview.value = null
@@ -168,7 +180,7 @@ async function chooseSession(id: string) {
   await ensureRouteProfile(profile)
     if (chat.activeProfileName !== profile) await chat.loadSessions(profile, 'chat')
   await chat.selectSession(id, profile)
-  await chat.markRead(id, profile).catch(() => undefined)
+
   quoted.value = null
 }
 
@@ -426,6 +438,7 @@ watch(() => chat.activeSessionId, async id => {
 
     <div class="chat-workspace">
       <MessageTimeline
+        @visible-messages="markVisible"
         ref="timeline"
         :messages="messages"
         :title="activeSession?.title || '新会话'"
@@ -469,9 +482,10 @@ watch(() => chat.activeSessionId, async id => {
         :reasoning-effort="reasoningLabel"
         :reasoning-value="chat.reasoningEffort || ''"
         :reasoning-options="reasoningComposerOptions"
-        :context-used="contextUsed"
-        :context-limit="chat.contextUsage?.contextLimit || 262144"
-        :context-estimated="contextIsEstimated"
+        show-context
+        :context-used="chat.contextUsage?.contextTokens"
+        :context-limit="chat.contextUsage?.contextLimit"
+        :context-percent="chat.contextUsage?.percentUsed"
         :queue-mode="queueMode || chat.isQueued"
         :tool-trace-visible="showThinking"
         :reference="reference"

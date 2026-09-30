@@ -1,4 +1,5 @@
 import type {ExecutionSettings} from './executionSettings.js'
+import {CREDENTIAL_TOOLS,type CredentialVaultCoordinator} from './credentialVault/coordinator.js'
 import {isLocalAuthorizationTarget} from './loopbackAuthorization.js'
 import {type ManagedBrowsers,type BrowserTurn} from './managedBrowsers.js'
 import {ToolOperationJournal} from './toolOperationJournal.js'
@@ -123,6 +124,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
   private executionTurns=new Map<string,{agentId:string;mode:import('../shared/executionEnvironment.js').ExecutionMode;revision:number}>()
   activeExecutionTurns(){return [...this.executionTurns.values()]}
   executionSettings?:ExecutionSettings
+  credentialVault?:CredentialVaultCoordinator
   plugins?: WorkspacePlugins
   managedBrowsers?:ManagedBrowsers
   private operationJournal:ToolOperationJournal
@@ -454,6 +456,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     let reconnecting: Promise<void> | undefined
     const toolController = new AbortController()
     let toolLease: WorkspaceToolLease | undefined
+    let credentialTurn: ReturnType<CredentialVaultCoordinator['openTurn']> | undefined
     let pluginLease: OpenBotPlugins | undefined
     let resolveTurn!: (m: Message) => void, rejectTurn!: (e: Error) => void
     const completion = new Promise<Message>((resolve, reject) => {
@@ -471,6 +474,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       try { retainBrowser=!error&&!this.getWork(owner,run.id).cancelRequested&&!this.store.require<Run>(owner,'run',run.runId).stopRequested } catch { /* Missing/revoked work must not retain a browser. */ }
       void browserTurn?.close({retain:retainBrowser}).catch(()=>{})
       toolController.abort()
+      credentialTurn?.close()
       void toolLease?.dispose()
       void pluginLease?.dispose()
       clearTimeout(flushTimer)
@@ -893,7 +897,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
           }
           return name==='__file_transfer'?vmHolder.session.transfer(args as Record<string,unknown>):vmHolder.session.call(name,args,callId)
         }
-        if(team||cloud||desktop||plugins||knowledge||routines||dispatchedVm||environment.tools.managedBrowser||(execution&&botCapabilities.tools)){
+        if(team||cloud||desktop||plugins||knowledge||routines||dispatchedVm||environment.tools.managedBrowser||(execution&&botCapabilities.tools)||(this.credentialVault?.client.configured&&botCapabilities.tools)){
           if(team){const granted=this.getWork(owner,run.id);granted.teamManagementRevision=agent.revision;this.saveWork(owner,granted)}
           if(desktop)await this.desktopEnvironments!.requireAvailable(owner,agent,target)
           if(cloud)await this.cloud!.requireAvailable(owner,agent,target)
@@ -915,9 +919,17 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             // the preferred target. Each dispatched environment checks its grants.
             ...(execution?{computerPolicy:{mode:'profile',hostAccess:true}}:{}),
             session:()=>({runtimeId,storedId:binding!.storedId}),assertActive,
-            catalog:()=>[...(team?this.teamTools.catalog(owner,run.id):[]),...(routines?this.routineTools!.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...environmentCatalog,...(systemTurn?.catalog()??[]),...(pluginLease?.catalog()??[])],
+            catalog:()=>[...(this.credentialVault?.client.configured&&botCapabilities.tools?CREDENTIAL_TOOLS:[]),...(team?this.teamTools.catalog(owner,run.id):[]),...(routines?this.routineTools!.catalog(owner,run.id):[]),...(knowledge?this.knowledgeTools.catalog(owner,run.id,botCapabilities.memory):[]),...environmentCatalog,...(systemTurn?.catalog()??[]),...(pluginLease?.catalog()??[])],
             call:async(toolId,args,callId)=>{
               assertActive()
+              if(toolId.startsWith('credential_')&&this.credentialVault?.client.configured&&botCapabilities.tools){
+                credentialTurn??=this.credentialVault.openTurn(owner,agent.id,run.id,toolController.signal,assertActive,value=>{
+                  if(settled||toolController.signal.aborted)return
+                  const work=this.getWork(owner,run.id);if(!['running','waiting'].includes(work.status))return
+                  work.status=value?'waiting':'running';this.saveWork(owner,work)
+                })
+                return credentialTurn.call(toolId,args)
+              }
               if(toolId==='yaoyao_service_request'&&systemTurn)return systemTurn.call(args,toolController.signal)
               if(this.routineTools?.handles(toolId)) return this.routineTools.call(owner,run.id,toolId,args)
               if(toolId.startsWith('managed_browser_')&&environment.tools.managedBrowser&&this.managedBrowsers){

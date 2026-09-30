@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, ChatRouteState, RpcEventFrame } from '@shared/types'
 import { applyChatEvent, mergeChatMessages } from '@/utils/messageReducer'
-import { estimateConversationTokens } from '@/utils/contextUsage'
 
 function message(id: string, content = '相同内容', clientMessageId?: string): ChatMessage {
   return {
@@ -23,13 +22,6 @@ function event(type: string, payload: Record<string, unknown>, sessionId = 'sess
 }
 
 describe('chat message reducer', () => {
-  it('estimates visible conversation tokens when Hermes has no live gauge', () => {
-    expect(estimateConversationTokens([
-      message('one', '你好，Hermes！'),
-      { ...message('two', 'The quick brown fox'), role: 'assistant', reasoning: '检查上下文' },
-    ])).toBeGreaterThan(0)
-  })
-
   it('preserves repeated user text when server identities differ', () => {
     const merged = mergeChatMessages([message('one')], [message('two')])
     expect(merged).toHaveLength(2)
@@ -197,6 +189,16 @@ describe('chat message reducer', () => {
       input: 10, output: 20, total: 30, context_used: 12_500, context_max: 114_688, context_percent: 10.9,
     }))
     expect(current.usage).toMatchObject({ contextTokens: 12_500, contextLimit: 114_688, percentUsed: 10.9 })
+  })
+
+  it('retains the context gauge when completion only updates cumulative counters', () => {
+    let current = applyChatEvent(state(), event('session.usage', { context_used: 12_500, context_max: 114_688 }))
+    current = applyChatEvent(current, event('message.complete', { text: '完成', usage: { total_tokens: 1_900_000 } }))
+    expect(current.usage).toMatchObject({ contextTokens: 12_500, contextLimit: 114_688, totalTokens: 1_900_000 })
+    current = applyChatEvent(current, event('usage.update', { input_tokens: 10 }))
+    expect(current.usage).toMatchObject({ contextTokens: 12_500, contextLimit: 114_688, inputTokens: 10 })
+    current = applyChatEvent(current, event('context.update', { context_used: 0, context_percent: 0 }))
+    expect(current.usage).toMatchObject({ contextTokens: 0, percentUsed: 0 })
   })
 
   it('tracks approval and clarification independently', () => {

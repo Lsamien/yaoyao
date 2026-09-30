@@ -1,3 +1,4 @@
+import { installUnreadBadge } from './unread-badge.mjs'
 import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, utilityProcess, powerMonitor, systemPreferences, dialog, safeStorage, net, session as electronSession } from 'electron'
 import { appendFileSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -56,6 +57,8 @@ else {
     try { return remoteMode && remoteURL ? [new URL(remoteURL).origin] : manager?.state.url ? [new URL(manager.state.url).origin] : [] }
     catch { return [] }
   }
+  const unreadBadge=installUnreadBadge({ipcMain,app,owner:()=>window,origins:serviceOrigins,url:serviceURL,quitting:()=>closing||quitting,fetch:(url,options)=>electronSession.defaultSession.fetch(url,options)})
+  app.on('will-quit',()=>unreadBadge.stop())
   const closeComputerViewer = installComputerViewer({ owner: () => window, origin: () => serviceURL(),
     preload: join(desktopRoot, 'preload.cjs'), quitting: () => quitting })
   app.on('will-quit', closeComputerViewer)
@@ -169,6 +172,7 @@ else {
       catch { /* Invalid navigation is denied. */ }
       event.preventDefault(); safeExternal(url)
     }
+    window.webContents.on('did-start-navigation',(_event,_url,_inPlace,isMainFrame)=>{if(isMainFrame)unreadBadge.clear()})
     window.webContents.on('will-navigate', guardNavigation)
     window.webContents.on('will-redirect', guardNavigation)
     window.webContents.on('will-attach-webview', event => event.preventDefault())
@@ -235,7 +239,7 @@ else {
   function requestQuit(stopBackground = false) {
     if (closing || quitting) return
     const resumeLocal = serverModeActive && manager?.activationRequested === true
-    closing = true; clearInterval(timer)
+    closing = true; unreadBadge.clear(); clearInterval(timer)
     updater?.stopChecking?.(); updater?.cancel(); updateWindow?.close()
     window?.hide()
     // Native Cmd+Q can enter before-quit from Cocoa's termination callback.
@@ -276,7 +280,7 @@ else {
   async function prepareUpdateRestart() {
     if (closing || quitting) throw new Error('App 正在退出，请稍后重试')
     resumeLocalAfterUpdate = serverModeActive && manager?.activationRequested === true
-    closing = true; clearInterval(timer)
+    closing = true; unreadBadge.clear(); clearInterval(timer)
     await environmentHost?.close()
     await hostManager?.stop()
     await runnerManager?.stop()

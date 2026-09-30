@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "approved": false,
+  "brokerUid": 12346,
+  "hermesUid": 12345,
+  "hermesPid": 12345,
+  "approvedAt": 0,
+  "expiresAt": 0,
+  "controls": [
+    "separate-identity",
+    "hermes-no-control-access",
+    "browser-private-no-cdp",
+    "restricted-egress"
+  ]
+}

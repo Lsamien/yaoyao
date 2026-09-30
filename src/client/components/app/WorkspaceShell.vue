@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import UnreadPanel from './UnreadPanel.vue'
+import { useUnreadStore } from '@/stores/unread'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { Profile } from '@shared/types'
@@ -27,6 +29,7 @@ type SettingsPage =
   | 'agent-models'
   | 'account-profile'
   | 'account-security'
+  | 'credential-vault'
   | 'account-mobile'
   | 'appearance'
   | 'system-overview'
@@ -98,6 +101,7 @@ const emit = defineEmits<{
   botSettingsChanged: []
 }>()
 
+const unread=useUnreadStore(),unreadOpen=ref(false)
 const route = useRoute()
 const router = useRouter()
 const mobileDrawerOpen = ref(false)
@@ -443,7 +447,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
-  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)">
+  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="unreadOpen || settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)">
     <header class="mobile-header" :inert="mobileDrawerOpen">
       <button ref="mobileNavigationTrigger" class="icon-button" type="button" aria-label="打开导航" @click="openMobileDrawer">
         <AppIcon name="menu" :size="20" />
@@ -539,6 +543,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
         </div>
       </section>
 
+      <button class="unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" title="未读消息" @click="unreadOpen=true"><AppIcon name="bell" :size="19" /><span v-if="!sidebarCollapsed || applicationWorkspace">未读消息</span><b v-if="unread.total">{{ unread.total>99?'99+':unread.total }}</b></button>
       <div class="sidebar-footer">
         <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
@@ -747,6 +752,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
         </div>
       </div>
     </Teleport>
+  <UnreadPanel v-if="unreadOpen" :mode="applicationWorkspace?'bot':'chat'" @close="unreadOpen=false" />
   </div>
 </template>
 
@@ -994,4 +1000,8 @@ defineExpose({openLocalVm:showLocalVmSettings})
  .workspace-shell--conversation-open>.desktop-sidebar{display:none}
  .workspace-shell--conversation-open>.workspace-main{display:flex}
 }
+</style>
+
+<style scoped>
+.unread-entry{display:flex;align-items:center;gap:10px;margin:8px 12px;padding:10px 12px;border:0;border-radius:10px;background:transparent;color:inherit;text-align:left;cursor:pointer;min-height:44px}.unread-entry:hover{background:var(--surface-hover,rgba(128,128,128,.1))}.unread-entry span{flex:1}.unread-entry b{border-radius:20px;background:var(--accent,#796bcd);color:white;min-width:22px;padding:2px 6px;font-size:12px;white-space:nowrap}.desktop-sidebar--collapsed .unread-entry{position:relative;margin:8px;padding:10px}.desktop-sidebar--collapsed .unread-entry b{position:absolute;top:0;right:0;font-size:10px}@media(max-width:767px){.unread-entry{display:none}}
 </style>

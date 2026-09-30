@@ -137,6 +137,59 @@ describe('ordinary v2 cross-client store', () => {
     await vi.waitFor(() => expect(wire.clients.some((c) => c.id === id)).toBe(true))
     return wire.clients.filter((c) => c.id === id).at(-1)!
   }
+  it('refreshes an opened owned session with the same gauge source order as mobile', async () => {
+    wire.request.mockImplementation(async (method: string) => {
+      if (method === 'session.resume') return { session_id: 'runtime', stored_session_id: 's' }
+      if (method === 'session.usage') return { input_tokens: 1_800_000, output_tokens: 100_000, total_tokens: 1_900_000 }
+      if (method === 'session.context_breakdown') return { context_used: 12_500, context_max: 114_688, context_percent: 10.9 }
+      return {}
+    })
+    await open()
+    await vi.waitFor(() => expect(chat.contextUsage).toMatchObject({
+      totalTokens: 1_900_000, contextTokens: 12_500, contextLimit: 114_688, percentUsed: 10.9,
+    }))
+    expect(wire.request).toHaveBeenCalledWith('session.usage', { session_id: 'runtime' }, 15_000)
+    expect(wire.request).toHaveBeenCalledWith('session.context_breakdown', { session_id: 'runtime' }, 15_000)
+  })
+
+  it('keeps read-only history unattached when context statistics are unavailable', async () => {
+    chat.sessions = [session('s', false)]
+    await chat.selectSession('s', 'p')
+    expect(wire.request).not.toHaveBeenCalled()
+    expect(chat.contextUsage).toBeUndefined()
+  })
+
+  it('does not let a slow usage response replace a newer realtime gauge', async () => {
+    await open()
+    let finish!: (value: unknown) => void
+    wire.request.mockImplementation((method: string) => method === 'session.usage'
+      ? new Promise(resolve => { finish = resolve }) : Promise.resolve({}))
+    const refreshing = chat.refreshContextUsage()
+    emit('session.usage', { context_used: 4000, context_max: 8000, context_percent: 50 })
+    finish({ context_used: 1000, context_max: 8000, context_percent: 12.5 })
+    await refreshing
+    expect(chat.contextUsage).toMatchObject({ contextTokens: 4000, contextLimit: 8000, percentUsed: 50 })
+  })
+
+  it('refreshes context after a turn completed on another client', async () => {
+    const client = await open()
+    await client.changed(snapshot([answer('处理中', { status: 'streaming' })], 's', { running: true }))
+    wire.request.mockImplementation(async (method: string) => method === 'session.usage'
+      ? { context_used: 4000, context_max: 8000 } : {})
+    await client.changed(snapshot([answer()], 's', { running: false }))
+    await vi.waitFor(() => expect(chat.contextUsage).toMatchObject({ contextTokens: 4000, contextLimit: 8000 }))
+  })
+
+  it('restores a confirmed gauge from session metadata without inventing context from history', async () => {
+    wire.request.mockResolvedValue({ session_id: 'runtime', stored_session_id: 's',
+      info: { usage: { context_used: 2000, context_max: 8000 } } })
+    const client = await open()
+    expect(chat.contextUsage).toMatchObject({ contextTokens: 2000, contextLimit: 8000 })
+    await client.changed(snapshot([answer('很长的旧记录'.repeat(200))], 's', {
+      session: { input_tokens: 1_800_000, output_tokens: 100_000 },
+    }))
+    expect(chat.contextUsage).toMatchObject({ contextTokens: 2000, contextLimit: 8000 })
+  })
   it.each(['image_path', 'path', 'ref_path'])('preserves uploaded image %s in pending and canonical messages', async field => {
     const client = await open()
     const paths = ['/home/user/.hermes/images/照片 one.png', '/tmp/photo-two.png']

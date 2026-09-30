@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { chmod, mkdir, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -174,6 +174,13 @@ async function start() {
   process.stdout.write(`已启动 ${label}\n`)
 }
 
+async function restart() {
+  if (!existsSync(plistPath)) throw new Error('服务尚未安装，请先运行 yaoyao service install')
+  if (loaded()) run('launchctl', ['bootout', `${domain}/${label}`])
+  await bootstrapLaunchAgent()
+  process.stdout.write(`已重启 ${label}\n`)
+}
+
 function stop() {
   if (loaded()) run('launchctl', ['bootout', `${domain}/${label}`])
   process.stdout.write(`已停止 ${label}；Hermes 9119 未被操作\n`)
@@ -218,15 +225,21 @@ async function pruneUploads(args) {
 
 async function main() {
   const [, , group, command, ...args] = process.argv
+  if (group === 'version' || group === '--version' || group === '-v') {
+    const { version } = JSON.parse(readFileSync(join(sourceProjectRoot, 'package.json'), 'utf8'))
+    process.stdout.write(`${version}\n`)
+    return
+  }
   if (group === 'service') {
     if (command === 'install') return install()
     if (command === 'start') return start()
+    if (command === 'restart') return restart()
     if (command === 'stop') return stop()
     if (command === 'status') return status()
     if (command === 'uninstall') return uninstall()
   }
   if (group === 'uploads' && command === 'prune') return pruneUploads(args)
-  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao service install|start|stop|status|uninstall\n  yaoyao uploads prune --older-than 30 --yes\n`)
+  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
 }
 
 export function isMainModule(entry = process.argv[1]) {

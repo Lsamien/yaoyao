@@ -21,7 +21,8 @@ const props = withDefaults(defineProps<{
   reasoningOptions?: ComposerOption[]
   contextUsed?: number
   contextLimit?: number
-  contextEstimated?: boolean
+  contextPercent?: number
+  showContext?: boolean
   queueMode?: boolean
   toolTraceVisible?: boolean
   reference?: ComposerReference | null
@@ -49,7 +50,7 @@ const props = withDefaults(defineProps<{
   reasoningOptions: () => [],
   contextUsed: 0,
   contextLimit: 0,
-  contextEstimated: false,
+  showContext: false,
   queueMode: false,
   toolTraceVisible: true,
   reference: null,
@@ -106,8 +107,10 @@ const canStop = computed(() => props.streaming && (props.stopWhileRunning || pro
 // holds a draft, so resource waits can always be cancelled by the user.
 const showStop = computed(() => canStop.value && !text.value.trim() && !attachments.value.length)
 const compactModel = computed(() => props.modelLabel.split('/').filter(Boolean).at(-1) || props.modelLabel)
-const contextPercent = computed(() => props.contextLimit > 0 ? Math.min(100, Math.round(props.contextUsed / props.contextLimit * 100)) : 0)
-const hasContext = computed(() => props.contextLimit > 0)
+const contextPercent = computed(() => Math.max(0, Math.min(100, props.contextPercent
+  ?? (props.contextLimit > 0 ? Math.round(props.contextUsed / props.contextLimit * 100) : 0))))
+const hasContextUsage = computed(() => props.contextUsed > 0)
+const hasContext = computed(() => props.showContext || props.contextLimit > 0 || hasContextUsage.value)
 const remainingContextTokens = computed(() => Math.max(0, props.contextLimit - props.contextUsed))
 const reasoningOptionIndex = computed(() => Math.max(0, props.reasoningOptions.findIndex(option => option.id === props.reasoningValue)))
 const reasoningLabel = computed(() => props.reasoningOptions[reasoningOptionIndex.value]?.label || props.reasoningEffort)
@@ -494,28 +497,23 @@ defineExpose({
 
 <template>
   <div class="composer-area">
-    <div v-if="attachments.length" class="composer-attachments" aria-label="附件">
-      <div v-for="attachment in attachments" :key="attachment.id" class="composer-attachment" :class="{ image: isImage(attachment.type) }">
-        <img v-if="attachment.previewUrl" :src="attachment.previewUrl" :alt="attachment.name" />
-        <AppIcon v-else name="file" :size="19" />
-        <span><strong>{{ attachment.name }}</strong><small>{{ formatSize(attachment.size) }}</small></span>
-        <button type="button" :aria-label="`移除 ${attachment.name}`" @click="removeAttachment(attachment.id)"><AppIcon name="close" :size="12" /></button>
-      </div>
-    </div>
-
     <div v-if="reference" class="composer-reference">
       <AppIcon name="quote" :size="14" />
       <span><small>{{ reference.author ? `回复 ${reference.author}` : '回复消息' }}</small><strong>{{ reference.content.replace(/\s+/g, ' ').trim() }}</strong></span>
       <button type="button" aria-label="取消引用" @click="emit('clearReference')"><AppIcon name="close" :size="13" /></button>
     </div>
 
-    <div v-if="mode === 'group'" class="composer-activity-slot">
-      <Transition name="composer-activity">
-        <div v-if="activityText" class="composer-activity" role="status" aria-label="机器人输入状态" aria-live="polite" aria-atomic="true">
-          <span class="composer-typing-dots" aria-hidden="true"><i /><i /><i /></span>
-          <strong>{{ activityText }}</strong>
-        </div>
-      </Transition>
+    <!-- Status changes share one row without resizing the transcript. -->
+    <div class="composer-activity-slot">
+      <slot name="activity">
+        <Transition name="composer-activity">
+          <div v-if="activityText" class="composer-activity" role="status" aria-label="机器人输入状态" aria-live="polite" aria-atomic="true">
+            <span class="composer-typing-dots" aria-hidden="true"><i /><i /><i /></span>
+            <strong>{{ activityText }}</strong>
+          </div>
+        </Transition>
+      </slot>
+      <span v-if="sending" class="composer-sending" role="status" aria-live="polite"><i />正在发送</span>
     </div>
 
     <slot name="before-input" />
@@ -532,9 +530,20 @@ defineExpose({
       <input ref="fileInput" class="composer-file-input" type="file" multiple @change="onFiles" />
       <div class="composer-resize" title="拖动调整高度；双击复位" @pointerdown="startResize" @dblclick="resetHeight" />
 
-      <div v-if="hasContext" class="composer-context" :class="{ warning: contextPercent > 80 }" :title="contextEstimated ? 'Hermes 未提供实时上下文用量；此数值按当前会话内容估算。' : undefined">
-        <span>{{ contextEstimated ? '约 ' : '' }}{{ formatTokens(contextUsed) }} / {{ formatTokens(contextLimit) }} · 剩余 {{ formatTokens(remainingContextTokens) }}</span>
-        <i><b :style="{ width: `${contextPercent}%` }" /></i>
+      <div v-if="hasContext" class="composer-context" :class="{ warning: hasContextUsage && contextPercent > 80 }" :title="hasContextUsage ? '最近一次模型请求的上下文用量' : '等待服务端提供最近一次模型请求的上下文用量'">
+        <span v-if="!hasContextUsage">等待本轮实际用量 · {{ contextLimit > 0 ? `窗口 ${formatTokens(contextLimit)}` : '窗口未确认' }}</span>
+        <span v-else-if="contextLimit > 0">{{ formatTokens(contextUsed) }} / {{ formatTokens(contextLimit) }} · 剩余 {{ formatTokens(remainingContextTokens) }}</span>
+        <span v-else>当前上下文 {{ formatTokens(contextUsed) }} · 窗口未确认</span>
+        <i v-if="hasContextUsage && contextLimit > 0"><b :style="{ width: `${contextPercent}%` }" /></i>
+      </div>
+
+      <div v-if="attachments.length" class="composer-attachments" aria-label="附件">
+        <div v-for="attachment in attachments" :key="attachment.id" class="composer-attachment" :class="{ image: isImage(attachment.type) }">
+          <img v-if="attachment.previewUrl" :src="attachment.previewUrl" :alt="attachment.name" />
+          <AppIcon v-else name="file" :size="19" />
+          <span><strong>{{ attachment.name }}</strong><small>{{ formatSize(attachment.size) }}</small></span>
+          <button type="button" :aria-label="`移除 ${attachment.name}`" @click="removeAttachment(attachment.id)"><AppIcon name="close" :size="12" /></button>
+        </div>
       </div>
 
       <textarea
@@ -628,12 +637,14 @@ defineExpose({
           <button v-else-if="mentionOptions.length" type="button" class="composer-tool composer-mention-hint" :disabled="disabled" aria-label="提及成员" @click="startMention"><At class="composer-action-icon" aria-hidden="true" /><span>提及成员</span></button>
         </div>
         <div class="composer-actions">
-          <button v-if="mode === 'chat' && streaming && canSubmit" class="queue-toggle" :class="{ active: queueMode }" type="button" :title="queueMode ? '消息将排队发送' : '消息将 Steer 当前会话'" @click="emit('queueToggle')">
-            {{ queueMode ? '排队' : 'Steer' }}
-          </button>
-          <span v-if="sending" class="composer-sending" role="status" aria-live="polite"><i />正在发送</span>
-          <span v-if="canStop && !showStop" class="composer-stop-hitbox">
-            <button class="composer-stop" type="button" aria-label="停止生成" title="停止生成" @click="emit('stop')">
+          <!-- Keep action widths stable when queue/send/stop controls switch. -->
+          <span v-if="mode === 'chat'" class="composer-queue-slot">
+            <button v-if="streaming && canSubmit" class="queue-toggle" :class="{ active: queueMode }" type="button" :title="queueMode ? '消息将排队发送' : '消息将 Steer 当前会话'" @click="emit('queueToggle')">
+              {{ queueMode ? '排队' : 'Steer' }}
+            </button>
+          </span>
+          <span v-if="stopWhileRunning || mode === 'chat'" class="composer-stop-hitbox">
+            <button v-if="canStop && !showStop" class="composer-stop" type="button" aria-label="停止生成" title="停止生成" @click="emit('stop')">
               <AppIcon name="stop" :size="15" />
             </button>
           </span>
@@ -681,7 +692,7 @@ defineExpose({
 
 <style scoped>
 .composer-area { position: relative; z-index: 12; flex: 0 0 auto; padding: 12px max(24px, calc((100% - 760px) / 2)) max(18px, env(safe-area-inset-bottom)); background: var(--conversation-canvas); }
-.composer-activity-slot { display: flex; width: 100%; max-width: 760px; min-height: 20px; margin: 0 auto 3px; align-items: center; }
+.composer-activity-slot { display: flex; width: 100%; max-width: 760px; height: 20px; margin: 0 auto 3px; align-items: center; gap: 8px; }
 .composer-activity { display: inline-flex; min-width: 0; align-items: center; gap: 7px; color: var(--text-muted); font-size: 10px; }
 .composer-activity strong { overflow: hidden; color: var(--text-secondary); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .composer-typing-dots { display: inline-flex; align-items: center; gap: 2px; }.composer-typing-dots i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: composer-typing 1.05s ease-in-out infinite; }.composer-typing-dots i:nth-child(2) { animation-delay: 140ms; }.composer-typing-dots i:nth-child(3) { animation-delay: 280ms; }
@@ -750,6 +761,7 @@ defineExpose({
 .composer-setting-row:hover { background: var(--surface-hover); color: var(--text-primary); }
 .composer-setting-row > span { display: inline-flex; align-items: center; gap: 7px; }
 .queue-toggle { height: 26px; padding: 0 7px; border: 0; border-radius: 8px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 10px; }
+.composer-queue-slot { display: grid; width: 48px; height: 34px; place-items: center; }
 .queue-toggle:hover, .queue-toggle.active { background: var(--surface-hover); color: var(--text-primary); }
 .composer-send-hitbox { display: grid; place-items: center; width: 34px; height: 34px; }
 .composer-stop-hitbox { display: grid; place-items: center; width: 30px; height: 34px; }
@@ -759,10 +771,11 @@ defineExpose({
 .composer-send--stop { background: var(--accent); }
 .composer-stop { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-raised); color: var(--text-secondary); cursor: pointer; transition: color 150ms ease, border-color 150ms ease; }
 .composer-stop:hover { color: var(--danger); border-color: var(--danger); }
-.composer-sending { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 9px; white-space: nowrap; }.composer-sending i { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); animation: composer-pulse 1s ease-in-out infinite; }
+.composer-sending { display: inline-flex; flex-shrink: 0; margin-left: auto; align-items: center; gap: 5px; color: var(--text-muted); font-size: 9px; white-space: nowrap; }.composer-sending i { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); animation: composer-pulse 1s ease-in-out infinite; }
 @keyframes composer-pulse { 50% { opacity: .25; transform: scale(.7); } }
-.composer-attachments { display: flex; width: 100%; max-width: 760px; margin: 0 auto 9px; flex-wrap: wrap; gap: 7px; }
-.composer-attachment { position: relative; display: flex; max-width: 210px; min-height: 48px; align-items: center; gap: 8px; padding: 6px 28px 6px 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text-secondary); }
+.composer-attachments { display: flex; width: 100%; min-width: 0; flex-wrap: wrap; gap: 8px; }
+.composer-context + .composer-attachments { padding-top: 16px; }
+.composer-attachment { position: relative; display: flex; max-width: min(210px, 100%); min-height: 48px; align-items: center; gap: 8px; padding: 6px 28px 6px 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text-secondary); }
 .composer-attachment.image { width: 64px; height: 64px; padding: 0; }
 .composer-attachment img { width: 100%; height: 100%; object-fit: cover; }
 .composer-attachment > span { display: flex; min-width: 0; flex-direction: column; }

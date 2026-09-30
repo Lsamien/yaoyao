@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { writeFile } from 'node:fs/promises'
 async function login(page: Page) {
   await page.goto('/conversations')
   await page.getByRole('textbox', { name: '账号', exact: true }).fill('fixture')
@@ -22,6 +23,153 @@ async function createAgent(page: Page, name: string) {
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
 }
+
+for (const { surface, kind } of [
+  { surface: 'Web', kind: 'direct' }, { surface: 'desktop bridge', kind: 'direct' },
+  { surface: 'Web', kind: 'group' }, { surface: 'desktop bridge', kind: 'group' },
+] as const) {
+test(`sending and queued Bot replies keep the ${kind} chat frame stable through ${surface}`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: surface === 'Web' ? 1280 : 1024, height: 800 })
+  if (surface === 'desktop bridge') await page.addInitScript(() => {
+    Object.assign(window, { yaoyaoDesktop: { deviceHost: async () => ({ deviceHost: 'local' }) } })
+  })
+  await login(page)
+  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
+  const created = await page.request.post('/api/app/agents', { headers, data: { name: `发送布局验收 ${surface} ${kind}`, profile: 'default' } })
+  expect(created.ok(), await created.text()).toBe(true)
+  const agent = (await created.json()).agent
+  const conversations = (await (await page.request.get('/api/app/conversations')).json()).conversations
+  let conversation = conversations.find((c: any) => c.kind === 'direct' && c.memberIds[0] === agent.id)
+  if (kind === 'group') {
+    const peerResponse = await page.request.post('/api/app/agents', { headers, data: { name: `群聊布局成员 ${surface}`, profile: 'default' } })
+    expect(peerResponse.ok(), await peerResponse.text()).toBe(true)
+    const peer = (await peerResponse.json()).agent
+    const groupResponse = await page.request.post('/api/app/conversations', { headers, data: {
+      name: `发送布局群 ${surface}`, memberIds: [agent.id, peer.id], administratorId: agent.id, autoReplyIds: [agent.id],
+    } })
+    expect(groupResponse.ok(), await groupResponse.text()).toBe(true)
+    conversation = (await groupResponse.json()).conversation
+  }
+  await page.goto(`/conversations/${conversation.id}`)
+  const input = page.locator('.composer-textarea')
+  await input.fill('[hold-workspace] 先执行第一条消息')
+  await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  await expect(page.getByTestId('chat-run-thinking-dots')).toBeVisible()
+  await expect(page.locator('.message--assistant')).toBeVisible()
+  await expect(input).toHaveValue('')
+  await input.fill('排队执行第二条消息')
+  const messageIds = await page.locator('[data-message-id]').evaluateAll(rows => rows.map(row => row.getAttribute('data-message-id')))
+  await page.evaluate(() => {
+    const selectors = ['.timeline-header', '.timeline', '.composer-area', '.composer-shell', '.composer-textarea', '.composer-tools', '.composer-actions']
+    const nodes = selectors.map(selector => document.querySelector(selector)!)
+    const previousMessages = [...document.querySelectorAll('[data-message-id]')]
+    const samples: Array<{ connected: boolean; rects: number[][] }> = []
+    let frame: number
+    const record = () => {
+      samples.push({ connected: [...nodes, ...previousMessages].every(node => node.isConnected), rects: nodes.map(node => {
+        const box = node.getBoundingClientRect(); return [box.x, box.y, box.width, box.height]
+      }) })
+      frame = requestAnimationFrame(record)
+    }
+    record()
+    Object.assign(window, { stopSendLayoutRecording: () => { cancelAnimationFrame(frame); return { selectors, samples } } })
+  })
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const pattern = `**/api/app/conversations/${conversation.id}/messages`
+  await page.route(pattern, async route => {
+    expect(route.request().postDataJSON().deviceHost).toBe(surface === 'Web' ? null : 'local')
+    await gate; await route.continue()
+  })
+  try {
+    await page.getByRole('button', { name: '发送消息', exact: true }).click()
+    await expect(page.locator('.composer-sending')).toBeVisible()
+    await page.evaluate(async () => { for (let count = 0; count < 3; count++) await new Promise(requestAnimationFrame) })
+    release()
+    await expect(page.getByText('正在等待可用机器人', { exact: true })).toBeVisible()
+    await expect(input).toHaveValue('')
+    await expect(page.locator('[data-message-id]')).toHaveCount(messageIds.length + 1)
+    await page.screenshot({ path: testInfo.outputPath('send-layout-queued.png') })
+    await page.request.post('http://127.0.0.1:19120/__release')
+    await expect(page.locator('.message--assistant')).toHaveCount(2)
+    await page.request.post('http://127.0.0.1:19120/__release')
+    await expect(page.getByTestId('chat-run-thinking-dots')).toHaveCount(0)
+    await input.fill('完成后再发送一条普通消息')
+    await page.getByRole('button', { name: '发送消息', exact: true }).click()
+    await expect(page.locator('.message--user')).toHaveCount(3)
+    await expect(page.locator('.message--assistant')).toHaveCount(3)
+    await page.request.post('http://127.0.0.1:19120/__release')
+    await expect(page.getByTestId('chat-run-thinking-dots')).toHaveCount(0)
+    await expect(input).toHaveValue('')
+  } finally {
+    release(); await page.unroute(pattern)
+  }
+  const recording = await page.evaluate(() => (window as unknown as { stopSendLayoutRecording(): { selectors: string[]; samples: { connected: boolean; rects: number[][] }[] } }).stopSendLayoutRecording())
+  const recordingPath = testInfo.outputPath('send-layout-frames.json')
+  await writeFile(recordingPath, JSON.stringify(recording, null, 2))
+  await testInfo.attach('send-layout-frames.json', { path: recordingPath, contentType: 'application/json' })
+  expect(recording.samples.every(sample => sample.connected)).toBe(true)
+  for (const [index, selector] of recording.selectors.entries()) {
+    for (let coordinate = 0; coordinate < 4; coordinate++) {
+      const values = recording.samples.map(sample => sample.rects[index]![coordinate]!)
+      expect(Math.max(...values) - Math.min(...values), `${selector} coordinate ${coordinate} shifted`).toBeLessThanOrEqual(1)
+    }
+  }
+})
+}
+
+test('UTF-8 attachments stay inside the composer and retain their names after sending and reload', async ({ page }, testInfo) => {
+  await login(page)
+  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
+  const created = await page.request.post('/api/app/agents', { headers, data: { name: '附件验收', profile: 'default' } })
+  expect(created.ok(), await created.text()).toBe(true)
+  const agent = (await created.json()).agent
+  const conversations = (await (await page.request.get('/api/app/conversations')).json()).conversations
+  const conversation = conversations.find((c: any) => c.kind === 'direct' && c.memberIds[0] === agent.id)
+  await page.goto(`/conversations/${conversation.id}`)
+  const name = '人工智能合同综合质量评估系统V2.0-信息采集表-待确认.docx'
+  const certificate = 'CertificateSigningRequest.certSigningRequest'
+  await page.locator('.composer-file-input').setInputFiles([
+    { name, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from('附件内容保持不变') },
+    { name: certificate, mimeType: 'application/octet-stream', buffer: Buffer.from('certificate') },
+    { name: '图片.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') },
+  ])
+  await page.locator('.composer-textarea').fill('请按格式填写附件')
+  for (const width of [1280, 655, 375]) {
+    await page.setViewportSize({ width, height: 863 })
+    const attachments = page.locator('.composer-shell > .composer-attachments')
+    await expect(attachments.locator('.composer-attachment')).toHaveCount(3)
+    await expect(attachments).toContainText(name)
+    await expect(attachments.getByRole('img', { name: '图片.png' })).toBeVisible()
+    const shell = (await page.locator('.composer-shell').boundingBox())!
+    const tray = (await attachments.boundingBox())!
+    const input = (await page.locator('.composer-textarea').boundingBox())!
+    expect(tray.x).toBeGreaterThan(shell.x)
+    expect(tray.y).toBeGreaterThan(shell.y)
+    expect(tray.x + tray.width).toBeLessThan(shell.x + shell.width)
+    expect(input.y - (tray.y + tray.height)).toBeGreaterThanOrEqual(0)
+    expect(input.y - (tray.y + tray.height)).toBeLessThanOrEqual(12)
+    expect(input.y + input.height).toBeLessThan(shell.y + shell.height)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`composer-attachments-${width}.png`) })
+  }
+  await page.getByRole('button', { name: '移除 图片.png', exact: true }).click()
+  await page.getByRole('button', { name: `移除 ${certificate}`, exact: true }).click()
+  await expect(page.locator('.composer-attachment')).toHaveCount(1)
+  await expect(page.locator('.composer-textarea')).toHaveValue('请按格式填写附件')
+  const uploaded = page.waitForResponse(response => response.url().endsWith('/api/app/uploads') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  expect((await (await uploaded).json()).files[0].name).toBe(name)
+  const file = page.locator('.message-file').filter({ hasText: name })
+  await expect(file).toBeVisible()
+  await expect(file).toHaveAccessibleName(new RegExp(`预览文件 ${name}`))
+  await expect(page.locator('.composer-attachment')).toHaveCount(0)
+  await page.reload()
+  await expect(file).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('utf8-attachment-message.png') })
+})
 
 test('Bot unread dots sync across viewers and neither detail nor read requests delay navigation', async ({ page, context }, testInfo) => {
   await login(page)

@@ -1,6 +1,6 @@
 # 夭夭 AI
 
-当前 Web 与 macOS 桌面发布版本：**v0.4.77**。桌面版提供 Apple Silicon（arm64）客户端正式 DMG；本次未发布完整版桌面安装包，Windows 与 Android 沿用旧版，详见 [发布说明](docs/releases/v0.4.77.md)。
+当前 Web 与 macOS 桌面发布版本：**v0.4.78**。桌面版提供 Apple Silicon（arm64）客户端正式 DMG；本次未发布完整版桌面安装包，Windows 与 Android 沿用旧版，详见 [发布说明](docs/releases/v0.4.78.md)。
 
 夭夭 AI 为网页、iOS 和安卓提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
 
@@ -60,17 +60,19 @@ yaoyao service install
 
 安装后访问 `http://127.0.0.1:15300` 创建管理员账号。macOS 通过 LaunchAgent 开机自启；Linux 的服务安装支持在路线图中。详见 [npm 安装说明](docs/npm-install.md)。
 
+执行 `yaoyao service restart` 重启服务，执行 `yaoyao --version`（或 `yaoyao version` / `yaoyao -v`）查询已安装的 npm 包版本。
+
 ## Docker 安装
 
 远程镜像发布在 [Docker Hub](https://hub.docker.com/r/samienluo/yaoyao)：
 
 | 镜像 | 架构 |
 | --- | --- |
-| `samienluo/yaoyao:v0.4.77-amd` | AMD64 |
-| `samienluo/yaoyao:v0.4.77` | 自动匹配 AMD64 / ARM64 |
-| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.77` 相同 |
+| `samienluo/yaoyao:v0.4.78-amd` | AMD64 |
+| `samienluo/yaoyao:v0.4.78` | 自动匹配 AMD64 / ARM64 |
+| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.78` 相同 |
 
-准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.77`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
+准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.78`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
 
 ```sh
 docker compose --env-file docker.env pull web

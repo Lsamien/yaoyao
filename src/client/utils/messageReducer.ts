@@ -1,9 +1,10 @@
 import type {
-  ApprovalRequest, ChatMessage, ChatRouteState, ChatUsage, ClarificationRequest, JsonValue, RpcEventFrame, ToolCall,
+  ApprovalRequest, ChatMessage, ChatRouteState, ClarificationRequest, JsonValue, RpcEventFrame, ToolCall,
 } from '@shared/types'
 import { createId } from './id'
 import { toolStatus } from '@shared/chatTools'
 import { bool, number, record, string } from './normalize'
+import { normalizeChatUsage } from './contextUsage'
 
 type MergePosition = 'append' | 'prepend' | 'snapshot'
 
@@ -173,20 +174,6 @@ function toolFromEvent(payload: Record<string, unknown>, status: ToolCall['statu
   }
 }
 
-function normalizeUsage(payload: Record<string, unknown>): ChatUsage | undefined {
-  const raw = record(payload.usage ?? payload)
-  if (!Object.keys(raw).length) return undefined
-  return {
-    inputTokens: number(raw.input_tokens ?? raw.input ?? raw.prompt) || undefined,
-    outputTokens: number(raw.output_tokens ?? raw.output ?? raw.completion) || undefined,
-    totalTokens: number(raw.total_tokens ?? raw.total) || undefined,
-    contextTokens: number(raw.context_tokens ?? raw.context_used ?? raw.current_tokens ?? raw.used) || undefined,
-    contextLimit: number(raw.context_limit ?? raw.context_max ?? raw.max_tokens ?? raw.limit) || undefined,
-    percentUsed: number(raw.percent_used ?? raw.context_percent ?? raw.percentage) || undefined,
-    raw: raw as JsonValue,
-  }
-}
-
 function updateStreamingMessage(
   state: ChatRouteState,
   payload: Record<string, unknown>,
@@ -302,7 +289,8 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
       next.isStreaming = waitingForOutput
       next.isQueued = false
       next.liveStatus = undefined
-      next.usage = normalizeUsage(payload) ?? next.usage
+      const usage = normalizeChatUsage(payload)
+      if (usage) next.usage = { ...next.usage, ...usage }
       if (failed) next.error = string(payload.error ?? payload.text ?? payload.message, '运行失败')
       break
     }
@@ -323,9 +311,11 @@ export function applyChatEvent(state: ChatRouteState, event: RpcEventFrame['para
       break
     case 'session.usage':
     case 'usage.update':
-    case 'context.update':
-      next.usage = normalizeUsage(payload)
+    case 'context.update': {
+      const usage = normalizeChatUsage(payload)
+      if (usage) next.usage = { ...next.usage, ...usage }
       break
+    }
     case 'tool.start':
     case 'tool.progress':
     case 'tool.started':

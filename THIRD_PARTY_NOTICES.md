@@ -14,3 +14,11 @@ Avatar silhouette paths and original two-eye expressions from zhulin025/LaoA-Gro
 ## OpenMausBot macOS updater preparation
 
 `scripts/patch-mac-updater.mjs` is adapted from OpenMausBot commit 13c5005b (Apache-2.0), Copyright 2026 Milind Soni and OpenMausBot contributors. It waits for Squirrel.Mac's native readiness before allowing a restart. The packaged electron-updater bundle retains its dependencies' license comments. See `licenses/OpenMausBot/LICENSE` and `NOTICE`.
+
+## libsodium.js credential vault cryptography
+
+`libsodium-wrappers-sumo` 0.8.4 and its locked `libsodium-sumo` 0.8.4 dependency provide Argon2id and XChaCha20-Poly1305 for the manually unlocked credential vault. Copyright 2015-2026 Ahmad Ben Mrad, Frank Denis and Ryan Lester. ISC license: see `licenses/libsodium.js/LICENSE`. Source: https://github.com/jedisct1/libsodium.js.
+
+## ssh2 credential execution
+
+`ssh2` 1.17.0 provides SSH public-key authentication, host key verification and SFTP for the protected credential executor. Copyright Brian White. MIT license: see `licenses/ssh2/LICENSE`. Source: https://github.com/mscdex/ssh2. Installation lifecycle scripts are not required for the pure JavaScript fallback.

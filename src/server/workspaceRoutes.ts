@@ -527,7 +527,7 @@ export function workspaceRouter(
       ctx.type = activeContent ? 'application/octet-stream' : file.mimeType
       ctx.set(
         'Content-Disposition',
-        `${action === 'preview' && !activeContent ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        `${action === 'preview' && !activeContent ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(publicFile(file).name)}`,
       )
       ctx.set('Accept-Ranges', 'bytes')
       ctx.set('Cache-Control', 'private, no-store')

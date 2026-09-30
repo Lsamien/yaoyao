@@ -2,6 +2,36 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ComposerShell from '@/components/composer/ComposerShell.vue'
 
+describe('composer context gauge', () => {
+  it('shows unknown measurements instead of inventing a 256k window or remaining budget', async () => {
+    const wrapper = mount(ComposerShell, { props: { showContext: true } })
+    expect(wrapper.get('.composer-context').text()).toBe('等待本轮实际用量 · 窗口未确认')
+    expect(wrapper.find('.composer-context i').exists()).toBe(false)
+    await wrapper.setProps({ contextLimit: 262_144 })
+    expect(wrapper.get('.composer-context').text()).toBe('等待本轮实际用量 · 窗口 256.0k')
+    expect(wrapper.text()).not.toContain('剩余')
+    wrapper.unmount()
+  })
+
+  it('uses confirmed context and server percentage, and clears the gauge after reset', async () => {
+    const wrapper = mount(ComposerShell, { props: { showContext: true, contextUsed: 2000, contextLimit: 8000, contextPercent: 45.5 } })
+    expect(wrapper.get('.composer-context').text()).toBe('2.0k / 7.8k · 剩余 5.9k')
+    expect(wrapper.get('.composer-context b').attributes('style')).toContain('45.5%')
+    expect(wrapper.get('.composer-context').attributes('title')).toContain('最近一次模型请求')
+    await wrapper.setProps({ contextUsed: 0, contextPercent: 0 })
+    expect(wrapper.get('.composer-context').text()).toBe('等待本轮实际用量 · 窗口 7.8k')
+    expect(wrapper.find('.composer-context i').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows confirmed occupancy without pretending the model window is known', () => {
+    const wrapper = mount(ComposerShell, { props: { showContext: true, contextUsed: 12_500 } })
+    expect(wrapper.get('.composer-context').text()).toBe('当前上下文 12.2k · 窗口未确认')
+    expect(wrapper.find('.composer-context i').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
 beforeEach(() => {
   const values = new Map<string, string>()
   vi.stubGlobal('localStorage', {

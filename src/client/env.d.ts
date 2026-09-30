@@ -11,6 +11,7 @@ interface ImportMeta {
 
 interface Window {
   yaoyaoDesktop?: {
+    unreadState?(accountId: string | null): Promise<void>
     openLogin?(): Promise<unknown>
     forgetLogin?(): Promise<unknown>
     openUpdates?(): Promise<void>

@@ -577,6 +577,20 @@ export class ChatTranscriptStore {
           .prepare('INSERT OR IGNORE INTO chat_transcript_reads VALUES(?,?,?,?)')
           .run(owner, profile, sessionId, m.id)
   }
+  unreadMessages(...scope: Scope): TranscriptMessage[] {
+    this.unread(...scope)
+    return this.db.prepare(`SELECT m.data FROM chat_transcript_messages m LEFT JOIN chat_transcript_reads r USING(owner,profile,session_id,id)
+      WHERE m.owner=? AND m.profile=? AND m.session_id=? AND m.deleted=0 AND r.id IS NULL ORDER BY m.seq,m.id`).all(...scope)
+      .map(row=>JSON.parse(String(row.data)) as TranscriptMessage).filter(m=>m.final_result===true && isFinalChatResult(m))
+  }
+  markMessagesRead(owner:string,profile:string,sessionId:string,ids:string[]):void {
+    const selected=new Set(ids)
+    const head=this.head(owner,profile,sessionId);head.localReadEstablished=true
+    this.db.prepare('UPDATE chat_transcript_heads SET data=? WHERE owner=? AND profile=? AND session_id=?').run(JSON.stringify(head),owner,profile,sessionId)
+    for(const m of this.unreadMessages(owner,profile,sessionId))if(selected.has(m.id))
+      this.db.prepare('INSERT OR IGNORE INTO chat_transcript_reads VALUES(?,?,?,?)').run(owner,profile,sessionId,m.id)
+    this.notify()
+  }
   unread(...scope: Scope): number {
     // Legacy read cursors can finish importing after the initial local snapshot.
     // Map only persisted source rows, never consume a live streaming result.

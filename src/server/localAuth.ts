@@ -232,6 +232,12 @@ export class LocalAuthStore {
     return this.currentFromCookieHeader(ctx.get('cookie'))
   }
 
+  /** Opaque vault binding; callers must separately validate the session. */
+  sessionBinding(cookieHeader: string | undefined): string | undefined {
+    const token = parse(cookieHeader ?? '')[SESSION_COOKIE]
+    return token ? createHash('sha256').update('yaoyao-vault-session-v1\0').update(token).digest('hex') : undefined
+  }
+
   /** Resolve the same authenticated user for non-Koa transports such as WS Upgrade. */
   currentFromCookieHeader(cookieHeader: string | undefined): LocalUser | undefined {
     const token = parse(cookieHeader ?? '')[SESSION_COOKIE]

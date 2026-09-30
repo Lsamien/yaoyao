@@ -1,6 +1,10 @@
 /** Owner-scoped Bot endpoints. Keep native and administrative surfaces denied. */
 export function isWorkspaceAccountPath(method: string, path: string): boolean {
   const read = method === 'GET' || method === 'HEAD'
+  if(read&&path==='/api/app/vault')return true
+  if(method==='POST'&&/^\/api\/app\/vault\/(initialize|unlock|lock|rotate|backup|restore|entries|leases)$/.test(path))return true
+  if(['PUT','DELETE'].includes(method)&&/^\/api\/app\/vault\/entries\/[0-9a-f-]{36}$/.test(path))return true
+  if(method==='DELETE'&&/^\/api\/app\/vault\/leases\/[0-9a-f-]{36}$/.test(path))return true
   if (read && /^\/api\/app\/workspace\/(snapshot|projects|memories|memory-export|memory-jobs|collaboration)$/.test(path)) return true
   if (read && /^\/api\/app\/workspace\/memories\/[^/]+\/revisions$/.test(path)) return true
   return method === 'POST' && /^\/api\/app\/workspace\/(projects|memories|memories\/forget|memory-jobs\/[^/]+\/retry|collaboration\/[^/]+\/stop)$/.test(path)
