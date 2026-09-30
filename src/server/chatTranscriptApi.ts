@@ -32,7 +32,7 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     }catch(error){store.db.exec('ROLLBACK TO transcript_snapshot; RELEASE transcript_snapshot');throw error}
   })
   router.get('/api/app/chat/sessions/:id/events',ctx=>{
-    const {owner,profile,id}=scope(ctx),version=auth.pushAuthorizationVersion(owner)
+    const {owner,profile,id}=scope(ctx),version=auth.pushAuthorizationVersion(owner),cookie=ctx.get('cookie')
     const raw=ctx.get('last-event-id')||String(ctx.query.after??''),parts=raw.split(':')
     let cursor=Number(parts.at(-1)),closed=false,lastFlush=0,ready=false
     transcripts.seed(owner,profile,id)
@@ -40,7 +40,7 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     if(parts.length!==2||parts[0]!==epoch||!Number.isSafeInteger(cursor)||cursor<0||cursor>transcripts.cursor(owner,profile,id))throw new HttpError(409,'聊天事件需要重新同步','transcript_reset')
     const res=ctx.res
     let timer:ReturnType<typeof setTimeout>|undefined,heartbeat:ReturnType<typeof setInterval>|undefined,off=()=>{}
-    const valid=()=>!store.isClosed&&auth.isUserActive(owner)&&auth.pushAuthorizationVersion(owner)===version&&auth.current(ctx)?.id===owner&&store.ownsSession(owner,profile,id)&&auth.canUseSource(owner,'local',profile)
+    const valid=()=>!store.isClosed&&auth.isUserActive(owner)&&auth.pushAuthorizationVersion(owner)===version&&auth.currentFromCookieHeader(cookie)?.id===owner&&store.ownsSession(owner,profile,id)&&auth.canUseSource(owner,'local',profile)
     const close=()=>{if(closed)return;closed=true;clearTimeout(timer);clearInterval(heartbeat);off();if(!res.writableEnded)res.end()}
     const write=(value:string)=>{
       if(closed||res.destroyed||!valid()){close();return false}

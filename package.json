@@ -25,6 +25,7 @@
     "brand:verify": "node scripts/verify-brand.mjs",
     "release:verify": "node scripts/verify-release.mjs",
     "verify:lifecycle": "node scripts/verify-lifecycle.mjs",
+    "test:pair:mobile": "node --import tsx --test scripts/verify-mobile-pair.test.ts",
     "test:e2e:workspace": "npm run build && playwright test -c playwright.workspace.config.ts",
     "test:e2e:desktop-hosts": "npm run build && playwright test -c playwright.desktop-hosts.config.ts",
     "test:e2e:team-tools": "npm run build && playwright test -c playwright.team-tools.config.ts",

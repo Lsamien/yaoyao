@@ -186,8 +186,13 @@ export class RealtimeAPI {
           ? { epoch: canonicalEpoch(body.epoch), cursor: groupCursor(body.cursor) } : undefined)
         ctx.status = 201; ctx.body = { id: c.id, brokerEpoch: this.broker.epoch }; return
       }
-      const receipt = /^\/commands\/([A-Za-z0-9:_-]{1,200})$/.exec(path)
-      if (receipt && ctx.method === 'GET') { ctx.body = this.broker.receipt(principal, receipt[1]!); return }
+      const receipt = /^\/commands\/([^/]+)$/.exec(path)
+      if (receipt && ctx.method === 'GET') {
+        let id: string
+        try { id = decodeURIComponent(receipt[1]!) } catch { throw new HttpError(400, 'Invalid request ID', 'invalid_request_id') }
+        if (!/^[A-Za-z0-9:_-]{1,200}$/.test(id)) throw new HttpError(400, 'Invalid request ID', 'invalid_request_id')
+        ctx.body = this.broker.receipt(principal, id); return
+      }
       const channel = /^\/channels\/([0-9a-f-]{36})(?:\/(commands|events))?$/.exec(path)
       if (!channel) throw new HttpError(404, 'Realtime route not found', 'not_found')
       const c = this.broker.get(principal, channel[1]!)

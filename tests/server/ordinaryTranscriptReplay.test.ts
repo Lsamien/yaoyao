@@ -33,7 +33,7 @@ it.each([300, 1000])('replays %i committed events through the HTTP router before
   }
   const finalCursor = store.transcripts.cursor(...scope)
   const auth = {
-    require: () => ({ id: scope[0] }), current: () => ({ id: scope[0] }),
+    require: () => ({ id: scope[0] }), currentFromCookieHeader: () => ({ id: scope[0] }),
     canUseSource: () => true, isUserActive: () => true, pushAuthorizationVersion: () => 1,
   } as unknown as LocalAuthStore
   const router = chatTranscriptRouter({ store, schedule: () => {} } as unknown as ChatCacheCoordinator, auth)
