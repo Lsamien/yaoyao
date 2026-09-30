@@ -69,6 +69,14 @@ describe('subaccount registration and approval through real middleware', () => {
     expect(snapshot.agents.map((a: any) => a.id)).toEqual([create.body.agent.id])
     expect(snapshot.conversations).toHaveLength(1)
     expect((await call(admin, 'get', '/api/app/workspace/snapshot')).body.agents).toEqual([])
+    // The shared unread centre is owner-scoped, including Bot-only accounts.
+    expect((await call(child, 'get', '/api/app/unread').expect(200)).body.total).toBe(0)
+    await call(child, 'head', '/api/app/unread').expect(200)
+    await call(child, 'post', '/api/app/unread/read').send({ items: [] }).expect(403)
+    await call(child, 'post', '/api/app/unread/read', login.body.csrfToken).send({ items: [] }).expect(200)
+    const adminAgent = (await call(admin, 'post', '/api/app/agents', csrf).send({ name: '管理员 Bot', profile: 'allowed' }).expect(201)).body.agent
+    const adminConversation = (await call(admin, 'get', '/api/app/conversations').expect(200)).body.conversations.find((c: any) => c.memberIds.includes(adminAgent.id))
+    await call(child, 'post', '/api/app/unread/read', login.body.csrfToken).send({ items: [{ mode: 'bot', id: adminConversation.id, messages: [] }] }).expect(404)
     await call(child, 'get', '/api/app/workspace/projects').expect(200)
     await call(child, 'get', '/api/app/workspace/collaboration').expect(200)
     await call(child, 'get', '/api/app/workspace/memory-jobs').expect(200)
