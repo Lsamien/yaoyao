@@ -982,7 +982,7 @@ it('keeps an unconfirmed turn separate from a later reply and retries history wi
   }
   const run = runtime.send(owner, c.id, { requestId: randomUUID(), content: '只执行一次' })
   await vi.waitFor(() => expect(requests.filter(r => r.method === 'session.resume').length).toBeGreaterThanOrEqual(1), { timeout: 3000 })
-  expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('uncertain')
+  await vi.waitFor(() => expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('uncertain'), { timeout: 3000 })
   expect(store.messages(owner, c.id).at(-1)?.content).not.toBe('另一轮回复')
   recoveryHistory = [{ role: 'user', content: prompt }, { role: 'assistant', content: '本轮结果' }]
   await vi.waitFor(() => expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('complete'), { timeout: 4000 })
