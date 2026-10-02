@@ -4,6 +4,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/common/AppIcon.vue'
 import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
+import StandaloneDialog from '@/components/common/StandaloneDialog.vue'
+import type { SessionSummary } from '@shared/types'
 import type { ChoiceOption } from '@/components/common/types'
 import ComposerShell from '@/components/composer/ComposerShell.vue'
 import ModelChoiceDialog from '@/components/composer/ModelChoiceDialog.vue'
@@ -46,6 +48,9 @@ const showThinking = ref(false)
 const queueMode = ref(false)
 const actionSessionId = ref('')
 const renaming = ref(false)
+const pendingDeleteSession = ref<Pick<SessionSummary, 'id' | 'profile' | 'title'> | null>(null)
+const deletingSession = ref(false)
+const deleteSessionError = ref('')
 const renameValue = ref('')
 const actionMenuPosition = ref({ x: 8, y: 8 })
 const composer = ref<InstanceType<typeof ComposerShell> | null>(null)
@@ -337,12 +342,35 @@ function navigateOutline(target: { messageId: string; anchorId: string }) {
   if (window.matchMedia('(max-width: 900px)').matches) closeInspector()
 }
 
-async function deleteSession() {
-  const session = chat.sessions.find(item => item.id === actionSessionId.value)
+function confirmDeleteSession() {
+  const session = actionSession.value
   if (!session) return
-  await chat.removeSession(session.id, session.profile)
+  pendingDeleteSession.value = { id: session.id, profile: session.profile, title: session.title }
+  deleteSessionError.value = ''
   closeSessionActions()
-  if (route.params.sessionId === session.id) await router.replace('/chat')
+}
+
+function cancelDeleteSession() {
+  if (deletingSession.value) return
+  pendingDeleteSession.value = null
+  deleteSessionError.value = ''
+  void nextTick(() => headerSessionMenuButton.value?.focus())
+}
+
+async function deleteSession() {
+  const session = pendingDeleteSession.value
+  if (!session || deletingSession.value) return
+  deletingSession.value = true
+  deleteSessionError.value = ''
+  try {
+    await chat.removeSession(session.id, session.profile)
+    if (route.params.sessionId === session.id) await router.replace({ path: '/chat', query: { profile: session.profile } })
+    pendingDeleteSession.value = null
+  } catch (cause) {
+    deleteSessionError.value = cause instanceof Error ? cause.message : '删除失败，请重试'
+  } finally {
+    deletingSession.value = false
+  }
 }
 
 async function branch() {
@@ -517,6 +545,17 @@ watch(() => chat.activeSessionId, async id => {
 
   <ModelChoiceDialog :open="modelDialog" :options="chat.models" :selected-id="selectedModelId" :busy="modelSwitching" @close="modelDialog = false" @select="selectModel" />
 
+  <StandaloneDialog v-if="pendingDeleteSession" title="删除会话" compact :before-close="() => !deletingSession" @close="cancelDeleteSession">
+    <div class="session-delete" :aria-busy="deletingSession">
+      <p>确定删除「{{ pendingDeleteSession.title || '新会话' }}」吗？删除后无法恢复。</p>
+      <p v-if="deleteSessionError" class="session-delete-error" role="alert">{{ deleteSessionError }}</p>
+      <div class="session-delete-actions">
+        <button class="quiet-button" type="button" :disabled="deletingSession" @click="cancelDeleteSession">取消</button>
+        <button class="solid-button session-delete-confirm" type="button" :disabled="deletingSession" @click="deleteSession">{{ deletingSession ? '删除中…' : '删除' }}</button>
+      </div>
+    </div>
+  </StandaloneDialog>
+
   <Teleport to="body">
     <Transition name="session-menu">
       <section v-if="actionSessionId" class="session-actions" :style="actionMenuStyle" role="menu" aria-label="会话操作" @contextmenu.prevent>
@@ -529,7 +568,7 @@ watch(() => chat.activeSessionId, async id => {
           <button v-if="actionSessionId === chat.activeSessionId" class="action-row" role="menuitem" type="button" :disabled="chat.isStreaming || chat.isQueued || chat.isSending || chat.activeRouteState?.isLoadingHistory" @click="forceRefreshHistory"><AppIcon name="refresh" :size="14" />强制刷新历史</button>
           <button class="action-row" role="menuitem" type="button" @click="toggleSessionPinned"><AppIcon :name="actionSession?.pinned ? 'pin-off' : 'pin'" :size="14" />{{ actionSession?.pinned ? '取消置顶' : '置顶会话' }}</button>
           <button class="action-row" role="menuitem" type="button" @click="renaming = true"><AppIcon name="edit" :size="14" />重命名</button>
-          <button class="action-row danger" role="menuitem" type="button" @click="deleteSession"><AppIcon name="trash" :size="14" />删除会话</button>
+          <button class="action-row danger" role="menuitem" type="button" @click="confirmDeleteSession"><AppIcon name="trash" :size="14" />删除会话</button>
         </template>
       </section>
     </Transition>
@@ -538,6 +577,14 @@ watch(() => chat.activeSessionId, async id => {
 
 <style scoped>
 .chat-workspace { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
+.session-delete p { margin: 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.session-delete .session-delete-error { margin-top: 12px; color: var(--danger); }
+.session-delete-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+.session-delete-actions button { min-width: 80px; min-height: 44px; font-size: 14px; }
+.session-delete-confirm { border-color: var(--danger); background: var(--danger); color: var(--text-on-solid); }
+.session-delete-confirm:hover { transform: none; filter: brightness(.95); }
+.session-delete-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-delete-actions button:disabled { opacity: .6; cursor: wait; }
 .sidebar-primary-action { display: flex; width: 100%; min-height: 40px; align-items: center; gap: 10px; padding: 0 11px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 12px; font-weight: 610; text-align: left; transition: background-color 120ms ease; }
 .sidebar-primary-action:hover, .sidebar-primary-action:focus-visible { background: var(--surface-hover); outline: 0; }
 .sidebar-primary-action:focus-visible { box-shadow: inset 0 0 0 1px var(--line-strong); }

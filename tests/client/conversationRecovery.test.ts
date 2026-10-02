@@ -1,18 +1,21 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
-import { shallowRef } from 'vue'
+import { defineComponent, shallowRef } from 'vue'
 import { createMemoryHistory, createRouter, matchedRouteKey } from 'vue-router'
 import ConversationsView from '@/views/ConversationsView.vue'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
 import { apiRequest } from '@/api/client'
+import { useUnreadStore } from '@/stores/unread'
 
 vi.mock('@/api/client', async importOriginal => ({ ...await importOriginal<typeof import('@/api/client')>(), apiRequest: vi.fn(), setApiCsrfToken: vi.fn() }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 'owner' }, profiles: [], refreshProfileAvatars: async () => {} }) }))
 vi.mock('@/stores/theme', () => ({ useThemeStore: () => ({}) }))
 let wrapper: VueWrapper | undefined
 const sources: Array<{ url: string; close: ReturnType<typeof vi.fn> }> = []
+const scrollToMessage = vi.fn(() => true)
 beforeEach(() => {
   vi.useFakeTimers()
+  useUnreadStore().reset(); scrollToMessage.mockReset().mockReturnValue(true)
   sources.length = 0
   vi.stubGlobal('EventSource', class extends EventTarget {
     readonly close = vi.fn()
@@ -21,14 +24,20 @@ beforeEach(() => {
 })
 afterEach(() => {
   wrapper?.unmount(); wrapper = undefined
+  useUnreadStore().reset()
   vi.mocked(apiRequest).mockReset(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers()
 })
-async function mountView(path = '/conversations') {
+async function mountView(path = '/conversations', stubTimeline = false) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/conversations/:id?', component: { template: '<div />' } }] })
   await router.push(path); await router.isReady()
   wrapper = shallowMount(ConversationsView, { global: {
     provide: { [matchedRouteKey as symbol]: shallowRef(router.currentRoute.value.matched[0]) }, plugins: [router],
-    stubs: { WorkspaceShell: { template: '<div><slot name="sidebar" /><slot /></div>' }, ComposerShell: { template: '<div />', methods: { filesSnapshot: () => [] } }, Teleport: true },
+    stubs: { WorkspaceShell: { template: '<div><slot name="sidebar" /><slot /></div>' }, ComposerShell: { template: '<div />', methods: { filesSnapshot: () => [] } }, Teleport: true,
+      ...(stubTimeline ? { MessageTimeline: defineComponent({
+        name: 'WorkspaceMessageTimeline', props: ['messages', 'title'], emits: ['visibleMessages'], template: '<div />',
+        methods: { scrollToMessage, scrollToBottom() {}, isFollowingBottom: () => true },
+      }) } : {}),
+    },
   } })
   await flushPromises()
 }
@@ -110,4 +119,53 @@ it('aborts a pending detail on going offline and ignores its late response', asy
   await flushPromises(); await vi.advanceTimersByTimeAsync(5000)
   expect(wrapper!.findComponent(WorkspaceMessageTimeline).props('title')).not.toBe('迟到会话')
   expect(sources).toHaveLength(0)
+})
+
+it.each([true, false])('resumes visible-message reads when entering the already-open conversation (target found: %s)', async found => {
+  const unread = useUnreadStore()
+  const pending = {
+    total: 2, bot: 2, chat: 0, conversations: [{ mode: 'bot' as const, id: 'c', name: '研发助手', preview: '回复', count: 2, updatedAt: 1,
+      messages: [{ id: 'first', seq: 1, version: 1 }, { id: 'second', seq: 2, version: 1 }],
+    }],
+  }
+  vi.mocked(apiRequest).mockImplementation(async path => {
+    if (path === '/api/app/unread') return pending as never
+    if (path === '/api/app/unread/read') return { ...pending, total: 1, bot: 1,
+      conversations: [{ ...pending.conversations[0], count: 1, messages: [pending.conversations[0]!.messages[1]] }],
+    } as never
+    if (path.startsWith('/api/app/conversations/c')) return {
+      conversation: { id: 'c', kind: 'direct', name: '研发助手', memberIds: [], readSeq: 0, lastSeq: 2 },
+      messages: ['first', 'second'].map(id => ({ id, role: 'assistant', status: 'complete', content: '回复', attachments: [], tools: [], createdAt: 1 })),
+      hasOlder: false, run: null, interactions: [], context: null,
+    } as never
+    return successfulResponse(path) as never
+  })
+  unread.start('owner'); await flushPromises()
+  await mountView('/conversations/c', true)
+  expect(wrapper!.findComponent(WorkspaceMessageTimeline).props('title')).toBe('研发助手')
+  scrollToMessage.mockReturnValue(found)
+  await wrapper!.vm.$router.push({ query: { unread: found ? 'first' : 'removed-message' } }); await flushPromises()
+  expect(scrollToMessage).toHaveBeenCalledWith(found ? 'first' : 'removed-message')
+  expect(wrapper!.vm.$router.currentRoute.value.query.unread).toBeUndefined()
+  wrapper!.findComponent(WorkspaceMessageTimeline).vm.$emit('visibleMessages', ['first'])
+  await flushPromises()
+  expect(unread.total).toBe(1)
+  expect(unread.snapshot.conversations[0]?.messages.map(message => message.id)).toEqual(['second'])
+  expect(apiRequest).toHaveBeenCalledWith('/api/app/unread/read', expect.objectContaining({
+    body: { items: [{ mode: 'bot', id: 'c', messages: [{ id: 'first', seq: 1, version: 1 }] }] },
+  }))
+})
+
+it('locates an unread target after opening and loading a different conversation', async () => {
+  vi.mocked(apiRequest).mockImplementation(async path => {
+    if (path.startsWith('/api/app/conversations/c')) return {
+      conversation: { id: 'c', kind: 'direct', name: '研发助手', memberIds: [], readSeq: 0, lastSeq: 1 },
+      messages: [{ id: 'first', role: 'assistant', status: 'complete', content: '回复', attachments: [], tools: [], createdAt: 1 }],
+      hasOlder: false, run: null, interactions: [], context: null,
+    } as never
+    return successfulResponse(path) as never
+  })
+  await mountView('/conversations/c?unread=first', true)
+  expect(scrollToMessage).toHaveBeenCalledWith('first')
+  expect(wrapper!.vm.$router.currentRoute.value.query.unread).toBeUndefined()
 })

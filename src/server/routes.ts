@@ -356,6 +356,8 @@ function isMissingSessionResponse(response: UpstreamResponse): boolean {
     const payload = parseJson(response)
     if (payload.code === 'session_not_found') return true
     const detail = payload.detail
+    // Hermes also uses this detail for a stored session absent from its history.
+    if (typeof detail === 'string' && /^not found[.!]?$/i.test(detail.trim())) return true
     const message = [payload.error, payload.message, detail,
       detail && typeof detail === 'object' && 'message' in detail ? detail.message : undefined]
       .find(value => typeof value === 'string')
@@ -2305,6 +2307,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       if (isMissingSessionResponse(existing)) {
         // Only this account's cached copy remains; no upstream mutation is needed.
         dependencies.chatCache?.store.deleteSession(owner, profile, id)
+        dependencies.onChatListChanged?.(owner, profile, id)
         ctx.body = { ok: true }
         return
       }
@@ -2320,6 +2323,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
           profile,
           id,
         )
+        dependencies.onChatListChanged?.(owner, profile, id)
       }
       if (alreadyMissing) {
         ctx.body = { ok: true }

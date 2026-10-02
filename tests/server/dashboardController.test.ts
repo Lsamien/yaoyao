@@ -14,6 +14,7 @@ function fixture(options: { upstream?: URL; platform?: NodeJS.Platform; label?: 
       return `${service} = {\n\targuments = {\n\t\t${options.command ?? '/server/.hermes/venv/bin/python\n\t\t/server/.hermes/hermes-agent/hermes\n\t\tdashboard'}\n\t\t--host\n\t\t127.0.0.1\n\t}\n\tpid = ${pid}\n}`
     }
     if (command === '/usr/sbin/lsof') return `p${listener}\n`
+    if (command === '/bin/launchctl' && args[0] === 'list') return available ? `${pid}\t0\t${service.split('/').at(-1)}\n` : ''
     if (command === '/bin/launchctl' && args[0] === 'kickstart') { pid = replacement; listener = replacement; return '' }
     throw new Error('unexpected command')
   })
@@ -46,6 +47,17 @@ it('supports the standard Hermes LaunchAgent only when it owns the configured li
   const f = fixture({ label: 'ai.hermes.dashboard', command: '/server/.local/bin/hermes\n\t\tdashboard' })
   await f.controller.refresh(); await f.controller.restart()
   expect(f.mutations()[0]?.[1]).toEqual(['kickstart', '-k', 'gui/501/ai.hermes.dashboard'])
+})
+
+it.each([
+  '/server/.hermes/venv/bin/python3\n\t\t-m\n\t\thermes_cli.main\n\t\tdashboard',
+  '/server/.hermes/venv/bin/python\n\t\t/server/.hermes/hermes-agent/hermes_cli/main.py\n\t\tserve',
+  '/server/.local/bin/hermes\n\t\t--profile\n\t\tyaoyao\n\t\tdashboard',
+])('recognizes supported Hermes entry points under a custom LaunchAgent label: %s', async command => {
+  const f = fixture({ label: 'local.custom.hermes', command })
+  await f.controller.refresh(); expect(f.controller.canRestart).toBe(true)
+  await f.controller.restart()
+  expect(f.mutations()[0]?.[1]).toEqual(['kickstart', '-k', 'gui/501/local.custom.hermes'])
 })
 
 it.each([
@@ -133,4 +145,70 @@ it('serializes restarts and stops verification when the server shuts down', asyn
   await expect(pending).rejects.toThrow('未恢复健康')
   expect(f.controller.canRestart).toBe(false)
   expect(f.run).not.toHaveBeenCalled()
+})
+
+function standaloneFixture() {
+  let pid = 1043, running = true, uid = 501, parent = 99
+  let command = '/server/venv/bin/python3 -m hermes_cli.main dashboard --host 0.0.0.0 --port 9119 --no-open'
+  let jobs = '', stopped = true, cwd = '/server/hermes-agent'
+  const run = vi.fn(async (program: string, args: string[]) => {
+    if (program === '/usr/sbin/lsof') return args.includes('cwd') ? `p${pid}\nfcwd\nn${cwd}\n` : running ? `p${pid}\n` : ''
+    if (program === '/bin/launchctl' && args[0] === 'list') return jobs
+    if (program === '/bin/launchctl') throw new Error('no managed job')
+    if (program === '/bin/ps') {
+      if (args[1] === '99') return '501 98 /bin/zsh -l\n'
+      if (running && args[1] === String(pid)) return `${uid} ${parent} ${command}\n`
+      throw new Error('process exited')
+    }
+    if (program === '/bin/kill' && args[1] === String(pid)) { if (stopped) running = false; return '' }
+    throw new Error('unexpected command')
+  })
+  const launch = vi.fn(async (program: string, args: string[], directory: string) => { pid = 2043; parent = 500; jobs = '500\t0\tcom.samien.hermes-yaoyao\n'; running = true; command = [program, ...args].join(' '); cwd = directory; return pid })
+  const healthy = vi.fn(async () => true)
+  const controller = new ServerDashboardController(origin, undefined, { platform: 'darwin', uid: 501, run, launch, healthy, readyTimeoutMs: 15, pollIntervalMs: 1 })
+  return { controller, run, launch, healthy, set: (value: { uid?: number; command?: string; jobs?: string; stopped?: boolean; parent?: number; cwd?: string }) => {
+    if (value.uid !== undefined) uid = value.uid
+    if (value.command !== undefined) command = value.command
+    if (value.jobs !== undefined) jobs = value.jobs
+    if (value.stopped !== undefined) stopped = value.stopped
+    if (value.parent !== undefined) parent = value.parent
+    if (value.cwd !== undefined) cwd = value.cwd
+  } }
+}
+
+it('restarts a verified terminal-launched Hermes listener while preserving its entry point and binding', async () => {
+  const f = standaloneFixture()
+  await f.controller.refresh(); expect(f.controller.canRestart).toBe(true)
+  expect(f.launch).not.toHaveBeenCalled()
+  await f.controller.restart()
+  expect(f.run).toHaveBeenCalledWith('/bin/kill', ['-TERM', '1043'])
+  expect(f.launch).toHaveBeenCalledWith('/server/venv/bin/python3', ['-m', 'hermes_cli.main', 'dashboard', '--host', '0.0.0.0', '--port', '9119', '--no-open'], '/server/hermes-agent')
+  expect(f.healthy).toHaveBeenCalledWith(origin.origin)
+  await f.controller.refresh(); expect(f.controller.canRestart).toBe(true)
+})
+
+it.each([
+  { uid: 502 }, { command: '/usr/bin/node /server/dashboard.js' },
+  { command: '/bin/sh -c /server/hermes dashboard' },
+  { command: '/server/hermes dashboard --ssh-session-token-file /private/token' },
+  { command: '/server/hermes dashboard --port 9120' },
+  { jobs: '1043\t0\tlocal.unknown.service\n' },
+  { jobs: '99\t0\tlocal.wrapper.service\n' }, { parent: 444 }, { cwd: '' },
+])('refuses to stop an unverified standalone listener: %j', async state => {
+  const f = standaloneFixture(); f.set(state)
+  await f.controller.refresh(); expect(f.controller.canRestart).toBe(false)
+  await expect(f.controller.restart()).rejects.toThrow('未识别到')
+  expect(f.launch).not.toHaveBeenCalled(); expect(f.run.mock.calls.some(([program]) => program === '/bin/kill')).toBe(false)
+})
+
+it('rechecks a standalone process owner immediately before the restart', async () => {
+  const f = standaloneFixture(); await f.controller.refresh(); expect(f.controller.canRestart).toBe(true)
+  f.set({ uid: 502 }); await expect(f.controller.restart()).rejects.toThrow('未识别到')
+  expect(f.launch).not.toHaveBeenCalled(); expect(f.run.mock.calls.some(([program]) => program === '/bin/kill')).toBe(false)
+})
+
+it('does not launch a competitor if the original standalone process ignores termination', async () => {
+  const f = standaloneFixture(); f.set({ stopped: false })
+  await expect(f.controller.restart()).rejects.toThrow('未能停止')
+  expect(f.launch).not.toHaveBeenCalled(); expect(f.controller.canRestart).toBe(false)
 })

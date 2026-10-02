@@ -21,6 +21,7 @@ export interface CredentialLeaseSummary {
 export interface CredentialVaultStatus {
   protocol: 1; online: boolean; initialized: boolean; unlocked: boolean
   unlockExpiresAt?: number
+  storageMode?: 'local'
   execution: 'disabled' | 'dummy-fixture' | 'protected-adapters'; reason: 'executor_not_enabled' | 'vault_offline' | 'dummy_fixture_only' | 'operator_approved' | 'isolation_required'
   entries: CredentialSummary[]; leases: CredentialLeaseSummary[]
 }

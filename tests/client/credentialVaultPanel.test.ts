@@ -14,6 +14,27 @@ it('shows an offline state without offering secret entry and explicitly keeps re
   state.online=false;const w=await setup()
   expect(w.find('input[type=password]').exists()).toBe(false);expect(w.text()).toContain('尚未启用');expect(w.text()).toContain('不会自动安装或启动服务')
 })
+it('offers creation and credential entry in local storage mode without offering Bot leases',async()=>{
+  state.initialized=false;state.storageMode='local';const w=await setup()
+  expect(w.text()).toContain('保存凭据无需配置独立服务');expect(w.text()).toContain('创建密码库')
+  state.initialized=true;state.unlocked=true
+  await w.findAll('button').find(b=>b.text()==='刷新状态')!.trigger('click');await flushPromises()
+  await w.findAll('button').find(b=>b.text()==='添加凭据')!.trigger('click')
+  const editor=w.findAll('form')[0]!,label=(text:string)=>editor.findAll('label').find(l=>l.text().startsWith(text))!
+  await label('名称').get('input').setValue('Dummy site');await label('用户名').get('input').setValue('dummy')
+  await label('准确网站').get('input').setValue('https://example.test');await label('密码').get('input').setValue('DUMMY-new-secret')
+  await editor.trigger('submit');await flushPromises()
+  expect(api).toHaveBeenCalledWith('/api/app/vault/entries',expect.objectContaining({method:'POST',body:{name:'Dummy site',username:'dummy',target:{kind:'website',origin:'https://example.test'},secret:'DUMMY-new-secret'}}))
+  expect(w.text()).not.toContain('授予本任务');expect(w.text()).not.toContain('DUMMY-new-secret');expect(w.find('input[type=password]').exists()).toBe(true)
+})
+it('reports a wrong vault master password without expiring the application login or echoing errors',async()=>{
+  const w=await setup();await w.get('input[type=password]').setValue('DUMMY-wrong-master')
+  api.mockImplementation(async(path)=>{if(path.endsWith('/unlock'))throw Object.assign(new Error('DUMMY-private-error-DUMMY-wrong-master'),{code:'vault_unlock_failed'});return structuredClone(state)})
+  await w.get('form').trigger('submit');await flushPromises()
+  expect(api).toHaveBeenCalledWith('/api/app/vault/unlock',expect.objectContaining({notifyUnauthorized:false}))
+  expect(w.get('[role=alert]').text()).toContain('主密码错误');expect(w.text()).not.toContain('DUMMY-private-error');expect(w.text()).not.toContain('DUMMY-wrong-master')
+  expect(w.get<HTMLInputElement>('input[type=password]').element.value).toBe('')
+})
 it('preserves a master password draft while locked status is polled, then clears it after manual unlock',async()=>{
   vi.useFakeTimers();const storage=vi.spyOn(Storage.prototype,'setItem'),w=await setup(),input=w.get<HTMLInputElement>('input[type=password]')
   await input.setValue('DUMMY-ONLY-master');await vi.advanceTimersByTimeAsync(3000);await flushPromises();expect(input.element.value).toBe('DUMMY-ONLY-master')

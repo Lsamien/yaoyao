@@ -1,6 +1,8 @@
 # Bot 内置密码库（首期）
 
-部署目标是 Hermes 执行节点，用户通过专用界面手动输入主密码。默认锁定，重启不自动解锁。密码库不是 Hermes 的环境变量或工具配置。
+默认安装提供夭夭服务器本机密码保险箱：登录后在「Bot 模式 → 设置 → 密码管理」创建主密码、手动解锁，即可添加网站密码和 SSH 私钥，无需先安装独立密码库服务。每个账号独立存储，密文位于夭夭数据目录的 `credential-vault/`；单实例锁防止其他 broker 同时写入。默认锁定，重启不自动解锁。它不向 Bot 提供秘密读取、任务租约或自动登录执行。
+
+配置 `HERMES_YAOYAO_VAULT_SOCKET` / `HERMES_YAOYAO_VAULT_TOKEN_FILE` 后，仍使用原有独立密码库服务；显式配置的服务不可用时保持离线，不切换到新的本机保险箱。独立服务可以部署在 Hermes 执行节点，并在隔离部署验收后启用受保护执行器。密码库不是 Hermes 的环境变量或工具配置。
 
 ## 密码学与存储
 
@@ -11,6 +13,8 @@
 解锁 DEK 只存在 broker 内存，固定到期、锁定、关闭时清除可控字节缓冲。JS 字符串、GC、WASM、交换区和进程转储不提供安全擦除保证，必须配合操作系统隔离；不能据此称“密码永不进入内存”。UI/API 不提供读取密码或私钥明文的接口；编辑秘密是单向替换。
 
 ## 执行边界
+
+本机保险箱复用 Web/BFF 内的加密存储与会话校验，不属于独立 OS 身份隔离。主密码和解锁后的材料会进入可信服务器进程内存；同 UID 的任意 shell、调试器或被控制的服务器进程仍可能访问它们。它提供密文落盘和管理 API 的账号/会话隔离，不能据此声称具备抵御同 UID 攻击的隔离保证。需要 Bot 自动使用真实凭据时，应配置并验收下述独立服务；本机模式不会签发任务租约，也不会执行网站、SSH 或 SFTP 操作。
 
 同 OS 用户的 Hermes 任意 shell 可以读取同用户文件或访问进程/IPC，因此单纯子进程、0600 权限、secretref 或加密 DB 不构成隔离。真实部署前需人工批准独立 OS 身份/可信沙箱、私有 IPC、控制面访问权限以及浏览器进程/资料目录边界。Web 管理面也不能与拥有任意本机 shell 的 Hermes 共用可信身份。
 
@@ -41,7 +45,7 @@ Bot 工具只有 `credential_refs` 与 `credential_request`，输入严格为引
 1. 选择 Hermes 所在的同一执行节点，确认 Hermes 非 root 身份，并为 Web 管理面与 vault 分配不同于 Hermes 的非 root 可信服务身份。首期为同主机 Unix IPC；远程 Web → vault 网络通道尚未实现，不能将 Unix socket 暴露为 TCP 或经通用 Runner 转发主密码。
 2. 人工审核 broker、Web 管理面、配置、socket 父目录、控制 token、库目录的 ownership、ACL、进程调试/core dump、备份访问及管理浏览器隔离。代码检查私有权限、批准时效及 Hermes PID 的实际 UID，但这些检查不是 OS 边界的完整证据；Hermes 的 shell 不得读取控制 token、管理面登录会话或访问私有 IPC。两者为同用户时直接拒绝，不自动改 OS 设置。
 3. 在该可信控制身份下人工准备 0700 私有目录，以及 0600 配置和高熵控制 token 文件；token 仅用于 IPC 认证，绝不是静态解密密钥。配置结构 `{ "home": "/私有库目录", "socket": "/私有连接目录/vault.sock", "tokenFile": "/私有连接目录/control.token", "hermesUid": 12345 }` 中的 UID 是文档示例，必须填实测 UID，且不能与控制服务身份相同。不要把这些文件放入仓库或 Hermes 工作目录。
-4. 经后续部署批准后，使用 Node >=24、生产依赖和构建输出，人工前台执行 `node dist-server/server/credentialVault/index.js --config /私有路径/vault.json`。单实例控制避免两个 broker 同时写库；启动会检查而不会创建 OS 身份/安装守护进程。Web 配置 `HERMES_YAOYAO_VAULT_SOCKET`、`HERMES_YAOYAO_VAULT_TOKEN_FILE`、`HERMES_YAOYAO_VAULT_HERMES_UID`，它们只有路径/UID。未配置时 UI 明确离线；锁定或离线不自动降级。
+4. 经部署批准后，使用 Node >=24、生产依赖和构建输出，人工前台执行 `node dist-server/server/credentialVault/index.js --config /私有路径/vault.json`。单实例控制避免两个 broker 同时写库；启动会检查而不会创建 OS 身份/安装守护进程。Web 配置 `HERMES_YAOYAO_VAULT_SOCKET`、`HERMES_YAOYAO_VAULT_TOKEN_FILE`、`HERMES_YAOYAO_VAULT_HERMES_UID`，它们只有路径/UID。未配置外部服务时使用仅存储的本机保险箱；配置后连接失败保持离线，不自动降级。
 5. 用户亲自在专用 UI 创建并解锁。上线前还需验证真实 OS/IPC 攻击边界、HTTPS 管理通道及备份恢复，不把本地同进程 dummy 测试作为隔离验收。本轮没有实际创建服务身份、控制凭据、生产密码库或录入真实秘密。
 
 受保护执行器的部署仍需要独立安全验收：限定操作及单次提交，执行前/后检查授权，撤销中止；结果只返回脱敏状态，执行断线或取消结果不明确时禁止自动重试。浏览器填充阶段必须独占并隔离 DOM、请求、Cookie、截图、CDP 与同 UID shell；登录后的站点操作也须走受限动作/脱敏返回，不能向模型开放可读 Cookie 的通用浏览器。SSH/SFTP 要独立短连接及已确认的 host key，不能允许 shell 自选命令、任意跳板/代理、端口转发、agent forwarding、密钥导出或明文 FTP。

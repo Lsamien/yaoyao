@@ -44,6 +44,7 @@ const childStubs = {
   AgentIdentityPanel: simpleStub('AgentIdentityPanel', 'agent-identity'),
   ModelServicesPanel: ModelServicesPanelStub,
   AccountSecurityPanel: simpleStub('AccountSecurityPanel', 'account-security'),
+  CredentialVaultPanel: simpleStub('CredentialVaultPanel', 'credential-vault'),
   NodePairingPanel: simpleStub('NodePairingPanel', 'node-pairing'),
   SystemOverviewPanel: simpleStub('SystemOverviewPanel', 'system-overview'),
   SystemManagementPanel: simpleStub('SystemManagementPanel', 'system-management'),
@@ -82,6 +83,13 @@ afterEach(() => {
 })
 
 describe('Settings center dialog', () => {
+  it('describes vault management as belonging to the signed-in account', () => {
+    const wrapper=mountSettings({botMode:true,initialPage:'credential-vault'})
+    expect(wrapper.get('.settings-content__heading').text()).toContain('当前账号：owner')
+    expect(wrapper.get('.settings-content__heading').text()).not.toContain('全局设置')
+    expect(wrapper.find('[data-testid=credential-vault]').exists()).toBe(true)
+    wrapper.unmount()
+  })
   it('keeps desktop runtime controls out of a browser', () => {
     const wrapper = mountSettings({ initialPage: 'desktop-mode' })
     expect(wrapper.findAll('.settings-sidebar nav button').map(button => button.text())).not.toContain('运行模式')

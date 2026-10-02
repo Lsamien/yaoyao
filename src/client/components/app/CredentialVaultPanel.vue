@@ -17,20 +17,24 @@ const loginPath=ref('/login'),submitPath=ref('/login'),successPath=ref('/account
 let timer:ReturnType<typeof setInterval>|undefined,alive=true
 const inflight=new Set<AbortController>()
 function clearSecrets(){master.value='';confirmation.value='';replacement.value='';secret.value='';passphrase.value='';contents.value='';clearPassphrase.value=false}
+function failure(cause:unknown){
+  const code=cause&&typeof cause==='object'&&'code' in cause?String(cause.code):''
+  return ({vault_offline:'密码保险箱连接不可用，请刷新状态或检查数据目录权限。',vault_locked:'密码保险箱已锁定，请重新手动解锁后添加凭据。',vault_unlock_failed:'主密码错误或密码库已损坏，请核对主密码。',vault_invalid_request:'填写内容不符合要求：主密码至少 12 位；网站须为不含路径的 HTTPS 地址；SSH 须提供 SHA256 主机指纹。',vault_executor_not_enabled:'本机保险箱可以保存凭据；Bot 自动使用需要连接独立密码库服务。'} as Record<string,string>)[code]??'操作未完成，请检查连接和主密码；秘密不会回显。'
+}
 async function request<T>(path:string,method:'GET'|'POST'|'PUT'|'DELETE'='GET',body?:Record<string,JsonValue>){
   const c=new AbortController();inflight.add(c)
-  try{return await apiRequest<T>(root+path,{method,...(body?{body}:{}),signal:c.signal,timeoutMs:20000})}
+  try{return await apiRequest<T>(root+path,{method,...(body?{body}:{}),signal:c.signal,timeoutMs:20000,notifyUnauthorized:false})}
   finally{inflight.delete(c)}
 }
 async function load(){const value=await request<View>('');if(!alive)return;const wasUnlocked=state.value?.unlocked;state.value=value;if(!value.online||(wasUnlocked&&!value.unlocked)){clearSecrets();showEditor.value=false}}
 async function action(work:()=>Promise<void>,message:string){
   if(busy.value)return;busy.value=true;error.value='';notice.value=''
   try{await work();if(alive){notice.value=message;await load()}}
-  catch{if(alive)error.value='操作未完成，请检查连接、主密码和本任务授权；秘密不会回显。'}
+  catch(cause){if(alive){notice.value='';error.value=failure(cause)}}
   finally{clearSecrets();busy.value=false}
 }
 async function create(){if(master.value!==confirmation.value){error.value='两次主密码不一致';return}await action(async()=>{await request('/initialize','POST',{password:master.value})},'密码库已创建，仍保持锁定')}
-async function unlock(){await action(async()=>{await request('/unlock','POST',{password:master.value,seconds:300})},'已手动解锁 5 分钟；任务仍需要逐次授权')}
+async function unlock(){await action(async()=>{await request('/unlock','POST',{password:master.value,seconds:300})},state.value?.storageMode==='local'?'已解锁 5 分钟，可以添加和编辑凭据。':'已手动解锁 5 分钟；任务仍需要逐次授权')}
 async function lock(){clearSecrets();showEditor.value=false;await action(async()=>{await request('/lock','POST',{})},'密码库已锁定，任务授权已撤销')}
 function edit(entry?:CredentialSummary){
   clearSecrets();editing.value=entry;name.value=entry?.name??'';username.value=entry?.username??'';kind.value=entry?.target.kind??'website'
@@ -89,11 +93,12 @@ onBeforeUnmount(()=>{
 
 <template>
   <section class="credential-vault" :aria-busy="busy">
-    <p>秘密只在专用界面录入，加密保存在 Hermes 执行节点；不发送给 Bot。密码库默认锁定，重启或到期需重新手动解锁。</p>
-    <p role="status">{{state?.execution==='protected-adapters'?'受控执行器已取得人工部署批准：仅支持配置的标准表单、固定 SSH 命令和指定 SFTP 文件；仍须逐任务授权。':'受控网站与 SSH/SFTP 执行尚未启用。隔离部署批准前，由你人工接管。'}}</p>
+    <p>秘密只在专用界面录入，由主密码加密保存；不发送给 Bot。密码保险箱默认锁定，重启或到期需重新手动解锁。</p>
+    <p v-if="state?.storageMode==='local'" role="status">本机保险箱：凭据保存在夭夭服务器的数据目录，只有当前账号解锁后可以管理。保存凭据无需配置独立服务；Bot 自动使用需要连接独立密码库服务。</p>
+    <p v-else role="status">{{state?.execution==='protected-adapters'?'受控执行器已取得人工部署批准：仅支持配置的标准表单、固定 SSH 命令和指定 SFTP 文件；仍须逐任务授权。':'受控网站与 SSH/SFTP 执行尚未启用。隔离部署批准前，由你人工接管。'}}</p>
     <p v-if="error" role="alert">{{error}}</p><p v-if="notice" role="status">{{notice}}</p>
     <button type="button" :disabled="busy" @click="action(load,'状态已刷新')">刷新状态</button>
-    <p v-if="!state?.online">执行节点密码库离线或尚未配置。需要管理员先批准独立服务身份和私有连接；此处不会自动安装或启动服务。</p>
+    <p v-if="!state?.online">密码保险箱暂时不可用，请检查夭夭数据目录权限；已配置独立密码库时，请检查该服务的私有连接。此处不会自动安装或启动服务。</p>
     <template v-else>
       <p>{{state.unlocked?'已解锁':'已锁定'}}<span v-if="state.unlockExpiresAt"> · {{new Date(state.unlockExpiresAt).toLocaleTimeString()}} 到期</span></p>
       <form v-if="!state.initialized" @submit.prevent="create">
@@ -105,7 +110,7 @@ onBeforeUnmount(()=>{
       </form>
       <form v-else-if="!state.unlocked" @submit.prevent="unlock">
         <label>主密码<input v-model="master" type="password" autocomplete="off" minlength="12" maxlength="1024" required :disabled="busy" /></label>
-        <button :disabled="busy">手动解锁 5 分钟</button>
+        <p>先输入主密码解锁，即可添加和编辑凭据。</p><button :disabled="busy">手动解锁 5 分钟</button>
       </form>
       <template v-else>
         <div class="actions"><button type="button" :disabled="busy" @click="lock">立即锁定并撤销授权</button><button type="button" :disabled="busy" @click="edit()">添加凭据</button><button type="button" :disabled="busy" @click="backup">导出加密备份</button></div>
@@ -119,7 +124,7 @@ onBeforeUnmount(()=>{
           <label>{{kind==='website'?'密码':'私钥'}}<input v-if="kind==='website'" v-model="secret" type="password" autocomplete="new-password" :required="!editing" maxlength="32768" :disabled="busy" /><textarea v-else v-model="secret" autocomplete="off" :required="!editing" maxlength="32768" :disabled="busy" /><small v-if="editing">留空保留原值；没有秘密读取或回显接口。</small></label>
           <label v-if="kind==='ssh'">私钥口令（可选）<input v-model="passphrase" type="password" autocomplete="new-password" :disabled="busy" /></label>
           <label v-if="kind==='ssh'&&editing"><input v-model="clearPassphrase" type="checkbox" :disabled="busy" />清除原私钥口令（留空输入默认保留）</label>
-          <label><input v-model="configureUse" type="checkbox" :disabled="busy||!!editing?.usage" />配置允许 Bot 执行的固定操作</label>
+          <label v-if="state.storageMode!=='local'"><input v-model="configureUse" type="checkbox" :disabled="busy||!!editing?.usage" />配置允许 Bot 执行的固定操作</label>
           <template v-if="configureUse&&kind==='website'">
             <p>仅支持主页面的标准 POST 表单。允许跳转仅限此 origin 的成功页；iframe、跨站 SSO、MFA 或验证码转人工。</p>
             <label>登录页路径<input v-model="loginPath" required :disabled="busy" /></label><label>表单提交路径<input v-model="submitPath" required :disabled="busy" /></label><label>登录成功页路径<input v-model="successPath" required :disabled="busy" /></label>
@@ -136,7 +141,7 @@ onBeforeUnmount(()=>{
           </template>
           <div class="actions"><button :disabled="busy">加密保存</button><button type="button" :disabled="busy" @click="showEditor=false;clearSecrets()">取消</button></div>
         </form>
-        <form @submit.prevent="grant">
+        <form v-if="state.storageMode!=='local'" @submit.prevent="grant">
           <h4>本次任务授权</h4><p>仅绑定一个 Bot、当前任务、执行节点和指定操作；最长 60 秒，不建立长期访问权限。</p>
           <ul><li v-for="pending in state.requests" :key="pending.workId+pending.credentialRef">
             {{state.tasks.find(t=>t.workId===pending.workId)?.name??'任务'}} · {{pending.operation}} · {{pending.credentialRef}}

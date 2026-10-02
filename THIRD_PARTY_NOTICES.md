@@ -22,3 +22,7 @@ Avatar silhouette paths and original two-eye expressions from zhulin025/LaoA-Gro
 ## ssh2 credential execution
 
 `ssh2` 1.17.0 provides SSH public-key authentication, host key verification and SFTP for the protected credential executor. Copyright Brian White. MIT license: see `licenses/ssh2/LICENSE`. Source: https://github.com/mscdex/ssh2. Installation lifecycle scripts are not required for the pure JavaScript fallback.
+
+## Application supplier logos
+
+`public/provider-logos/*.svg` contains the Gmail, Google Drive, Google Calendar, GitHub, Notion, Slack, Linear, Discord, Outlook, Trello, Airtable and X logos retrieved from `https://logos.composio.dev/api/{slug}` on 2026-10-02. These assets identify the corresponding integrations. Each brand's logo and trademark rights belong to its respective owner.

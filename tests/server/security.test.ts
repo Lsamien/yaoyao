@@ -78,6 +78,15 @@ describe('server security boundary', () => {
     expect(headers['Content-Security-Policy']).toContain('ws://yaoyao-lc.samien.cn')
     expect(headers['Content-Security-Policy']).toContain('wss://yaoyao-lc.samien.cn')
   })
+  it('allows the supplier logo CDNs only in the image policy', () => {
+    const headers: Record<string, string> = {}
+    const ctx = { host: '127.0.0.1:15300', set(name: string, value: string) { headers[name] = value } } as unknown as Koa.Context
+    applySecurityHeaders(ctx, false)
+    const directives = headers['Content-Security-Policy'].split('; ')
+    expect(directives.find(value => value.startsWith('img-src '))).toBe("img-src 'self' data: blob: https://logos.composio.dev https://assets.composio.dev")
+    expect(directives.find(value => value.startsWith('script-src '))).toBe("script-src 'self'")
+    expect(directives.find(value => value.startsWith('connect-src '))).not.toContain('composio.dev')
+  })
 
   it('accepts configured IPv6 addresses and brackets them in WebSocket CSP origins', () => {
     const allowed = new Set(['2001:db8::10'])

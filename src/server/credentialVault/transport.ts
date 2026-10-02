@@ -43,6 +43,7 @@ export class CredentialVaultClient {
   onDisconnect = () => {}
   constructor(private config?: { socket: string; tokenFile: string; hermesUid: number }) {}
   get configured() { return !!this.config }
+  close(): void {}
   private async send(owner: string, session: string, command: string, value?: unknown): Promise<any> {
     const c = this.config
     if (!c) throw new HttpError(503, '执行节点密码库尚未连接', 'vault_offline')

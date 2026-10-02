@@ -122,6 +122,7 @@ export class CredentialVaultCoordinator {
         operation: leaseInput.shape.operation, seconds: leaseInput.shape.seconds }).strict(), (ctx.request as any).body)
       this.task(s.owner, body.agentId, body.workId)
       const binding = this.binding(s.owner, body.agentId), state: CredentialVaultStatus = await this.call(s, 'status'), entry = state.entries.find(e => e.id === body.credentialRef)
+      if (state.storageMode === 'local') throw new HttpError(409, 'Bot 自动使用需要连接独立密码库服务', 'vault_executor_not_enabled')
       if (!entry) throw new HttpError(403, '请解锁并选择当前账号的凭据', 'vault_credential_forbidden')
       const summary = await this.call(s, 'grant', { ...body, ...binding, target: entry.target }) as CredentialLeaseSummary
       try {
@@ -203,5 +204,5 @@ export class CredentialVaultCoordinator {
       },
     }
   }
-  close() { this.closed=true; clearInterval(this.timer); for(const c of this.turnControllers)c.abort();this.turnControllers.clear();this.grants.clear(); this.pending.clear(); for (const s of this.sessions.values()) void this.endSession(s); this.sessions.clear() }
+  close() { this.closed=true; clearInterval(this.timer); for(const c of this.turnControllers)c.abort();this.turnControllers.clear();this.grants.clear(); this.pending.clear(); for (const s of this.sessions.values()) void this.endSession(s); this.sessions.clear(); this.client.close() }
 }

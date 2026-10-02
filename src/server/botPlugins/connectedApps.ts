@@ -4,6 +4,7 @@ import type { WorkspaceStore } from '../workspaceStore.js'
 import type { WorkspaceNodes } from '../workspaceGateway.js'
 import { HttpError } from '../errors.js'
 import type { BotAppCard, BotAppConnection, BotPluginSettings } from '../../shared/workspacePlugins.js'
+import { bundledProviderLogo, safeProviderLogo } from '../../shared/botProviderLogos.js'
 
 const API = 'https://backend.composio.dev/api/v3.1'
 const CATALOG_API = 'https://backend.composio.dev/api/v3'
@@ -16,7 +17,7 @@ export const CURATED_APPS: BotAppCard[] = [
   ['github', 'GitHub', '代码仓库与议题'], ['notion', 'Notion', '文档与知识库'], ['slack', 'Slack', '团队沟通'],
   ['linear', 'Linear', '项目与任务'], ['discord', 'Discord', '社区消息'], ['outlook', 'Outlook', '邮件与日历'],
   ['trello', 'Trello', '看板与任务'], ['airtable', 'Airtable', '表格与业务数据'], ['twitter', 'X', '社交内容'],
-].map(([slug, name, description]) => ({ slug: slug!, name: name!, description: description! }))
+].map(([slug, name, description]) => ({ slug: slug!, name: name!, description: description!, logo: bundledProviderLogo(slug!) }))
 
 function trustedUrl(value: string): string {
   let url: URL
@@ -81,7 +82,7 @@ export class ConnectedApps {
     if (value?.key) try {
       const items = await this.pages(value.key, '/toolkits', { limit: '500', sort_by: 'usage' }, undefined, CATALOG_API)
       this.current(owner, value.revision)
-      const cards = items.filter(item => appSlug.safeParse(item.slug).success).map(item => ({ slug: item.slug, name: String(item.name ?? item.slug).slice(0, 100), description: String(item.meta?.description ?? item.description ?? '').slice(0, 180) }))
+      const cards = items.filter(item => appSlug.safeParse(item.slug).success).map(item => ({ slug: item.slug, name: String(item.name ?? item.slug).slice(0, 100), description: String(item.meta?.description ?? item.description ?? '').slice(0, 180), logo: safeProviderLogo(item.meta?.logo ?? item.logo) ?? bundledProviderLogo(item.slug) }))
       if (cards.length) { this.catalogCache.set(owner, { at: Date.now(), cards }); return { cards, source: 'api' } }
     } catch { /* Catalog fallback never claims that account inventory is empty. */ }
     return { cards: CURATED_APPS, source: 'curated' }

@@ -156,7 +156,7 @@ const showAgentSelector = computed(() => !props.botMode && activePage.value.star
 const activeScope = computed(() => {
   if (activePage.value.startsWith('agent-')) return `正在设置：${profileTitle(props.activeProfile)} / ${props.activeProfile?.name || '未选择'}`
   if (activePage.value === 'account-profile') return '管理你的账号头像与服务器名称。'
-  if (activePage.value.startsWith('account-')) return `当前账号：${accountName.value}${props.isAdmin ? ' · 管理员' : ''}`
+  if (activePage.value.startsWith('account-') || activePage.value === 'credential-vault') return `当前账号：${accountName.value}${props.isAdmin ? ' · 管理员' : ''}`
   if (activePage.value === 'chat-appearance') return '预设与颜色 · 自动保存到当前设备'
   if (activePage.value === 'appearance') return '选择当前浏览器的显示方式。'
   if (activePage.value === 'desktop-mode') return '选择这台电脑作为服务器或客户端。'

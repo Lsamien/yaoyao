@@ -101,7 +101,26 @@ const emit = defineEmits<{
   botSettingsChanged: []
 }>()
 
-const unread=useUnreadStore(),unreadOpen=ref(false)
+const unread = useUnreadStore(), unreadOpen = ref(false)
+const unreadAnchor = ref({ left: 0, top: 0 })
+let unreadTrigger: HTMLButtonElement | undefined
+
+function openUnread(event: MouseEvent) {
+  unreadTrigger = event.currentTarget as HTMLButtonElement
+  const entry = unreadTrigger.getBoundingClientRect()
+  const sidebar = unreadTrigger.closest('aside')!.getBoundingClientRect()
+  unreadAnchor.value = { left: sidebar.right + 12, top: entry.top }
+  profileMenuOpen.value = false
+  createMenuOpen.value = false
+  settingsMenuOpen.value = false
+  toolsMenuOpen.value = false
+  unreadOpen.value = true
+}
+
+function closeUnread() {
+  unreadOpen.value = false
+  void nextTick(() => { if (unreadTrigger?.isConnected) unreadTrigger.focus() })
+}
 const route = useRoute()
 const router = useRouter()
 const mobileDrawerOpen = ref(false)
@@ -447,7 +466,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
-  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="unreadOpen || settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)">
+  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="(unreadOpen || settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)) ? true : undefined">
     <header class="mobile-header" :inert="mobileDrawerOpen">
       <button ref="mobileNavigationTrigger" class="icon-button" type="button" aria-label="打开导航" @click="openMobileDrawer">
         <AppIcon name="menu" :size="20" />
@@ -469,12 +488,20 @@ defineExpose({openLocalVm:showLocalVmSettings})
       <div v-if="applicationWorkspace" class="bot-list-header">
         <button class="bot-logo-trigger sidebar-brand" type="button" aria-label="返回 Bot 列表" title="夭夭 AI" @click="navigate('/conversations')"><BrandMark :size="32" :label="false" compact bare /></button>
         <span class="bot-list-header__spacer" />
+        <button class="bot-list-toolbar-button unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" aria-haspopup="dialog" aria-controls="unread-center" :aria-expanded="unreadOpen" title="未读消息" @click="openUnread">
+          <AppIcon name="bell" :size="20" />
+          <b v-if="unread.total" class="unread-entry__count" aria-hidden="true">{{ unread.total > 99 ? '99+' : unread.total }}</b>
+        </button>
         <button class="bot-list-toolbar-button sidebar-search-trigger" type="button" aria-label="搜索" :aria-expanded="sidebarSearchOpen" @click="openSidebarSearch(desktopSidebarContext)"><AppIcon name="search" :size="21" /></button>
         <button class="bot-list-toolbar-button sidebar-create-trigger" type="button" aria-label="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="23" /></button>
       </div>
       <div v-else class="sidebar-brand-row">
         <button class="rail__brand sidebar-brand" type="button" aria-label="返回聊天" title="夭夭 AI" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
           <BrandMark :size="sidebarCollapsed ? 26 : 32" :label="false" compact bare />
+        </button>
+        <button class="unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" aria-haspopup="dialog" aria-controls="unread-center" :aria-expanded="unreadOpen" title="未读消息" @click="openUnread">
+          <AppIcon name="bell" :size="20" />
+          <b v-if="unread.total" class="unread-entry__count" aria-hidden="true">{{ unread.total > 99 ? '99+' : unread.total }}</b>
         </button>
       </div>
       <button
@@ -543,7 +570,6 @@ defineExpose({openLocalVm:showLocalVmSettings})
         </div>
       </section>
 
-      <button class="unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" title="未读消息" @click="unreadOpen=true"><AppIcon name="bell" :size="19" /><span v-if="!sidebarCollapsed || applicationWorkspace">未读消息</span><b v-if="unread.total">{{ unread.total>99?'99+':unread.total }}</b></button>
       <div class="sidebar-footer">
         <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
@@ -752,7 +778,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
         </div>
       </div>
     </Teleport>
-  <UnreadPanel v-if="unreadOpen" :mode="applicationWorkspace?'bot':'chat'" @close="unreadOpen=false" />
+    <UnreadPanel v-if="unreadOpen" :anchor="unreadAnchor" @close="closeUnread" />
   </div>
 </template>
 
@@ -1003,5 +1029,28 @@ defineExpose({openLocalVm:showLocalVmSettings})
 </style>
 
 <style scoped>
-.unread-entry{display:flex;align-items:center;gap:10px;margin:8px 12px;padding:10px 12px;border:0;border-radius:10px;background:transparent;color:inherit;text-align:left;cursor:pointer;min-height:44px}.unread-entry:hover{background:var(--surface-hover,rgba(128,128,128,.1))}.unread-entry span{flex:1}.unread-entry b{border-radius:20px;background:var(--accent,#796bcd);color:white;min-width:22px;padding:2px 6px;font-size:12px;white-space:nowrap}.desktop-sidebar--collapsed .unread-entry{position:relative;margin:8px;padding:10px}.desktop-sidebar--collapsed .unread-entry b{position:absolute;top:0;right:0;font-size:10px}@media(max-width:767px){.unread-entry{display:none}}
+.unread-entry {
+  position: relative;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+.sidebar-brand-row .unread-entry { position: absolute; top: 9px; right: 49px; }
+.bot-list-header .unread-entry { position: relative; color: var(--text-secondary); }
+.unread-entry:hover, .unread-entry[aria-expanded="true"], .bot-list-header .unread-entry:hover, .bot-list-header .unread-entry[aria-expanded="true"] { background: var(--surface-hover); color: var(--text-primary); }
+.unread-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.unread-entry__count { position: absolute; top: -3px; right: -3px; display: grid; min-width: 18px; height: 18px; place-items: center; padding: 0 4px; border: 2px solid var(--surface); border-radius: 20px; background: var(--accent); color: var(--text-on-solid); font-size: 10px; font-weight: 600; line-height: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.desktop-sidebar--collapsed .sidebar-brand-row { flex-direction: column; gap: 8px; padding: 9px 13px; }
+.desktop-sidebar--collapsed .unread-entry { position: relative; top: auto; right: auto; }
+@media (max-width: 767px) { .unread-entry, .bot-list-header .unread-entry { display: none; } }
 </style>

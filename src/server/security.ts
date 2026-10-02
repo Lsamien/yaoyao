@@ -4,6 +4,7 @@ import type Koa from 'koa'
 import { parse, serialize } from 'cookie'
 import type { ServerConfig } from './config.js'
 import { isLoopbackHost, isPrivateHost } from './config.js'
+import { BOT_LOGO_ORIGINS } from '../shared/botProviderLogos.js'
 
 export const CSRF_COOKIE = 'hermes_yaoyao_csrf'
 
@@ -183,7 +184,7 @@ export function applySecurityHeaders(ctx: Koa.Context, tls: boolean, allowedHost
     "object-src 'none'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    `img-src 'self' data: blob: ${BOT_LOGO_ORIGINS.join(' ')}`,
     "media-src 'self' blob:",
     `connect-src 'self' ${socketOrigin} ${proxySocketOrigins.join(' ')}`.trim(),
   ].join('; '))

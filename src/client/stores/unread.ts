@@ -5,24 +5,28 @@ const createUnreadStore=()=>{
  const snapshot=ref<UnreadSnapshot>(emptyUnread()),error=ref(''),scope=ref('')
  let epoch=0,revision=0,timer:ReturnType<typeof setInterval>|undefined,inflight:Promise<void>|undefined
  function reset(account='') { epoch++;revision++;scope.value=account;snapshot.value=emptyUnread();error.value='';inflight=undefined;clearInterval(timer);timer=undefined }
+ function accept(value:UnreadSnapshot){
+  snapshot.value=value;error.value=''
+  void window.yaoyaoDesktop?.unreadState?.(scope.value).catch(()=>{})
+ }
  async function refresh(){
   if(!scope.value)return
   if(inflight)return inflight
   const generation=epoch,request=revision
   const pending=apiRequest<UnreadSnapshot>('/api/app/unread').then(value=>{
    if(generation!==epoch||request!==revision)return
-   snapshot.value=value;error.value=''
-   void window.yaoyaoDesktop?.unreadState?.(scope.value).catch(()=>{})
-  }).catch(e=>{if(generation===epoch)error.value=e instanceof Error?e.message:'未读同步失败'})
+   accept(value)
+  }).catch(e=>{if(generation===epoch&&request===revision)error.value=e instanceof Error?e.message:'未读同步失败'})
   inflight=pending;try{await pending}finally{if(inflight===pending)inflight=undefined}
  }
  function start(account:string){reset(account);void window.yaoyaoDesktop?.unreadState?.(account).catch(()=>{});void refresh();timer=setInterval(()=>void refresh(),3000)}
  async function read(items:UnreadConversation[]){
-  const generation=epoch,account=scope.value;revision++;inflight=undefined
-  await apiRequest<UnreadSnapshot>('/api/app/unread/read',{method:'POST',body:JSON.parse(JSON.stringify({items:items.map(({mode,id,profile,messages})=>({mode,id,profile,messages}))}))})
+  const generation=epoch,account=scope.value,request=++revision;inflight=undefined
+  const value=await apiRequest<UnreadSnapshot>('/api/app/unread/read',{method:'POST',body:JSON.parse(JSON.stringify({items:items.map(({mode,id,profile,messages})=>({mode,id,profile,messages}))}))})
   if(generation!==epoch||account!==scope.value)return
+  if(request===revision){accept(value);return}
   // Concurrent reads can finish out of order; fetch the latest authority.
-  revision++;await refresh()
+  revision++;inflight=undefined;await refresh()
  }
  async function visible(mode:'bot'|'chat',id:string,profile:string|undefined,ids:string[]){
   if(!ids.length||!scope.value)return

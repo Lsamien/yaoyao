@@ -77,6 +77,7 @@ describe('deleting sessions retained only in cache', () => {
     { error: 'session 不存在' },
     { message: '会话不存在' },
     { detail: 'Session not found: cached-session' },
+    { detail: 'Not found' },
     { detail: { message: 'Session not found' } },
     { code: 'session_not_found' },
   ])('cleans a missing session and keeps deletion idempotent: %j', async payload => {

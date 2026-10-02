@@ -398,13 +398,25 @@ async function load(id = selected.value, append = false, signal?: AbortSignal) {
     if (own === generation) loading.value = false
   }
 }
+let unreadNavigation=0
 async function locateUnread(id:string){
- for(let i=0;i<100&&active.value?.id===selected.value;i++){
-  await nextTick();if(timeline.value?.scrollToMessage(id)){const query={...route.query};delete query.unread;await router.replace({query});return}
-  if(!older.value||loadingOlder.value)return
-  await loadOlder()
+ const own=++unreadNavigation,conversation=selected.value,task=selectedTask.value,path=route.path
+ const current=()=>!disposed&&own===unreadNavigation&&route.path===path&&active.value?.id===conversation&&selected.value===conversation
+  &&selectedTask.value===task&&route.query.unread===id
+ try{
+  for(let i=0;i<100&&current();i++){
+   await nextTick();if(!current()||timeline.value?.scrollToMessage(id))return
+   if(!older.value||loadingOlder.value)return
+   await loadOlder()
+  }
+ }finally{
+  // A removed/unavailable target must not keep all visible messages unread.
+  if(current()){const query={...route.query};delete query.unread;await router.replace({query})}
  }
 }
+watch(()=>route.query.unread,id=>{
+ if(typeof id==='string'&&!loading.value&&active.value?.id===selected.value)void locateUnread(id)
+},{flush:'post'})
 const unread=useUnreadStore()
 const pendingReads = new Set<string>()
 async function markVisible(ids:string[]) {

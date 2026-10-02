@@ -202,6 +202,26 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
 })
 
 describe('account-owned connected applications', () => {
+  it('includes bundled supplier logos before configuring the connection service', async () => {
+    const result = await api('get', '/apps/catalog').expect(200)
+    expect(result.body.source).toBe('curated')
+    expect(result.body.cards).toHaveLength(12)
+    expect(result.body.cards.every((card: any) => card.logo === `/provider-logos/${card.slug}.svg`)).toBe(true)
+  })
+  it('preserves catalog logos from the approved image origins and falls back for invalid metadata', async () => {
+    await configure()
+    rejectRequest = url => url.includes('/toolkits?') ? response({ items: [
+      { slug: 'github', name: 'GitHub', meta: { logo: 'https://logos.composio.dev/api/github' } },
+      { slug: 'customapp', name: 'Custom', logo: 'https://assets.composio.dev/logos/custom.png' },
+      { slug: 'gmail', name: 'Gmail', meta: { logo: 'javascript:alert(1)' } },
+      { slug: 'unsafeapp', name: 'Unsafe', meta: { logo: 'https://logos.composio.dev.example.test/logo.svg' } },
+      { slug: 'credentialapp', name: 'Credentials', meta: { logo: 'https://user:secret@logos.composio.dev/api/secret' } },
+    ] }) : undefined
+    const result = await api('get', '/apps/catalog').expect(200)
+    expect(result.body.cards.map((card: any) => card.logo)).toEqual([
+      'https://logos.composio.dev/api/github', 'https://assets.composio.dev/logos/custom.png', '/provider-logos/gmail.svg', undefined, undefined,
+    ])
+  })
   it('supports catalog, OAuth links, multiple accounts, Bot grants and scoped disconnect', async () => {
     await configure(); await configure('member')
     const ownerSettings = runtime.workspace.list('owner', 'bot-plugin-settings')

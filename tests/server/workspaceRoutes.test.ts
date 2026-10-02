@@ -777,7 +777,8 @@ it('aggregates per-agent daily token usage for today, month and lifetime', async
     pad = (n: number) => String(n).padStart(2, '0'),
     today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
     month = today.slice(0, 7),
-    older = `${month}-01`
+    earlier = new Date(now.getFullYear(), now.getMonth(), now.getDate() === 1 ? 0 : 1),
+    older = `${earlier.getFullYear()}-${pad(earlier.getMonth() + 1)}-${pad(earlier.getDate())}`
   const seed = (agentId: string, date: string, input: number, output: number) =>
     store.put('first', 'agent-token-day', `${agentId}:${date}`, { agentId, date, input, output, total: input + output, updatedAt: 1 })
   seed(agent.id, today, 300, 100)
@@ -786,7 +787,9 @@ it('aggregates per-agent daily token usage for today, month and lifetime', async
   const usage = (await req('get', `/api/app/agents/${agent.id}/usage`).expect(200)).body
   expect(usage.today).toBe(today)
   expect(usage.todayUsage).toEqual({ input: 300, output: 100, total: 400 })
-  expect(usage.monthUsage).toEqual({ input: 2300, output: 1100, total: 3400 })
+  expect(usage.monthUsage).toEqual(older.startsWith(month)
+    ? { input: 2300, output: 1100, total: 3400 }
+    : { input: 300, output: 100, total: 400 })
   expect(usage.totalUsage).toEqual({ input: 2300, output: 1100, total: 3400 })
   expect(usage.daily.map((d: any) => d.date)).toEqual([today, older])
   await req('get', `/api/app/agents/${randomUUID()}/usage`).expect(404)

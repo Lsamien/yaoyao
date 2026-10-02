@@ -36,6 +36,26 @@ it('retains connected accounts on failed refresh instead of presenting them as d
   expect(button(wrapper, '添加账号').exists()).toBe(true)
   wrapper.unmount()
 })
+it('shows the same supplier logo in the directory and connected list', async () => {
+  const wrapper = render(); await flushPromises()
+  expect(wrapper.get('.app-card .provider-logo img').attributes('src')).toBe('/provider-logos/gmail.svg')
+  await button(wrapper, '已连接 1').trigger('click')
+  expect(wrapper.get('.app-card .provider-logo img').attributes('src')).toBe('/provider-logos/gmail.svg')
+  wrapper.unmount()
+})
+it('shows a recognized MCP supplier logo and a placeholder for unknown services', async () => {
+  const request = vi.mocked(apiRequest).getMockImplementation()!
+  vi.mocked(apiRequest).mockImplementation(async (path, options) => path.endsWith('/mcp')
+    ? { plugins: [{ ...plugin, name: 'GitHub MCP', url: 'https://api.githubcopilot.com/mcp' }, { ...plugin, id: 'unknown' }], canManage } as never
+    : request(path, options))
+  const wrapper = render(); await flushPromises()
+  await button(wrapper, 'MCP 服务').trigger('click')
+  const logos = wrapper.findAll('.mcp-card .provider-logo')
+  expect(logos[0].get('img').attributes('src')).toBe('/provider-logos/github.svg')
+  expect(logos[1].find('img').exists()).toBe(false)
+  expect(logos[1].text()).toBe('现')
+  wrapper.unmount()
+})
 it('keeps secret placeholders and invalid form input without submitting a broken configuration', async () => {
   const wrapper = render(); await flushPromises()
   await button(wrapper, 'MCP 服务').trigger('click')

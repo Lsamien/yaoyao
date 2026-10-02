@@ -13,7 +13,7 @@ export interface BotMcpPlugin {
   testedAt?: number
   toolCount: number
 }
-export interface BotAppCard { slug: string; name: string; description: string }
+export interface BotAppCard { slug: string; name: string; description: string; logo?: string }
 export interface BotAppAccount { id: string; alias?: string; status: string }
 export interface BotAppConnection { slug: string; accounts: BotAppAccount[]; agentIds: string[]; revision: number }
 export interface BotPluginSettings { configured: boolean; revision: number }

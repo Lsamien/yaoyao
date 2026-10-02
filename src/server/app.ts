@@ -1,7 +1,7 @@
 import { unreadSnapshot } from './unreadCenter.js'
 import {ExecutionSettings} from './executionSettings.js'
 import {CredentialVaultCoordinator} from './credentialVault/coordinator.js'
-import {CredentialVaultClient} from './credentialVault/transport.js'
+import {createCredentialVaultClient} from './credentialVault/localClient.js'
 import {ManagedBrowsers} from './managedBrowsers.js'
 import { isWorkspaceAccountPath } from './subaccountAccess.js'
 import { chatTranscriptRouter } from './chatTranscriptApi.js'
@@ -264,7 +264,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
   const executionSettings=new ExecutionSettings(workspace,workspaceNodes,auth)
-  const credentialVault=new CredentialVaultCoordinator(new CredentialVaultClient(config.credentialVault),workspace,auth,runners)
+  const credentialVault=new CredentialVaultCoordinator(createCredentialVaultClient(config.credentialVault,config.home),workspace,auth,runners)
   const workspaceRuntime = new WorkspaceRuntime(workspace, workspaceNodes, uploads, owner => auth.isUserActive(owner), owner => auth.pushAuthorizationVersion(owner) ?? 0, openVikingService)
   workspaceRuntime.executionSettings=executionSettings
   workspaceRuntime.credentialVault=credentialVault

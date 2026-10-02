@@ -1,7 +1,9 @@
-import { mount, flushPromises } from '@vue/test-utils'
+import { DOMWrapper, mount, flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { defineComponent } from 'vue'
+import { createPinia } from 'pinia'
+import { useUnreadStore } from '@/stores/unread'
 import type { Profile } from '@shared/types'
 import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
 
@@ -46,7 +48,7 @@ async function mountShell(start = '/chat') {
       sidebarTitle: '历史记录',
     },
     global: {
-      plugins: [router],
+      plugins: [router, createPinia()],
       stubs: {
         SettingsCenterDialog: SettingsCenterDialogStub,
         BotPluginsDialog: defineComponent({emits:['close'],template:'<div data-testid="plugins-dialog"><button @click="$emit(\'close\')">关闭已连接应用</button></div>'}),
@@ -64,6 +66,7 @@ async function mountShell(start = '/chat') {
 
 beforeEach(() => {
   localStorage.clear()
+  useUnreadStore().reset()
   delete window.yaoyaoDesktop
 })
 
@@ -291,5 +294,26 @@ it('does not expose server update controls to a non-admin browser account', asyn
   await wrapper.setProps({ isAdmin: false })
   await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
   expect(document.querySelector('.workspace-settings-menu')?.textContent).not.toContain('检测更新')
+  wrapper.unmount()
+})
+
+it('opens the unread center beside the sidebar and restores focus after Escape', async () => {
+  const wrapper = await mountShell('/conversations')
+  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .unread-entry')
+  vi.spyOn(trigger.element, 'getBoundingClientRect').mockReturnValue({ top: 86 } as DOMRect)
+  vi.spyOn(wrapper.get('.desktop-sidebar').element, 'getBoundingClientRect').mockReturnValue({ right: 360 } as DOMRect)
+  await trigger.trigger('click')
+  expect(trigger.attributes('aria-expanded')).toBe('true')
+  expect(wrapper.attributes()).toHaveProperty('inert')
+  const panel = document.querySelector<HTMLElement>('#unread-center')!
+  expect(panel).not.toBeNull()
+  expect(document.activeElement).toBe(panel)
+  expect(panel.parentElement?.style.getPropertyValue('--unread-left')).toBe('372px')
+  expect(panel.parentElement?.style.getPropertyValue('--unread-top')).toBe('86px')
+  await new DOMWrapper(panel).trigger('keydown', { key: 'Escape' })
+  await flushPromises()
+  expect(document.querySelector('#unread-center')).toBeNull()
+  expect(wrapper.attributes()).not.toHaveProperty('inert')
+  expect(document.activeElement).toBe(trigger.element)
   wrapper.unmount()
 })
