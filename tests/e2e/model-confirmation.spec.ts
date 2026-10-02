@@ -14,6 +14,7 @@ test('model confirmation survives reconnects and failed inputs retain their posi
     await route.fulfill({ json: { state: 'confirmed', response: { result } } })
   })
   await page.goto('/chat/session-demo?profile=yaoyao')
+  await expect(page.getByRole('heading', { name: '登录夭夭' })).toBeVisible()
   if (await page.getByRole('heading', { name: '登录夭夭' }).isVisible()) {
     await page.getByLabel('账号').fill('admin')
     await page.getByLabel('密码').fill('e2e-password')

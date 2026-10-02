@@ -43,13 +43,13 @@ async function mountView(path = '/conversations', stubTimeline = false) {
 }
 function successfulResponse(path: string) {
   if (path === '/api/app/capabilities') return { features: [] }
-  if (path === '/api/app/workspace/snapshot') return { agents: [], conversations: [], details: [], cursor: 17 }
+  if (path.split('?')[0] === '/api/app/workspace/snapshot') return { agents: [], conversations: [], details: [], cursor: 17 }
   throw new Error(`Unexpected request ${path}`)
 }
 it.each([undefined, null, { agents: [], conversations: [], details: [] }])('recovers incomplete Bot initialization data without requiring a virtual machine', async snapshot => {
   let snapshots = 0
   vi.mocked(apiRequest).mockImplementation(async path => {
-    if (path === '/api/app/workspace/snapshot' && snapshots++ === 0) return snapshot as never
+    if (path.split('?')[0] === '/api/app/workspace/snapshot' && snapshots++ === 0) return snapshot as never
     return successfulResponse(path) as never
   })
   await mountView()
@@ -57,7 +57,7 @@ it.each([undefined, null, { agents: [], conversations: [], details: [] }])('reco
   expect(wrapper!.get('[role="alert"]').text()).toContain('Bot 会话数据尚未就绪')
   expect(wrapper!.text()).not.toContain('TypeError')
   await vi.advanceTimersByTimeAsync(1500); await flushPromises()
-  expect(sources.map(source => source.url)).toEqual(['/api/app/events/stream?after=17'])
+  expect(sources.map(source => source.url)).toEqual(['/api/app/events/stream?after=17&toolDetails=lazy'])
   expect(vi.mocked(apiRequest).mock.calls.some(([path]) => /local-vm|computer/.test(path))).toBe(false)
 })
 it('recovers an initial server outage while the browser stays online', async () => {
@@ -65,7 +65,7 @@ it('recovers an initial server outage while the browser stays online', async () 
   await mountView()
   expect(sources).toHaveLength(0)
   await vi.advanceTimersByTimeAsync(1500); await flushPromises()
-  expect(sources.map(source => source.url)).toEqual(['/api/app/events/stream?after=17'])
+  expect(sources.map(source => source.url)).toEqual(['/api/app/events/stream?after=17&toolDetails=lazy'])
   expect(vi.mocked(apiRequest).mock.calls.filter(([path]) => path === '/api/app/capabilities')).toHaveLength(2)
 })
 it('cancels a scheduled initial recovery when the view is destroyed', async () => {
@@ -101,7 +101,7 @@ it('cancels recovery while offline and restarts it only when connectivity return
   await vi.advanceTimersByTimeAsync(10_000)
   expect(apiRequest).toHaveBeenCalledTimes(1)
   online = true; window.dispatchEvent(new Event('online')); await flushPromises()
-  expect(sources.map(source => source.url)).toEqual(['/api/app/events/stream?after=17'])
+  expect(sources.map(source => source.url)).toEqual(['/api/app/events/stream?after=17&toolDetails=lazy'])
 })
 it('aborts a pending detail on going offline and ignores its late response', async () => {
   let online = true, signal: AbortSignal | undefined, release!: (value: unknown) => void

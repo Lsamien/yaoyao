@@ -21,7 +21,7 @@ it.each([true, false])('sends the selected delivery mode through the real compos
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.mocked(apiRequest).mockImplementation(async (path, options) => {
     if (path === '/api/app/capabilities') return { features: [], csrfToken: 'fixture' } as never
-    if (path === '/api/app/workspace/snapshot') return { agents, conversations: [group], cursor: 1, details: [] } as never
+    if (path.split('?')[0] === '/api/app/workspace/snapshot') return { agents, conversations: [group], cursor: 1, details: [] } as never
     if (path === '/api/app/agents') return { agents } as never
     if (path === '/api/app/agents/sources') return { sources: [] } as never
     if (path === '/api/app/conversations') return { conversations: [group], cursor: 1 } as never

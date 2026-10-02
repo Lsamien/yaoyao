@@ -20,7 +20,7 @@ async function setup(kind: 'direct' | 'group', remove: () => Promise<void> = asy
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.mocked(apiRequest).mockImplementation(async (path, options) => {
     if (path === '/api/app/capabilities') return { features: [], csrfToken: 'fixture-csrf' } as never
-    if (path === '/api/app/workspace/snapshot') return { agents: [{ id: 'bot', name: '旧聊天', archived: true }], conversations: archived, details: [], cursor: 1 } as never
+    if (path.split('?')[0] === '/api/app/workspace/snapshot') return { agents: [{ id: 'bot', name: '旧聊天', archived: true }], conversations: archived, details: [], cursor: 1 } as never
     if (path.endsWith('/lifecycle')) {
       if (options?.method !== 'POST') return { name: '旧聊天', kind, groups, confirmationToken: 'a'.repeat(64) } as never
       await remove()
