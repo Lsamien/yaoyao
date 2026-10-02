@@ -1,4 +1,5 @@
 import { ChatTranscriptStore } from './chatTranscriptStore.js'
+import { sessionForList } from './chatPresentation.js'
 import { isFinalChatResult } from './chatUnread.js'
 import { HttpError } from './errors.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -356,7 +357,7 @@ export class ChatCacheStore {
       LIMIT ? OFFSET ?`).all(...args, limit, offset) as Array<Record<string,any>>
     const unread = new Map(this.unread(owner, profile).sessions.map(row => [JSON.stringify([row.profile, row.session_id]), row.final_unread_count]))
     return {status:200,headers:new Headers({'content-type':'application/json'}),body:Buffer.from(JSON.stringify({
-      sessions:rows.map(r=>({...JSON.parse(r.data),...(r.local_title!=null?{title:r.local_title}:{}),id:r.session_id,profile:r.profile,owned:true,pinned:!!r.pin,
+      sessions:rows.map(r=>({...sessionForList(JSON.parse(r.data)),...(r.local_title!=null?{title:r.local_title}:{}),id:r.session_id,profile:r.profile,owned:true,pinned:!!r.pin,
         final_unread_count:unread.get(JSON.stringify([r.profile,r.session_id]))??0,
         sync_state:r.sync_state,history_complete:!!r.complete})), total,offset,limit,
       sync_state:this.needsListMetadata(owner,profile)?'syncing':'current'
@@ -1038,7 +1039,7 @@ export class ChatCacheStore {
     })
     const offset = Math.max(0, Math.trunc(page.offset ?? 0))
     const limit = Math.max(1, Math.min(500, Math.trunc(page.limit ?? 100)))
-    const sessions = allSessions.slice(offset, offset + limit)
+    const sessions = allSessions.slice(offset, offset + limit).map(value => object(value) ? sessionForList(object(value)!) : value)
     const headers = new Headers(response.headers)
     headers.delete('content-length')
     return {

@@ -1,17 +1,36 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { apiRequest } from '@/api/client'
 import type { UiToolCall } from './types'
 
 const props = withDefaults(defineProps<{ tool: UiToolCall; expanded?: boolean }>(), { expanded: false })
 const open = ref(props.expanded || props.tool.status === 'error')
+const loaded = shallowRef<{ input?: unknown; output?: unknown }>()
+const loading = ref(false), error = ref('')
+let request: AbortController | undefined
+async function loadDetails() {
+  const url = props.tool.detailsUrl
+  if (!open.value || !url || loaded.value || loading.value) return
+  const controller = new AbortController()
+  request = controller; loading.value = true; error.value = ''
+  try {
+    const value = await apiRequest<{ input?: unknown; output?: unknown }>(url, { signal: controller.signal })
+    if (request === controller && !controller.signal.aborted) loaded.value = value
+  } catch (cause) {
+    if (request === controller && !controller.signal.aborted) error.value = cause instanceof Error ? cause.message : '工具详情加载失败'
+  } finally { if (request === controller) loading.value = false }
+}
+watch(() => props.tool.detailsUrl, () => { request?.abort();request = undefined;loaded.value = undefined;loading.value = false;error.value = '';void loadDetails() })
+watch(open, () => { void loadDetails() }, { immediate: true })
+onBeforeUnmount(() => request?.abort())
 const statusLabel = computed(() => ({ running: '运行中', success: '完成', error: '失败', pending: '等待', interrupted: '已结束，结果未确认' })[props.tool.status])
 function detail(value: unknown): string {
   if (value === undefined || value === null || value === '') return ''
   if (typeof value === 'string') return value
   try { return JSON.stringify(value, null, 2) } catch { return String(value ?? '') }
 }
-const inputDetail = computed(() => detail(props.tool.input))
-const outputDetail = computed(() => detail(props.tool.output))
+const inputDetail = computed(() => detail(loaded.value ? loaded.value.input : props.tool.input))
+const outputDetail = computed(() => detail(loaded.value ? loaded.value.output : props.tool.output))
 watch(() => props.expanded, value => { if (value) open.value = true })
 </script>
 
@@ -22,7 +41,9 @@ watch(() => props.expanded, value => { if (value) open.value = true })
       <small v-if="tool.status === 'error' || tool.status === 'interrupted'">{{ statusLabel }}</small>
       <span class="tool-trace__caret" :class="{ open }">›</span>
     </button>
-    <div v-if="open && (inputDetail || outputDetail)" class="tool-trace__details">
+    <div v-if="open && (inputDetail || outputDetail || tool.detailsUrl)" class="tool-trace__details">
+      <small v-if="loading" role="status">正在加载工具详情…</small>
+      <button v-if="error" type="button" @click="loadDetails">{{ error }}，点击重试</button>
       <section v-if="inputDetail"><small>输入</small><pre>{{ inputDetail }}</pre></section>
       <section v-if="outputDetail"><small>输出</small><pre>{{ outputDetail }}</pre></section>
     </div>

@@ -17,7 +17,7 @@ async function fixture(executor?:CredentialExecutorFixture){
   dispatch('initialize',{password});dispatch('unlock',{password})
   const entry=dispatch('add',{name:'dummy-site',username:'dummy-username',target:{kind:'website',origin:'https://example.test'},secret})
   const input:LeaseInput={credentialRef:entry.id,agentId:randomUUID(),workId:randomUUID(),runnerId:randomUUID(),runnerInstance:randomUUID(),runnerEpoch:'dummy-runner-epoch',operation:'website.login',target:entry.target,seconds:60}
-  return {home,store,broker,dispatch,entry,input,grant:()=>dispatch('grant',input),execute:(id:string,b=input,o=owner,s=session)=>broker.execute(epoch,o,s,id,b),advance:(ms:number)=>{now+=ms},reconnect:()=>{epoch=randomUUID();broker.hello(epoch)}}
+  return {home,store,broker,dispatch,entry,input,grant:()=>dispatch('grant',input),prepare:(body:unknown,s=session,o=owner,signal?:AbortSignal)=>broker.prepareHost(epoch,o,s,body,signal),execute:(id:string,b=input,o=owner,s=session)=>broker.execute(epoch,o,s,id,b),advance:(ms:number)=>{now+=ms},reconnect:()=>{epoch=randomUUID();broker.hello(epoch)}}
 }
 afterEach(()=>{brokers.splice(0).forEach(b=>b.close());homes.splice(0).forEach(h=>rmSync(h,{recursive:true,force:true}))})
 it('production has no execution adapter or read-secret RPC, even after user unlock and grant',async()=>{
@@ -72,13 +72,30 @@ it('logout from another login cannot lock the session that unlocked the vault',a
   const f=await fixture();f.grant();f.dispatch('logout',{},otherSession)
   expect(f.dispatch('status').unlocked).toBe(true);f.dispatch('logout');expect(f.dispatch('status').unlocked).toBe(false)
 })
+it.each(['lock','logout','reconnect','update','remove','expiry','close','connection'] as const)('never saves a late first-use host pin after %s',async cause=>{
+  const started=Promise.withResolvers<void>(),release=Promise.withResolvers<string>();let signal:AbortSignal|undefined
+  const f=await fixture({mode:'local-adapters',execute:async()=>{},prepareSshHost:async(_target,s)=>{signal=s;started.resolve();return release.promise}})
+  const target={kind:'ssh',host:'ssh.example.test',port:22,auth:'password'},entry=f.dispatch('add',{name:'dummy ssh',username:'dummy',target,secret})
+  const connection=new AbortController(),run=f.prepare({id:entry.id,revision:entry.revision},session,owner,connection.signal),result=expect(run).rejects.toMatchObject({code:'vault_host_probe_failed'})
+  await started.promise
+  if(cause==='lock'||cause==='logout')f.dispatch(cause)
+  if(cause==='reconnect')f.reconnect()
+  if(cause==='update')f.dispatch('update',{id:entry.id,entry:{name:'changed',username:'dummy',target,revision:1}})
+  if(cause==='remove')f.dispatch('remove',{id:entry.id})
+  if(cause==='expiry'){f.advance(300000);f.dispatch('status')}
+  if(cause==='close')f.broker.close()
+  if(cause==='connection')connection.abort()
+  expect(signal?.aborted).toBe(true);release.resolve('SHA256:'+'A'.repeat(43));await result
+  f.dispatch('unlock',{password});expect(f.dispatch('status').entries.some((e:any)=>e.id===entry.id&&e.target.hostKey)).toBe(false)
+})
 it('refuses symlink audit sinks and leaves their destination unchanged',async()=>{
   const f=await fixture(),path=join(f.home,'audit.jsonl'),destination=join(f.home,'dummy-destination')
   writeFileSync(destination,'unchanged');rmSync(path);symlinkSync(destination,path)
   expect(()=>f.dispatch('backup')).toThrow();expect(readFileSync(destination,'utf8')).toBe('unchanged')
 })
-it.each([undefined,{status:'complete',operation:'website.login',secret},{status:'complete',operation:'ssh.exec'}])('never treats missing, raw or scope-mismatched protected receipts as success',async receipt=>{
-  const f=await fixture({mode:'protected-adapters',execute:async()=>receipt as any}),lease=f.grant()
+const invalidReceipts=[undefined,{status:'complete',operation:'website.login',secret},{status:'complete',operation:'ssh.exec'}]
+it.each((['protected-adapters','local-adapters'] as const).flatMap(mode=>invalidReceipts.map(receipt=>({mode,receipt}))))('never treats missing, raw or scope-mismatched $mode receipts as success',async({mode,receipt})=>{
+  const f=await fixture({mode,execute:async()=>receipt as any}),lease=f.grant()
   await expect(f.execute(lease.id)).rejects.toMatchObject({code:'vault_operation_uncertain'})
   expect(f.dispatch('status').leases).toHaveLength(0)
   expect(readFileSync(join(f.home,'audit.jsonl'),'utf8')).not.toContain(secret)

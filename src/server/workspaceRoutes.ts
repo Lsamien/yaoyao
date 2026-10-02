@@ -2,6 +2,7 @@ import { WORKSPACE_PATCH_CAPABILITY } from '../shared/workspaceMessagePatch.js'
 import { KNOWLEDGE_FEATURES } from './workspaceKnowledge.js'
 import { workspaceKnowledgeRouter } from './workspaceKnowledgeRoutes.js'
 import { workspaceDetail, streamWorkspace } from './workspaceSync.js'
+import { workspaceMessageForClient } from './chatPresentation.js'
 import { readServerIdentity } from './serverIdentity.js'
 import { randomUUID } from 'node:crypto'
 import Router from '@koa/router'
@@ -318,7 +319,24 @@ export function workspaceRouter(
   router.get('/api/app/conversations/:id', (ctx) => {
     ctx.body = workspaceDetail(store, runtime, owner(ctx), ctx.params.id,
       typeof ctx.query.taskId === 'string' ? ctx.query.taskId : undefined,
-      Math.max(1, Math.min(100, number(ctx.query.limit, 100))))
+      Math.max(1, Math.min(100, number(ctx.query.limit, 100))), ctx.query.toolDetails === 'lazy')
+  })
+  router.get('/api/app/conversations/:id/messages/:messageId/tools/:index', ctx => {
+    const user = owner(ctx)
+    const conversation = store.require<WorkspaceConversation>(user, 'conversation', ctx.params.id)
+    for (const id of conversation.memberIds) {
+      const agent = store.get<WorkspaceAgent>(user, 'agent', id)
+      if (agent && !auth.canUseSource(user, agent.nodeId, agent.profile)) throw new HttpError(403, '没有此机器人的权限', 'agent_source_forbidden')
+    }
+    const message = store.require<WorkspaceMessage>(user, 'message', ctx.params.messageId)
+    if (message.conversationId !== conversation.id || message.visible === false) throw new HttpError(404, '工具记录不存在', 'tool_not_found')
+    const index = number(ctx.params.index, -1)
+    const tool = typeof ctx.query.toolId === 'string'
+      ? message.tools.find(tool => String(tool.id) === ctx.query.toolId)
+      : message.tools[index]
+    if (!tool) throw new HttpError(404, '工具记录不存在', 'tool_not_found')
+    ctx.set('Cache-Control', 'no-store')
+    ctx.body = { input: tool.arguments ?? tool.args ?? tool.input, output: tool.error ?? tool.result ?? tool.output, revision: message.revision }
   })
   router.patch('/api/app/conversations/:id', async (ctx) => {
     const user = owner(ctx), input = body(ctx)
@@ -348,7 +366,7 @@ export function workspaceRouter(
         Math.min(200, number(ctx.query.limit, 100)),
         false,
         task?.id,
-      ),
+      ).map(message => ctx.query.toolDetails === 'lazy' ? workspaceMessageForClient(message) : message),
       cursor: store.cursor(user),
     }
   })
@@ -401,10 +419,15 @@ export function workspaceRouter(
     const user = owner(ctx)
     const conversations = store.list<WorkspaceConversation>(user, 'conversation')
       .map(c => store.conversationSummary(user, c)).sort(compareWorkspaceConversations)
-    const details = conversations.filter(c => !c.archived).map(c => workspaceDetail(store, runtime, user, c.id))
+    const partialDetails = ctx.query.details === 'selected'
+    const taskId = partialDetails && typeof ctx.query.taskId === 'string' ? ctx.query.taskId : undefined
+    // A stale task link must still load the list; the detail route handles its fallback.
+    const details = conversations.filter(c => !c.archived && (!partialDetails || c.id === ctx.query.conversationId)
+      && (!taskId || store.get<{ conversationId: string }>(user, 'conversation-task', taskId)?.conversationId === c.id))
+      .map(c => workspaceDetail(store, runtime, user, c.id, taskId, 50, ctx.query.toolDetails === 'lazy'))
     ctx.set('Cache-Control', 'no-store')
     ctx.body = { projects: runtime.knowledge.projects(user), agents: store.list<WorkspaceAgent>(user, 'agent').map(a => store.agentSummary(a)),
-      conversations, details, cursor: store.cursor(user), serverIdentity: readServerIdentity(store) }
+      conversations, details, partialDetails, cursor: store.cursor(user), serverIdentity: readServerIdentity(store) }
   })
   router.get('/api/app/events/stream', ctx => streamWorkspace(ctx, store, auth))
   router.get('/api/app/events', (ctx) => {

@@ -25,7 +25,7 @@ const statusLabel = computed(() => props.group.status === 'running' ? '进行中
           <header><AppIcon name="brain" :size="12" />思考过程 · {{ entry.content.length }} 字</header>
           <MarkdownContent process-content :content="entry.content" :streaming="group.status === 'running'" :stream-interval-ms="streamIntervalMs" />
         </section>
-        <ToolTrace v-else class="turn-trace__item turn-trace__tool" :tool="entry.tool" expanded />
+        <ToolTrace v-else class="turn-trace__item turn-trace__tool" :tool="entry.tool" :expanded="!entry.tool.detailsUrl" />
       </template>
     </div>
   </SystemMessageNotice>

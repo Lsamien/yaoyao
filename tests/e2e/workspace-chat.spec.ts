@@ -877,6 +877,37 @@ test('Bot transcript switches from cache and preserves the viewport during histo
   }
 })
 
+test('Bot startup loads only the selected transcript and fetches large tool output after expansion', async ({ page }) => {
+  await login(page)
+  const bootstrap = await (await page.request.get('/api/app/bootstrap')).json()
+  const headers = { 'X-CSRF-Token': bootstrap.csrfToken }
+  const seeded = await page.request.post('/__test/workspace-transcript?tools=large', { headers })
+  expect(seeded.ok(), await seeded.text()).toBe(true)
+  const seed = await seeded.json()
+  const requests: string[] = []
+  page.on('request', request => { if (request.method() === 'GET') requests.push(request.url()) })
+  const snapshot = page.waitForResponse(response => response.url().includes('/api/app/workspace/snapshot?'))
+  await page.goto('/conversations')
+  expect((await (await snapshot).json()).details).toEqual([])
+  await page.locator(`.desktop-sidebar [data-sidebar-id="${seed.conversationId}"]`).click()
+  await expect(page.locator('.message')).toHaveCount(50)
+  await page.locator('.composer-tool[title="显示思考"]').click()
+  await page.locator('.turn-trace summary').click()
+  const tool = page.locator('.tool-trace').filter({ hasText: 'read_file' })
+  await expect(tool).toBeVisible()
+  expect(requests.some(url => url.includes('/tools/'))).toBe(false)
+  await tool.getByRole('button', { name: /read_file/ }).click()
+  await expect(tool.locator('pre').last()).toContainText('工具输出末尾')
+  expect(requests.filter(url => url.includes('/tools/'))).toHaveLength(1)
+  const reloaded = page.waitForResponse(response => response.url().includes('/api/app/workspace/snapshot?'))
+  await page.reload()
+  const selected = await (await reloaded).json()
+  expect(selected.details).toHaveLength(1)
+  expect(selected.details[0].conversation.id).toBe(seed.conversationId)
+  expect(JSON.stringify(selected)).not.toContain('工具输出末尾')
+  await expect(page.locator('.message')).toHaveCount(50)
+})
+
 test('account update checks show loading, available versions and retry on desktop and phone', async ({ page }, testInfo) => {
   await login(page)
   const current = { schemaVersion: 1, releaseVersion: '0.4.17', webVersion: '0.4.17', gitTag: 'v0.4.17' }

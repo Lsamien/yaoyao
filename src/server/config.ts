@@ -101,6 +101,7 @@ function parseUpstream(value: string | undefined): URL {
 
 function parseReleaseSource(value: string | undefined): string {
   const source = normalizeReleaseSource(value)
+  if (source === 'npm:@lsamien/yaoyao') return source
   if (source.length > 2_048 || /[\u0000-\u001f\u007f]/.test(source)) {
     throw new Error('HERMES_YAOYAO_RELEASE_SOURCE is invalid')
   }

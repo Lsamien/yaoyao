@@ -53,6 +53,7 @@ export class RunnerHub {
   browserAllowed:(runnerId:string,scope:unknown,grantId?:string)=>boolean=()=>false
   controlAllowed:(id:string,runnerId:string)=>boolean=()=>false
   readonly epoch=randomUUID()
+  private readonly credentialServerId=randomUUID()
   private online = new Map<string,{instance:string;seen:number;epoch:string;features:string[];wake?:()=>void}>()
   private retired = new Map<string,Set<string>>()
   private pending = new Map<string,Map<string,Pending>>()
@@ -95,10 +96,18 @@ export class RunnerHub {
     return result
   }
   records():RunnerRecord[] {return this.store.list('_system','runner')}
-  credentialBinding(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent) {
+  credentialBinding(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent,location:'node'|'server'='node') {
     if(agent.archived||!this.auth.canUseSource(owner,agent.nodeId,agent.profile))throw new HttpError(403,'Bot 凭据授权已结束','vault_agent_forbidden')
     const record=this.records().find(r=>r.enabled&&r.sourceNodeId===agent.nodeId&&(r.sourceOwner==='_system'||r.sourceOwner===owner))
     const online=record&&this.online.get(record.id)
+    if(location==='server'){
+      if(record&&(!online||Date.now()-online.seen>=35000))throw new HttpError(503,'Bot 所在节点离线，请等待节点连接','vault_runner_offline')
+      if(record&&!record.allowedProfiles.includes(agent.profile))throw new HttpError(403,'执行节点未授权当前 Profile','vault_agent_forbidden')
+      // No Runner is needed for direct Hermes tasks. Existing Runner reconnects
+      // still change the binding, even though secrets remain in this server.
+      return {runnerId:this.credentialServerId,runnerInstance:this.epoch,
+        runnerEpoch:hash(JSON.stringify([agent.nodeId,agent.profile,record?.id,online?.instance,online?.epoch]))}
+    }
     if(!record||!online||Date.now()-online.seen>=35000)throw new HttpError(503,'执行节点离线，请等待节点连接','vault_runner_offline')
     if(!record.allowedProfiles.includes(agent.profile))throw new HttpError(403,'执行节点未授权当前 Profile','vault_agent_forbidden')
     if(!online.features.includes('credential-ref-v1'))throw new HttpError(409,'请更新 Runner，旧节点不支持凭据引用授权','vault_runner_upgrade_required')

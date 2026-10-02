@@ -94,7 +94,7 @@ describe('independent Web updates', () => {
     const boot = await anonymous.get('/api/app/bootstrap').set('Host', host).expect(200)
     const getPaths = ['/status', '/jobs/11111111-1111-4111-8111-111111111111']
     for (const path of getPaths) await anonymous.get(base + path).set('Host', host).expect(401)
-    for (const path of ['/check', '/apply', '/rollback']) {
+    for (const path of ['/check', '/apply', '/rollback', '/activate']) {
       await anonymous.post(base + path).set('Host', host).set('Origin', origin).set('X-CSRF-Token', boot.body.csrfToken)
         .send({ targetVersion: '0.3.0' }).expect(401)
     }
@@ -103,7 +103,7 @@ describe('independent Web updates', () => {
     const member = await login(f.runtime, 'member', 'temporary-password')
     f.fetchImpl.mockClear()
     for (const path of getPaths) await member.agent.get(base + path).set('Host', host).expect(403)
-    for (const path of ['/check', '/apply', '/rollback']) {
+    for (const path of ['/check', '/apply', '/rollback', '/activate']) {
       await member.agent.post(base + path).set('Host', host).set('Origin', origin).set('X-CSRF-Token', member.csrf)
         .send({ targetVersion: '0.3.0' }).expect(403)
       await admin.agent.post(base + path).set('Host', host).set('Origin', origin).send({}).expect(403)

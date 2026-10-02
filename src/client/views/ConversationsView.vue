@@ -341,7 +341,7 @@ async function load(id = selected.value, append = false, signal?: AbortSignal) {
     activeTask.value = null;tasks.value = [];assignments.value = [];quoted.value = null;older.value = false
   }
   try {
-    const incoming = cached ?? await apiRequest<WorkspaceDetail>(`/api/app/conversations/${id}?limit=50${requestedTask ? `&taskId=${encodeURIComponent(requestedTask)}` : ''}`, { signal })
+    const incoming = cached ?? await apiRequest<WorkspaceDetail>(`/api/app/conversations/${id}?limit=50&toolDetails=lazy${requestedTask ? `&taskId=${encodeURIComponent(requestedTask)}` : ''}`, { signal })
     if (!current()) return
     const r = cached ?? transcriptStore.finishRead(readToken, incoming)
     if (cached && transcriptStore.staleDetails.has(transcriptKey(id, cached.task?.id))) {
@@ -525,7 +525,10 @@ async function hydrateWorkspace(signal: AbortSignal) {
   if (capabilities.csrfToken) setApiCsrfToken(capabilities.csrfToken)
   const readToken = transcriptStore.beginRead()
   try {
-  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity; projects?: WorkspaceProject[] }>('/api/app/workspace/snapshot', { signal })
+  const query = new URLSearchParams({ details: 'selected', toolDetails: 'lazy' })
+  if (selected.value) query.set('conversationId', selected.value)
+  if (selectedTask.value) query.set('taskId', selectedTask.value)
+  const snapshot = await apiRequest<WorkspaceSnapshot & { serverIdentity?: ServerIdentity; projects?: WorkspaceProject[] }>(`/api/app/workspace/snapshot?${query}`, { signal })
   if (signal.aborted || disposed || accountEpoch !== epoch || auth.user?.id !== owner) return
   transcriptStore.hydrate(snapshot)
   agents.value = snapshot.agents; conversations.value = transcriptStore.conversations; cursor = snapshot.cursor
@@ -537,7 +540,7 @@ function connectEvents() {
   eventSource?.close()
   if (disposed) return
   if (!navigator.onLine) { suspendEvents(); return }
-  const source = new EventSource(`/api/app/events/stream?after=${cursor}${patchEvents ? '&format=patch-v1' : ''}`)
+  const source = new EventSource(`/api/app/events/stream?after=${cursor}&toolDetails=lazy${patchEvents ? '&format=patch-v1' : ''}`)
   eventSource = source
   source.addEventListener('workspace', event => {
     if (disposed || eventSource !== source) return
@@ -913,7 +916,7 @@ async function loadOlder() {
   const taskId = activeTask.value?.id, own = generation
   try {
     const r = await apiRequest<{ messages: Message[]; cursor?: number }>(
-      `/api/app/conversations/${c.id}/messages?limit=50&before=${messages.value[0]?.seq ?? 0}${activeTask.value ? `&taskId=${activeTask.value.id}` : ''}`,
+      `/api/app/conversations/${c.id}/messages?limit=50&toolDetails=lazy&before=${messages.value[0]?.seq ?? 0}${activeTask.value ? `&taskId=${activeTask.value.id}` : ''}`,
     )
     if (own !== generation || active.value?.id !== c.id || activeTask.value?.id !== taskId) return
     const current = transcriptStore.get(c.id, taskId)

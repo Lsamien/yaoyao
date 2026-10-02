@@ -44,7 +44,7 @@ if (platform.windows) app.setAppUserModelId('cn.samien.yaoyao.desktop')
 if (!app.requestSingleInstanceLock()) { app.quit() }
 else {
   let window, tray, manager, runnerManager, quitting = false, closing = false, timer
-  let updateWindow, updater, environmentHost, hostManager, onboarding
+  let updater, environmentHost, hostManager, onboarding
   let remoteMode = false, remoteURL = '', serverModeActive = false, switchingMode = false
   let recoveringService = false
   let resumeLocalAfterUpdate = false
@@ -62,8 +62,9 @@ else {
   const closeComputerViewer = installComputerViewer({ owner: () => window, origin: () => serviceURL(),
     preload: join(desktopRoot, 'preload.cjs'), quitting: () => quitting })
   app.on('will-quit', closeComputerViewer)
-  const updateURL = pathToFileURL(join(desktopRoot, 'update.html')).href
   const bootURL = pathToFileURL(join(desktopRoot, 'boot.html')).href
+  const inlineUpdateScript = readFileSync(join(desktopRoot, 'inline-update.js'), 'utf8')
+  const inlineUpdateStyle = readFileSync(join(desktopRoot, 'inline-update.css'), 'utf8')
   const root = app.isPackaged ? join(process.resourcesPath, 'runtime')
     : join(app.getAppPath(), clientOnly ? '.desktop-build-client' : '.desktop-build')
   const logRoot = join(app.getPath('logs'), fixtureHome ? 'verification' : 'service')
@@ -103,20 +104,19 @@ else {
       return onboarding[action](input)
     })
   }
-  const trustedUpdate = event => event.sender === updateWindow?.webContents
-    && event.senderFrame === updateWindow.webContents.mainFrame && event.senderFrame.url === updateURL
+  const trustedUpdate = event => {
+    if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame) return false
+    if (event.senderFrame.url === bootURL) return true
+    try { return serviceOrigins().includes(new URL(event.senderFrame.url).origin) }
+    catch { return false }
+  }
   ipcMain.handle('desktop:updates', async event => {
-    let trusted = false
-    try {
-      trusted = event.sender === window?.webContents && event.senderFrame === window.webContents.mainFrame
-        && serviceOrigins().includes(new URL(event.senderFrame.url).origin)
-    } catch { /* Only the active server's main page may open the local updater. */ }
-    if (!trusted || closing || quitting || !updater) throw new Error('不允许此页面打开 App 更新')
+    if (!trustedUpdate(event) || closing || quitting || !updater) throw new Error('不允许此页面检测 App 更新')
     await showUpdates()
   })
   for (const action of ['state', 'check', 'download', 'cancel', 'install', 'open', 'folder', 'release']) {
     ipcMain.handle(`desktop-update:${action}`, async event => {
-      if (!trustedUpdate(event)) throw new Error('不允许此页面操作 App 更新')
+      if (!trustedUpdate(event) || !updater) throw new Error('不允许此页面操作 App 更新')
       if (action === 'state') return updater.snapshot()
       if (closing || quitting) throw new Error('App 正在重启或退出')
       if (action === 'check') return updater.check()
@@ -131,18 +131,11 @@ else {
     })
   }
   async function showUpdates() {
-    if (closing || quitting) return
-    if (updateWindow && !updateWindow.isDestroyed()) { updateWindow.show(); updateWindow.focus(); return }
-    updateWindow = new BrowserWindow({ title: 'App 更新 · 夭夭', width: 640, height: 620, minWidth: 360, minHeight: 440, show: false,
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
-        preload: join(desktopRoot, 'update-preload.cjs') } })
-    updateWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    updateWindow.webContents.on('will-navigate', event => event.preventDefault())
-    updateWindow.webContents.on('will-redirect', event => event.preventDefault())
-    updateWindow.webContents.on('will-attach-webview', event => event.preventDefault())
-    updateWindow.on('closed', () => { updateWindow = undefined })
-    updateWindow.once('ready-to-show', () => updateWindow?.show())
-    await updateWindow.loadURL(updateURL)
+    if (closing || quitting || !updater) return
+    if (!window || window.isDestroyed()) await createWindow()
+    window.show(); window.focus()
+    window?.webContents.send('desktop:update-requested')
+    if (!updater.busy && updater.snapshot().phase !== 'ready') await updater.check()
   }
 
   function show() {
@@ -176,6 +169,15 @@ else {
     window.webContents.on('will-navigate', guardNavigation)
     window.webContents.on('will-redirect', guardNavigation)
     window.webContents.on('will-attach-webview', event => event.preventDefault())
+    window.webContents.on('did-finish-load', () => {
+      // Older remote Web builds have no inline updater component. The local
+      // renderer supplies it until a current workspace claims the entry.
+      const contents = window.webContents
+      try {
+        if (!serviceOrigins().includes(new URL(contents.getURL()).origin)) return
+        void contents.insertCSS(inlineUpdateStyle).then(() => contents.executeJavaScript(inlineUpdateScript)).catch(error => log(error.message))
+      } catch { /* The local startup page already loads the widget itself. */ }
+    })
     const trustedService = (contents, url) => {
       try { return contents === window?.webContents && serviceOrigins().includes(new URL(url).origin) }
       catch { return false }
@@ -240,7 +242,7 @@ else {
     if (closing || quitting) return
     const resumeLocal = serverModeActive && manager?.activationRequested === true
     closing = true; unreadBadge.clear(); clearInterval(timer)
-    updater?.stopChecking?.(); updater?.cancel(); updateWindow?.close()
+    updater?.stopChecking?.(); updater?.cancel()
     window?.hide()
     // Native Cmd+Q can enter before-quit from Cocoa's termination callback.
     // Both cleanup and the final quit must run after that callback unwinds.
@@ -304,7 +306,7 @@ else {
     }
     clearInterval(timer)
     timer = setInterval(() => { if (serverModeActive) void manager?.check(); else void checkRemoteAuthorization() }, 10000); timer.unref()
-    window?.show(); updateWindow?.show()
+    window?.show()
   }
   app.on('before-quit', event => {
     if (quitting) return
@@ -642,7 +644,7 @@ else {
         { id:'desktop-background', label:'登录启动时仅驻留菜单栏', type:'checkbox', checked:preferences.value.backgroundAtLogin,
           click:async item=>{try{await preferences.setBackgroundAtLogin(item.checked)}catch(error){item.checked=preferences.value.backgroundAtLogin;await dialog.showMessageBox(window,{type:'error',message:error.message})}} },
         { id:'desktop-update-check', label:'检查 App 更新…', click:showUpdates },
-        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n\n通过“检查 App 更新”下载新版，准备完成后点击“重启更新”。此操作只更新当前电脑的 App，不升级远程服务器。开发运行时提供手动安装包下载。${platform.server ? "\n\n独立后台服务继续运行。服务器模式下，首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 降级通过服务器的回滚入口处理；数据库结构不兼容时不能直接降级。" : ""}\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
+        { id:'desktop-update-help', label:'App 更新与回退…', click:()=>dialog.showMessageBox(window,{type:'info',message:`夭夭 App ${packageVersion}`,detail:`App 构建：${String(buildInfo.commit).slice(0,12)}\n\n点击侧栏中的“可更新”下载新版，准备完成后点击“重新启动”。此操作只更新当前电脑的 App，不升级远程服务器。开发运行时提供手动安装包下载。${platform.server ? "\n\n独立后台服务继续运行。服务器模式下，首次启动同步较旧的本机 Web，已有较新的 Web 保留。Web 降级通过服务器的回滚入口处理；数据库结构不兼容时不能直接降级。" : ""}\n\n数据目录：${home}`,buttons:['知道了','打开数据目录']}).then(result=>{if(result.response===1)shell.showItemInFolder(home)}) },
         { type: 'separator' },
         { role: 'hide', label: '隐藏夭夭' }, { role: 'hideOthers', label: '隐藏其他' }, { role: 'unhide', label: '显示全部' },
         { type: 'separator' },

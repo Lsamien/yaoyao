@@ -4,6 +4,7 @@ import SystemUpdatePanel from '@/components/app/SystemUpdatePanel.vue'
 
 const api = vi.hoisted(() => ({
   applySystemUpdate: vi.fn(),
+  activateSystemUpdate: vi.fn(),
   checkSystemUpdate: vi.fn(),
   rollbackSystemUpdate: vi.fn(),
   systemUpdateJob: vi.fn(),
@@ -46,6 +47,7 @@ beforeEach(() => {
   api.checkSystemUpdate.mockReset()
   api.systemUpdateJob.mockReset()
   api.applySystemUpdate.mockReset()
+  api.activateSystemUpdate.mockReset()
   api.rollbackSystemUpdate.mockReset()
   api.systemUpdateStatus.mockResolvedValue(readyStatus)
   api.checkSystemUpdate.mockResolvedValue(readyStatus)
@@ -60,6 +62,41 @@ afterEach(() => {
 })
 
 describe('SystemUpdatePanel', () => {
+  it('downloads npm updates without restarting and restores the restart action after reopening offline', async () => {
+    const target = { ...manifest, releaseVersion: '0.3.0', webVersion: '0.3.0', gitTag: 'v0.3.0' }
+    const npmStatus = { ...readyStatus, updateMethod: 'npm', installationMode: 'npm', latest: target, updateAvailable: true }
+    const preparedJob = { ...activeJob, state: 'prepared', target, message: '服务器更新已准备完成' }
+    api.systemUpdateStatus.mockResolvedValue(npmStatus)
+    api.checkSystemUpdate.mockResolvedValue(npmStatus)
+    api.applySystemUpdate.mockResolvedValue({ ...activeJob, state: 'downloading', received: 37, total: 100 })
+    api.systemUpdateJob.mockResolvedValue(preparedJob)
+    const confirm = vi.spyOn(window, 'confirm')
+    let wrapper = mount(SystemUpdatePanel, { global: { stubs: { AppIcon: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('不保留旧版本')
+    expect(wrapper.text()).not.toContain('回滚上一版本')
+    await wrapper.get('.solid-button').trigger('click'); await flushPromises()
+    expect(api.applySystemUpdate).toHaveBeenCalledWith('0.3.0')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('37')
+    api.systemUpdateStatus.mockResolvedValue({ ...npmStatus, latest: undefined, job: preparedJob })
+    await vi.advanceTimersByTimeAsync(1000); await flushPromises()
+    expect(wrapper.get('.restart-server').text()).toContain('重启服务器')
+    expect(wrapper.get('.version-grid').text()).toContain('0.3.0')
+    expect(wrapper.emitted('lock-change')?.at(-1)).toEqual([false])
+    expect(api.activateSystemUpdate).not.toHaveBeenCalled()
+    wrapper.unmount()
+    api.checkSystemUpdate.mockRejectedValue(new Error('npm 暂时离线'))
+    wrapper = mount(SystemUpdatePanel, { global: { stubs: { AppIcon: true } } })
+    await flushPromises()
+    expect(wrapper.get<HTMLButtonElement>('.restart-server').element.disabled).toBe(false)
+    let finish!: (job: typeof activeJob) => void
+    api.activateSystemUpdate.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    await wrapper.get('.restart-server').trigger('click'); await wrapper.get('.restart-server').trigger('click')
+    expect(api.activateSystemUpdate).toHaveBeenCalledExactlyOnceWith('job-1')
+    await wrapper.setProps({ active: false }); finish(activeJob); await flushPromises()
+    wrapper.unmount()
+  })
   it('hides a previous successful update that does not match the running Web version', async () => {
     const old = { ...doneJob, target: { ...manifest, webVersion: '0.1.0', releaseVersion: '0.1.0' }, message: '已升级 Web 0.1.0' }
     api.systemUpdateStatus.mockResolvedValue({ ...readyStatus, job: old })

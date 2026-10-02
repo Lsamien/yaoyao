@@ -4,6 +4,7 @@ export type UiToolCall = {
   status: 'running' | 'success' | 'error' | 'pending' | 'interrupted'
   input?: unknown
   output?: unknown
+  detailsUrl?: string
   durationMs?: number
 }
 

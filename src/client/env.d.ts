@@ -15,6 +15,9 @@ interface Window {
     openLogin?(): Promise<unknown>
     forgetLogin?(): Promise<unknown>
     openUpdates?(): Promise<void>
+    updateState?(): Promise<import('@shared/desktopUpdate').DesktopUpdateState>
+    updateAction?(action: import('@shared/desktopUpdate').DesktopUpdateAction): Promise<import('@shared/desktopUpdate').DesktopUpdateState | undefined>
+    onUpdateRequested?(callback: () => void): () => void
     modeState?(): Promise<{ mode: 'client' | 'server'; serverURL: string; switching: boolean; platform?: string; supportedModes?: ('client' | 'server')[] }>
     switchMode?(mode: 'client' | 'server'): Promise<{ ok: boolean; error?: string; pendingLogin?: boolean }>
     openRemoteLogin?(): Promise<void>

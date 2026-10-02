@@ -54,6 +54,24 @@ it('requests a fresh snapshot when the database cursor has moved backwards', asy
   expect(await response.text()).toContain('event: reset')
 })
 
+it('replays a full lightweight baseline before patches for a background chat omitted from a partial snapshot', async () => {
+  store.createAgent('owner', { name: 'Bot', nodeId: 'local', profile: 'default' })
+  const c = store.list<WorkspaceConversation>('owner', 'conversation')[0]!
+  const m: WorkspaceMessage = { id: 'background', conversationId: c.id, seq: 0, role: 'assistant', content: 'one', reasoning: '', status: 'streaming', tools: [{ id: 'large', result: 'private-output'.repeat(2000) }], attachments: [], createdAt: 1 }
+  store.saveMessage('owner', m)
+  const after = store.cursor('owner')
+  store.saveMessage('owner', { ...m, content: 'one two' })
+  const controller = new AbortController()
+  const response = await fetch(`${url()}?after=${after}&format=patch-v1&toolDetails=lazy`, { signal: controller.signal })
+  const reader = response.body!.getReader(), decoder = new TextDecoder()
+  let text = ''
+  while (!text.includes('event: ready')) text += decoder.decode((await reader.read()).value, { stream: true })
+  const event = text.split('\n').find(line => line.startsWith('data: ') && line.includes('message.changed'))!
+  expect(JSON.parse(event.slice(6)).data).toMatchObject({ id: m.id, content: 'one two', tools: [expect.objectContaining({ detailsUrl: expect.any(String) })] })
+  expect(text).not.toContain('private-output')
+  controller.abort(); await reader.cancel().catch(() => {})
+})
+
 it('returns only the latest 50 messages with an exact hasOlder flag and a matching cursor', () => {
   store.createAgent('owner', { name: 'Bot', nodeId: 'local', profile: 'default' })
   const conversation = store.list<WorkspaceConversation>('owner', 'conversation')[0]!

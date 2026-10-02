@@ -56,17 +56,21 @@ for (const scenario of ['remote', 'local', 'remote-failure', 'local-failure', 'r
         app.quit()
       }
     }, { root, home, fail })
-    const opened = app.waitForEvent('window')
-    if (checking || mode === 'local' && fail) await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('desktop-update-check').click())
-    else await page.evaluate(() => window.yaoyaoDesktop.openUpdates())
-    const updates = await opened
-    await updates.getByRole('button', { name: '下载更新', exact: true }).click()
-    await expect(updates.getByRole('button', { name: '重启更新', exact: true })).toBeEnabled()
+    if (checking || mode === 'local' && fail) {
+      await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('desktop-update-check').click())
+      await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.available))).toBe(true)
+    } else await page.evaluate(() => window.yaoyaoDesktop.openUpdates())
+    assert.equal(app.windows().length, 1)
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('download'))
+    await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.phase))).toBe('ready')
     const closed = fail ? undefined : app.waitForEvent('close')
     if (mode === 'local' && fail) activationRequired = true
-    await updates.getByRole('button', { name: '重启更新', exact: true }).click().catch(error => { if (!updates.isClosed()) throw error })
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('install')).catch(error => {
+      // Recovery can replace the main renderer while this IPC is completing.
+      if (!page.isClosed() && !(fail && /Execution context was destroyed/.test(error.message))) throw error
+    })
     if (fail) {
-      await expect(updates.getByRole('alert')).toContainText('fixture restart failed')
+      await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.error)).catch(() => '')).toContain('fixture restart failed')
       assert.equal(await app.evaluate(({ app }) => app.hasSingleInstanceLock()), true)
       if (checking) {
         assert.equal((await page.evaluate(() => window.yaoyaoDesktop.status())).active, true)

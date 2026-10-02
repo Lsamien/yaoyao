@@ -225,7 +225,7 @@ function requireLocalSystemUpdate(ctx: Koa.Context, dependencies: RouteDependenc
 
 function updateFailure(error: unknown): HttpError {
   const message = error instanceof Error ? error.message : String(error)
-  if (/最新版本|目标版本|正在执行|可回滚|不支持/.test(message)) {
+  if (/最新版本|目标版本|正在执行|可回滚|不支持|没有可生效|已准备更新/.test(message)) {
     return new HttpError(409, message, 'system_update_conflict')
   }
   return new HttpError(502, `无法访问系统发布源：${message}`, 'system_update_source_failed')
@@ -2117,6 +2117,14 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     } catch (error) {
       throw updateFailure(error)
     }
+  })
+  router.post('/api/app/system/update/activate', (ctx) => {
+    dependencies.auth.requireAdmin(ctx)
+    requireLocalSystemUpdate(ctx, dependencies)
+    const jobID = body(ctx).jobID
+    if (typeof jobID !== 'string' || !/^[0-9a-f-]{36}$/.test(jobID)) throw new HttpError(400, 'jobID 无效', 'invalid_request')
+    try { json(ctx, 202, dependencies.updates.startActivation(jobID)) }
+    catch (error) { throw updateFailure(error) }
   })
   router.get('/api/app/system/update/jobs/:jobID', async (ctx) => {
     dependencies.auth.requireAdmin(ctx)

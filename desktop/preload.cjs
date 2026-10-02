@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld('yaoyaoDesktop', Object.freeze({
   forceSync: () => ipcRenderer.invoke('desktop:force-sync'),
   logs: () => ipcRenderer.invoke('desktop:logs'),
   openUpdates: () => ipcRenderer.invoke('desktop:updates'),
+  updateState: () => ipcRenderer.invoke('desktop-update:state'),
+  updateAction: action => ipcRenderer.invoke(`desktop-update:${action}`),
+  onUpdateRequested: callback => {
+    const listener = () => callback()
+    ipcRenderer.on('desktop:update-requested', listener)
+    return () => ipcRenderer.removeListener('desktop:update-requested', listener)
+  },
   modeState: () => ipcRenderer.invoke('desktop:mode-state'),
   switchMode: mode => ipcRenderer.invoke('desktop:mode-switch', mode),
   openRemoteLogin: () => ipcRenderer.invoke('desktop:remote-login'),

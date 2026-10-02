@@ -379,6 +379,23 @@ const auth = new LocalAuthStore(home, false)
 const grokAuth=process.env.WORKSPACE_FIXTURE_GROK_AUTH==='1'?new FixtureGrokAuthProvider():undefined
 const runtime = createApplication({ config, auth, grokFetch:grokAuth?.fetch, pluginFetch: pluginsFixture?.fetch }),
   node = createNodeServer(runtime)
+if(process.env.WORKSPACE_FIXTURE_VAULT==='1'){
+  // Test-only entry into real Bot tools, with disposable tasks and dummy credentials.
+  runtime.app.use(async(ctx,next)=>{
+    if(ctx.path!=='/__test/vault-use'||ctx.method!=='POST')return next()
+    const owner=auth.require(ctx).id,body=(ctx.request as any).body
+    const agent=runtime.workspace.require<any>(owner,'agent',body.agentId),workId=randomUUID(),runId=randomUUID()
+    const run={id:runId,status:'running',stopRequested:false},work={id:workId,agentId:agent.id,runId,status:'running',cancelRequested:false}
+    runtime.workspace.put(owner,'run',runId,run);runtime.workspace.put(owner,'turn',workId,work)
+    const controller=new AbortController(),tools=runtime.credentialVault.openTurn(owner,agent.id,workId,controller.signal,()=>{
+      if(!auth.canUseSource(owner,agent.nodeId,agent.profile))throw new Error('fixture Bot denied')
+    },waiting=>runtime.workspace.put(owner,'turn',workId,{...work,status:waiting?'waiting':'running'}))
+    try{
+      const refs=await tools.call('credential_refs',{})
+      ctx.body=body.discoverOnly?refs:{refs,result:await tools.call('credential_request',body.command?{credentialRef:body.credentialRef,operation:'ssh.exec',command:body.command}:{credentialRef:body.credentialRef,operation:'ssh.exec'})}
+    }finally{tools.close();runtime.workspace.put(owner,'turn',workId,{...work,status:'complete'});runtime.workspace.put(owner,'run',runId,{...run,status:'complete'})}
+  })
+}
 const closeNative=process.env.WORKSPACE_FIXTURE_NATIVE==='1'?(await import('./native-environment.js')).nativeEnvironmentFixture(runtime,home,port):undefined
 if (process.env.WORKSPACE_FIXTURE_COMMUNICATION === '1') {
   const owner = JSON.parse(readFileSync(usersPath, 'utf8')).users[0].id as string
@@ -404,12 +421,13 @@ runtime.app.use((ctx, next) => {
     runtime.workspace.saveMessage(owner, { ...message, content: message.content + '\n\n实时追加的内容', status: 'streaming' })
     ctx.body = { ok: true }; return
   }
-  const agent = runtime.workspace.createAgent(owner, { name: '长会话性能验收', profile: 'default' })
+  const agent = runtime.workspace.createAgent(owner, { name: ctx.query.tools === 'large' ? '大工具按需加载验收' : '长会话性能验收', profile: 'default' })
   const conversation = runtime.workspace.list<any>(owner, 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === agent.id)!
   for (let index = 1; index <= 300; index++) runtime.workspace.saveMessage(owner, {
     id: randomUUID(), conversationId: conversation.id, seq: index, role: index % 2 ? 'user' : 'assistant',
     content: `消息 ${index}\n\n${'用于验证长会话缓存与滚动位置。'.repeat(12)}`, reasoning: '', status: 'complete',
-    attachments: [], tools: [], createdAt: Date.now() + index,
+    attachments: [], tools: index === 300 && ctx.query.tools === 'large'
+      ? [{ id: 'large-tool', name: 'read_file', status: 'completed', arguments: { path: '/tmp/large.txt' }, result: '完整工具输出'.repeat(3000) + '工具输出末尾' }] : [], createdAt: Date.now() + index,
   })
   ctx.body = { agentId: agent.id, conversationId: conversation.id }
 })

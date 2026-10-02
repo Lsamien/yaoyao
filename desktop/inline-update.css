@@ -1,0 +1,26 @@
+#desktop-update-entry{max-width:360px;margin:16px auto;padding:0 16px;font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;color:var(--text-primary,var(--text,#20201e))}
+#desktop-update-entry button{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:8px 12px;border:1px solid var(--line,#ddddda);border-radius:9px;background:var(--surface,var(--canvas,#fff));color:inherit;font:inherit;cursor:pointer}
+#desktop-update-entry button:disabled{cursor:default}
+#desktop-update-entry button:focus-visible{outline:2px solid var(--accent,var(--success,#377a54));outline-offset:2px}
+#desktop-update-label{flex:1;text-align:left}
+#desktop-update-ring{width:20px;height:20px;flex:0 0 20px;transform:rotate(-90deg);color:var(--accent,var(--success,#377a54))}
+#desktop-update-icon{width:20px;height:20px;flex:0 0 20px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+#desktop-update-ring[hidden],#desktop-update-icon[hidden]{display:none}
+#desktop-update-ring circle{fill:none;stroke:currentColor;stroke-width:2.5;stroke-linecap:round}.update-track{opacity:.18}
+#desktop-update-dot{width:6px;height:6px;border-radius:50%;background:var(--accent,var(--success,#377a54))}
+#desktop-update-error{font-size:12px;color:var(--danger,#b33d33);overflow-wrap:anywhere}
+.update-spinning{animation:desktop-update-spin 1s linear infinite}
+@keyframes desktop-update-spin{to{transform:rotate(270deg)}}
+@media(prefers-reduced-motion:reduce){.update-spinning{animation:none}}
+#desktop-update-entry.desktop-update-fallback{position:fixed;left:12px;bottom:12px;z-index:40;width:224px;max-width:calc(100vw - 24px);margin:0;padding:0}
+#desktop-update-entry.desktop-update-toolbar{position:relative;flex:0 0 36px;width:36px;height:36px;max-width:none;margin:0;padding:0;color:var(--accent)}
+#desktop-update-entry.desktop-update-toolbar button{justify-content:center;height:100%;min-height:0;padding:0;border-color:transparent;border-radius:50%;background:transparent}
+#desktop-update-entry.desktop-update-toolbar button:hover{background:var(--surface-hover)}
+#desktop-update-entry.desktop-update-toolbar.desktop-update-ready button{background:rgba(var(--accent-rgb),.10)}
+#desktop-update-entry.desktop-update-toolbar #desktop-update-label,#desktop-update-entry.desktop-update-toolbar #desktop-update-error{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#desktop-update-entry.desktop-update-toolbar #desktop-update-dot{position:absolute;top:3px;right:3px}
+.bot-list-header #desktop-update-entry.desktop-update-toolbar{flex-basis:42px;width:42px;height:42px}
+.bot-list-header #desktop-update-entry.desktop-update-toolbar button{border-color:var(--line);background:var(--surface)}
+.sidebar-brand-row #desktop-update-entry.desktop-update-toolbar{position:absolute;top:9px;right:89px}
+.desktop-sidebar--collapsed .sidebar-brand-row #desktop-update-entry.desktop-update-toolbar{position:relative;top:auto;right:auto}
+@media(max-width:767px){#desktop-update-entry.desktop-update-toolbar{display:none}}

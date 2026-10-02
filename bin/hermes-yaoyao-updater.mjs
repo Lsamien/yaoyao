@@ -1,23 +1,31 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readlinkSync,
+  readdirSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
+  writeSync,
+  realpathSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const label = 'com.samien.hermes-yaoyao'
-import { LaunchAgentService, updateMutex, recoverTransition, transitionService } from './lib/service-update.mjs'
+import { LaunchAgentService, updateMutex, recoverTransition, switchRelease, transitionService } from './lib/service-update.mjs'
+import { readRuntime } from './lib/runtime-release.mjs'
 import { assertRollbackCompatible } from './lib/service-data.mjs'
+import { NPM_PACKAGE, npmInstallationLocation, npmRuntimeDigest, parseNpmRelease, verifyPreparedNpmArchive } from './lib/npm-release.mjs'
 
 const uid = process.getuid?.() ?? 501
 const domain = `gui/${uid}`
@@ -252,6 +260,89 @@ function stageRelease(job, jobPath) {
   return { finalRoot, commit }
 }
 
+export async function stageNpmRelease(job, jobPath, { fetchImpl = fetch } = {}) {
+  const { plan, target, id } = job
+  validateManifest(target)
+  const npm = parseNpmRelease({ name: NPM_PACKAGE, version: plan.npm?.version, dist: plan.npm })
+  if (npm.version !== target.releaseVersion) fail('npm 发布信息与目标版本不一致')
+  const downloads = join(plan.home, 'updates', 'npm'), staging = join(downloads, id)
+  mkdirSync(downloads, { recursive: true, mode: 0o700 })
+  // Only one update owns the mutex. A replacement download supersedes any
+  // previous prepared archive, so temporary packages cannot accumulate.
+  for (const name of readdirSync(downloads)) {
+    if (/^[0-9a-f-]{36}$/.test(name)) removeInside(join(downloads, name), downloads)
+  }
+  mkdirSync(staging, { mode: 0o700 })
+  const archive = join(staging, 'release.tgz')
+  try {
+    updateJob(jobPath, { state: 'downloading', message: `正在下载服务器 ${npm.version}…`, received: 0, total: 0 })
+    const response = await fetchImpl(npm.tarball, { signal: AbortSignal.timeout(600000) })
+    if (!response.ok || !response.body) fail(`npm 安装包下载失败：HTTP ${response.status}`)
+    const total = Number(response.headers.get('content-length')) || 0, limit = 512 * 1024 * 1024
+    if (total > limit) fail('npm 安装包超过下载大小限制')
+    const hash = createHash('sha512'), descriptor = openSync(archive, 'wx', 0o600)
+    let received = 0, lastProgress = 0
+    try {
+      for await (const chunk of response.body) {
+        received += chunk.length
+        if (received > limit) fail('npm 安装包超过下载大小限制')
+        for (let offset = 0; offset < chunk.length;) offset += writeSync(descriptor, chunk, offset, chunk.length - offset)
+        hash.update(chunk)
+        if (Date.now() - lastProgress > 250) {
+          updateJob(jobPath, { received, total, message: total > 0 ? `正在下载服务器更新 · ${Math.min(100, Math.floor(received / total * 100))}%` : '正在下载服务器更新…' })
+          lastProgress = Date.now()
+        }
+      }
+    } finally { closeSync(descriptor) }
+    if (`sha512-${hash.digest('base64')}` !== npm.integrity) fail('npm 安装包完整性校验失败，原服务保持运行')
+    const prepared = { archive }
+    updateJob(jobPath, { state: 'prepared', message: `服务器 ${npm.version} 已下载完成，点击“重启服务器”覆盖更新`, received, total, plan: { ...plan, prepared } })
+    return prepared
+  } catch (error) {
+    removeInside(staging, downloads)
+    throw error
+  }
+}
+
+export async function overwriteNpmRelease(job, jobPath, { driver = serviceOptions(jobPath, job).driver, install = (archive, location) => run('npm', [
+  'install', ...(location.global ? ['--global'] : []), '--prefix', location.prefix, '--no-save', '--package-lock=false', '--omit=dev', '--no-audit', '--no-fund', '--engine-strict', '--allow-file=all', archive,
+], { cwd: location.prefix, timeout: 600000 }) } = {}) {
+  const { plan, target } = job
+  validateManifest(target)
+  const npm = parseNpmRelease({ name: NPM_PACKAGE, version: plan.npm?.version, dist: plan.npm })
+  if (npm.version !== target.releaseVersion) fail('npm 发布信息与目标版本不一致')
+  const archive = verifyPreparedNpmArchive(plan.home, plan.prepared, npm)
+  let stopped = false, quiescing = false
+  try {
+    const previous = driver.snapshot(), root = realpathSync(plan.previousServiceRoot)
+    if (!previous || realpathSync(previous.root) !== root) fail('当前服务与 npm 安装目录不一致，已取消覆盖更新')
+    const location = npmInstallationLocation(root), home = realpathSync(plan.home), modules = dirname(dirname(root))
+    if (home === modules || pathInside(home, modules)) fail('用户数据目录位于 npm 程序目录内，已取消覆盖更新')
+    if (existsSync(join(plan.home, 'updates', 'transition.json'))) fail('存在未完成的服务切换，请先处理后再覆盖更新')
+    if (previous.wasRunning) await driver.verify(undefined, 5000)
+    quiescing = true
+    await driver.quiesce(message => updateJob(jobPath, { message }))
+    updateJob(jobPath, { state: 'installing', message: '正在停止服务器并覆盖当前 npm 安装…' })
+    await driver.stop(); stopped = true
+    await install(archive, location)
+    npmRuntimeDigest(root, npm.version)
+    // Keep the same program path. No version copy, data snapshot or rollback
+    // record is created for an npm overwrite.
+    rmSync(join(plan.home, 'updates', 'last-success.json'), { force: true })
+    switchRelease(plan.releaseRoot, root)
+    updateJob(jobPath, { state: 'restarting', message: '正在启动更新后的服务器…' })
+    await driver.start(root, previous)
+    updateJob(jobPath, { state: 'verifying', message: '正在核对新版本和服务状态…' })
+    await driver.verify(readRuntime(root))
+    updateJob(jobPath, { state: 'succeeded', message: `服务器已覆盖更新到 ${target.webVersion}` })
+  } catch (error) {
+    if (quiescing && !stopped) await driver.resume()
+    throw new Error(`${error.message}${stopped ? '；未保留旧版本，请修复当前安装后重启服务器' : ''}`)
+  } finally {
+    removeInside(dirname(archive), join(plan.home, 'updates', 'npm'))
+  }
+}
+
 function serviceOptions(jobPath, job) {
   const home = job.plan.home || resolve(dirname(jobPath), '..')
   const options = { home, releaseRoot: job.plan.releaseRoot, port: job.plan.port || Number(process.env.HERMES_YAOYAO_PORT || 15300) }
@@ -259,6 +350,11 @@ function serviceOptions(jobPath, job) {
 }
 
 async function runUpdate(jobPath, job) {
+  if (job.plan.npm) {
+    if (job.plan.prepared) await overwriteNpmRelease(job, jobPath)
+    else await stageNpmRelease(job, jobPath)
+    return
+  }
   const options = serviceOptions(jobPath, job)
   await recoverTransition(options)
   const { finalRoot } = stageRelease(job, jobPath)

@@ -6,6 +6,7 @@ import { createPinia } from 'pinia'
 import { useUnreadStore } from '@/stores/unread'
 import type { Profile } from '@shared/types'
 import WorkspaceShell from '@/components/app/WorkspaceShell.vue'
+import type { DesktopUpdateState } from '@shared/desktopUpdate'
 
 const profiles: Profile[] = [
   { name: 'default', agentName: '丫头', isDefault: true },
@@ -287,6 +288,87 @@ it('opens the native updater, prevents duplicate clicks and lets a failed openin
   expect(document.querySelector('.workspace-settings-menu')).toBeNull()
   expect(wrapper.find('[data-testid="update-dialog"]').exists()).toBe(false)
   wrapper.unmount()
+})
+
+it('keeps desktop downloads and restart beside the bell in both workspaces', async () => {
+  vi.useFakeTimers()
+  let state: DesktopUpdateState = { phase: 'checked', installMode: 'restart', currentVersion: '0.4.80', latestVersion: '0.4.81', available: true, received: 0, total: 100, message: '发现更新' }
+  let finish!: (state: DesktopUpdateState) => void
+  const openUpdates = vi.fn()
+  const updateAction = vi.fn().mockImplementation(action => {
+    if (action === 'download') {
+      state = { ...state, phase: 'downloading', received: 42 }
+      return new Promise<DesktopUpdateState>(resolve => { finish = resolve })
+    }
+    state = { ...state, phase: 'installing' }
+    return Promise.resolve(state)
+  })
+  window.yaoyaoDesktop = { updateState: vi.fn(async () => state), updateAction, openUpdates, openComputer: vi.fn(), computerClosed: vi.fn(), onComputerClose: vi.fn() }
+  const wrapper = await mountShell('/conversations')
+  try {
+    await wrapper.setProps({ isAdmin: false })
+    await flushPromises()
+    const entry = () => wrapper.get('.desktop-sidebar .desktop-update-entry')
+    expect(entry().text()).toBe('可更新')
+    expect(entry().element.previousElementSibling?.classList.contains('unread-entry')).toBe(true)
+    expect(wrapper.find('.sidebar-footer .desktop-update-entry').exists()).toBe(false)
+    await entry().get('button').trigger('click')
+    await entry().get('button').trigger('click')
+    await flushPromises()
+    expect(updateAction).toHaveBeenCalledExactlyOnceWith('download')
+    expect(entry().get('[role="progressbar"]').attributes('aria-valuenow')).toBe('42')
+    await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
+    expect(document.querySelector('.workspace-settings-menu .desktop-update-entry')).toBeNull()
+    expect(document.querySelector('.desktop-update-check')?.hasAttribute('disabled')).toBe(true)
+    expect(entry().get('[role="progressbar"]').attributes('aria-valuenow')).toBe('42')
+    state = { ...state, phase: 'preparing', received: 100 }
+    await vi.advanceTimersByTimeAsync(500)
+    expect(entry().text()).toContain('正在准备…')
+    expect(entry().get('button').attributes()).toHaveProperty('disabled')
+    await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
+    state = { ...state, phase: 'ready', available: false }
+    finish(state); await flushPromises()
+    expect(entry().text()).toBe('重新启动')
+    expect(entry().classes()).toContain('desktop-update-entry--ready')
+    expect(entry().get('button').attributes('title')).toContain('点击重新启动')
+    await wrapper.vm.$router.push('/chat'); await flushPromises()
+    expect(wrapper.find('.sidebar-status-actions .desktop-update-entry').exists()).toBe(true)
+    expect(entry().element.previousElementSibling?.classList.contains('unread-entry')).toBe(true)
+    expect(updateAction).toHaveBeenCalledTimes(1)
+    await entry().get('button').trigger('click'); await flushPromises()
+    expect(updateAction).toHaveBeenLastCalledWith('install')
+    expect(openUpdates).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="update-dialog"]').exists()).toBe(false)
+  } finally { wrapper.unmount(); vi.useRealTimers() }
+})
+
+it('hides the toolbar update icon when no update exists, including manual checks and errors', async () => {
+  vi.useFakeTimers()
+  const checked: DesktopUpdateState = { phase: 'checked', installMode: 'restart', currentVersion: '0.4.80', available: false, received: 0, total: 0, message: '已是最新版本' }
+  let state: DesktopUpdateState = { ...checked, phase: 'idle' }
+  let requested!: () => void
+  const updateAction = vi.fn().mockRejectedValueOnce(new Error('连接失败')).mockResolvedValueOnce(checked)
+  window.yaoyaoDesktop = { updateState: vi.fn(async () => state), updateAction, onUpdateRequested: callback => { requested = callback; return () => {} }, openComputer: vi.fn(), computerClosed: vi.fn(), onComputerClose: vi.fn() }
+  const wrapper = await mountShell('/conversations')
+  try {
+    await flushPromises()
+    expect(wrapper.find('.desktop-update-entry').exists()).toBe(false)
+    state = { ...checked, phase: 'checking' }; requested(); await flushPromises()
+    expect(wrapper.find('.desktop-update-entry').exists()).toBe(false)
+    state = checked; await vi.advanceTimersByTimeAsync(500)
+    expect(wrapper.find('.desktop-update-entry').exists()).toBe(false)
+    await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
+    const button = () => document.querySelector<HTMLButtonElement>('.desktop-update-check')!
+    button().click(); button().click(); await flushPromises()
+    expect(updateAction).toHaveBeenCalledExactlyOnceWith('check')
+    expect(document.querySelector('.workspace-settings-menu [role="alert"]')?.textContent).toBe('连接失败')
+    expect(wrapper.find('.desktop-update-entry').exists()).toBe(false)
+    button().click(); await flushPromises()
+    expect(button().textContent).toContain('已是最新版本')
+    expect(document.querySelector('.workspace-settings-menu')).not.toBeNull()
+    expect(document.querySelector('.workspace-settings-menu [role="alert"]')).toBeNull()
+    expect(wrapper.find('.desktop-update-entry').exists()).toBe(false)
+  } finally { wrapper.unmount(); vi.useRealTimers() }
 })
 
 it('does not expose server update controls to a non-admin browser account', async () => {

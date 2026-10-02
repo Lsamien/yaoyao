@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process'
 import type { ServerConfig } from './config.js'
 import { DEFAULT_YAOYAO_RELEASE_SOURCE } from './config.js'
 import { normalizeReleaseSource } from '../../bin/lib/release-source.mjs'
+import { inspectNpmRelease, isNpmInstallation, NPM_RELEASE_SOURCE, verifyPreparedNpmArchive, type NpmRelease, type PreparedNpmUpdate } from '../../bin/lib/npm-release.mjs'
 import { githubReleasePage, inspectGitHubRelease } from './githubReleases.js'
 import {
   compareReleaseVersions,
@@ -31,6 +32,7 @@ export type UpdateJobState =
   | 'queued'
   | 'downloading'
   | 'building'
+  | 'prepared'
   | 'installing'
   | 'restarting'
   | 'verifying'
@@ -48,6 +50,8 @@ export interface UpdateJob {
   updatedAt: string
   target?: ReleaseManifest
   error?: string
+  received?: number
+  total?: number
 }
 
 interface UpdatePlan {
@@ -58,6 +62,8 @@ interface UpdatePlan {
   previousServiceRoot: string
   target?: ReleaseManifest
   targetCommit?: string
+  npm?: NpmRelease
+  prepared?: PreparedNpmUpdate
 }
 
 interface StoredUpdateJob extends UpdateJob {
@@ -69,7 +75,8 @@ export interface SystemUpdateStatus {
   releasePageUrl?: string
   current: ReleaseManifest
   build?: BuildIdentity
-  installationMode: 'source' | 'release' | 'desktop'
+  installationMode: 'source' | 'release' | 'npm' | 'desktop'
+  updateMethod?: 'git' | 'npm'
   latest?: ReleaseManifest
   updateAvailable: boolean
   supported: boolean
@@ -81,7 +88,8 @@ export interface SystemUpdateStatus {
 export interface RemoteRelease {
   releasePageUrl?: string
   manifest: ReleaseManifest
-  commit: string
+  commit?: string
+  npm?: NpmRelease
 }
 
 type InspectRemote = (source: string, current: ReleaseManifest) => Promise<RemoteRelease | undefined>
@@ -200,7 +208,7 @@ function publicJob(job: StoredUpdateJob | undefined): UpdateJob | undefined {
 }
 
 function terminal(state: UpdateJobState): boolean {
-  return ['succeeded', 'failed', 'rolled_back'].includes(state)
+  return ['prepared', 'succeeded', 'failed', 'rolled_back'].includes(state)
 }
 
 export class SystemUpdateManager {
@@ -221,8 +229,13 @@ export class SystemUpdateManager {
     this.updaterPath = resolve(options.updaterPath ?? join(this.projectRoot, 'bin', 'hermes-yaoyao-updater.mjs'))
     this.updateHome = join(config.home, 'updates')
     this.releaseRoot = resolve(config.releaseRoot ?? join(homedir(), '.local', 'share', 'hermes-yaoyao'))
-    this.releaseSource = normalizeReleaseSource(config.releaseSource ?? DEFAULT_YAOYAO_RELEASE_SOURCE)
-    this.inspectRemote = options.inspectRemote ?? inspectGitRemote
+    const source = normalizeReleaseSource(config.releaseSource ?? DEFAULT_YAOYAO_RELEASE_SOURCE)
+    this.releaseSource = source === DEFAULT_YAOYAO_RELEASE_SOURCE && isNpmInstallation(this.projectRoot) ? NPM_RELEASE_SOURCE : source
+    this.inspectRemote = options.inspectRemote ?? (this.releaseSource === NPM_RELEASE_SOURCE
+      ? async () => {
+        const npm = await inspectNpmRelease(this.projectRoot)
+        return { npm, manifest: { schemaVersion: 1, releaseVersion: npm.version, webVersion: npm.version, gitTag: `v${npm.version}` } }
+      } : inspectGitRemote)
     this.platform = options.platform ?? process.platform
     this.desktopOwned = options.desktopOwned ?? process.env.HERMES_YAOYAO_DESKTOP === '1'
     this.launchUpdater = options.launchUpdater ?? ((jobPath) => {
@@ -273,14 +286,15 @@ export class SystemUpdateManager {
     return {
       current,
       releaseSource: this.releaseSource,
-      releasePageUrl: githubReleasePage(this.releaseSource),
+      releasePageUrl: this.releaseSource === NPM_RELEASE_SOURCE ? 'https://www.npmjs.com/package/@lsamien/yaoyao' : githubReleasePage(this.releaseSource),
       build: readBuildIdentity(this.projectRoot),
-      installationMode: this.desktopOwned ? 'desktop' : this.projectRoot.startsWith(`${this.releaseRoot}/`) ? 'release' : 'source',
+      installationMode: this.desktopOwned ? 'desktop' : this.releaseSource === NPM_RELEASE_SOURCE ? 'npm' : this.projectRoot.startsWith(`${this.releaseRoot}/`) ? 'release' : 'source',
+      updateMethod: this.releaseSource === NPM_RELEASE_SOURCE ? 'npm' : 'git',
       latest,
       updateAvailable: Boolean(latest && compareReleaseVersions(latest.releaseVersion, current.releaseVersion) > 0),
       supported: !this.desktopOwned && this.platform === 'darwin',
       unsupportedReason: this.desktopOwned ? 'App 内置服务随 App 一起更新，请使用夭夭菜单中的 App 更新与回退。' : this.platform === 'darwin' ? undefined : '容器和非 macOS 环境请通过替换部署镜像升级',
-      canRollback: !this.desktopOwned && existsSync(join(this.updateHome, 'last-success.json')),
+      canRollback: !this.desktopOwned && this.releaseSource !== NPM_RELEASE_SOURCE && existsSync(join(this.updateHome, 'last-success.json')),
       job: job?.state === 'succeeded' && job.target && (job.target.webVersion !== current.webVersion || job.target.releaseVersion !== current.releaseVersion) ? undefined : publicJob(job),
     }
   }
@@ -289,7 +303,7 @@ export class SystemUpdateManager {
     const current = this.currentManifest()
     if (this.desktopOwned) return this.status()
     const latest = await this.inspectRemote(this.releaseSource, current)
-    return { ...this.status(latest?.manifest), releasePageUrl: latest?.releasePageUrl ?? githubReleasePage(this.releaseSource) }
+    return { ...this.status(latest?.manifest), ...(latest?.releasePageUrl ? { releasePageUrl: latest.releasePageUrl } : {}) }
   }
 
   private acquire(jobID: string): void {
@@ -338,7 +352,7 @@ export class SystemUpdateManager {
     }
   }
 
-  private createJob(operation: UpdateJob['operation'], target?: ReleaseManifest, targetCommit?: string): StoredUpdateJob {
+  private createJob(operation: UpdateJob['operation'], target?: ReleaseManifest, targetCommit?: string, npm?: NpmRelease, prepared?: UpdatePlan['prepared']): StoredUpdateJob {
     const id = randomUUID()
     this.acquire(id)
     const now = new Date().toISOString()
@@ -346,7 +360,7 @@ export class SystemUpdateManager {
       id,
       operation,
       state: 'queued',
-      message: operation === 'update' ? '升级任务已排队' : '回滚任务已排队',
+      message: prepared ? '服务器重启任务已排队' : operation === 'update' ? '升级任务已排队' : '回滚任务已排队',
       createdAt: now,
       updatedAt: now,
       target,
@@ -358,6 +372,8 @@ export class SystemUpdateManager {
         previousServiceRoot: this.projectRoot,
         target,
         targetCommit,
+        npm,
+        prepared,
       },
     }
     const jobPath = join(this.updateHome, `${id}.json`)
@@ -384,11 +400,31 @@ export class SystemUpdateManager {
       throw new Error('当前已经是最新版本')
     }
     if (targetVersion !== latest.manifest.releaseVersion) throw new Error('目标版本不是当前发布源的最新版本')
-    return publicJob(this.createJob('update', latest.manifest, latest.commit))!
+    if (this.releaseSource === NPM_RELEASE_SOURCE && !latest.npm) throw new Error('npm 发布信息不完整')
+    return publicJob(this.createJob('update', latest.manifest, latest.commit, latest.npm))!
+  }
+
+  startActivation(jobID: string): UpdateJob {
+    if (this.desktopOwned || this.platform !== 'darwin') throw new Error('当前环境不支持服务器重启更新')
+    const job = this.latestJob()
+    if (!job || job.id !== jobID || job.state !== 'prepared' || !job.plan.prepared || !job.plan.npm || !job.target)
+      throw new Error('没有可生效的已准备更新，请重新检查更新')
+    if (compareReleaseVersions(job.target.releaseVersion, this.currentManifest().releaseVersion) <= 0)
+      throw new Error('已准备更新不是比当前服务更新的版本')
+    const prepared = job.plan.prepared
+    try {
+      verifyPreparedNpmArchive(this.config.home, prepared, job.plan.npm)
+    } catch {
+      const error = '已准备更新的文件已改变或不可用，请重新下载'
+      writeFileSync(join(this.updateHome, `${job.id}.json`), JSON.stringify({ ...job, state: 'failed', message: error, error, updatedAt: new Date().toISOString() }), { mode: 0o600 })
+      throw new Error(error)
+    }
+    return publicJob(this.createJob('update', job.target, undefined, job.plan.npm, prepared))!
   }
 
   startRollback(): UpdateJob {
     if (this.desktopOwned) throw new Error('App 内置服务随 App 一起更新或回退')
+    if (this.releaseSource === NPM_RELEASE_SOURCE) throw new Error('npm 覆盖更新不保留旧版本，不支持回滚')
     if (this.platform !== 'darwin') throw new Error('当前环境不支持服务内回滚')
     if (!existsSync(join(this.updateHome, 'last-success.json'))) throw new Error('没有可回滚的上一版本')
     return publicJob(this.createJob('rollback'))!

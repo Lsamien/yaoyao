@@ -44,9 +44,9 @@ function derive(password: string, e: Envelope) {
 }
 const summary = ({ secret: _secret, passphrase: _passphrase, usage, ...entry }: VaultEntry): CredentialSummary => ({...entry,...(usage?{usage:usage.kind==='sftp.write'?{kind:usage.kind,remotePath:usage.remotePath,bytes:Buffer.byteLength(usage.contents)}:usage}:{})})
 
-/** This belongs in an independently isolated broker. No file/OS-account key is created.
- * JS strings/GC and WASM are not a secure enclave; same-UID process access must be
- * prevented by deployment. Restart discards the DEK and always starts locked. */
+/** Encrypted storage for a trusted local server or independently isolated broker.
+ * JS strings/GC and WASM are not a secure enclave; same-UID protection requires
+ * deployment isolation. Restart discards the DEK and always starts locked. */
 export class CredentialVaultStore {
   private unlocked = new Map<string, { envelope: Envelope; key: Uint8Array; entries: VaultEntry[]; until: number }>()
   private failures = new Map<string, { count: number; next: number }>()
@@ -169,8 +169,13 @@ export class CredentialVaultStore {
     const s = this.active(owner), input = parse(updateInput, value), old = s.entries.find(v => v.id === id)
     if (!old) throw new HttpError(404, '凭据不存在', 'vault_entry_missing')
     if (old.revision !== input.revision) throw new HttpError(409, '凭据已变化，请刷新', 'vault_revision_conflict')
+    const changedAuthentication = old.target.kind !== input.target.kind || old.target.kind === 'ssh' && input.target.kind === 'ssh'
+      && (old.target.auth ?? 'privateKey') !== (input.target.auth ?? 'privateKey')
+    if (changedAuthentication && !input.secret) throw new HttpError(400, '更换认证方式需要重新填写密码或私钥', 'vault_auth_secret_required')
     const changedUsage=input.usage?.kind==='sftp.write'?{...input.usage,contents:input.usage.contents??(old.usage?.kind==='sftp.write'?old.usage.contents:undefined)}:input.usage??old.usage
-    const next = parse(storedEntry,{ ...old, ...input,usage:changedUsage, secret: input.secret ?? old.secret, revision: old.revision + 1, updatedAt: this.now() })
+    const next = parse(storedEntry,{ ...old, ...input,usage:changedUsage, secret: input.secret ?? old.secret,
+      passphrase: input.target.kind === 'ssh' && input.target.auth === 'password' ? undefined : input.passphrase ?? old.passphrase,
+      revision: old.revision + 1, updatedAt: this.now() })
     this.commit(owner, s.entries.map(v => v.id === id ? next : v)); this.onLock(owner)
     return summary(next)
   }
@@ -179,7 +184,7 @@ export class CredentialVaultStore {
     if (!s.entries.some(v => v.id === id)) throw new HttpError(404, '凭据不存在', 'vault_entry_missing')
     this.commit(owner, s.entries.filter(v => v.id !== id)); this.onLock(owner)
   }
-  /** Only the isolated executor callback may receive this. No read-secret RPC exists. */
+  /** Only a broker-controlled executor callback may receive this. No read-secret RPC exists. */
   withSecret<T>(owner: string, id: string, use: (entry: Readonly<VaultEntry>) => T): T {
     const s = this.active(owner), entry = s.entries.find(v => v.id === id)
     if (!entry) throw new HttpError(404, '凭据不存在', 'vault_entry_missing')

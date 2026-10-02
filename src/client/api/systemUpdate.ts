@@ -12,6 +12,7 @@ export type UpdateJobState =
   | 'queued'
   | 'downloading'
   | 'building'
+  | 'prepared'
   | 'installing'
   | 'restarting'
   | 'verifying'
@@ -29,6 +30,8 @@ export interface UpdateJob {
   updatedAt: string
   target?: ReleaseManifest
   error?: string
+  received?: number
+  total?: number
 }
 
 export interface SystemUpdateStatus {
@@ -36,7 +39,8 @@ export interface SystemUpdateStatus {
   releasePageUrl?: string
   current: ReleaseManifest
   build?: { commit: string; buildNumber: number; dirty: boolean; artifactDigest?: string }
-  installationMode: 'source' | 'release' | 'desktop'
+  installationMode: 'source' | 'release' | 'npm' | 'desktop'
+  updateMethod?: 'git' | 'npm'
   latest?: ReleaseManifest
   updateAvailable: boolean
   supported: boolean
@@ -70,4 +74,8 @@ export function systemUpdateJob(jobID: string): Promise<UpdateJob> {
 
 export function rollbackSystemUpdate(): Promise<UpdateJob> {
   return apiRequest('/api/app/system/update/rollback', { method: 'POST', body: {} })
+}
+
+export function activateSystemUpdate(jobID: string): Promise<UpdateJob> {
+  return apiRequest('/api/app/system/update/activate', { method: 'POST', body: { jobID }, timeoutMs: 90000 })
 }

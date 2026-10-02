@@ -23,7 +23,7 @@ function context(cookie='',path='',method='GET',body:unknown={}):Koa.Context{
   return {state:{},get:(key:string)=>key.toLowerCase()==='cookie'?cookie:'',set:(key:string,value:any)=>{headers[key.toLowerCase()]=value},response:{headers},path,method,request:{body},params:{},secure:false,req:{socket:{remoteAddress:'127.0.0.1'}}} as unknown as Koa.Context
 }
 function cookie(ctx:Koa.Context){const value=ctx.response.headers['set-cookie'];return String(Array.isArray(value)?value.at(-1):value).split(';')[0]!}
-async function fixture(ipc=false,executor?:CredentialExecutor){
+async function fixture(ipc=false,executor?:CredentialExecutor,configured=false){
   const home=mkdtempSync(join(tmpdir(),'yaoyao-vault-coordinator-')),auth=new LocalAuthStore(home),login=context(),user=auth.setupAdmin(login,'dummy-user','dummy-login-password'),cookies=cookie(login)
   const vault=await CredentialVaultStore.create(join(home,'vault')),broker=new CredentialVaultBroker(vault,Date.now,executor)
   let client:CredentialVaultClient,server:Server|undefined
@@ -45,7 +45,8 @@ async function fixture(ipc=false,executor?:CredentialExecutor){
   cleanups.push(async()=>{coordinator.close();if(server){await new Promise<void>(resolve=>server!.close(()=>resolve()));server.closeAllConnections()}else broker.close();rmSync(home,{recursive:true,force:true})})
   await request('/initialize','POST',{password})
   const unlock=()=>request('/unlock','POST',{password}),status=()=>request('')
-  await unlock();const entry=await request('/entries','POST',{name:'dummy-site',username:'dummy-user',target:{kind:'website',origin:'https://example.test'},secret})
+  await unlock();const entry=await request('/entries','POST',{name:'dummy-site',username:'dummy-user',target:{kind:'website',origin:'https://example.test'},secret,
+    ...(configured?{usage:{kind:'website.form',loginPath:'/login',submitPath:'/login',successPath:'/account',formId:'login',usernameName:'username',passwordName:'password',successSelector:'#success'}}:{})})
   const grant=()=>request('/leases','POST',{credentialRef:entry.id,agentId:agent.id,workId:work.id,operation:'website.login',seconds:60})
   const turn=(signal=new AbortController().signal,waiting=vi.fn())=>coordinator.openTurn(user.id,agent.id,work.id,signal,()=>{},waiting)
   return {home,auth,user,cookies,broker,client,coordinator,request,unlock,status,entry,agent,run,work,grant,turn,changeBinding:()=>{binding={...binding,runnerInstance:randomUUID()}},hub,server}
@@ -58,6 +59,15 @@ it('uses private IPC for encrypted CRUD and short grants but returns manual take
   expect(await t.call('credential_request',{credentialRef:f.entry.id,operation:'website.login'})).toMatchObject({status:'manual_takeover_required',reason:'vault_executor_not_enabled'})
   const status=await f.status();expect(JSON.stringify(status)).not.toContain(secret);expect(status.execution).toBe('disabled');expect(lease.expiresAt-Date.now()).toBeLessThanOrEqual(60000)
   t.close();await vi.waitFor(async()=>expect((await f.status()).leases).toHaveLength(0))
+})
+it('discovers only configured metadata while unlocked, distinguishes discovery from task approval and hides it after lock',async()=>{
+  const f=await fixture(false,undefined,true),t=f.turn()
+  const references=async()=>((await t.call('credential_refs',{})) as any).references
+  expect(await references()).toEqual([{credentialRef:f.entry.id,name:'dummy-site',operation:'website.login',allowedTarget:f.entry.target,allowedUse:f.entry.usage,authorized:false}])
+  expect(JSON.stringify(await references())).not.toContain(secret);expect(JSON.stringify(await references())).not.toContain('dummy-user')
+  const lease=await f.grant();expect((await references())[0].authorized).toBe(true)
+  await f.request('/leases/'+lease.id,'DELETE');expect((await references())[0].authorized).toBe(false)
+  await f.request('/lock','POST',{});expect(await references()).toEqual([]);t.close()
 })
 it.each(['lock','logout','connection'] as const)('rejects a late unlock response following %s and leaves the vault locked',async cause=>{
   const f=await fixture();await f.request('/lock','POST',{})

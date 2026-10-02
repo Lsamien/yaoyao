@@ -7,7 +7,7 @@ import { createServer } from 'node:http'
 import { _electron as electron, expect } from '@playwright/test'
 import { dataKey } from './service-manager.mjs'
 
-test('the main local app can open the native updater and repeated requests reuse its window', { timeout: 60000 }, async () => {
+test('the main local app checks updates in place and denies other renderers', { timeout: 60000 }, async () => {
   const root = resolve(import.meta.dirname, '..')
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-update-entry-')))
   const version = JSON.parse(await readFile(join(root, '.desktop-build/release.json'), 'utf8')).webVersion
@@ -32,12 +32,11 @@ test('the main local app can open the native updater and repeated requests reuse
     releaseIdentity()
     await page.waitForURL(origin + '/**')
     await app.evaluate(({ net }) => { net.fetch = async () => new Response('', { status: 403 }) })
-    const opened = app.waitForEvent('window')
     await page.getByRole('button', { name: '检测更新', exact: true }).click()
-    const updates = await opened
-    await expect(updates.getByRole('alert')).toContainText('GitHub 请求受限')
+    await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.error))).toContain('GitHub 请求受限')
+    await expect(page.locator('#desktop-update-error')).toContainText('GitHub 请求受限')
     await page.evaluate(() => window.yaoyaoDesktop.openUpdates())
-    assert.equal(app.windows().length, 2)
+    assert.equal(app.windows().length, 1)
     const denied = await app.evaluate(async ({ BrowserWindow }, { origin, preload }) => {
       const outsider = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, preload } })
       try {
@@ -55,7 +54,7 @@ test('the main local app can open the native updater and repeated requests reuse
   }
 })
 
-test('client mode opens local App updates without a local service or admin role', { timeout: 60000 }, async () => {
+test('client mode checks local App updates in place without a local service or admin role', { timeout: 60000 }, async () => {
   const root = resolve(import.meta.dirname, '..')
   const home = await realpath(await mkdtemp(join(tmpdir(), 'yaoyao-client-update-')))
   const remote = createServer((req, res) => {
@@ -74,18 +73,18 @@ test('client mode opens local App updates without a local service or admin role'
     assert.equal((await page.evaluate(() => window.yaoyaoDesktop.modeState())).mode, 'client')
     assert.equal(await page.evaluate(() => typeof window.yaoyaoUpdate), 'undefined')
     await app.evaluate(({ net }) => { net.fetch = async () => new Response('', { status: 403 }) })
-    const opened = app.waitForEvent('window'); await page.getByRole('button', { name: 'App update' }).click()
-    const updates = await opened
-    await expect(updates.getByRole('heading', { name: 'App 更新' })).toBeVisible()
-    await expect(updates.getByRole('alert')).toContainText('GitHub 请求受限')
+    await page.getByRole('button', { name: 'App update' }).click()
+    await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.error))).toContain('GitHub 请求受限')
+    await expect(page.locator('#desktop-update-error')).toContainText('GitHub 请求受限')
+    assert.equal(app.windows().length, 1)
     const denied = await app.evaluate(async ({ BrowserWindow }, { origin, preload }) => {
       const outsider = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, preload } })
       try {
         await outsider.loadURL(origin)
-        return await outsider.webContents.executeJavaScript('Promise.all([window.yaoyaoUpdate.check(),window.yaoyaoUpdate.download(),window.yaoyaoUpdate.install()].map(p=>p.then(()=>false,()=>true)))')
+        return await outsider.webContents.executeJavaScript("Promise.all([window.yaoyaoDesktop.updateState(),window.yaoyaoDesktop.updateAction('check'),window.yaoyaoDesktop.updateAction('download'),window.yaoyaoDesktop.updateAction('install')].map(p=>p.then(()=>false,()=>true)))")
       } finally { outsider.destroy() }
-    }, { origin, preload: join(root, 'desktop/update-preload.cjs') })
-    assert.deepEqual(denied, [true, true, true])
+    }, { origin, preload: join(root, 'desktop/preload.cjs') })
+    assert.deepEqual(denied, [true, true, true, true])
     assert.equal(remote.listening, true)
   } finally {
     await app?.close().catch(() => {})

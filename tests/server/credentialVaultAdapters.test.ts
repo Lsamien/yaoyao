@@ -42,8 +42,8 @@ it('cancelling a submitted website login closes its private context and leaves a
   await vi.waitFor(()=>expect(site.state.logins).toBe(1));controller.abort();await result
   expect(site.state.logins).toBe(1);expect(site.state.logouts).toBe(0)
 },15000)
-it('uses pinned public-key SSH, a fixed executable and bounded exact SFTP paths; receipts omit stdout and file contents',async()=>{
-  const h=home(),ssh=await sshFixture();cleanup.push(ssh.close);const executor=new ProtectedCredentialExecutor(join(h,'executor'),gate)
+it.each(['privateKey','password'] as const)('uses pinned %s SSH, a fixed executable and bounded exact SFTP paths; receipts omit stdout and file contents',async auth=>{
+  const h=home(),ssh=await sshFixture(auth);cleanup.push(ssh.close);const executor=new ProtectedCredentialExecutor(join(h,'executor'),gate)
   const base={name:'dummy',username:ssh.username,secret:ssh.secret,target:ssh.target}
   const command=entry({...base,usage:{kind:'ssh.exec',command:'/usr/bin/uptime'}})
   expect(await executor.execute(command,input(command,'ssh.exec'),new AbortController().signal)).toEqual({status:'complete',operation:'ssh.exec',exitCode:0})
@@ -57,8 +57,8 @@ it('uses pinned public-key SSH, a fixed executable and bounded exact SFTP paths;
   expect(ssh.state.opens.at(-1)).toMatchObject({flags:58,mode:0o600})
   await expect(executor.execute(write,input(write,'sftp.write'),new AbortController().signal)).rejects.toThrow() // Never overwrite.
 },15000)
-it('rejects an unknown SSH host key before authentication, symlink targets and oversized files',async()=>{
-  const h=home(),ssh=await sshFixture();cleanup.push(ssh.close);const executor=new ProtectedCredentialExecutor(join(h,'executor'),gate)
+it.each(['privateKey','password'] as const)('rejects an unknown SSH host key before %s authentication, symlink targets and oversized files',async auth=>{
+  const h=home(),ssh=await sshFixture(auth);cleanup.push(ssh.close);const executor=new ProtectedCredentialExecutor(join(h,'executor'),gate)
   const base={name:'dummy',username:ssh.username,secret:ssh.secret,target:ssh.target},e=entry({...base,target:{...ssh.target,hostKey:'SHA256:'+'A'.repeat(43)},usage:{kind:'ssh.exec',command:'/usr/bin/uptime'}})
   await expect(executor.execute(e,input(e,'ssh.exec'),new AbortController().signal)).rejects.toMatchObject({code:'vault_host_key_rejected'});expect(ssh.state.auths).toBe(0)
   const read=entry({...base,usage:{kind:'sftp.read',remotePath:'/approved/input.txt',maxBytes:1}})
@@ -72,6 +72,12 @@ it('a malformed private key produces a rejected operation without unhandled conn
   const e=entry({name:'dummy',username:ssh.username,secret:'DUMMY-not-a-private-key',target:ssh.target,usage:{kind:'ssh.exec',command:'/usr/bin/uptime'}})
   await expect(new ProtectedCredentialExecutor(join(h,'executor'),gate).execute(e,input(e,'ssh.exec'),new AbortController().signal)).rejects.toThrow()
   expect(ssh.state.auths).toBe(0)
+})
+it('rejects a wrong SSH password without trying another authentication method or executing a command',async()=>{
+  const h=home(),ssh=await sshFixture('password');cleanup.push(ssh.close)
+  const e=entry({name:'dummy',username:ssh.username,secret:'DUMMY-wrong-ssh-password',target:ssh.target,usage:{kind:'ssh.exec',command:'/usr/bin/uptime'}})
+  await expect(new ProtectedCredentialExecutor(join(h,'executor'),gate).execute(e,input(e,'ssh.exec'),new AbortController().signal)).rejects.toThrow()
+  expect(ssh.state.authMethods).toEqual(['password']);expect(ssh.state.auths).toBe(0);expect(ssh.state.commands).toEqual([])
 })
 it('cancelling SFTP during a lost write acknowledgement terminates promptly and leaves the partial result for manual inspection',async()=>{
   const h=home(),ssh=await sshFixture();cleanup.push(ssh.close);ssh.state.delayWrite=true

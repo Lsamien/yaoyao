@@ -1,6 +1,6 @@
 # 夭夭 AI
 
-当前 Web 与 macOS 桌面发布版本：**v0.4.80**。桌面版提供 Apple Silicon（arm64）客户端正式 DMG；本次未发布完整版桌面安装包，Windows 与 Android 沿用旧版，详见 [发布说明](docs/releases/v0.4.80.md)。
+当前 Web 与 macOS 桌面发布版本：**v0.4.81**。桌面版提供 Apple Silicon（arm64）客户端正式 DMG；本次未发布完整版桌面安装包，Windows 与 Android 沿用旧版，详见 [发布说明](docs/releases/v0.4.81.md)。
 
 夭夭 AI 为网页、iOS 和安卓提供统一的 Agent、群聊、文件库及语音配置服务。Hermes 通过标准 9119 HTTP/WebSocket 接口执行任务。
 
@@ -68,11 +68,11 @@ yaoyao service install
 
 | 镜像 | 架构 |
 | --- | --- |
-| `samienluo/yaoyao:v0.4.80-amd` | AMD64 |
-| `samienluo/yaoyao:v0.4.80` | 自动匹配 AMD64 / ARM64 |
-| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.80` 相同 |
+| `samienluo/yaoyao:v0.4.81-amd` | AMD64 |
+| `samienluo/yaoyao:v0.4.81` | 自动匹配 AMD64 / ARM64 |
+| `samienluo/yaoyao:latest` | 最新稳定版通用镜像，当前与 `v0.4.81` 相同 |
 
-准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.80`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
+准备好 Docker Engine/Compose 和容器可访问的 Hermes 9119 服务，在仓库目录将 `docker.env.example` 复制为 `docker.env`。配置上游地址，并设置 `HERMES_YAOYAO_IMAGE=samienluo/yaoyao:v0.4.81`（或 `samienluo/yaoyao:latest`），即可使用远程镜像：
 
 ```sh
 docker compose --env-file docker.env pull web
@@ -100,9 +100,11 @@ iOS 统一连接 Web 地址，通过设置中的手机登录二维码或账号�
 
 ## 数据与升级
 
-Web 默认从 [GitHub Releases](https://github.com/Lsamien/yaoyao/releases) 检查稳定版本；桌面菜单“检查 App 更新…”可下载并校验 DMG 后手动安装。旧官方发布源会自动归一化为 GitHub，自定义仓库保留。详见 [GitHub 版本升级](docs/github-updates.md)。
+npm 安装的 macOS 服务支持在「更新与回滚」中下载 npm 新版本，下载完成后点击「重启服务器」覆盖当前安装，不保留旧版本，临时包自动清理。参见 [npm 安装说明](docs/npm-install.md)。
 
-发布版本由 `release.json` 记录。macOS 本机服务支持在系统设置中升级 Web 或回滚到上一个版本；其他源码部署更新代码、重新构建并重启服务，Docker 部署通过拉取远程镜像（或自行构建）并重建容器更新。升级前备份 Web 数据目录，客户端版本要求见对应发布说明。
+源码 Web 默认从 [GitHub Releases](https://github.com/Lsamien/yaoyao/releases) 检查稳定版本；桌面菜单“检查 App 更新…”可下载并校验 DMG 后手动安装。旧官方发布源会自动归一化为 GitHub，自定义仓库保留。详见 [GitHub 版本升级](docs/github-updates.md)。
+
+发布版本由 `release.json` 记录。macOS 源码/发布包服务支持在系统设置中升级 Web 或回滚到上一个版本；其他源码部署更新代码、重新构建并重启服务，Docker 部署通过拉取远程镜像（或自行构建）并重建容器更新。升级前备份 Web 数据目录，客户端版本要求见对应发布说明。
 
 后续发布同时交付本地构建和 Docker Hub 远程镜像，验证固定版本后更新 `latest`，保留旧版本标签。发布者按 [发布流程](docs/release-process.md) 执行，并将镜像地址、架构和验证结果写入发布说明。
 

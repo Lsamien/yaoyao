@@ -89,19 +89,20 @@ test('installed NSIS client rejects a corrupt update, upgrades and preserves set
       fs.writeFileSync(home + '/upgrade-token.enc', await safeStorage.encryptStringAsync('upgrade-device-identity'))
     }, { origin, home })
     requireCookie = true
-    const opened = application.waitForEvent('window'); await page.evaluate(() => window.yaoyaoDesktop.openUpdates())
-    const updates = await opened
-    await expect(updates.locator('#download')).toBeEnabled({ timeout: 30000 })
-    await updates.locator('#download').click()
-    await expect(updates.locator('#error')).toBeVisible({ timeout: 120000 })
-    assert.equal(await updates.evaluate(async () => (await window.yaoyaoUpdate.state()).phase), 'failed')
+    await page.evaluate(() => window.yaoyaoDesktop.openUpdates())
+    assert.equal(application.windows().length, 1)
+    await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.available)), { timeout: 30000 }).toBe(true)
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('download'))
+    await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.phase)), { timeout: 120000 }).toBe('failed')
     console.log('已拒绝损坏安装包，重试完整下载')
     corrupt = false
-    await updates.locator('#check').click(); await expect(updates.locator('#download')).toBeEnabled()
-    await updates.locator('#download').click(); await expect(updates.locator('#install')).toBeEnabled({ timeout: 120000 })
-    await updates.screenshot({ path: join(evidence, 'upgrade-ready.png') })
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('check'))
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('download'))
+    await expect.poll(() => page.evaluate(() => window.yaoyaoDesktop.updateState().then(state => state.phase)), { timeout: 120000 }).toBe('ready')
+    await page.screenshot({ path: join(evidence, 'upgrade-ready.png') })
     console.log('完整更新包已就绪，开始重启替换')
-    const closed = application.waitForEvent('close'); await updates.locator('#install').click().catch(error => { if (!updates.isClosed()) throw error })
+    const closed = application.waitForEvent('close')
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('install')).catch(error => { if (!page.isClosed()) throw error })
     await closed; application = undefined
     await expect.poll(async () => readFile(join(installed, 'resources/runtime/release.json'), 'utf8').then(text => JSON.parse(text).webVersion).catch(() => ''),
       { timeout: 120000 }).toBe(nextVersion)

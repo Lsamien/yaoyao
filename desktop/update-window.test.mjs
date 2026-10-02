@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto'
 import { _electron as electron, expect } from '@playwright/test'
 
 const root = resolve(import.meta.dirname, '..')
-test('native update window works without a Web service, verifies a real DMG and denies the boot renderer', { timeout: 90000 }, async () => {
+test('inline boot updater works without a Web service, verifies a real DMG and denies other renderers', { timeout: 90000 }, async () => {
   const home = await mkdtemp(join(tmpdir(), 'yaoyao-update-window-'))
   const blocked = createServer((req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{"ok":true}') })
   await new Promise(done => blocked.listen(0, '127.0.0.1', done))
@@ -27,19 +27,19 @@ test('native update window works without a Web service, verifies a real DMG and 
       args: process.env.DESKTOP_TEST_EXECUTABLE ? [] : [root], cwd: root,
       env: { ...process.env, HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_SYNC: '1', HERMES_YAOYAO_DESKTOP_PORT: String(blocked.address().port), HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:1' } })
     const boot = await app.firstWindow()
-    await boot.locator('#status[role="alert"]').waitFor()
+    await expect.poll(() => boot.evaluate(() => window.yaoyaoDesktop.status().then(state => state.phase))).toBe('error')
+    await boot.reload()
     assert.equal(await boot.evaluate(() => typeof window.yaoyaoUpdate), 'undefined')
-    assert.equal(await boot.evaluate(() => window.yaoyaoDesktop.openUpdates().then(() => false, () => true)), true)
+    assert.equal(await boot.evaluate(() => typeof window.yaoyaoDesktop.updateState), 'function')
     // Even another renderer carrying the real bridge cannot acquire update privileges.
     const denied = await app.evaluate(async ({ BrowserWindow }, preload) => {
       const outsider = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, preload } })
       try {
         await outsider.loadURL('data:text/html,<html><body>Untrusted renderer</body></html>')
-        return await outsider.webContents.executeJavaScript("window.yaoyaoUpdate.check().then(()=>false,()=>true)")
+        return await outsider.webContents.executeJavaScript("window.yaoyaoDesktop.updateAction('check').then(()=>false,()=>true)")
       } finally { outsider.destroy() }
-    }, join(root, 'desktop/update-preload.cjs'))
+    }, join(root, 'desktop/preload.cjs'))
     assert.equal(denied, true)
-    const opened = app.waitForEvent('window')
     await app.evaluate(({ net, shell, Menu }, fixture) => {
       const tag = `v${fixture.version}`, api = 'https://api.github.com/repos/Lsamien/yaoyao'
       const prefix = `https://github.com/Lsamien/yaoyao/releases/download/${tag}/`
@@ -59,12 +59,11 @@ test('native update window works without a Web service, verifies a real DMG and 
       shell.openPath = async path => { process.env.YAOYAO_TEST_OPENED_UPDATE = path; return '' }
       Menu.getApplicationMenu().getMenuItemById('desktop-update-check').click()
     }, { version, name, sums, data: bytes.toString('base64'), size: bytes.length, digest })
-    const page = await opened
-    await page.getByRole('button', { name: '下载安装包', exact: true }).waitFor()
-    await page.getByRole('button', { name: '下载安装包', exact: true }).click()
+    const page = boot
+    await page.getByRole('button', { name: '可更新', exact: true }).click()
+    assert.equal(app.windows().length, 1)
     await page.getByRole('button', { name: '打开安装包', exact: true }).waitFor({ timeout: 30000 })
-    await page.getByRole('button', { name: '检查更新', exact: true }).focus()
-    await page.keyboard.press('Tab')
+    await page.getByRole('button', { name: '打开安装包', exact: true }).focus()
     await expect(page.getByRole('button', { name: '打开安装包', exact: true })).toBeFocused()
     assert.equal(await app.evaluate(() => process.env.YAOYAO_TEST_OPENED_UPDATE), undefined)
     await mkdir(join(root, 'test-results/desktop'), { recursive: true })
@@ -77,12 +76,11 @@ test('native update window works without a Web service, verifies a real DMG and 
     await page.getByRole('button', { name: '打开安装包', exact: true }).click()
     await expect.poll(() => app.evaluate(() => process.env.YAOYAO_TEST_OPENED_UPDATE)).toBe(join(home, 'updates', 'desktop-downloads', version, name))
     await app.evaluate(({ net }) => { net.fetch = async () => new Response('', { status: 403 }) })
-    await page.getByRole('button', { name: '检查更新', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('GitHub 请求受限')
+    await page.evaluate(() => window.yaoyaoDesktop.updateAction('check'))
+    await expect(page.locator('#desktop-update-error')).toContainText('GitHub 请求受限')
     await expect(page.getByRole('button', { name: '打开安装包', exact: true })).toBeHidden()
     assert.equal(blocked.listening, true)
-    await page.keyboard.press('Escape').catch(error => { if (!page.isClosed()) throw error })
-    await expect.poll(() => page.isClosed()).toBe(true)
+    assert.equal(app.windows().length, 1)
   } finally {
     await app?.close().catch(() => {})
     await new Promise(done => blocked.close(done))

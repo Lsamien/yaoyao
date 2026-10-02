@@ -1,4 +1,5 @@
-import { lstatSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,12 +7,14 @@ import { launchAgentPlist } from '../bin/hermes-yaoyao.mjs'
 import {
   currentTarget,
   formatCommandFailure,
+  overwriteNpmRelease,
   restorePreviousService,
   serviceInstallInvocation,
   switchCurrent,
   validateManifest,
   verifyRuntime,
 } from '../bin/hermes-yaoyao-updater.mjs'
+import { writeNpmFixture } from './fixtures/npm-release.mjs'
 
 const roots: string[] = []
 afterEach(() => {
@@ -19,6 +22,28 @@ afterEach(() => {
 })
 
 describe('standalone updater primitives', () => {
+  it.each([true, false])('protects data inside the npm installation and never restarts an old version after an overwrite failure (nested data: %s)', async (nestedData) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'npm-overwrite-'))); roots.push(root)
+    const packageRoot = join(root, 'node_modules/@lsamien/yaoyao')
+    writeNpmFixture(packageRoot, '0.2.0')
+    const home = nestedData ? join(packageRoot, 'data') : join(root, 'data'), id = randomUUID()
+    const archive = join(home, 'updates/npm', id, 'release.tgz'), contents = Buffer.from('verified archive')
+    mkdirSync(join(archive, '..'), { recursive: true }); writeFileSync(archive, contents)
+    writeFileSync(join(home, 'user.txt'), 'user data')
+    const target = { schemaVersion: 1, releaseVersion: '0.3.0', webVersion: '0.3.0', gitTag: 'v0.3.0' }
+    const job = { id, target, plan: { home, releaseRoot: join(root, 'releases'), previousServiceRoot: packageRoot, prepared: { archive },
+      npm: { version: '0.3.0', integrity: `sha512-${createHash('sha512').update(contents).digest('base64')}`, tarball: 'https://example.test/release.tgz' } } }
+    const jobPath = join(home, 'updates', `${id}.json`); writeFileSync(jobPath, JSON.stringify(job))
+    const driver = { snapshot: () => ({ root: packageRoot, wasRunning: false }), quiesce: vi.fn(), stop: vi.fn(), resume: vi.fn(), start: vi.fn(), restore: vi.fn() }
+    const install = vi.fn(async () => { writeFileSync(join(packageRoot, 'dist/index.html'), 'partly overwritten'); throw new Error('installation failed') })
+    await expect(overwriteNpmRelease(job, jobPath, { driver, install })).rejects.toThrow(nestedData ? '用户数据目录' : '未保留旧版本')
+    expect(readFileSync(join(home, 'user.txt'), 'utf8')).toBe('user data')
+    expect(driver.start).not.toHaveBeenCalled(); expect(driver.restore).not.toHaveBeenCalled(); expect(driver.resume).not.toHaveBeenCalled()
+    expect(install).toHaveBeenCalledTimes(nestedData ? 0 : 1)
+    expect(driver.stop).toHaveBeenCalledTimes(nestedData ? 0 : 1)
+    expect(existsSync(archive)).toBe(false)
+  })
+
   it('accepts a healthy Web without probing 9119 or upstream-dependent readiness', async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url !== 'http://127.0.0.1:15300/healthz') throw new Error('9119 offline')

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'">
-  <title>夭夭</title><link rel="stylesheet" href="boot.css">
+  <title>夭夭</title><link rel="stylesheet" href="boot.css"><link rel="stylesheet" href="inline-update.css">
 </head>
 <body>
 <main id="session-loading" class="session-loading" role="status" aria-live="polite" aria-busy="true">
@@ -71,5 +71,9 @@
   <div id="help" class="help" hidden><p><strong>本机运行：</strong>自动准备服务并以管理员身份进入，无需创建账号或登录。</p><p><strong>远程连接：</strong>填写夭夭服务器地址，检测成功后使用该服务器的账号登录。登录授权保存在此设备，主动退出或密码修改后需要重新登录。</p><p>更换服务器不会迁移原服务器上的数据。遇到安装问题，可展开安装详情查看日志。</p></div>
 </div>
 </main>
-<script src="boot.js"></script>
+<section id="desktop-update-entry" class="desktop-update-entry" hidden aria-label="App 更新">
+  <button id="desktop-update-action" type="button"><svg id="desktop-update-ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="update-track" cx="12" cy="12" r="9"/><circle id="desktop-update-value" cx="12" cy="12" r="9" pathLength="100"/></svg><span id="desktop-update-label" aria-live="polite">检测更新</span><span id="desktop-update-dot" hidden aria-hidden="true"></span></button>
+  <p id="desktop-update-error" role="alert" hidden></p>
+</section>
+<script src="boot.js"></script><script src="inline-update.js"></script>
 </body></html>

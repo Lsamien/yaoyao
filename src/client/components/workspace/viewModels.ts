@@ -423,6 +423,7 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
         id: String(tool.id || index), name: String(tool.name || tool.tool_name || '工具'),
         status: status === 'completed' ? 'success' : status === 'failed' ? 'error' : status,
         input: tool.arguments ?? tool.args ?? tool.input, output: tool.error ?? tool.result ?? tool.output,
+        detailsUrl: typeof tool.detailsUrl === 'string' ? tool.detailsUrl : undefined,
       }
     }),
   }))

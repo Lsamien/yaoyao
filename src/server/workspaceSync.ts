@@ -3,11 +3,12 @@ import type { LocalAuthStore } from './localAuth.js'
 import type { WorkspaceStore } from './workspaceStore.js'
 import type { WorkspaceRuntime } from './workspaceRuntime.js'
 import { readServerIdentity } from './serverIdentity.js'
-import type { WorkspaceConversation, WorkspaceEvent, WorkspaceInteraction, WorkspaceRun } from '../shared/workspace.js'
+import { workspaceMessageForClient, workspaceEventForClient } from './chatPresentation.js'
+import type { WorkspaceConversation, WorkspaceEvent, WorkspaceInteraction, WorkspaceMessage, WorkspaceRun } from '../shared/workspace.js'
 
 /** Bot transcripts are a local projection. Snapshot and cursor are read in the same synchronous turn. */
 export function workspaceDetail(store: WorkspaceStore, runtime: WorkspaceRuntime, owner: string,
-  conversationId: string, taskId?: string, limit = 50) {
+  conversationId: string, taskId?: string, limit = 50, lazyTools = false) {
   const conversation = store.require<WorkspaceConversation>(owner, 'conversation', conversationId)
   const task = store.resolveTask(owner, conversationId, taskId)
   const activeRunId = task?.activeRunId ?? (conversation.kind === 'direct' ? conversation.activeRunId : undefined)
@@ -16,7 +17,7 @@ export function workspaceDetail(store: WorkspaceStore, runtime: WorkspaceRuntime
     conversation: store.conversationSummary(owner, conversation), task: task ?? null,
     tasks: conversation.kind === 'group' ? store.tasks(owner, conversationId) : [],
     assignments: task ? runtime.tasks.assignments(owner, task.id) : [],
-    messages: page.slice(-limit), hasOlder: page.length > limit,
+    messages: page.slice(-limit).map(message => lazyTools ? workspaceMessageForClient(message) : message), hasOlder: page.length > limit,
     hiddenMessageIds: store.hiddenMessageIds(owner, conversationId, task?.id),
     run: activeRunId ? store.require<WorkspaceRun>(owner, 'run', activeRunId) : null,
     interactions: store.list<WorkspaceInteraction>(owner, 'interaction')
@@ -31,6 +32,7 @@ export function streamWorkspace(ctx: Koa.Context, store: WorkspaceStore, auth: L
   const owner = auth.require(ctx).id, version = auth.pushAuthorizationVersion(owner)
   const cookie = ctx.get('cookie')
   const patches = store.messagePatchesEnabled && ctx.query.format === 'patch-v1'
+  const lazyTools = ctx.query.toolDetails === 'lazy'
   const res = ctx.res
   const raw = ctx.get('last-event-id') || String(ctx.query.after ?? '0')
   let cursor = /^\d+$/.test(raw) ? Number(raw) : 0
@@ -57,7 +59,7 @@ export function streamWorkspace(ctx: Koa.Context, store: WorkspaceStore, auth: L
   }
   const emit = (event: WorkspaceEvent) => {
     if (event.seq <= cursor) return
-    write(`id: ${event.seq}\nevent: workspace\ndata: ${JSON.stringify(event)}\n\n`)
+    write(`id: ${event.seq}\nevent: workspace\ndata: ${JSON.stringify(lazyTools ? workspaceEventForClient(event) : event)}\n\n`)
     cursor = event.seq
     if (event.type.startsWith('message.')) lastTextAt = Date.now()
   }
@@ -73,7 +75,18 @@ export function streamWorkspace(ctx: Koa.Context, store: WorkspaceStore, auth: L
     if (patches) {
       // A new live subscription may not have this background task in its snapshot.
       // The first live update is a full committed baseline; replay stays revision-checked.
-      emit(wire.type === 'message.patch' && event.type === 'message.changed' && id && !knownMessages.has(id) ? event : wire)
+      let baseline = wire
+      if (wire.type === 'message.patch' && id && !knownMessages.has(id)) {
+        if (event.type === 'message.changed') baseline = event
+        else if (lazyTools) {
+          // Partial snapshots do not include background messages. A replayed
+          // first patch also needs a baseline, scoped to this authenticated owner.
+          const message = store.get<WorkspaceMessage>(owner, 'message', id)
+          if (!message) { write('event: reset\ndata: {}\n\n'); close(); return }
+          baseline = { ...event, type: 'message.changed', data: store.messageForDisplay(owner, message) }
+        }
+      }
+      emit(baseline)
       if (id && event.type.startsWith('message.')) {
         knownMessages.delete(id); knownMessages.add(id)
         while (knownMessages.size > 64) knownMessages.delete(knownMessages.values().next().value!)

@@ -48,15 +48,31 @@ yaoyao --version          # 查看已安装的 npm 包版本
 
 LaunchAgent 安装时的环境会写入 plist；修改环境变量配置后，执行 `yaoyao service install` 重新写入配置并启动服务。`yaoyao service restart` 使用已保存的配置重启。
 
-## 升级
+## 从界面升级
+
+macOS 通过 `yaoyao service install` 注册的独立服务可进入「我的设置 → 更新与回滚」升级：
+
+1. 检查 npm 仓库的新版本，点击「下载更新」。
+2. 安装包通过 SHA-512 校验后暂存；当前服务继续运行。
+3. 显示「重启服务器」后，由管理员点击生效。后台进程等待任务结束、停止服务，在当前 npm 安装位置覆盖程序及依赖，再启动并验证新版本。
+4. 更新成功后页面自动刷新。临时安装包自动清理，不新增版本目录或回滚备份，不保留旧程序；用户数据目录保持原位。
+
+下载状态保存在服务器，即使关闭页面也不会自动重启，重新打开设置仍可继续。重启时使用已经校验的安装包，但 npm 安装依赖仍可能需要仓库连接。远程升级默认关闭，需要显式设置 `HERMES_YAOYAO_ALLOW_REMOTE_UPDATE=1`；接口仍要求管理员登录、Origin 和 CSRF 校验。
+
+全局 npm 安装在原来的包目录更新，也支持之前迁移到版本目录的 npm 服务就地更新；后续更新复用同一路径。`~/.local/share/hermes-yaoyao/current` 指向实际服务的包目录，界面的「当前 Web」显示运行版本。全局安装就地更新后，`yaoyao --version` 也会显示新版本；历史迁移的服务可能与全局启动器版本不同。
+
+npm 覆盖更新不提供回滚入口，覆盖或新版本启动失败时需要修复当前安装再重启，不会自动恢复旧程序或旧数据。源码和 App 的更新机制保持各自原有规则。
+
+首次使用需要先安装包含界面更新功能的 npm 版本。旧版本可用命令升级：
 
 ```sh
-npm update -g @lsamien/yaoyao
-yaoyao service restart
-yaoyao --version
+npm install -g @lsamien/yaoyao@latest
+yaoyao service install
 ```
 
-Web 界面中的「系统更新」入口面向源码/发布包安装；npm 安装的服务请直接用上述 npm 命令升级，避免两套版本并存。
+重复执行全局包的 `service install` 会重新指定服务入口；日常重启使用 `service restart`，后续升级使用界面。
+
+默认 npm 安装自动使用 `npm:@lsamien/yaoyao` 发布源，检查遵循 npm 仓库配置；显式自定义的 Git 仓库继续使用 Git 更新流程。也可设置 `HERMES_YAOYAO_RELEASE_SOURCE=npm:@lsamien/yaoyao`。
 
 ## 与其他安装方式的关系
 
@@ -67,4 +83,4 @@ Web 界面中的「系统更新」入口面向源码/发布包安装；npm 安�
 ## 已知限制
 
 - Linux 的 `service install`（systemd user unit）尚未实现，当前 CLI 在 Linux 上会提示不支持；临时做法：手动运行 `npm root -g` 定位包目录，用进程管理器守护 `node dist-server/server/index.js`（工作目录设为包根目录）。
-- 通过 npm 安装的服务端不支持在 Web 界面内自更新（版本由 npm 管理）。
+- Linux 的界面内切换与重启仍需部署管理器支持；当前 npm 界面升级适用于 macOS LaunchAgent 服务。

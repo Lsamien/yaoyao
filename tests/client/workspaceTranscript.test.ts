@@ -8,6 +8,18 @@ const detail = (): WorkspaceDetail => ({ conversation, messages: [message('old',
 const event = (seq: number, value: WorkspaceMessage): WorkspaceEvent => ({ seq, type: 'message.changed', conversationId: value.conversationId, data: value })
 
 describe('Bot transcript cache', () => {
+  it('retains unselected transcripts as stale after a partial snapshot and accepts subsequent patches', () => {
+    const store = new WorkspaceTranscriptStore(), initial = detail()
+    initial.messages[1] = { ...initial.messages[1]!, revision: 1 }
+    store.hydrate({ agents: [], conversations: [conversation], details: [initial], cursor: 10 })
+    store.hydrate({ agents: [], conversations: [conversation], details: [], partialDetails: true, cursor: 11 })
+    expect(store.get('c')!.messages).toEqual(initial.messages)
+    expect(store.staleDetails.has('c:')).toBe(true)
+    store.apply({ seq: 12, type: 'message.patch', conversationId: 'c', data: { id: 'live', conversationId: 'c', baseRevision: 1, revision: 2, contentAppend: ' updated', reasoningAppend: '' } })
+    expect(store.get('c')!.messages[1]!.content).toBe('live updated')
+    store.hydrate({ agents: [], conversations: [], details: [], partialDetails: true, cursor: 13 })
+    expect(store.get('c')).toBeUndefined()
+  })
   it.each([undefined, null, { agents: [], conversations: [], details: [] }, { cursor: 0 }])('keeps the last transcript when a snapshot response is incomplete', snapshot => {
     const store = new WorkspaceTranscriptStore(), initial = detail()
     store.hydrate({ agents: [], conversations: [conversation], details: [initial], cursor: 10 })

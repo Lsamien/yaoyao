@@ -30,6 +30,20 @@ afterEach(() => {
 })
 
 describe('durable source=web chat cache', () => {
+  it('keeps model context in storage while excluding it from ordinary and native-history lists', () => {
+    const f = fixture()
+    f.store.recordRoute(owner, profile, sessionID, 'runtime-web')
+    const metadata = { id: sessionID, title: 'Title', model: 'model', system_prompt: 'context'.repeat(10000), tool_names: ['tool'], model_config: { model: 'model' } }
+    f.store.putSnapshot(owner, 'detail', 'detail', profile, sessionID, response(metadata))
+    const item = JSON.parse(f.store.localList(owner, profile, {}).body.toString()).sessions[0]
+    expect(item).toMatchObject({ id: sessionID, title: 'Title', model_config: { model: 'model' } })
+    expect(item).not.toHaveProperty('system_prompt')
+    expect(item).not.toHaveProperty('tool_names')
+    expect(JSON.parse(f.store.localDetail(owner, profile, sessionID)!.response.body.toString()).system_prompt).toBe(metadata.system_prompt)
+    const native = f.store.excludeOwnedSessionsFromList(owner, profile, response({ sessions: [{ ...metadata, id: 'native' }], total: 1 }))
+    expect(JSON.parse(native.body.toString()).sessions[0]).not.toHaveProperty('system_prompt')
+    f.store.close()
+  })
   it('keeps session metadata when message envelopes only contain session_id and advances activity from messages', () => {
     const f = fixture()
     f.store.recordRoute(owner, profile, sessionID, 'runtime-web')

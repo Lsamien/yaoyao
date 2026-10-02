@@ -8,7 +8,8 @@ export const website = z.object({ kind: z.literal('website'), origin: z.string()
   } catch { ctx.addIssue({ code: 'custom', message: '网站需要准确的 HTTPS origin' }); return z.NEVER }
 }) }).strict()
 export const ssh = z.object({ kind: z.literal('ssh'), host: z.string().min(1).max(253).regex(/^[A-Za-z0-9.:[\]_-]+$/).transform(v => v.toLowerCase()),
-  port: z.number().int().min(1).max(65535), hostKey: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}=?$/) }).strict()
+  port: z.number().int().min(1).max(65535), hostKey: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}=?$/).optional(),
+  auth: z.enum(['privateKey', 'password']).optional() }).strict()
 export const target = z.discriminatedUnion('kind', [website, ssh])
 const path = z.string().min(2).max(1024).refine(v=>v.startsWith('/')&&!v.includes('\\')&&!/[\u0000-\u001f\u007f?#]/.test(v)&&v.split('/').every((s,i)=>i===0||!!s&&s!=='.'&&s!=='..'))
 const name = z.string().min(1).max(100).regex(/^[A-Za-z][A-Za-z0-9_.:-]*$/)
@@ -18,18 +19,25 @@ const command = z.object({kind:z.literal('ssh.exec'),command:z.string().max(512)
 const read = z.object({kind:z.literal('sftp.read'),remotePath:path,maxBytes:z.number().int().min(1).max(1048576).default(65536)}).strict()
 const write = z.object({kind:z.literal('sftp.write'),remotePath:path,contents:z.string().max(65536)}).strict()
 export const usage = z.discriminatedUnion('kind',[form,command,read,write])
+export const sshCommand = z.string().min(1).max(32768).refine(v=>!v.includes('\u0000'))
+export const sshTimeout = z.number().int().min(1).max(600)
 const updatedUsage = z.discriminatedUnion('kind',[form,command,read,write.extend({contents:z.string().max(65536).optional()})])
 export const leaseInput = z.object({
   credentialRef: z.string().uuid(), agentId: z.string().uuid(), workId: z.string().uuid(),
   runnerId: z.string().uuid(), runnerInstance: z.string().uuid(), runnerEpoch: z.string().min(1).max(128),
   operation: z.enum(['website.login', 'ssh.exec', 'sftp.read', 'sftp.write']), target,
+  command:sshCommand.optional(),timeoutSeconds:sshTimeout.optional(),
   seconds: z.number().int().min(15).max(120).default(60),
 }).strict()
 export type LeaseInput = z.infer<typeof leaseInput>
-export const entryInput = z.object({ name: z.string().trim().min(1).max(120), username: z.string().min(1).max(256),
+const entryFields = z.object({ name: z.string().trim().min(1).max(120), username: z.string().min(1).max(256),
   target, usage:usage.optional(), secret: z.string().min(1).max(32768), passphrase: z.string().max(4096).optional() }).strict()
-export const updateInput = entryInput.extend({ secret: entryInput.shape.secret.optional(), usage:updatedUsage.optional(), revision: z.number().int().positive() })
-export const storedEntry = entryInput.extend({ id: z.string().uuid(), revision: z.number().int().positive(), updatedAt: z.number().int().nonnegative() })
+const validPassphrase = (entry: { target: z.infer<typeof target>; passphrase?: string }) =>
+  entry.target.kind !== 'ssh' || entry.target.auth !== 'password' || !entry.passphrase
+const passphraseError = { message: 'SSH 密码登录不使用私钥口令', path: ['passphrase'] }
+export const entryInput = entryFields.refine(validPassphrase, passphraseError)
+export const updateInput = entryFields.extend({ secret: entryFields.shape.secret.optional(), usage:updatedUsage.optional(), revision: z.number().int().positive() }).refine(validPassphrase, passphraseError)
+export const storedEntry = entryFields.extend({ id: z.string().uuid(), revision: z.number().int().positive(), updatedAt: z.number().int().nonnegative() }).refine(validPassphrase, passphraseError)
 export type VaultEntry = z.infer<typeof storedEntry>
 export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value)

@@ -5,7 +5,9 @@ import {execFileSync} from 'node:child_process'
 import {readFileSync,writeFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {createHash,randomBytes} from 'node:crypto'
-import {Server,utils,type Connection} from 'ssh2'
+import ssh2 from 'ssh2'
+import type {Connection,utils} from 'ssh2'
+const {Server,utils:keyUtils}=ssh2
 export async function websiteFixture(home:string){
   const key=join(home,'dummy-key.pem'),cert=join(home,'dummy-cert.pem'),cnf=join(home,'dummy-openssl.cnf')
   writeFileSync(cnf,'[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=127.0.0.1\n[ext]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\n')
@@ -32,20 +34,35 @@ export async function websiteFixture(home:string){
     usage:{kind:'website.form' as const,loginPath:'/login',submitPath:'/login',successPath:'/account',logoutPath:'/logout',formId:'login',usernameName:'username',passwordName:'password',successSelector:'#login-success'},
     close:async()=>{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()))}}
 }
-export async function sshFixture(){
-  const host=utils.generateKeyPairSync('ed25519'),key=utils.generateKeyPairSync('ed25519'),parsed=utils.parseKey(key.public) as utils.ParsedKey
-  const fingerprint='SHA256:'+createHash('sha256').update((utils.parseKey(host.private) as utils.ParsedKey).getPublicSSH()).digest('base64').replace(/=+$/,'')
+function dummySshKey(){
+  // ssh2 1.17.0 strips leading zero bytes when serializing Ed25519 public
+  // material. Validate generated dummy input, never retry an actual operation.
+  for(let attempt=0;attempt<8;attempt++){
+    const pair=keyUtils.generateKeyPairSync('ed25519')
+    if(!(keyUtils.parseKey(pair.private) instanceof Error)&&!(keyUtils.parseKey(pair.public) instanceof Error))return pair
+  }
+  throw new Error('Unable to generate a valid dummy SSH key')
+}
+export async function sshFixture(auth: 'privateKey' | 'password' = 'privateKey',port=0){
+  const host=dummySshKey(),key=dummySshKey(),parsed=keyUtils.parseKey(key.public) as utils.ParsedKey
+  const fingerprint='SHA256:'+createHash('sha256').update((keyUtils.parseKey(host.private) as utils.ParsedKey).getPublicSSH()).digest('base64').replace(/=+$/,'')
   const clients=new Set<Connection>(),files=new Map<string,Buffer>([['/approved/input.txt',Buffer.from('DUMMY-private-file-contents')]])
   const executed=Promise.withResolvers<void>(),written=Promise.withResolvers<void>()
-  const state={auths:0,commands:[] as string[],opens:[] as {path:string,flags:number,mode:number}[],writes:0,delayWrite:false,delayExec:false,readRedirect:false}
+  const password='DUMMY-ssh-login-password-only'
+  const state={auths:0,authMethods:[] as string[],commands:[] as string[],opens:[] as {path:string,flags:number,mode:number}[],writes:0,delayWrite:false,delayExec:false,readRedirect:false,
+    execReplies:new Map<string,{stdout:string;stderr?:string;exitCode?:number}>()}
   const server=new Server({hostKeys:[host.private]},client=>{
     clients.add(client);client.on('error',()=>{});client.on('close',()=>clients.delete(client))
     client.on('authentication',ctx=>{
-      if(ctx.method!=='publickey'||ctx.username!=='dummy-ssh-user'||!ctx.key.data.equals(parsed.getPublicSSH())||ctx.signature&&parsed.verify(ctx.blob!,ctx.signature)!==true){ctx.reject();return}
+      state.authMethods.push(ctx.method)
+      const valid=ctx.username==='dummy-ssh-user'&&(auth==='password'
+        ? ctx.method==='password'&&ctx.password===password
+        : ctx.method==='publickey'&&ctx.key.data.equals(parsed.getPublicSSH())&&(!ctx.signature||parsed.verify(ctx.blob!,ctx.signature)===true))
+      if(!valid){ctx.reject([auth==='password'?'password':'publickey']);return}
       state.auths++;ctx.accept()
     }).on('ready',()=>client.on('session',accept=>{
       const session=accept()
-      session.on('exec',(accept,_reject,info)=>{state.commands.push(info.command);const stream=accept();executed.resolve();if(state.delayExec)return;stream.write('DUMMY-private-command-output');stream.stderr.write('DUMMY-private-stderr');stream.exit(0);stream.end()})
+      session.on('exec',(accept,_reject,info)=>{state.commands.push(info.command);const stream=accept();executed.resolve();if(state.delayExec)return;const reply=state.execReplies.get(info.command);stream.write(reply?.stdout??'DUMMY-private-command-output');stream.stderr.write(reply?.stderr??'DUMMY-private-stderr');stream.exit(reply?.exitCode??0);stream.end()})
       session.on('sftp',accept=>{
         const s=accept(),handles=new Map<string,string>();let id=0
         s.on('error',()=>{})
@@ -69,7 +86,7 @@ export async function sshFixture(){
       })
     }))
   })
-  server.listen(0,'127.0.0.1');await once(server,'listening')
-  return {state,files,executed:executed.promise,written:written.promise,username:'dummy-ssh-user',secret:key.private,target:{kind:'ssh' as const,host:'127.0.0.1',port:(server.address() as any).port,hostKey:fingerprint},
+  server.listen(port,'127.0.0.1');await once(server,'listening')
+  return {state,files,executed:executed.promise,written:written.promise,username:'dummy-ssh-user',secret:auth==='password'?password:key.private,target:{kind:'ssh' as const,host:'127.0.0.1',port:(server.address() as any).port,hostKey:fingerprint,...(auth==='password'?{auth}:{})},
     close:async()=>{for(const client of clients)client.end();await new Promise<void>(r=>server.close(()=>r()))}}
 }

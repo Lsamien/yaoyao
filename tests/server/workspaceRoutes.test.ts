@@ -126,6 +126,37 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
 })
 describe('application workspace HTTP contract', () => {
+  it('loads only the selected transcript and fetches large tool results without changing stored history', async () => {
+    const store = runtime.workspace
+    store.createAgent('first', { name: 'First Bot', profile: 'default' })
+    store.createAgent('first', { name: 'Second Bot', profile: 'default' })
+    const [firstChat, secondChat] = store.list<WorkspaceConversation>('first', 'conversation')
+    const output = 'large-private-tool-result'.repeat(2000), id = randomUUID()
+    store.saveMessage('first', { id, conversationId: firstChat!.id, seq: 0, role: 'assistant',
+      content: '已完成', reasoning: '', status: 'complete', tools: [{ id: 'large-tool', name: 'read_file', result: output }], attachments: [], createdAt: Date.now() })
+    const list = (await req('get', '/api/app/workspace/snapshot?details=selected&toolDetails=lazy').expect(200)).body
+    expect(list.conversations).toHaveLength(2)
+    expect(list.details).toEqual([])
+    expect(list.partialDetails).toBe(true)
+    const staleTask = (await req('get', `/api/app/workspace/snapshot?details=selected&conversationId=${firstChat!.id}&taskId=deleted-task`).expect(200)).body
+    expect(staleTask.details).toEqual([])
+    expect(staleTask.conversations).toHaveLength(2)
+    const snapshot = (await req('get', `/api/app/workspace/snapshot?details=selected&toolDetails=lazy&conversationId=${firstChat!.id}`).expect(200)).body
+    expect(snapshot.details).toHaveLength(1)
+    const tool = snapshot.details[0].messages[0].tools[0]
+    expect(tool).toMatchObject({ id: 'large-tool', status: 'completed' })
+    expect(tool).not.toHaveProperty('result')
+    expect((await req('get', tool.detailsUrl).expect(200)).body.output).toBe(output)
+    await req('get', tool.detailsUrl, 'other-user').expect(404)
+    await req('get', tool.detailsUrl.replace(firstChat!.id, secondChat!.id)).expect(404)
+    const authorization = vi.spyOn(runtime.auth, 'canUseSource').mockReturnValue(false)
+    await req('get', tool.detailsUrl).expect(403)
+    authorization.mockRestore()
+    store.saveMessage('first', { ...store.require<any>('first', 'message', id), visible: false })
+    await req('get', tool.detailsUrl).expect(404)
+    expect(store.require<any>('first', 'message', id).tools[0].result).toBe(output)
+    expect((await req('get', '/api/app/workspace/snapshot').expect(200)).body.details).toHaveLength(2)
+  })
   it.each(['empty', 'existing'] as const)('serves a complete %s Bot snapshot before any Runner or virtual machine is created', async state => {
     const store = runtime.workspace
     expect(runtime.runners.records()).toEqual([])

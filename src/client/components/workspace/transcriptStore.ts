@@ -20,6 +20,7 @@ export interface WorkspaceSnapshot {
   agents: WorkspaceAgent[]
   conversations: WorkspaceConversation[]
   details: WorkspaceDetail[]
+  partialDetails?: boolean
   cursor: number
 }
 export const transcriptKey = (id: string, taskId?: string | null) => `${id}:${taskId ?? ''}`
@@ -141,8 +142,9 @@ export class WorkspaceTranscriptStore {
     for (const [key, detail] of previous) {
       const conversation = snapshot.conversations.find(c => c.id === detail.conversation.id)
       const current = snapshot.details.find(d => d.conversation.id === detail.conversation.id)
-      if (!this.details.has(key) && conversation && (conversation.archived || current?.tasks?.some(t => t.id === detail.task?.id))) {
+      if (!this.details.has(key) && conversation && (snapshot.partialDetails || conversation.archived || current?.tasks?.some(t => t.id === detail.task?.id))) {
         this.details.set(key, { ...detail, conversation }); this.staleDetails.add(key)
+        for (const message of detail.messages) this.messageReconciler.remember(message)
       }
     }
     for (const event of concurrent) this.accept(event)

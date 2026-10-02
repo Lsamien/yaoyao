@@ -12,6 +12,8 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import SettingsCenterDialog from '@/components/app/SettingsCenterDialog.vue'
 import { rememberInterfacePath } from '@/utils/interfaceMode'
 import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
+import DesktopUpdateEntry from './DesktopUpdateEntry.vue'
+import { useDesktopUpdate } from '@/composables/useDesktopUpdate'
 const AboutDialog = defineAsyncComponent(() => import('./AboutDialog.vue'))
 const UpdateCheckDialog = defineAsyncComponent(() => import('./UpdateCheckDialog.vue'))
 const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspace/BotPluginsDialog.vue'))
@@ -141,7 +143,12 @@ const createMenu = ref<HTMLElement | null>(null)
 let createTrigger: HTMLElement | null = null
 const createPosition = ref({ left: '8px', top: '58px' })
 const settingsMenuOpen = ref(false)
-const canCheckUpdates = computed(() => Boolean(window.yaoyaoDesktop?.openUpdates) || props.isAdmin)
+const desktopUpdate = useDesktopUpdate()
+const { state: desktopUpdateState, error: desktopUpdateError, pending: desktopUpdatePending, visible: desktopUpdateVisible } = desktopUpdate
+const canCheckUpdates = computed(() => desktopUpdate.supported || Boolean(window.yaoyaoDesktop?.openUpdates) || props.isAdmin)
+const desktopUpdateBusy = computed(() => desktopUpdatePending.value || ['checking', 'downloading', 'verifying', 'preparing', 'installing'].includes(desktopUpdateState.value?.phase ?? ''))
+const desktopUpdateCheckLabel = computed(() => desktopUpdateState.value?.phase === 'checking' ? '正在检测…'
+  : desktopUpdateState.value?.phase === 'checked' && !desktopUpdateState.value.available ? '已是最新版本' : '检测更新')
 const openingUpdate = ref(false)
 const updateError = ref('')
 const settingsMenu = ref<HTMLElement | null>(null)
@@ -251,6 +258,7 @@ async function openSettingsMenu(event: MouseEvent) {
   createMenuOpen.value = false
   toolsMenuOpen.value = false
   updateError.value = ''
+  void desktopUpdate.refresh()
   settingsMenuOpen.value = true
   await nextTick()
   settingsMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
@@ -258,6 +266,7 @@ async function openSettingsMenu(event: MouseEvent) {
 async function checkForUpdates() {
   if (openingUpdate.value || !canCheckUpdates.value) return
   updateError.value = ''
+  if (desktopUpdate.supported) { await desktopUpdate.run('check'); return }
   if (window.yaoyaoDesktop?.openUpdates) {
     openingUpdate.value = true
     try {
@@ -466,7 +475,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
-  <div class="workspace-shell" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="(unreadOpen || settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)) ? true : undefined">
+  <div class="workspace-shell" :data-desktop-update-inline="desktopUpdate.supported ? '' : undefined" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="(unreadOpen || settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)) ? true : undefined">
     <header class="mobile-header" :inert="mobileDrawerOpen">
       <button ref="mobileNavigationTrigger" class="icon-button" type="button" aria-label="打开导航" @click="openMobileDrawer">
         <AppIcon name="menu" :size="20" />
@@ -492,6 +501,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
           <AppIcon name="bell" :size="20" />
           <b v-if="unread.total" class="unread-entry__count" aria-hidden="true">{{ unread.total > 99 ? '99+' : unread.total }}</b>
         </button>
+        <DesktopUpdateEntry v-if="desktopUpdate.supported && desktopUpdateVisible" :state="desktopUpdateState" :pending="desktopUpdatePending" :error="desktopUpdateError" @activate="desktopUpdate.run()" />
         <button class="bot-list-toolbar-button sidebar-search-trigger" type="button" aria-label="搜索" :aria-expanded="sidebarSearchOpen" @click="openSidebarSearch(desktopSidebarContext)"><AppIcon name="search" :size="21" /></button>
         <button class="bot-list-toolbar-button sidebar-create-trigger" type="button" aria-label="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="23" /></button>
       </div>
@@ -499,10 +509,13 @@ defineExpose({openLocalVm:showLocalVmSettings})
         <button class="rail__brand sidebar-brand" type="button" aria-label="返回聊天" title="夭夭 AI" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
           <BrandMark :size="sidebarCollapsed ? 26 : 32" :label="false" compact bare />
         </button>
-        <button class="unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" aria-haspopup="dialog" aria-controls="unread-center" :aria-expanded="unreadOpen" title="未读消息" @click="openUnread">
-          <AppIcon name="bell" :size="20" />
-          <b v-if="unread.total" class="unread-entry__count" aria-hidden="true">{{ unread.total > 99 ? '99+' : unread.total }}</b>
-        </button>
+        <div class="sidebar-status-actions">
+          <button class="unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" aria-haspopup="dialog" aria-controls="unread-center" :aria-expanded="unreadOpen" title="未读消息" @click="openUnread">
+            <AppIcon name="bell" :size="20" />
+            <b v-if="unread.total" class="unread-entry__count" aria-hidden="true">{{ unread.total > 99 ? '99+' : unread.total }}</b>
+          </button>
+          <DesktopUpdateEntry v-if="desktopUpdate.supported && desktopUpdateVisible" :state="desktopUpdateState" :pending="desktopUpdatePending" :error="desktopUpdateError" @activate="desktopUpdate.run()" />
+        </div>
       </div>
       <button
         v-if="!applicationWorkspace"
@@ -621,7 +634,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
         <button class="sidebar-brand" type="button" aria-label="返回聊天" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
           <BrandMark :size="32" compact />
         </button>
-        <div class="mobile-drawer__actions"><button ref="mobileDrawerClose" class="icon-button" type="button" aria-label="关闭导航" @click="closeMobileDrawer">
+        <div class="mobile-drawer__actions"><DesktopUpdateEntry v-if="desktopUpdate.supported && desktopUpdateVisible" :state="desktopUpdateState" :pending="desktopUpdatePending" :error="desktopUpdateError" @activate="desktopUpdate.run()" /><button ref="mobileDrawerClose" class="icon-button" type="button" aria-label="关闭导航" @click="closeMobileDrawer">
           <AppIcon name="close" />
         </button><button v-if="applicationWorkspace" class="sidebar-create-trigger" type="button" aria-label="新建" title="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="19" /></button></div>
       </div>
@@ -764,8 +777,10 @@ defineExpose({openLocalVm:showLocalVmSettings})
         <div ref="settingsMenu" class="workspace-create-menu workspace-settings-menu" :style="settingsMenuPosition" role="menu" aria-label="账号菜单" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseSettingsAction('settings')"><AppIcon name="settings" :size="17" />我的设置</button>
           <button type="button" role="menuitem" @click="chooseSettingsAction('about')"><AppIcon name="info" :size="17" />关于</button>
-          <button v-if="canCheckUpdates" type="button" role="menuitem" :disabled="openingUpdate" :aria-busy="openingUpdate" @click="checkForUpdates"><AppIcon name="refresh" :size="17" />{{ openingUpdate ? '正在打开…' : '检测更新' }}</button>
+          <button v-if="desktopUpdate.supported" class="desktop-update-check" type="button" role="menuitem" :disabled="desktopUpdateBusy || desktopUpdateState?.phase === 'ready'" :aria-busy="desktopUpdateBusy" @click="checkForUpdates"><AppIcon name="refresh" :size="17" />{{ desktopUpdateCheckLabel }}</button>
+          <button v-else-if="canCheckUpdates" type="button" role="menuitem" :disabled="openingUpdate" :aria-busy="openingUpdate" @click="checkForUpdates"><AppIcon name="refresh" :size="17" />{{ openingUpdate ? '正在打开…' : '检测更新' }}</button>
           <p v-if="updateError" class="update-menu-error" role="alert">{{ updateError }}</p>
+          <p v-if="desktopUpdate.supported && (desktopUpdateError || desktopUpdateState?.error)" class="update-menu-error" role="alert">{{ desktopUpdateError || desktopUpdateState?.error }}</p>
           <a role="menuitem" href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer" @click="closeSettingsMenu"><AppIcon name="external" :size="17" />帮助</a>
           <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
@@ -1045,12 +1060,16 @@ defineExpose({openLocalVm:showLocalVmSettings})
   cursor: pointer;
   transition: background-color 140ms ease, border-color 140ms ease;
 }
-.sidebar-brand-row .unread-entry { position: absolute; top: 9px; right: 49px; }
+.sidebar-status-actions { position: absolute; top: 9px; right: 49px; display: flex; align-items: center; gap: 4px; }
+.bot-list-header .desktop-update-entry { width: 42px; height: 42px; }
+.bot-list-header .desktop-update-entry :deep(button) { border-color: var(--line); background: var(--surface); }
+.bot-list-header .desktop-update-entry--ready :deep(button) { background: rgba(var(--accent-rgb), .10); }
 .bot-list-header .unread-entry { position: relative; color: var(--text-secondary); }
 .unread-entry:hover, .unread-entry[aria-expanded="true"], .bot-list-header .unread-entry:hover, .bot-list-header .unread-entry[aria-expanded="true"] { background: var(--surface-hover); color: var(--text-primary); }
 .unread-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .unread-entry__count { position: absolute; top: -3px; right: -3px; display: grid; min-width: 18px; height: 18px; place-items: center; padding: 0 4px; border: 2px solid var(--surface); border-radius: 20px; background: var(--accent); color: var(--text-on-solid); font-size: 10px; font-weight: 600; line-height: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .desktop-sidebar--collapsed .sidebar-brand-row { flex-direction: column; gap: 8px; padding: 9px 13px; }
+.desktop-sidebar--collapsed .sidebar-status-actions { position: static; flex-direction: column; }
 .desktop-sidebar--collapsed .unread-entry { position: relative; top: auto; right: auto; }
-@media (max-width: 767px) { .unread-entry, .bot-list-header .unread-entry { display: none; } }
+@media (max-width: 767px) { .sidebar-status-actions, .unread-entry, .bot-list-header .unread-entry { display: none; } }
 </style>

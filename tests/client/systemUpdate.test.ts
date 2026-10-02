@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   applySystemUpdate,
+  activateSystemUpdate,
   checkSystemUpdate,
   rollbackSystemUpdate,
   systemUpdateJob,
@@ -32,6 +33,7 @@ describe('system update client protocol', () => {
     await applySystemUpdate('0.3.0')
     await systemUpdateJob('11111111-1111-4111-8111-111111111111')
     await rollbackSystemUpdate()
+    await activateSystemUpdate('11111111-1111-4111-8111-111111111111')
 
     expect(calls.map(call => call.path)).toEqual([
       '/api/app/system/update/status',
@@ -39,9 +41,12 @@ describe('system update client protocol', () => {
       '/api/app/system/update/apply',
       '/api/app/system/update/jobs/11111111-1111-4111-8111-111111111111',
       '/api/app/system/update/rollback',
+      '/api/app/system/update/activate',
     ])
     expect(new Headers(calls[1]!.init?.headers).get('X-CSRF-Token')).toBe('csrf-system-update')
     expect(calls[2]!.init?.body).toBe(JSON.stringify({ targetVersion: '0.3.0' }))
     expect(new Headers(calls[4]!.init?.headers).get('X-CSRF-Token')).toBe('csrf-system-update')
+    expect(calls[5]!.init?.body).toBe(JSON.stringify({ jobID: '11111111-1111-4111-8111-111111111111' }))
+    expect(new Headers(calls[5]!.init?.headers).get('X-CSRF-Token')).toBe('csrf-system-update')
   })
 })

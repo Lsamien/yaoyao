@@ -405,3 +405,16 @@ it('advertises only vault references and binds them to the current Runner incarn
   state.features=state.features.filter((f:string)=>f!=='credential-ref-v1')
   expect(()=>hub.credentialBinding('owner',agent)).toThrowError(expect.objectContaining({code:'vault_runner_upgrade_required'}))
 })
+it('binds server vault execution without requiring a Runner and invalidates bindings on source reconnect',()=>{
+  const agent={id:randomUUID(),nodeId:'local',profile:'default',archived:false} as any
+  const first=hub.credentialBinding('owner',agent,'server'),state=(hub as any).online.get(config.runnerId)
+  expect(first.runnerId).not.toBe(config.runnerId);expect(first.runnerInstance).toBe(hub.epoch)
+  state.instance=randomUUID();expect(hub.credentialBinding('owner',agent,'server')).not.toEqual(first)
+  const direct=new RunnerHub(store,auth,{} as GatewayTarget)
+  try{
+    const record=hub.records()[0]!;store.put('_system','runner',record.id,{...record,enabled:false})
+    expect(direct.credentialBinding('owner',agent,'server').runnerInstance).toBe(direct.epoch)
+    expect(()=>direct.credentialBinding('owner',agent)).toThrowError(expect.objectContaining({code:'vault_runner_offline'}))
+    auth.allowed=false;expect(()=>direct.credentialBinding('owner',agent,'server')).toThrowError(expect.objectContaining({code:'vault_agent_forbidden'}))
+  }finally{auth.allowed=true;direct.close()}
+})

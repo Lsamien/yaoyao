@@ -81,3 +81,35 @@ it('encrypts fixed SFTP contents, never returns them, retains a blank edit and r
   for(const value of [{kind:'ssh.exec',command:'/bin/sh -c id'},{kind:'sftp.read',remotePath:'/approved/../outside',maxBytes:10}])expect(()=>store.update(owner,e.id,{...ssh,revision:2,usage:value})).toThrowError(expect.objectContaining({code:'vault_invalid_request'}))
   expect(readFileSync(join(home,readdirSync(home).find(v=>v.endsWith('.vault'))!),'utf8')).not.toContain(body)
 })
+
+it('encrypts SSH passwords, preserves blank password edits and restores the authentication mode from a backup',async()=>{
+  const {store}=await fixture();store.initialize(owner,password);store.unlock(owner,password)
+  const login={name:'dummy ssh',username:'dummy',secret:'DUMMY-ssh-password',target:{kind:'ssh',host:'ssh.example.test',port:22,hostKey:'SHA256:'+'A'.repeat(43),auth:'password'}}
+  const e=store.add(owner,login)
+  expect(e.target).toMatchObject({auth:'password'});expect(e).not.toHaveProperty('secret');expect(e).not.toHaveProperty('passphrase')
+  store.update(owner,e.id,{...login,secret:undefined,revision:1})
+  expect(store.withSecret(owner,e.id,x=>x.secret)).toBe(login.secret)
+  const archive=store.backup(owner);expect(archive).not.toContain(login.secret)
+  const {store:restored}=await fixture();restored.restore(owner,archive,password);restored.unlock(owner,password)
+  expect(restored.list(owner)[0]!.target).toMatchObject({auth:'password'})
+  expect(restored.withSecret(owner,e.id,x=>x.secret)).toBe(login.secret)
+  expect(()=>store.add(owner,{...login,passphrase:'DUMMY-key-passphrase'})).toThrowError(expect.objectContaining({code:'vault_invalid_request'}))
+  expect(()=>store.add(owner,{...login,target:{...login.target,auth:'keyboard-interactive'}})).toThrowError(expect.objectContaining({code:'vault_invalid_request'}))
+})
+
+it('keeps old SSH entries as private keys and requires replacement secrets when changing authentication',async()=>{
+  const {store}=await fixture();store.initialize(owner,password);store.unlock(owner,password)
+  const key={name:'legacy ssh',username:'dummy',secret:'DUMMY-old-private-key',passphrase:'DUMMY-old-passphrase',target:{kind:'ssh',host:'ssh.example.test',port:22,hostKey:'SHA256:'+'A'.repeat(43)}}
+  const e=store.add(owner,key)
+  store.lock(owner);store.unlock(owner,password)
+  expect(store.list(owner)[0]!.target).not.toHaveProperty('auth')
+  const passwordTarget={...key.target,auth:'password'}
+  expect(()=>store.update(owner,e.id,{...key,passphrase:undefined,secret:undefined,target:passwordTarget,revision:1})).toThrowError(expect.objectContaining({code:'vault_auth_secret_required'}))
+  expect(store.withSecret(owner,e.id,x=>x.secret)).toBe(key.secret)
+  let revoked=0;store.onLock=()=>revoked++
+  store.update(owner,e.id,{...key,passphrase:undefined,secret:'DUMMY-new-ssh-password',target:passwordTarget,revision:1})
+  expect(store.withSecret(owner,e.id,x=>x.passphrase)).toBeUndefined();expect(revoked).toBe(1)
+  expect(()=>store.update(owner,e.id,{...key,secret:undefined,revision:2})).toThrowError(expect.objectContaining({code:'vault_auth_secret_required'}))
+  store.update(owner,e.id,{...key,revision:2})
+  expect(store.withSecret(owner,e.id,x=>x.secret)).toBe(key.secret);expect(revoked).toBe(2)
+})

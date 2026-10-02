@@ -8,12 +8,14 @@
   --solid:#20201e;
   --on-solid:#fff;
   --success:#377a54;
+  --accent:var(--success);
   --danger:#b33d33;
   --focus:rgba(31,31,29,.16);
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
   color:var(--text);
   background:var(--canvas)
 }
+
 * {
   box-sizing:border-box
 }

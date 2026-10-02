@@ -4,6 +4,7 @@ import type { ChatCacheCoordinator } from './chatCache.js'
 import type { LocalAuthStore } from './localAuth.js'
 import { HttpError } from './errors.js'
 import { CHAT_TRANSCRIPT_FEATURE } from '../shared/chatTranscript.js'
+import { sessionForList } from './chatPresentation.js'
 
 export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthStore):Router {
   const router=new Router(),store=cache.store,transcripts=store.transcripts
@@ -27,7 +28,7 @@ export function chatTranscriptRouter(cache:ChatCacheCoordinator,auth:LocalAuthSt
     try{
       transcripts.seed(owner,profile,id)
       const detail=store.localDetail(owner,profile,id)!
-      ctx.body=transcripts.snapshot(owner,profile,id,JSON.parse(detail.response.body.toString()),detail.state,before,limit)
+      ctx.body=transcripts.snapshot(owner,profile,id,sessionForList(JSON.parse(detail.response.body.toString())),detail.state,before,limit)
       store.db.exec('RELEASE transcript_snapshot')
     }catch(error){store.db.exec('ROLLBACK TO transcript_snapshot; RELEASE transcript_snapshot');throw error}
   })

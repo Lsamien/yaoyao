@@ -23,6 +23,7 @@ export function serveCredentialVault(broker: CredentialVaultBroker, token: strin
       command: z.string().max(64), value: z.unknown().optional() }).strict(), JSON.parse(Buffer.concat(chunks).toString('utf8')))
     const result = body.command === 'hello' ? broker.hello(body.epoch) : body.command === 'execute'
       ? await (() => { const v=parse(z.object({id:z.string().uuid(),input:z.unknown()}).strict(),body.value); res.once('close',()=>{if(!res.writableEnded)broker.connectionClosed(body.owner,body.session,v.id)}); return broker.execute(body.epoch,body.owner,body.session,v.id,v.input as any) })()
+      : body.command === 'prepare-host' ? await (()=>{const controller=new AbortController();res.once('close',()=>{if(!res.writableEnded)controller.abort()});return broker.prepareHost(body.epoch,body.owner,body.session,body.value,controller.signal)})()
       : broker.dispatch(body.epoch, body.owner, body.session, body.command, body.value)
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ result }))
   })().catch(error => {
@@ -43,6 +44,7 @@ export class CredentialVaultClient {
   onDisconnect = () => {}
   constructor(private config?: { socket: string; tokenFile: string; hermesUid: number }) {}
   get configured() { return !!this.config }
+  get executionLocation(): 'node' | 'server' { return 'node' }
   close(): void {}
   private async send(owner: string, session: string, command: string, value?: unknown): Promise<any> {
     const c = this.config

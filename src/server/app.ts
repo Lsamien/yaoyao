@@ -1,4 +1,5 @@
 import { unreadSnapshot } from './unreadCenter.js'
+import { jsonCompression } from './jsonCompression.js'
 import {ExecutionSettings} from './executionSettings.js'
 import {CredentialVaultCoordinator} from './credentialVault/coordinator.js'
 import {createCredentialVaultClient} from './credentialVault/localClient.js'
@@ -411,6 +412,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
     await next()
   })
+  app.use(jsonCompression)
   app.use(async (ctx,next)=>{
     // Count admitted requests before async parsing/authorization. A restart must
     // not race a request which has not yet reached the runtime's task counters.
