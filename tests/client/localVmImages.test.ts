@@ -21,7 +21,7 @@ it('does not offer a per-bot computer picker',async()=>{
   expect(wrapper.find('[aria-label="本地虚拟机执行方式"]').exists()).toBe(false)
   expect(wrapper.find('[aria-label="此机器人使用的电脑（可多选）"]').exists()).toBe(false)
   expect(wrapper.find('[aria-label="本机控制"]').exists()).toBe(false)
-  expect(wrapper.text()).toContain('电脑开关在 Bot 设置里')
+  expect(wrapper.text()).toContain('设备授权状态在 Bot 设置中查看')
   expect(apiRequest).not.toHaveBeenCalledWith('/api/app/agents/image-fixture/computer-selection',expect.anything())
  }finally{wrapper.unmount()}
 })
@@ -52,7 +52,7 @@ it('shows parallel toggles without a combined environment tab',async()=>{
   await flushPromises()
   expect(wrapper.find('[role="tab"][aria-label="本机 + 虚拟机"]').exists()).toBe(false)
   expect(wrapper.find('[aria-label="云端 · Grok Bot"]').exists()).toBe(false)
-  expect(wrapper.text()).toContain('电脑开关在 Bot 设置里')
+  expect(wrapper.text()).toContain('设备授权状态在 Bot 设置中查看')
  }finally{wrapper.unmount()}
 })
 it('checks desktop alongside cloud and never shows the legacy host option',async()=>{
