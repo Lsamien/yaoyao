@@ -37,7 +37,7 @@ test('registers a computer, downloads its private config and disables it', async
   expect((await (await page.request.get('/api/app/admin/desktop-hosts')).json()).hosts.find((h: any) => h.id === configuration.hostId).enabled).toBe(false)
 })
 
-test('shows globally available hosts for a legacy Bot without per-Bot switches', async ({ page }, testInfo) => {
+test('shows other device status only in Bot settings', async ({ page }, testInfo) => {
   await page.goto('/conversations')
   await page.getByRole('textbox', { name: '账号', exact: true }).fill('fixture')
   await page.getByRole('textbox', { name: '密码', exact: true }).fill('fixture-pass')
@@ -68,11 +68,17 @@ test('shows globally available hosts for a legacy Bot without per-Bot switches',
   const dock = page.getByRole('complementary', { name: '机器人电脑面板' })
   await expect(dock.locator('.env-check')).toHaveCount(0)
   await expect(dock.getByRole('combobox', { name: '操作的电脑', exact: true })).toHaveCount(0)
-  const hostCard = dock.locator('.host-permission', { hasText: '客厅 Mac mini' })
+  await expect(dock.locator('.host-permission')).toHaveCount(0)
+  await page.locator('.desktop-sidebar').getByRole('button',{name:'工具',exact:true}).click()
+  await page.getByRole('menuitem',{name:'Bot 设置',exact:true}).click()
+  const settings=page.getByRole('dialog',{name:'Bot 设置',exact:true})
+  await settings.getByRole('button',{name:'环境与授权',exact:true}).click()
+  const hostCard=settings.locator('.device-authorization article',{hasText:'客厅 Mac mini'})
   await expect(hostCard).toBeVisible()
   await expect(hostCard).toContainText('在线')
+  await expect(hostCard.locator('button')).toHaveCount(0)
   await hostCard.scrollIntoViewIfNeeded()
-  await page.screenshot({ path: testInfo.outputPath('desktop-host-global-permissions.png') })
+  await page.screenshot({path:testInfo.outputPath('desktop-host-settings-status.png')})
   const agents = (await (await page.request.get('/api/app/agents')).json()).agents
   const updated = agents.find((a: any) => a.id === seed.agentId)
   expect(updated).toMatchObject({ envs: { vm: true, desktop: true } })

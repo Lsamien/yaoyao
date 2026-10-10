@@ -72,10 +72,10 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
       const outsider=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,preload}})
       try{
         await outsider.loadURL(origin)
-        return await outsider.webContents.executeJavaScript('Promise.all([window.yaoyaoDesktop.modeState(),window.yaoyaoDesktop.switchMode("server"),window.yaoyaoDesktop.openRemoteLogin(),window.yaoyaoDesktop.authorizeComputer("csrf-test")].map(p=>p.then(()=>false,()=>true)))')
+        return await outsider.webContents.executeJavaScript('Promise.all([window.yaoyaoDesktop.modeState(),window.yaoyaoDesktop.switchMode("server"),window.yaoyaoDesktop.openRemoteLogin(),window.yaoyaoDesktop.authorizeComputer("csrf-test"),window.yaoyaoDesktop.authorizeCurrentDevice("full")].map(p=>p.then(()=>false,()=>true)))')
       }finally{outsider.destroy()}
     },{origin:remoteURL,preload:join(root,'desktop/preload.cjs')})
-    assert.deepEqual(denied,[true,true,true,true])
+    assert.deepEqual(denied,[true,true,true,true,true])
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('server')})
     await page.waitForURL(origin+'/**')
     await expect.poll(()=>page.evaluate(()=>window.yaoyaoDesktop.modeState())).toEqual({mode:'server',serverURL:origin,switching:false,platform:'darwin',supportedModes:['client','server']})

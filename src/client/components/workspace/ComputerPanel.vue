@@ -5,14 +5,14 @@ import {apiRequest} from '@/api/client'
 import {browserCanPrepare,prepareManagedBrowser} from '@/utils/managedBrowser'
 import {BrowserDragSession} from '@/utils/browserDrag'
 import BrowserToolbar from './BrowserToolbar.vue'
-import type {BotBrowserState,DesktopEnvironmentState} from '@shared/desktopEnvironment'
+import type {BotBrowserState} from '@shared/desktopEnvironment'
 import {createUuid} from '@/utils/id'
 import type {WorkspaceAgent} from '@shared/workspace'
 import type {ComputerControlStatus,ComputerFrame,ComputerInput} from '@shared/computerControl'
 import type {JsonValue} from '@shared/types'
 const props=defineProps<{agents:WorkspaceAgent[];embedded?:boolean;standalone?:boolean;autoTake?:boolean;backend?:ComputerBackend,host?:string}>(),emit=defineEmits<{close:[];changed:[];controlRequest:[];targetChanged:[backend:ComputerBackend,host?:string]}>()
 const selected=ref(props.agents[0]?.id??''),dialog=ref<HTMLDialogElement>()
-const backend=ref(props.backend),host=ref(props.host??(props.backend==='desktop'?'local':'')),envTargets=ref<{hosts:DesktopEnvironmentState['hosts'];cloudConfigured:boolean;vmEnabled:boolean;managedBrowser?:ManagedBrowserState}>()
+const backend=ref(props.backend),host=ref(props.host??(props.backend==='desktop'?'local':'')),envTargets=ref<{cloudConfigured:boolean;vmEnabled:boolean;managedBrowser?:ManagedBrowserState}>()
 const state=ref<ComputerControlStatus>({mode:'off'}),frame=ref<ComputerFrame>(),ticket=ref<{controlId:string;token:string}>()
 const controlsOpen=ref(false),actualSize=ref(false),browserState=ref<BotBrowserState>()
 const dragging=ref(false)
@@ -31,12 +31,11 @@ const mine=computed(()=>!!ticket.value&&ticket.value.controlId===state.value.con
 const canCloseBrowser=computed(()=>backend.value==='managed-browser'&&mine.value&&state.value.mode==='human'&&!state.value.canResume)
 const canSend=computed(()=>connectionOK.value&&!!frame.value&&mine.value&&state.value.mode==='human'&&frame.value?.generation===state.value.generation)
 const controllable=computed(()=>canSend.value&&!busy.value&&!dragging.value)
-const computerSettings=ref({vm:true,cloud:true,desktop:true,managedBrowser:false})
+const computerSettings=ref({vm:true,cloud:true,managedBrowser:false})
 const targets=computed(()=>{
   const envs=computerSettings.value,info=envTargets.value
   const list:{key:string;label:string;backend:ComputerBackend;host?:string;disabled?:boolean}[]=[]
-  if(envs.desktop)for(const h of info?.hosts??[])list.push({key:'desktop:'+h.id,label:(h.id==='local'?'服务器':'电脑')+' · '+(h.name||'未命名'),backend:'desktop',host:h.id,disabled:!h.online})
-  if(envs.cloud)list.push({key:'cloud',label:'云端 · Grok Bot'+(info?.cloudConfigured?'':' · 未连接'),backend:'cloud',disabled:!info?.cloudConfigured})
+  if(envs.cloud)list.push({key:'cloud',label:'云虚拟机'+(info?.cloudConfigured?'':' · 未连接'),backend:'cloud',disabled:!info?.cloudConfigured})
   if(envs.vm)list.push({key:'vm',label:'本地虚拟机'+(info?.vmEnabled?'':' · 未启用'),backend:'vm',disabled:!info?.vmEnabled})
   if(envs.managedBrowser){const browser=info?.managedBrowser;list.push({key:'managed-browser',label:'托管浏览器'+(browser?.available?'':browserCanPrepare(browser)?' · '+(browser?.installation?.status==='failed'?'准备失败':'待准备'):' · 不可用'),backend:'managed-browser',disabled:!browserCanPrepare(browser)})}
   return list
@@ -49,15 +48,14 @@ async function loadTargets(){
   const selectedId=selected.value,id=encodeURIComponent(selectedId)
   const settings=await apiRequest<{scriptMachine:boolean;serverComputer:boolean;vm:boolean;cloud:boolean;managedBrowser?:boolean}>('/api/app/settings/host-tools')
   if(closed||selectedId!==selected.value)return
-  computerSettings.value={vm:settings.vm,cloud:settings.cloud,desktop:settings.scriptMachine||settings.serverComputer,managedBrowser:settings.managedBrowser===true}
-  const [desk,cloud,vm,browser]=await Promise.all([
-    computerSettings.value.desktop?apiRequest<DesktopEnvironmentState>(`/api/app/agents/${id}/desktop-environment`).catch(()=>undefined):Promise.resolve(undefined),
+  computerSettings.value={vm:settings.vm,cloud:settings.cloud,managedBrowser:settings.managedBrowser===true}
+  const [cloud,vm,browser]=await Promise.all([
     computerSettings.value.cloud?apiRequest<{configured:boolean}>(`/api/app/agents/${id}/cloud-computer`).catch(()=>undefined):Promise.resolve(undefined),
     computerSettings.value.vm?apiRequest<{enabled:boolean}>(`/api/app/agents/${id}/local-vm`).catch(()=>undefined):Promise.resolve(undefined),
     computerSettings.value.managedBrowser?apiRequest<ManagedBrowserState>(`/api/app/agents/${id}/managed-browser`).catch(()=>undefined):Promise.resolve(undefined),
   ])
   if(closed||selectedId!==selected.value)return
-  envTargets.value={hosts:((desk as DesktopEnvironmentState|undefined)?.hosts??[]).filter(h=>h.id==='local'?settings.serverComputer:settings.scriptMachine),cloudConfigured:!!(cloud as {configured?:boolean}|undefined)?.configured,vmEnabled:!!(vm as {enabled?:boolean}|undefined)?.enabled,managedBrowser:browser}
+  envTargets.value={cloudConfigured:!!(cloud as {configured?:boolean}|undefined)?.configured,vmEnabled:!!(vm as {enabled?:boolean}|undefined)?.enabled,managedBrowser:browser}
   if(backend.value==='managed-browser'){managedBrowser.value=browser;browserState.value=browser}
 }
 async function switchTarget(key:string){
@@ -269,7 +267,7 @@ defineExpose({take,close,releaseControl:async()=>{if(preparing.value){preparatio
   <Teleport to="body" :disabled="embedded||standalone">
     <component :is="embedded||standalone?'section':'dialog'" ref="dialog" class="computer-panel" :class="{embedded,standalone}" :aria-label="targets.find(t=>t.key===currentKey)?.label||'电脑桌面'" @cancel.prevent="close">
       <header>
-        <div><strong>{{backend==='managed-browser'?'托管浏览器':state.backend==='grok'?'Grok Bot 云端电脑':state.backend==='local'?(state.hostName??'服务器桌面'):state.backend==='browser'?'浏览器 · '+state.hostName:'本地虚拟机'}}</strong><small>{{ preparing?'正在准备浏览器':labels[state.mode] }}</small></div>
+        <div><strong>{{backend==='managed-browser'?'托管浏览器':backend==='cloud'?'云虚拟机':'本地虚拟机'}}</strong><small>{{ preparing?'正在准备浏览器':labels[state.mode] }}</small></div>
         <select v-if="targets.length>1" :value="currentKey" aria-label="切换电脑环境" :disabled="!!ticket||busy" @change="switchTarget(($event.target as HTMLSelectElement).value)"><option v-for="target in targets" :key="target.key" :value="target.key" :disabled="target.disabled">{{ target.label }}</option></select>
         <select v-if="agents.length>1" v-model="selected" aria-label="选择电脑" :disabled="!!ticket||busy"><option v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select>
         <span v-else-if="!embedded">{{ agents[0]?.name }}</span>

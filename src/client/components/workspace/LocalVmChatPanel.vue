@@ -4,7 +4,6 @@ import {ref,computed,watch,onBeforeUnmount} from 'vue'
 import {apiRequest} from '@/api/client'
 import {browserCanPrepare} from '@/utils/managedBrowser'
 import AppIcon from '@/components/common/AppIcon.vue'
-import type {DesktopEnvironmentState} from '@shared/desktopEnvironment'
 import GrokAuthPanel from './GrokAuthPanel.vue'
 import {type WorkspaceAgent} from '@shared/workspace'
 import type {ComputerFrame} from '@shared/computerControl'
@@ -13,11 +12,9 @@ const props=defineProps<{agents:WorkspaceAgent[];isAdmin:boolean;active?:boolean
 const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:ComputerBackend,host?:string];workspace:[agent:WorkspaceAgent]}>()
 const selected=ref(''),state=ref<LocalVmInstance&{enabled:boolean;controlMode?:string}>(),frame=ref<ComputerFrame>(),error=ref(''),busy=ref(false),loading=ref(true)
 const agent=computed(()=>props.agents.find(a=>a.id===selected.value))
-const native=ref<DesktopEnvironmentState>()
-const computers=ref({scriptMachine:true,serverComputer:true,vm:true,cloud:true,managedBrowser:false})
+const computers=ref({vm:true,cloud:true,managedBrowser:false})
 const managedBrowser=ref<ManagedBrowserState>()
 const recheckingBrowser=ref(false),browserError=ref('')
-const showDesktop=computed(()=>computers.value.scriptMachine||computers.value.serverComputer)
 const cloud=ref<{configured:boolean;running:boolean;connected:boolean;mode?:string}>(),connectionSettings=ref(false)
 const showCloud=computed(()=>computers.value.cloud)
 const showVm=computed(()=>computers.value.vm&&!!state.value)
@@ -31,18 +28,14 @@ watch(()=>state.value,value=>{
  const available=value.desktops?.filter(d=>d.online&&d.ready&&d.available!==false)??[]
  composeDesktopId.value=value.desktopId??(available.length===1?available[0]!.id:'')
 })
-const desktopHosts=computed(()=>(native.value?.hosts??[]).filter(host=>host.id==='local'?computers.value.serverComputer:computers.value.scriptMachine))
-const serverHost=computed(()=>desktopHosts.value.find(host=>host.id==='local'))
 const activeEnvLine=computed(()=>[
- computers.value.serverComputer?'服务器':'',computers.value.scriptMachine?'电脑':'',
- computers.value.cloud?'云端':'',computers.value.vm?'虚拟机':'',
+ computers.value.cloud?'云虚拟机':'',computers.value.vm?'本地虚拟机':'',
  computers.value.managedBrowser?'托管浏览器':'',
 ].filter(Boolean).join(' · '))
 const previewTargets=computed(()=>{
  const list:{key:string;label:string;backend:ComputerBackend;host?:string}[]=[]
- if(computers.value.scriptMachine||computers.value.serverComputer)for(const h of desktopHosts.value){list.push({key:'desktop:'+h.id,label:(h.id==='local'?'服务器 · '+(h.name||'服务器'):'电脑 · '+(h.name||'未命名'))+(h.online?'':' · 离线'),backend:'desktop',host:h.id})}
- if(computers.value.cloud&&cloud.value?.configured)list.push({key:'cloud',label:'云端 · Grok Bot',backend:'cloud'})
- if(computers.value.vm)list.push({key:'vm',label:'虚拟环境',backend:'vm'})
+ if(computers.value.cloud&&cloud.value?.configured)list.push({key:'cloud',label:'云虚拟机',backend:'cloud'})
+ if(computers.value.vm)list.push({key:'vm',label:'本地虚拟机',backend:'vm'})
  if(computers.value.managedBrowser)list.push({key:'managed-browser',label:'托管浏览器',backend:'managed-browser'})
  return list
 })
@@ -50,14 +43,13 @@ const previewKey=ref('')
 const automaticPreviewTarget=computed(()=>{
  const vm=previewTargets.value.find(target=>target.backend==='vm')
  if(vm&&state.value?.enabled&&state.value.container==='running'&&state.value.ready&&!state.value.problem)return vm
- return previewTargets.value.find(target=>target.backend!=='desktop'||desktopHosts.value.some(host=>host.id===target.host&&host.online))
+ return previewTargets.value.find(target=>target.backend==='cloud'&&cloud.value?.running&&cloud.value.connected)||previewTargets.value[0]
 })
 const previewTarget=computed(()=>previewKey.value?previewTargets.value.find(t=>t.key===previewKey.value):automaticPreviewTarget.value)
 const previewLoading=ref(false)
 const previewEmptyText=computed(()=>{
  const target=previewTarget.value
  if(!target)return previewKey.value?'所选电脑已不可用，请重新选择':'暂无已开放的电脑'
- if(target.backend==='desktop'){const host=native.value?.hosts?.find(h=>h.id===target.host);return !host?.online?'这台电脑已离线':host.local.ready?'正在读取电脑画面…':'请完成这台电脑的屏幕控制授权'}
  if(target.backend==='cloud')return cloud.value?.configured?(cloud.value?.running?'正在连接桌面…':'打开云端电脑后可查看桌面'):'尚未连接 Grok Bot 账号'
  if(target.backend==='managed-browser')return !managedBrowser.value?.available?(managedBrowser.value?.installation?.message||managedBrowser.value?.reason||'托管浏览器执行节点不可用'):managedBrowser.value.open?'正在读取浏览器画面…':'浏览器尚未打开，接管后可打开网页'
  if(!state.value?.enabled)return state.value?.fixedCapacity?'请先连接下方的共享桌面':'未使用电脑'
@@ -67,12 +59,6 @@ const previewEmptyText=computed(()=>{
  if(state.value.container==='stopped')return '虚拟机已停止'
  return '正在连接桌面…'
 })
-function authorizeHost(hostId:string,scope?:'full'){
- const body:{hostId?:string;scope?:'full'}={}
- if(hostId)body.hostId=hostId
- if(scope)body.scope=scope
- void run(()=>apiRequest(`/api/app/agents/${selected.value}/desktop-environment/authorize`,{method:'POST',body,timeoutMs:125000}))
-}
 let timer:ReturnType<typeof setTimeout>|undefined,closed=false,revision=0,previewRevision=0,browserRevision=0
 const base=()=>`/api/app/agents/${encodeURIComponent(selected.value)}/local-vm`
 async function readBrowser(){
@@ -89,7 +75,7 @@ async function refreshFrame(){
  const usable=target?.backend==='vm'?state.value?.container==='running'&&state.value?.ready
   :target?.backend==='cloud'?!!cloud.value?.running&&!!cloud.value?.connected
   :target?.backend==='managed-browser'?!!managedBrowser.value?.available&&!!managedBrowser.value?.open
-  :target?.backend==='desktop'&&desktopHosts.value.some(h=>h.id===target.host&&h.online&&h.local.ready)
+  :false
  if(!target||!usable){frame.value=undefined;previewLoading.value=false;return}
  previewLoading.value=true
  try{
@@ -104,16 +90,15 @@ async function refresh(){
  if(closed||props.active===false||!selected.value||document.hidden||busy.value)return
  const version=revision
  try{
-  try{const tools=await apiRequest<{scriptMachine?:boolean;serverComputer?:boolean;vm?:boolean;cloud?:boolean;managedBrowser?:boolean}>('/api/app/settings/host-tools');if(version===revision&&!closed)computers.value={scriptMachine:tools.scriptMachine!==false,serverComputer:tools.serverComputer!==false,vm:tools.vm!==false,cloud:tools.cloud!==false,managedBrowser:tools.managedBrowser===true}}catch{}
+  try{const tools=await apiRequest<{vm?:boolean;cloud?:boolean;managedBrowser?:boolean}>('/api/app/settings/host-tools');if(version===revision&&!closed)computers.value={vm:tools.vm!==false,cloud:tools.cloud!==false,managedBrowser:tools.managedBrowser===true}}catch{}
   const id=selected.value
-  const [desktopResult,cloudResult,vmResult]=await Promise.all([
-   apiRequest<DesktopEnvironmentState>(`/api/app/agents/${id}/desktop-environment`),
+  const [cloudResult,vmResult]=await Promise.all([
    apiRequest<typeof cloud.value>(`/api/app/agents/${id}/cloud-computer`),
    computers.value.vm?apiRequest<typeof state.value>(base()):Promise.resolve(undefined),
    computers.value.managedBrowser?readBrowser():Promise.resolve(undefined),
   ])
   if(version!==revision||closed)return
-  native.value=desktopResult;cloud.value=cloudResult;state.value=vmResult
+  cloud.value=cloudResult;state.value=vmResult
   await refreshFrame()
   if(version!==revision||closed)return
   error.value=''
@@ -127,7 +112,7 @@ async function connectCompose(){
 }
 async function openDesktop(backend:ComputerBackend,host?:string){
  const selectedAgent=agent.value
- if(!selectedAgent||busy.value)return
+ if(!selectedAgent||busy.value||!['vm','cloud','managed-browser'].includes(backend))return
  if(backend==='cloud'&&!await run(()=>apiRequest(`/api/app/agents/${encodeURIComponent(selectedAgent.id)}/cloud-computer/open`,{method:'POST',body:{}})))return
  if(!closed&&agent.value?.id===selectedAgent.id)emit('desktop',selectedAgent,backend,host)
 }
@@ -142,7 +127,7 @@ function action(value:LocalVmAction){
 }
 async function cycle(){const version=revision;await refresh();if(!closed&&version===revision)timer=setTimeout(cycle,3000)}
 watch(()=>props.agents.map(a=>a.id).join(','),()=>{if(!props.agents.some(a=>a.id===selected.value))selected.value=props.agents[0]?.id??''},{immediate:true})
-watch(selected,()=>{revision++;previewRevision++;browserRevision++;state.value=undefined;composeDesktopId.value='';native.value=undefined;cloud.value=undefined;managedBrowser.value=undefined;browserError.value='';frame.value=undefined;error.value='';loading.value=true;previewKey.value='';clearTimeout(timer);void cycle()},{immediate:true})
+watch(selected,()=>{revision++;previewRevision++;browserRevision++;state.value=undefined;composeDesktopId.value='';cloud.value=undefined;managedBrowser.value=undefined;browserError.value='';frame.value=undefined;error.value='';loading.value=true;previewKey.value='';clearTimeout(timer);void cycle()},{immediate:true})
 watch(()=>props.active,value=>{if(value)void refresh()})
 onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer)})
 </script>
@@ -160,7 +145,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
      <span v-if="frame" class="open-badge"><AppIcon name="external" :size="12"/>打开桌面</span>
     </button>
     <p v-if="error" class="problem" role="alert">{{error}}</p>
-    <p class="hint">电脑开关在 Bot 设置里，对所有机器人一起生效。</p>
+    <p class="hint">可查看和接管本地虚拟机、云虚拟机和托管浏览器。设备授权状态在 Bot 设置中查看。</p>
     <div class="computer-options">
     <section v-if="computers.managedBrowser" class="managed-browser-option" aria-label="托管浏览器">
       <strong>托管浏览器</strong>
@@ -170,25 +155,15 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
       <button v-if="!managedBrowser?.available" type="button" :disabled="busy||recheckingBrowser" :aria-busy="recheckingBrowser" @click="recheckBrowser">{{recheckingBrowser?'正在检测…':'重新检测'}}</button>
       <button class="primary" :disabled="busy||recheckingBrowser||!browserCanPrepare(managedBrowser)" @click="openDesktop('managed-browser')">{{managedBrowser?.installation?.status==='failed'?'重试并接管浏览器':managedBrowser?.open?'接管浏览器':'打开并接管浏览器'}}</button>
     </section>
-    <template v-if="showDesktop">
-      <p>服务器是运行夭夭服务的电脑；电脑是连接这台服务器的 Mac 或 Windows 电脑。两者都可改名。「本机」跟你当前发消息所在的电脑走。要文件用文件工具，要命令用 shell；只有需要看窗口或点按时才截图。</p>
-      <div v-for="host in desktopHosts" :key="host.id" class="host-permission" :class="{offline:!host.online}">
-       <div class="host-permission-head"><strong>{{host.id==='local'?('服务器 · '+(host.name||'服务器')):('电脑 · '+(host.name||'未命名'))}}</strong><small>{{host.online?'在线':'离线'}}</small></div>
-       <div class="permission-list"><span>{{host.local.authorized?'✓':'○'}} 屏幕控制授权</span><span>{{host.local.screen?'✓':'○'}} {{host.platform==='win32'?'屏幕可用':'屏幕录制'}}</span><span>{{host.local.accessibility?'✓':'○'}} {{host.platform==='win32'?'键鼠可用':'辅助功能'}}</span><span>{{host.local.fullAuthorized?'✓':'○'}} 文件与命令</span></div>
-       <button v-if="host.online&&!host.local.ready" class="primary" :disabled="busy||!isAdmin" @click="authorizeHost(host.id)">在桌面端授权</button>
-       <p v-if="host.online&&!host.local.ready" class="hint">{{host.platform==='win32'?'在 Windows 客户端确认授权，并解锁电脑、保持桌面会话连接。':'在目标 Mac 上确认授权，并按系统提示开启屏幕录制和辅助功能；可能需要重新打开 App。'}}</p>
-       <button v-if="host.online&&!host.local.fullAuthorized" :disabled="busy||!isAdmin" @click="authorizeHost(host.id,'full')">授权文件与命令</button>
-       <p v-if="host.online&&!host.local.fullAuthorized" class="hint">授权后，机器人可以在这台电脑的用户主目录内读写文件，并以当前用户权限执行命令；每台电脑单独授权，可随时撤销。</p>
-      </div>
-      <button v-if="serverHost" class="primary" :disabled="busy||!serverHost.online||!serverHost.local.ready" @click="openDesktop('desktop','local')">接管服务器</button>
-    </template>
     <template v-if="showCloud">
+     <strong>云虚拟机</strong>
      <p>多个机器人共用同一台 Grok Bot 云端虚拟机、工作文件和浏览器登录。基础机器人和聊天记录保持独立。</p>
-     <button v-if="cloud?.configured" class="primary" :disabled="busy" @click="openDesktop('cloud')">{{cloud?.mode==='human'?'打开控制中的桌面':'接管云端电脑'}}</button>
+     <button v-if="cloud?.configured" class="primary" :disabled="busy" @click="openDesktop('cloud')">{{cloud?.mode==='human'?'打开控制中的桌面':'接管云虚拟机'}}</button>
      <button @click="connectionSettings=!connectionSettings">{{cloud?.configured?'云端连接设置':'连接 Grok Bot'}}</button>
      <p v-if="!isAdmin&&!cloud?.configured" class="hint">请由管理员为当前账号配置 Grok Bot 连接。</p>
     </template>
     <template v-if="showVm&&state">
+     <strong>本地虚拟机</strong>
      <p>{{agent.temporaryGoalId?'临时助手的电脑由当前任务管理':state.fixedCapacity||state.mode==='shared'?'共享虚拟机 · 与其他成员共用桌面和工作文件':'此机器人的独立虚拟机'}}</p>
      <p v-if="state.problem" class="problem" role="alert" aria-label="本地虚拟机状态">{{state.problem}}</p>
      <template v-if="state.fixedCapacity&&!agent.temporaryGoalId">

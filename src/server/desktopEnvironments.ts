@@ -80,7 +80,6 @@ export const SERVER_COMPUTER_RULES='操作客户端提供的服务器桌面代�
  *  pairing. Browser/desktop authority never crosses into the renderer. */
 export class DesktopEnvironments {
  private readonly sessions=new Map<string,HostState>()
- private authorizing=new Map<string,Promise<unknown>>()
  private toolFrames=new WeakMap<AbortSignal,string>()
  private closed=false
  constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes){}
@@ -178,7 +177,16 @@ export class DesktopEnvironments {
  deviceContextLine(owner:string,deviceHost?:string){return deviceSourceText(this.snapshot(owner,undefined,deviceHost))}
  private agent(owner:string,id:string){const a=this.store.require<WorkspaceAgent>(owner,'agent',id);this.nodes.requireSource(owner,a);if(a.archived||a.remoteAgentId)throw new HttpError(409,'此机器人无法使用桌面环境','computer_unavailable');return a}
  private resource(owner:string,agent:WorkspaceAgent,mode:Mode){return mode==='local'?'local':digest(this.ownerKey(owner)+':'+agent.id+':'+(agent.browserProfile??'persistent'))}
- hostStates(owner:string){return [...this.sessions.values()].map(s=>{const online=this.hostOnline(s),info=online?s.info!:undefined;return {id:s.key,name:this.label(s),platform:info?.platform??'',online,local:{supported:['darwin','win32'].includes(info?.platform??''),authorized:!!info&&info.approved.includes(this.ownerKey(owner)),screen:info?.screen===true,accessibility:info?.accessibility===true,ready:!!info&&this.ready(s,owner),fullAuthorized:!!info&&(info.full??[]).includes(this.ownerKey(owner))},browser:{available:online}}}).sort((a,b)=>a.id==='local'?-1:b.id==='local'?1:a.name.localeCompare(b.name))}
+ hostStates(owner:string){
+  const records=this.store.list<import('../shared/desktopHost.js').DesktopHostRecord>('_system','desktop-host')
+  const states=[...this.sessions.values()]
+  for(const record of records)if(record.enabled&&!states.some(s=>s.key===record.id))states.push(newHostState(record.id,true))
+  return states.filter(s=>!records.some(record=>record.id===s.key&&!record.enabled)).map(s=>{
+   const online=this.hostOnline(s),info=online?s.info!:undefined
+   return {id:s.key,name:this.label(s)||records.find(record=>record.id===s.key)?.name||s.key,platform:info?.platform??'',online,
+    local:{supported:['darwin','win32'].includes(info?.platform??''),authorized:!!info&&info.approved.includes(this.ownerKey(owner)),screen:info?.screen===true,accessibility:info?.accessibility===true,ready:!!info&&this.ready(s,owner),fullAuthorized:!!info&&(info.full??[]).includes(this.ownerKey(owner))},browser:{available:online}}
+  }).sort((a,b)=>a.id==='local'?-1:b.id==='local'?1:a.name.localeCompare(b.name))
+ }
  state(owner:string,agent:WorkspaceAgent){const mode=this.selected(owner,agent),s=this.sessionFor(agent),online=!!s&&this.hostOnline(s),info=online?s!.info:undefined;return {online,host:info?{id:s!.key,name:this.label(s!),platform:info.platform}:null,local:{supported:['darwin','win32'].includes(info?.platform??''),authorized:!!info&&info.approved.includes(this.ownerKey(owner)),screen:info?.screen===true,accessibility:info?.accessibility===true,ready:!!info&&this.ready(s!,owner),fullAuthorized:!!info&&(info.full??[]).includes(this.ownerKey(owner))},browser:{available:online,profile:agent.browserProfile??'persistent'},selected:mode??null,agent:this.store.agentSummary(agent),hosts:this.hostStates(owner)}}
  /** Every Bot follows the same global desktop policy. */
  private modeOpen(owner:string,agent:WorkspaceAgent,mode:Mode){return this.selected(owner,agent)===mode}
@@ -293,15 +301,13 @@ export class DesktopEnvironments {
  private grant(s:HostState,owner:string,a:WorkspaceAgent,c:ReturnType<DesktopEnvironments['context']>,body:any){const m=this.current(s,c.key);const token=typeof body?.token==='string'?body.token:'';if(!m||!m.ready||m.owner!==owner||m.agentId!==a.id||m.id!==body?.controlId||!timingSafeEqual(Buffer.from(digest(token),'hex'),Buffer.from(digest(m.token),'hex')))throw new HttpError(410,'控制权已失效，请重新接管','computer_control_expired');c.check();return m}
  router(){const router=new Router()
   router.get('/api/app/agents/:id/desktop-environment',ctx=>{const owner=this.auth.require(ctx).id,a=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id);this.nodes.requireSource(owner,a);ctx.set('Cache-Control','no-store');ctx.body=this.state(owner,a)})
-  router.post('/api/app/agents/:id/desktop-environment/authorize',async ctx=>{
-   const user=this.auth.require(ctx);this.auth.requireAdmin(ctx);const a=this.agent(user.id,ctx.params.id)
-   const body=parse(z.object({hostId:z.union([z.literal('local'),z.string().uuid()]).optional(),scope:z.enum(['screen','full']).default('screen')}).strict(),(ctx.request as any).body??{})
-   const s=body.hostId!==undefined?this.sessions.get(body.hostId):this.sessionFor(a)
-   if(!s||!this.hostOnline(s))throw new HttpError(409,'桌面端未连接，请在电脑上打开夭夭。','desktop_offline')
-   const owner=this.ownerKey(user.id),epoch=s.info!.id,authorizeKey=user.id+':'+s.key+':'+body.scope
-   let pending=this.authorizing.get(authorizeKey)
-   if(!pending){pending=this.command(s,{operation:'authorize',owner,account:user.username,scope:body.scope},()=>{this.auth.requireAdmin(ctx);if(!this.hostOnline(s)||epoch!==s.info!.id)throw new HttpError(409,'桌面端已断开','desktop_offline')},120000).finally(()=>this.authorizing.delete(authorizeKey));this.authorizing.set(authorizeKey,pending)}
-   ctx.body=await pending})
+  router.get('/api/app/desktop-environment',ctx=>{const user=this.auth.require(ctx);this.auth.requireAdmin(ctx);ctx.set('Cache-Control','no-store');ctx.body={hosts:this.hostStates(user.id)}})
+  router.get('/api/app/desktop-environment/authorization',ctx=>{const user=this.auth.require(ctx);this.auth.requireAdmin(ctx);ctx.set('Cache-Control','no-store');ctx.body={owner:this.ownerKey(user.id),account:user.username}})
+  // Authorization is granted by the current native client, never dispatched to a selected host.
+  router.post('/api/app/agents/:id/desktop-environment/authorize',ctx=>{
+   this.auth.requireAdmin(ctx)
+   throw new HttpError(403,'请在需要授权的那台电脑上打开客户端，在 Bot 设置中授权当前设备。','desktop_local_authorization_required')
+  })
   router.put('/api/app/agents/:id/browser-profile',ctx=>{const owner=this.auth.require(ctx).id,a=this.agent(owner,ctx.params.id),body=parse(z.object({profile:z.enum(['persistent','temporary'])}).strict(),(ctx.request as any).body);this.assertIdle(owner,a.id);this.store.updateAgent(owner,a.id,{browserProfile:body.profile});ctx.body={ok:true}})
   router.get('/api/app/agents/:id/browser',async ctx=>{const owner=this.auth.require(ctx).id,a=this.agent(owner,ctx.params.id);if(this.selected(owner,a)!=='browser')throw new HttpError(409,'请先选择仅浏览器环境','desktop_unselected');const s=this.sessionFor(a);ctx.body=await this.command(s!,{...this.context(s,owner,a,'browser').command,operation:'browser-state'},this.context(s,owner,a,'browser').check)})
   router.get('/api/app/agents/:id/computer',async(ctx,next)=>{const owner=this.auth.require(ctx).id,a=this.store.require<WorkspaceAgent>(owner,'agent',ctx.params.id),mode=this.selected(owner,a);if(typeof ctx.query.backend==='string'&&ctx.query.backend!=='desktop')return next();if(!mode)return next();this.agent(owner,a.id);ctx.body=this.status(this.takeoverSession(a,ctx.query.host),owner,a,mode)})

@@ -58,7 +58,7 @@ it('shows the independent browser beside existing environments without opening i
   const wrapper=mount(Preview,{props:{agents:[agent],isAdmin:true,active:true},global:{stubs}})
   try{
     await flushPromises()
-    for(const key of ['desktop:local','cloud','vm','managed-browser'])expect(wrapper.find(`option[value="${key}"]`).exists()).toBe(true)
+    for(const key of ['cloud','vm','managed-browser'])expect(wrapper.find(`option[value="${key}"]`).exists()).toBe(true)
     await wrapper.get('[aria-label="显示的桌面"]').setValue('managed-browser');await flushPromises()
     expect(wrapper.get('.preview').text()).toContain('浏览器尚未打开')
     expect(wrapper.find('.preview img').exists()).toBe(false)
@@ -161,7 +161,7 @@ it.each([
   }finally{wrapper.unmount()}
 })
 
-it.each(['desktop','cloud','vm'] as const)('does not expose managed browser close for a %s target',async(backend)=>{
+it.each(['cloud','vm'] as const)('does not expose managed browser close for a %s target',async(backend)=>{
   const wrapper=mount(ComputerPanel,{props:{agents:[agent],backend,standalone:true,autoTake:true},global:{stubs}})
   try{
     await flushPromises()
@@ -208,7 +208,7 @@ it('ignores browser metadata that arrives after a target switch',async()=>{
   const wrapper=mount(ComputerPanel,{props:{agents:[agent],backend:'managed-browser',standalone:true},global:{stubs}})
   try{
     await flushPromises()
-    await wrapper.get('[aria-label="切换电脑环境"]').setValue('desktop:local');await flushPromises()
+    await wrapper.get('[aria-label="切换电脑环境"]').setValue('vm');await flushPromises()
     release({...state,tabs:[{id:'late',title:'延迟旧页面',url:'https://old.example',active:true}]});await flushPromises()
     expect(wrapper.findComponent(BrowserToolbar).exists()).toBe(false)
     expect(wrapper.text()).not.toContain('延迟旧页面')

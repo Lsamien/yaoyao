@@ -14,7 +14,7 @@ import {saveHostTools} from '../../src/server/hostToolSettings'
 import {HttpError} from '../../src/server/errors'
 import {acquireServiceInstance} from '../../src/server/serviceInstance'
 let home:string,store:WorkspaceStore,service:DesktopEnvironments,agent:WorkspaceAgent,version:number,host:any,poller:ReturnType<typeof setInterval>|undefined
-const auth={require:(ctx:any)=>({id:ctx.get('x-user')||'owner'}),requireAdmin:(ctx:any)=>{if(ctx.get('x-user'))throw new HttpError(403,'仅限管理员','admin_required')},pushAuthorizationVersion:()=>version} as any
+const auth={require:(ctx:any)=>({id:ctx.get('x-user')||'owner',username:'测试账号'}),requireAdmin:(ctx:any)=>{if(ctx.get('x-user'))throw new HttpError(403,'仅限管理员','admin_required')},pushAuthorizationVersion:()=>version} as any
 const nodes={localNodeID:'local-node',requireSource:()=>{}} as any
 const ownerKey=(owner:string)=>createHash('sha256').update('local-node:'+owner).digest('hex')
 beforeEach(()=>{home=mkdtempSync(join(tmpdir(),'desktop-env-'));store=new WorkspaceStore(home);service=new DesktopEnvironments(store,auth,nodes);version=1;agent=store.createAgent('owner',{name:'Desktop',nodeId:'local',profile:'default',computer:'local'});host={id:randomUUID(),name:'测试 Mac',platform:'darwin',screen:true,accessibility:true,approved:[ownerKey('owner')]}})
@@ -147,11 +147,25 @@ it('gates file and shell tools behind the separate full grant',async()=>{
  expect(seen.find(c=>c.operation==='file')?.action).toMatchObject({op:'list',path:'Documents'})
  await expect(service.call('owner',agent.id,'desktop_file_write',{host:'server',path:'a.txt',data:'!!!not base64!!!'},new AbortController().signal,()=>{},'local',service.hostEpoch('owner',agent))).rejects.toMatchObject({status:400})
 })
-it('passes the authorize scope through to the computer',async()=>{
+it('rejects remote authorization for every scope and target without dispatching a command',async()=>{
  const seen:any[]=[]
  drive(c=>{seen.push(c);return {ok:true}})
- await request(app()).post(base()+'/desktop-environment/authorize').send({scope:'full'}).expect(200)
- expect(seen.find(c=>c.operation==='authorize')?.scope).toBe('full')
+ for(const hostId of [undefined,'local',randomUUID()])for(const scope of ['screen','full']){
+  const result=await request(app()).post(base()+'/desktop-environment/authorize').send({hostId,scope}).expect(403)
+  expect(result.body.code).toBe('desktop_local_authorization_required')
+ }
+ expect(seen).toEqual([])
+})
+it('reads devices and the native authorization identity without needing a Bot',async()=>{
+ service.exchange({host,results:[]})
+ const offlineId=randomUUID(),revokedId=randomUUID()
+ for(const [id,enabled] of [[offlineId,true],[revokedId,false]] as const)store.put('_system','desktop-host',id,{id,enabled,name:'其他电脑',createdAt:1,tokenHash:'secret'})
+ const state=(await request(app()).get('/api/app/desktop-environment').expect(200)).body
+ expect(state.hosts).toEqual(expect.arrayContaining([expect.objectContaining({id:'local',online:true}),expect.objectContaining({id:offlineId,name:'其他电脑',online:false})]))
+ expect(state.hosts.some((h:any)=>h.id===revokedId)).toBe(false)
+ expect(JSON.stringify(state)).not.toContain('secret')
+ expect((await request(app()).get('/api/app/desktop-environment/authorization').expect(200)).body).toEqual({owner:ownerKey('owner'),account:'测试账号'})
+ for(const path of ['/api/app/desktop-environment','/api/app/desktop-environment/authorization'])await request(app()).get(path).set('x-user','other').expect(403)
 })
 it('copies files between the explicitly named hosts and server without chat attachments or model payloads',async()=>{
  const bytes=Buffer.alloc(300_000);for(let i=0;i<bytes.length;i++)bytes[i]=i%256

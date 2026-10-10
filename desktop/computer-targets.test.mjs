@@ -16,8 +16,10 @@ test('selected previews reach the matching native desktop and switch only after 
  try{
   await expect.poll(async()=>{try{return(await fetch(origin+'/healthz')).status}catch{return 0}},{timeout:30000}).toBe(200)
   const harness=join(home,'main.mjs')
-  await writeFile(harness,`import {app,BrowserWindow} from 'electron';
+  await writeFile(harness,`import {app,BrowserWindow,ipcMain} from 'electron';
 import {installComputerViewer} from '${pathToFileURL(join(root,'desktop/computer-viewer.mjs')).href}';
+ipcMain.handle('desktop:device-host',()=>({deviceHost:'client-mac'}));
+globalThis.grantedDeviceScopes=[];ipcMain.handle('desktop:device-authorize',(_event,scope)=>{globalThis.grantedDeviceScopes.push(scope);return {ok:true}});
 app.setPath('userData',${JSON.stringify(join(home,'chromium'))});
 app.whenReady().then(async()=>{let quitting=false;app.on('before-quit',()=>quitting=true);
 const owner=new BrowserWindow({width:1440,height:900,webPreferences:{preload:${JSON.stringify(join(root,'desktop/preload.cjs'))},sandbox:true,contextIsolation:true}});
@@ -31,8 +33,6 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
   await expect(page.locator('.desktop-sidebar .sidebar-create-trigger')).toBeVisible()
   const seed=await(await page.request.post(origin+'/__test/computer',{data:{}})).json()
   const targets=[
-   {key:'desktop:local',backend:'desktop',host:'local',name:'服务器',color:'#263f59'},
-   {key:'desktop:client-mac',backend:'desktop',host:'client-mac',name:'Mac Studio 客户端',color:'#245b49'},
    {key:'cloud',backend:'cloud',name:'Grok Bot 云端',color:'#6a405e'},
    {key:'managed-browser',backend:'managed-browser',name:'托管浏览器',color:'#264e60'},
    {key:'vm',backend:'vm',name:'独立虚拟机',color:'#65502c'},
@@ -45,9 +45,10 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
    return [target.key,canvas.toDataURL('image/png').split(',')[1]]
   })),targets)
   const permission={supported:true,authorized:true,screen:true,accessibility:true,ready:true,fullAuthorized:true}
-  const hosts=targets.filter(t=>t.backend==='desktop').map(t=>({id:t.host,name:t.name,online:true,local:permission,browser:{available:false}}))
+  const hosts=[{id:'local',name:'服务器'},{id:'client-mac',name:'Mac Studio 客户端'},{id:'other-mac',name:'另一台 Mac'}].map(h=>({...h,platform:'darwin',online:true,local:{...permission,authorized:false,ready:false,fullAuthorized:false},browser:{available:false}}))
   const calls=[],leases=new Set()
   let refuseGiveback=false
+  await app.context().route('**/api/app/desktop-environment',route=>route.fulfill({json:{hosts}}))
   await app.context().route('**/api/app/settings/host-tools',route=>route.fulfill({json:{scriptMachine:true,serverComputer:true,vm:true,cloud:true,managedBrowser:true}}))
   await app.context().route('**/api/app/agents/*/**',async route=>{
    const url=new URL(route.request().url()),path=url.pathname
@@ -108,22 +109,21 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false)
     await page.setViewportSize({width:1440,height:900})
    }
-   if(target.host==='client-mac'){
-    const output=join(root,'test-results/computer-targets');await mkdir(output,{recursive:true})
-    await viewer.screenshot({path:join(output,'client-desktop.png')})
-    await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(output,'selected-client-mobile.png')})
-    await page.setViewportSize({width:1440,height:900})
-   }
+
   }
   // Reopening an unchanged target focuses its existing window.
   await page.evaluate(({id,target})=>window.yaoyaoDesktop.openComputer(id,target),{id:seed.agentId,target:{backend:'vm'}})
   assert.equal(viewer.isClosed(),false);assert.equal(app.windows().length,2)
   const rejected=await page.evaluate(async id=>{try{await window.yaoyaoDesktop.openComputer(id,{backend:'vm',host:'client-mac'});return false}catch{return true}},seed.agentId)
   assert.equal(rejected,true);assert.equal(viewer.isClosed(),false)
+  const physicalRejected=await page.evaluate(async id=>{try{await window.yaoyaoDesktop.openComputer(id,{backend:'desktop',host:'local'});return false}catch{return true}},seed.agentId)
+  assert.equal(physicalRejected,true)
+  assert.equal(await dock.locator('option[value^="desktop:"]').count(),0)
+  assert.equal(await dock.locator('.host-permission').count(),0)
   refuseGiveback=true
   const beforeFailedSwitch=calls.length
   const failedSwitch=await page.evaluate(async id=>{
-   try{await window.yaoyaoDesktop.openComputer(id,{backend:'desktop',host:'local'});return ''}
+   try{await window.yaoyaoDesktop.openComputer(id,{backend:'cloud'});return ''}
    catch(error){return error.message}
   },seed.agentId)
   assert.match(failedSwitch,/尚未交还/)
@@ -133,8 +133,8 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
   // A manual change inside the viewer must update the identity used for reuse.
   await viewer.getByRole('button',{name:'键盘与操作',exact:true}).click()
   await viewer.getByRole('button',{name:'结束控制',exact:true}).click()
-  await viewer.getByRole('combobox',{name:'切换电脑环境'}).selectOption('desktop:local')
-  await expect(viewer.locator('.computer-screen img')).toHaveAttribute('src','data:image/png;base64,'+images['desktop:local'])
+  await viewer.getByRole('combobox',{name:'切换电脑环境'}).selectOption('cloud')
+  await expect(viewer.locator('.computer-screen img')).toHaveAttribute('src','data:image/png;base64,'+images.cloud)
   const reopened=app.waitForEvent('window'),oldViewer=viewer
   await page.evaluate(id=>window.yaoyaoDesktop.openComputer(id,{backend:'vm'}),seed.agentId)
   viewer=await reopened
@@ -144,6 +144,25 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
   await viewer.getByRole('button',{name:'交还并关闭',exact:true}).click()
   await expect.poll(()=>viewer.isClosed()).toBe(true)
   assert.equal(leases.size,0)
+  await page.locator('.desktop-sidebar').getByRole('button',{name:'工具',exact:true}).click()
+  await page.getByRole('menuitem',{name:'Bot 设置',exact:true}).click()
+  const settings=page.getByRole('dialog',{name:'Bot 设置',exact:true})
+  await settings.getByRole('button',{name:'环境与授权',exact:true}).click()
+  const devices=settings.locator('.device-authorization')
+  await expect(devices.locator('[data-host-id="client-mac"]')).toContainText('当前设备')
+  await expect(devices.locator('[data-host-id="local"] button')).toHaveCount(0)
+  await expect(devices.locator('[data-host-id="other-mac"] button')).toHaveCount(0)
+  await devices.getByRole('button',{name:'授权本机文件与命令',exact:true}).click()
+  await expect(devices.getByRole('status')).toContainText('本机授权已保存')
+  assert.deepEqual(await app.evaluate(()=>globalThis.grantedDeviceScopes),['full'])
+  await expect(devices.getByRole('button',{name:'授权本机文件与命令',exact:true})).toBeEnabled()
+  const output=join(root,'test-results/device-authorization');await mkdir(output,{recursive:true})
+  await page.screenshot({path:join(output,'desktop-settings.png')})
+  await page.setViewportSize({width:375,height:812})
+  await devices.scrollIntoViewIfNeeded()
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false)
+  await page.screenshot({path:join(output,'mobile-settings.png')})
+
  }finally{
   await app?.close().catch(()=>{})
   server.kill('SIGTERM');if(server.exitCode===null)await new Promise(done=>server.once('exit',done))

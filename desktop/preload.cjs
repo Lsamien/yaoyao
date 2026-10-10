@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('yaoyaoDesktop', Object.freeze({
   switchMode: mode => ipcRenderer.invoke('desktop:mode-switch', mode),
   openRemoteLogin: () => ipcRenderer.invoke('desktop:remote-login'),
   authorizeComputer: csrfToken => ipcRenderer.invoke('desktop:computer-authorize', csrfToken),
+  authorizeCurrentDevice: scope => ipcRenderer.invoke('desktop:device-authorize', scope),
   /** 'local' on the YaoYao server Mac; paired host uuid in remote mode; null if unknown. */
   deviceHost: () => ipcRenderer.invoke('desktop:device-host'),
   openComputer: (id, target) => ipcRenderer.invoke('desktop-computer:open', id, target),

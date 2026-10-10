@@ -20,9 +20,9 @@ onMounted(async () => {
   detach = window.yaoyaoDesktop?.onComputerClose(() => { void close() })
   try {
     const requestedBackend = route.query.backend, requestedHost = route.query.host
-    if (requestedBackend !== undefined && requestedBackend !== 'desktop' && requestedBackend !== 'cloud' && requestedBackend !== 'vm' && requestedBackend !== 'managed-browser')
+    if (requestedBackend !== undefined && requestedBackend !== 'cloud' && requestedBackend !== 'vm' && requestedBackend !== 'managed-browser')
       throw new Error('所选电脑无效，请关闭窗口后重新选择')
-    if (requestedHost !== undefined && (requestedBackend !== 'desktop' || typeof requestedHost !== 'string' || !/^[\w-]{1,128}$/.test(requestedHost)))
+    if (requestedHost !== undefined)
       throw new Error('所选电脑无效，请关闭窗口后重新选择')
     backend.value = requestedBackend
     host.value = typeof requestedHost === 'string' ? requestedHost : undefined

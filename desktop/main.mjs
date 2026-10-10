@@ -13,6 +13,7 @@ import { resolveDataHome } from './data-home.mjs'
 import { DesktopEnvironmentHost, DesktopHostCore } from './environment-host.mjs'
 import { DesktopHostManager } from './host-manager.mjs'
 import { remoteRegistration, remoteSession, enrollDesktopHost, inspectServer, persistRemoteSession, sessionCookieDetails } from './remote-login.mjs'
+import { authorizeCurrentComputer } from './computer-authorization.mjs'
 import { DesktopLoginSessions } from './login-sessions.mjs'
 import { DesktopOnboarding } from './onboarding.mjs'
 import { DesktopUpdateManager } from './update-manager.mjs'
@@ -458,6 +459,18 @@ else {
       requireModePage(event)
       if(switchingMode)throw new Error('正在切换运行模式，请稍候')
       return openRemoteLogin()
+    })
+    ipcMain.handle('desktop:device-authorize', async (event, scope) => {
+      requireModePage(event)
+      if (switchingMode) throw new Error('正在切换运行模式，请稍候')
+      const origin = new URL(event.senderFrame.url).origin
+      const core = remoteMode ? hostManager?.core : environmentHost?.core
+      const isCurrent = () => !closing && !quitting && !switchingMode && core === (remoteMode ? hostManager?.core : environmentHost?.core)
+        && new URL(event.senderFrame.url).origin === origin
+        && (!remoteMode || hostManager?.config?.serverURL === remoteURL)
+      const cookies = await electronSession.defaultSession.cookies.get({ url: origin })
+      if (!isCurrent()) throw new Error('当前连接已改变，请重新打开 Bot 设置')
+      return authorizeCurrentComputer({ scope, core, origin, cookies, fetchImpl: authFetch, isCurrent })
     })
     ipcMain.handle('desktop:computer-authorize',async(event,csrfToken)=>{
       requireModePage(event)
