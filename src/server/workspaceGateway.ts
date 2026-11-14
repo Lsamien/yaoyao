@@ -23,6 +23,8 @@ export interface WorkspaceNode {
 }
 export interface GatewayExecutionScope {taskEnvironment?:()=>import('../shared/executionEnvironment.js').TaskEnvironment;workId:string;cleanupOnly?:boolean;sessionId?:string;authorize():void;publishArtifact?(name:string,bytes:Buffer):Promise<unknown>}
 export interface GatewayTarget {
+  /** In-process Hermes gateway (embedded kernel). Takes precedence over every network transport. */
+  embedded?: import('./hermes/gateway.js').EmbeddedGateway
   url: URL
   client: UpstreamClient
   session: Pick<UpstreamServiceSession, 'request' | 'webSocketCredential'>
@@ -297,6 +299,11 @@ export class WorkspaceGateway {
     const generation = ++this.generation
     const active = () => !this.closed && generation === this.generation
     const disconnected = () => { if(active()){this.available=false;this.onDisconnect()} }
+    if(this.target.embedded&&!this.target.runner){
+      const channel=this.target.embedded.open(frame=>{if(active())this.onEvent(frame)},disconnected)
+      if(!active()){channel.close();throw new Error('Hermes connection closed')}
+      this.runner=channel;this.available=true;return
+    }
     if(this.target.runner){
       const runner=await this.target.runner.open(frame=>{if(active())this.onEvent(frame)},disconnected,this.scope)
       if(!active()){runner.close();throw new Error('Hermes connection closed')}

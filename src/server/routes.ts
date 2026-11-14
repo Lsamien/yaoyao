@@ -909,7 +909,7 @@ async function independentPairingCookies(
     await dependencies.upstream.request('/api/status', authenticatedJar),
   )
   if (!authRequired(status)) {
-    const cookies = authenticatedJar.header
+    const cookies = authenticatedJar.header || (dependencies.upstream.embedded ? 'yaoyao_embedded=1' : undefined)
     if (!cookies) throw new HttpError(401, 'Hermes session is unavailable', 'authentication_required')
     return cookies
   }
@@ -1443,7 +1443,8 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     await withJar(ctx, async (jar) => {
       await requireGatewayAuthentication(ctx, dependencies, jar)
       const request = optionalBody(ctx)
-      const cookieHeader = jar.header
+      // Embedded Hermes has no account cookies; the device token alone authorizes paired access.
+      const cookieHeader = jar.header || (dependencies.upstream.embedded ? 'yaoyao_embedded=1' : undefined)
       if (!cookieHeader) throw new HttpError(503, '9119 服务会话尚未就绪', 'upstream_session_missing')
       const pairing = dependencies.pairings.create(
         cookieHeader,

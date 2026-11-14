@@ -42,6 +42,20 @@ export class HermesApi {
       const result = await this.memoryExtract(typeof body.profile === 'string' ? body.profile : 'default', String(body.prompt ?? ''))
       return json(200, { ok: true, ...(result && typeof result === 'object' ? result : { text: result }) })
     }
+    if (path === '/api/plugins/yaoyao-bot-bridge/model-options' || path === '/api/plugins/yaoyao-bot-bridge/model-settings/resolve') {
+      const body = (request.body ?? {}) as { profile?: unknown; settings?: unknown }
+      const profile = (typeof body.profile === 'string' ? body.profile : search.get('profile')) || 'default'
+      const scope: HermesScope = profile === 'default' ? 'system' : { profile }
+      try {
+        const value = path.endsWith('/model-options')
+          ? await this.pool.call(scope, 'botmodels.options', {}, { timeoutMs: 60_000 })
+          : await this.pool.call(scope, 'botmodels.resolve', { settings: body.settings ?? null }, { timeoutMs: 60_000 })
+        return json(200, value)
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 400) return json(400, { detail: error.message })
+        throw error
+      }
+    }
     if (!NATIVE.test(path)) return json(404, { detail: 'Not Found' })
     return this.native(method, path, search, request.body, request.maxResponseBytes)
   }

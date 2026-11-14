@@ -40,6 +40,8 @@ export interface KernelRequest {
   turnContext?: string
   tools: KernelTool[]
   botPolicy?: { enabled: boolean; foreground: boolean; version?: 2 }
+  /** Hermes session source (`web` native chats, `yaoyao_workspace` Bot sessions). */
+  platform?: string
   compact?: Record<string, never>
 }
 export interface KernelControl { steer?: (text: string) => Promise<boolean> }

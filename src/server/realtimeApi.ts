@@ -18,6 +18,8 @@ import { ChatPushRelayObserver, type ChatNotificationResolver, type PushEventCoo
 
 export class RealtimeAPI {
   transcriptsAvailable = false
+  /** Embedded Hermes gateway used for local chats (set by the application). */
+  gateway?: import('./hermes/gateway.js').EmbeddedGateway
   readonly broker: RealtimeBroker
   private observers = new Map<string, ChatPushRelayObserver>()
   constructor(readonly config: ServerConfig, readonly auth: LocalAuthStore, readonly csrf: CsrfProtection,
@@ -68,7 +70,9 @@ export class RealtimeAPI {
     }
     const nativeBot = ctx.state.hermesBotNative === true
     if (nativeBot) key = `native:${key}`
+    const embedded = !exported && this.upstream.embedded ? this.gateway : undefined
     return {
+      ...(embedded ? { embedded } : {}),
       key, nativeBot, instanceKey: endpoint.href, upstreamKey: `${endpoint.href}:${device ? key : 'service'}`, paired: Boolean(device), valid, authorize,
       canResume: (profile, sessionId) => this.canResume(profile, sessionId, jar, owner),
       configuredWorkingDirectory: profile => configuredWorkingDirectory((path, options) => {
@@ -108,6 +112,7 @@ export class RealtimeAPI {
       upstreamKey: `${this.config.upstream.href}:service`, paired: false,
       instanceKey: this.config.upstream.href,
       agent: this.upstream.directAgent,
+      ...(this.upstream.embedded && this.gateway ? { embedded: this.gateway } : {}),
       valid: () => this.auth.isUserActive(job.localUserID),
       url: async () => {
         const credential = await this.session.webSocketCredential()

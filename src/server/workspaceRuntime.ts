@@ -782,6 +782,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       // stays a YaoYao policy; it is not a session-create parameter.
       const createSession = () => gateway.rpc('session.create', {
             profile: agent.profile,
+            // Embedded kernel: each Bot keeps its own Hermes runtime home under <data>/bots/<id>.
+            bot_id: agent.id,
             title: `Yaoyao ${c.id}${run.conversationTaskId ? ` / ${run.conversationTaskId}` : ''}`,
             source: 'yaoyao_workspace',
             ...(cwd ? { cwd } : {}),

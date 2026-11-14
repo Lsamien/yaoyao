@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
+import { EmbeddedSocket } from './hermes/socket.js'
 import { HttpError } from './errors.js'
 import { checkedChatFrame, CHAT_MAX_PAYLOAD, GroupFrameValidator } from './realtimeProtocol.js'
 import { RealtimeReceipts, type CommandReceipt } from './realtimeReceipts.js'
@@ -19,6 +20,8 @@ export interface RealtimePrincipal {
   canResume?(profile: string, sessionId: string): Promise<boolean>
   configuredWorkingDirectory?(profile: string): Promise<string | undefined>
   url(channel: 'chat' | 'groups', anchor?: { epoch: string; cursor: number }): Promise<URL>
+  /** In-process Hermes gateway; when set the broker never opens a network socket. */
+  embedded?: import('./hermes/gateway.js').EmbeddedGateway
   observeCommand?(frame: string): void
   observeEvent?(frame: string): void
 }
@@ -362,11 +365,12 @@ export class RealtimeBroker {
       await u.recovery?.catch(() => {})
       const principal = this.connectionPrincipal(u)
       if (!principal) throw new HttpError(401, 'Authentication expired', 'authentication_required')
-      const url = await principal.url('chat')
+      const url = principal.embedded ? undefined : await principal.url('chat')
       if (this.closed || this.upstreams.get(principal.upstreamKey) !== u) throw new Error('Broker transport closed')
       if (!this.authorized(principal)) throw new HttpError(401, 'Authentication expired', 'authentication_required')
       await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(url, { agent: principal.agent, headers: { Origin: `${url.protocol === 'wss:' ? 'https:' : 'http:'}//${url.host}` }, maxPayload: CHAT_MAX_PAYLOAD, handshakeTimeout: 15_000 })
+        const ws = principal.embedded ? new EmbeddedSocket(principal.embedded) as unknown as WebSocket
+          : new WebSocket(url!, { agent: principal.agent, headers: { Origin: `${url!.protocol === 'wss:' ? 'https:' : 'http:'}//${url!.host}` }, maxPayload: CHAT_MAX_PAYLOAD, handshakeTimeout: 15_000 })
         u.socket = ws
         const timeout = setTimeout(() => { reject(new Error('Upstream ready timeout')); ws.terminate() }, 20_000)
         let ready = false

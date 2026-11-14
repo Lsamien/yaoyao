@@ -214,6 +214,21 @@ def _model(cls_name, args):
     return getattr(web_models, cls_name)(**args)
 
 
+def op_botmodels_options(args):
+    """Bot model catalogue of this home (formerly the bridge plugin's /model-options)."""
+    import hermes_bot_models
+    return hermes_bot_models.options()
+
+
+def op_botmodels_resolve(args):
+    """Validate and resolve one Bot's model settings against this home."""
+    import hermes_bot_models
+    try:
+        return hermes_bot_models.resolve(args.get("settings"))
+    except hermes_bot_models.ModelSettingsError as exc:
+        raise ServiceError(400, str(exc)) from None
+
+
 def op_dashboard_call(args):
     """Native dashboard REST handler for this home (sessions, profiles, config, models, files)."""
     import hermes_dashboard

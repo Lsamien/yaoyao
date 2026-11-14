@@ -41,6 +41,7 @@ import {
 } from './security.js'
 import { UpstreamHttpError, UpstreamClient } from './upstream.js'
 import { createEmbeddedHermes, type EmbeddedHermes } from './hermes/embedded.js'
+import { readHostTools } from './hostToolSettings.js'
 import { UploadStore } from './uploads.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
@@ -179,7 +180,14 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const pairings = options.pairings ?? new NodePairingStore(config.home)
   const upstream = new UpstreamClient(config.upstream, options.fetchImpl, Boolean(config.tlsCert))
   // Embedded Hermes: the kernel runs as child processes under <data>/hermes; nothing listens on 9119.
-  const hermes = options.hermes ?? createEmbeddedHermes(config.home)
+  const hermes = options.hermes ?? createEmbeddedHermes(config.home, {
+    defaultCwd: config.mediaRoot,
+    policy: () => {
+      // Same global switch the Hermes dashboard used for native approvals.
+      try { const tools = readHostTools(config.home); return { approval: tools.approvalPolicy, denyHostTools: tools.denyServerTools } }
+      catch { return { approval: 'ask', denyHostTools: false } }
+    },
+  })
   // `fetchImpl` is a test-only fake Dashboard transport; production always answers in process.
   if (!options.upstreamSession && !options.fetchImpl) upstream.local = hermes.api
   const uploads = options.uploads ?? new UploadStore(config.home)
@@ -260,7 +268,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const workspace = new WorkspaceStore(config.home)
   push.setUnreadCounter(owner => unreadSnapshot(workspace, chatCache!.store, owner,(node,profile)=>auth.canUseSource(owner,node,profile)).total)
   const openVikingService = new OpenVikingService(workspace, openVikingConfiguration)
-  const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
+  const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession, ...(upstream.embedded ? { embedded: hermes.gateway } : {}) }, pairings.nodeID)
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
   const runners=new RunnerHub(workspace,auth,workspaceNodes.local)
   runners.hermesUpstream=config.upstream.origin
@@ -334,6 +342,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     resolver: new HermesChatNotificationResolver(upstreamSession, (user, prompt) => push.promptDigest(user, prompt)),
   }, (owner, profile, sessionID) =>
     chatCache?.store.ownsSession(owner, profile, sessionID) ?? false)
+  if (upstream.embedded) realtime.gateway = hermes.gateway
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
   realtime.broker.assertCanCommand=()=>hermesBridge.assertDashboardAvailable()
   realtime.transcriptsAvailable = chatCache.store.transcripts.enabled

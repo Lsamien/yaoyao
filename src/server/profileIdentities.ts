@@ -29,6 +29,12 @@ export class UpstreamProfileIdentityService {
   ) {}
 
   async load(): Promise<RemoteProfileIdentity[]> {
+    if (this.upstream.client.embedded) {
+      // Embedded kernel: the same native profile list, read in process.
+      const response = await this.upstream.request('/api/profiles', { cache: 'reload' })
+      if (response.status !== 200) throw new HttpError(502, '无法读取机器人身份', 'profile_identity_failed')
+      return identitiesFrom(object(JSON.parse(response.body.toString())).profiles)
+    }
     const credential = await this.upstream.webSocketCredential()
 
     const url = new URL(this.config.upstream)
@@ -81,24 +87,7 @@ export class UpstreamProfileIdentityService {
           return
         }
         if (String(frame.id ?? '') === 'profiles') {
-          const profiles = Array.isArray(object(frame.result).profiles)
-            ? object(frame.result).profiles as unknown[] : []
-          for (const entry of profiles) {
-            const outer = object(entry)
-            const profile = Object.keys(object(outer.profile)).length
-              ? object(outer.profile) : outer
-            const name = typeof profile.name === 'string' ? profile.name.trim() : ''
-            if (!name) continue
-            const agentIdentity = agentIdentityFromProfile(profile)
-            const identity: RemoteProfileIdentity = {
-              name,
-              displayName: agentIdentity.displayName,
-              model: typeof profile.model === 'string' ? profile.model : '',
-              color: agentIdentity.color,
-              avatar: encodeAgentAvatar(agentIdentity),
-            }
-            identities.set(name, identity)
-          }
+          for (const identity of identitiesFrom(object(frame.result).profiles)) identities.set(identity.name, identity)
           finish()
           return
         }
@@ -110,4 +99,23 @@ export class UpstreamProfileIdentityService {
       })
     })
   }
+}
+
+function identitiesFrom(value: unknown): RemoteProfileIdentity[] {
+  const identities = new Map<string, RemoteProfileIdentity>()
+  for (const entry of Array.isArray(value) ? value : []) {
+    const outer = object(entry)
+    const profile = Object.keys(object(outer.profile)).length ? object(outer.profile) : outer
+    const name = typeof profile.name === 'string' ? profile.name.trim() : ''
+    if (!name) continue
+    const agentIdentity = agentIdentityFromProfile(profile)
+    identities.set(name, {
+      name,
+      displayName: agentIdentity.displayName,
+      model: typeof profile.model === 'string' ? profile.model : '',
+      color: agentIdentity.color,
+      avatar: encodeAgentAvatar(agentIdentity),
+    })
+  }
+  return [...identities.values()]
 }
