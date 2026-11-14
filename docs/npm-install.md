@@ -44,7 +44,8 @@ yaoyao --version          # 查看已安装的 npm 包版本
 | --- | --- | --- |
 | `YAOYAO_HOME` | 数据目录 | `~/.yaoyao` |
 | `HERMES_YAOYAO_PORT` | Web 端口 | `15300` |
-| `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址 | `http://127.0.0.1:9119` |
+| `YAOYAO_KERNEL_VENV` | 内置 Hermes 内核的 Python 虚拟环境目录 | 安装目录下的 `.venv` |
+| `YAOYAO_IMPORT_HERMES_HOME` | 首次启动只读导入的原 Hermes 数据目录 | `~/.hermes` |
 
 LaunchAgent 安装时的环境会写入 plist；修改环境变量配置后，执行 `yaoyao service install` 重新写入配置并启动服务。`yaoyao service restart` 使用已保存的配置重启。
 

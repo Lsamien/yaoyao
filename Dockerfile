@@ -16,7 +16,15 @@ COPY bin ./bin
 COPY deploy ./deploy
 COPY third-party ./third-party
 COPY src ./src
-COPY integrations/hermes-bots-bridge ./integrations/hermes-bots-bridge
+COPY runtime ./runtime
+
+# Embedded Hermes kernel: Debian bookworm ships Python 3.11, the version the lock file targets.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-venv python3-dev build-essential \
+  && rm -rf /var/lib/apt/lists/* \
+  && python3 -m venv /app/.venv \
+  && /app/.venv/bin/pip install --no-cache-dir --require-hashes -r runtime/requirements.lock \
+  && find runtime -name __pycache__ -prune -exec rm -rf {} +
 
 RUN npm run build \
   && npm run runner:build \
@@ -30,8 +38,8 @@ ENV NODE_ENV=production \
     HERMES_YAOYAO_PORT=15300 \
     HERMES_YAOYAO_HOME=/home/node/.yaoyao \
     HERMES_YAOYAO_CHAT_CACHE_MODE=prefer-local \
-    HERMES_YAOYAO_SUPERVISE_DASHBOARD=0 \
-    HERMES_YAOYAO_LOCAL_VM_HOST=runner
+    HERMES_YAOYAO_LOCAL_VM_HOST=runner \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
@@ -47,6 +55,8 @@ COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 COPY --chown=node:node --from=builder /app/dist-server ./dist-server
 COPY --chown=node:node --from=builder /app/bin ./bin
+COPY --chown=node:node --from=builder /app/runtime ./runtime
+COPY --chown=node:node --from=builder /app/.venv ./.venv
 COPY --chown=node:node --from=builder /app/build-info.json /app/runner-bundle.tar.gz ./
 
 USER node

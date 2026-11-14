@@ -8,12 +8,19 @@ export const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..
 
 export interface KernelPaths { root: string; python: string; worker: string; service: string }
 
+/** Source checkout, npm package, esbuild bundle (runtime/ beside the bundle) or an explicit root. */
+function kernelRoot(env: NodeJS.ProcessEnv): string {
+  if (env.YAOYAO_KERNEL_ROOT) return env.YAOYAO_KERNEL_ROOT
+  const candidates = [PACKAGE_ROOT, dirname(fileURLToPath(import.meta.url)), process.cwd()]
+  return candidates.find(root => existsSync(join(root, 'runtime/worker.py'))) ?? PACKAGE_ROOT
+}
+
 export function kernelPaths(env: NodeJS.ProcessEnv = process.env): KernelPaths {
-  const root = env.YAOYAO_KERNEL_ROOT || PACKAGE_ROOT
+  const root = kernelRoot(env)
   const bundled = join(root, 'runtime/python/bin/python3')
   return {
     root,
-    python: env.YAOYAO_KERNEL_PYTHON || (existsSync(bundled) ? bundled : join(root, '.venv/bin/python')),
+    python: env.YAOYAO_KERNEL_PYTHON || (existsSync(bundled) ? bundled : join(env.YAOYAO_KERNEL_VENV || join(root, '.venv'), 'bin/python')),
     worker: env.YAOYAO_KERNEL_WORKER || join(root, 'runtime/worker.py'),
     service: env.YAOYAO_HERMES_SERVICE || join(root, 'runtime/hermes_service.py'),
   }

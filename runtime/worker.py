@@ -25,7 +25,8 @@ startup_steers = []
 # Prefix of the per-turn application state Yaovi renders (src/server/workspacePrompt.ts).
 TURN_CONTEXT_SENTINEL = "[[YAOVI_TURN_CONTEXT_V1]]"
 # Control-plane RPCs whose replies are JSON values, never model-facing tool output.
-CONTROL_TOOLS = ("yaovi_clarify", "yaovi_native_authorize", "yaovi_native_check")
+CONTROL_TOOLS = ("yaovi_clarify", "yaovi_native_authorize", "yaovi_native_check",
+                 "yaovi_skills_authorize", "yaovi_skills_load", "yaovi_skills_commit")
 
 
 def emit(kind, **payload):

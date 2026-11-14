@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -165,5 +165,27 @@ describe.skipIf(!kernel)('embedded Hermes gateway', () => {
     expect(done.payload!.status).toBe('interrupted')
     await waitFor(frames, () => hermes!.gateway.idle, 10_000).catch(() => undefined)
     expect(hermes!.gateway.running(created.session_id)).toBe(false)
+  }, 180_000)
+
+  it('admits Profile skills and commits a skill created in a native chat', async () => {
+    let step = 0
+    const { channel, frames } = await setup(messages => {
+      step++
+      if (step === 1) return { call: { name: 'skills_list', arguments: {} } }
+      if (step === 2) return { call: { name: 'skill_manage', arguments: { action: 'create', name: 'release-notes', content: '---\nname: release-notes\ndescription: Write release notes.\n---\n# Release notes\nList user-visible changes.\n' } } }
+      return { content: '技能：' + messages.filter(m => m.role === 'tool').map(m => String(m.content).slice(0, 300)).join(' | ') }
+    })
+    const skill = join(home, 'hermes', 'skills', 'writing', 'weekly-report')
+    mkdirSync(skill, { recursive: true })
+    writeFileSync(join(skill, 'SKILL.md'), '---\nname: weekly-report\ndescription: Draft a weekly report.\n---\nUse the template.\n')
+    writeFileSync(join(skill, 'template.md'), '# Week')
+    const created = await channel.rpc('session.create', { profile: 'default' })
+    await channel.rpc('prompt.submit', { session_id: created.session_id, text: '有哪些技能？再建一个发布说明技能' })
+    const done = await waitFor(frames, f => f.type === 'message.complete')
+    expect(done.payload!.status).toBe('complete')
+    expect(String(done.payload!.text)).toContain('weekly-report')
+    expect(frames.some(f => f.type === 'approval.request')).toBe(false)
+    const written = join(home, 'hermes', 'skills')
+    expect(readdirSync(written, { recursive: true }).some(path => String(path).endsWith('release-notes/SKILL.md'))).toBe(true)
   }, 180_000)
 })

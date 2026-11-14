@@ -6,6 +6,7 @@ import type { GatewayFrame } from '../workspaceGateway.js'
 import { defaultKernelConfig, runKernel, type KernelControl, type KernelTool } from './kernel.js'
 import type { HermesScope, HermesServicePool } from './service.js'
 import type { EmbeddedSession, EmbeddedSessions, SessionModel } from './sessions.js'
+import { collectSkills, commitSkills } from './skills.js'
 
 /**
  * In-process replacement for the Hermes dashboard's TUI gateway (`/api/ws` JSON-RPC).
@@ -43,7 +44,8 @@ interface Turn { id: string; controller: AbortController; control: KernelControl
 
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/
 const PROFILE = /^[a-z0-9][a-z0-9_-]{0,63}$/
-const READ_ONLY_NATIVE = new Set(['read_file', 'search_files', 'skills_list', 'skill_view', 'clarify', 'session_search', 'todo'])
+// Reads, and skill edits (confined to the turn's skill copy and committed by the host), need no approval.
+const READ_ONLY_NATIVE = new Set(['read_file', 'search_files', 'skills_list', 'skill_view', 'skill_manage', 'clarify', 'session_search', 'todo'])
 const MAX_ATTACHMENT = 32 * 1024 * 1024
 const BUILTIN_TOOLS: ToolDescriptor[] = [
   { id: 'web_search', name: 'web_search', description: 'Search the web with the configured Hermes provider. Returns titles, URLs and snippets; use web_extract for page content.', inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100, default: 5 } }, required: ['query'], additionalProperties: false } },
@@ -447,13 +449,20 @@ export class EmbeddedGateway {
         writeFileSync(path, bytes, { mode: 0o600 })
         return path
       }
+      // Skills: the Profile's library (editable from native chats, shared read-only with Bots) plus a Bot's own.
+      const profileHome = pool.profileHome(session.profile)
+      const skillOwner = session.botId ?? session.profile
+      const skills = collectSkills(session.botId
+        ? [{ home: profileHome }, { home: pool.home(scope), owner: session.botId }]
+        : [{ home: profileHome, owner: session.profile }])
+      const skillHome = session.botId ? pool.home(scope) : profileHome
       const result = await runKernel({
-        workspaceId: 'yaoyao', botId: session.botId ?? session.profile, sessionId: session.id, runId: turn.id,
+        workspaceId: 'yaoyao', botId: skillOwner, sessionId: session.id, runId: turn.id,
         dataRoot: pool.home(scope), ...(pool.parent(scope) ? { hermesRoot: pool.parent(scope) } : {}),
         ...(cwd && !policy.denyHostTools && existsSync(cwd) ? { hostWorkspace: { cwd } } : {}),
         route: { provider, model, reasoningEffort: session.model?.reasoningEffort || 'default', fastMode: session.model?.fastMode ?? 'normal' },
         config: defaultKernelConfig(config), instructions: grant ? GRANT_INSTRUCTIONS : '', text: input, tools,
-        botPolicy: { enabled: true, foreground: true, version: 2 }, platform: session.source || 'web',
+        botPolicy: { enabled: true, foreground: true, version: 2 }, platform: session.source || 'web', skills,
       }, {
         signal: turn.controller.signal, control: turn.control, env: this.options.env,
         maxSeconds: this.options.maxTurnSeconds ?? 6 * 3600, waiting: () => turn.pending.size > 0,
@@ -474,6 +483,12 @@ export class EmbeddedGateway {
           const input = args && typeof args === 'object' ? args as Record<string, any> : {}
           if (name === 'yaovi_native_authorize') return this.authorize(session, turn, input)
           if (name === 'yaovi_native_check') return { allow: policy.approval !== 'deny' }
+          if (name === 'yaovi_skills_authorize') return skills.map(entry => entry.id)
+          if (name === 'yaovi_skills_load') return { entries: [] }
+          if (name === 'yaovi_skills_commit') {
+            try { return { entries: commitSkills(skillHome, skillOwner, input.changes) } }
+            catch (error) { return { error: error instanceof Error ? error.message : '技能保存失败' } }
+          }
           if (name === 'yaovi_clarify') {
             const answer = await this.ask(session, turn, 'clarify', { question: str(input.question), message: str(input.question), choices: Array.isArray(input.choices) ? input.choices.map(String) : [] })
             return typeof answer === 'string' ? answer : null

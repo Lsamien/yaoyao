@@ -47,6 +47,8 @@ const service = resolve(out, 'web-service')
 await mkdir(service)
 for (const file of ['server.mjs', 'vm-data-migrate.mjs', 'node_modules', 'ui', 'release.json', 'build-info.json', 'file_transfer.py', 'hermes_worker.py', 'profile_skills.py', 'skill_bundle.py', 'guest_proxy.py', 'computer-image', 'third-party']) await cp(resolve(out, file), resolve(service, file), { recursive: true })
 for (const file of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md', 'licenses']) await cp(resolve(root, file), resolve(service, file), { recursive: true })
+// Embedded Hermes kernel sources; the Python environment is prepared on first start in the user data directory.
+await cp(resolve(root, 'runtime'), resolve(service, 'runtime'), { recursive: true, filter: source => !source.includes('__pycache__') && !source.endsWith('.pyc') && !/[\\/](?:\.env|auth\.json)$/.test(source) })
 await cp(resolve(root, 'bin'), resolve(service, 'bin'), { recursive: true })
 await cp(await realpath(process.execPath), resolve(service, 'node'))
 await cp(resolve(await realpath(process.execPath), '../../LICENSE'), resolve(service, 'NODE-LICENSE.txt'))

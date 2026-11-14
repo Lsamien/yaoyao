@@ -4,13 +4,18 @@ import {spawnSync} from 'node:child_process'
 import {createHash} from 'node:crypto'
 import {existsSync,mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {dirname,join} from 'node:path'
 
 const UV_VERSION='0.13.0'
 
+/** Virtual environment for the kernel: packaged apps keep it outside their read-only bundle. */
+export function kernelVenv(root,env=process.env){
+  return env.YAOYAO_KERNEL_VENV||join(root,'.venv')
+}
+
 /** Interpreter used for runtime/worker.py and runtime/hermes_service.py. */
 export function kernelPython(root,env=process.env){
-  return env.YAOYAO_KERNEL_PYTHON||(existsSync(join(root,'runtime/python/bin/python3'))?join(root,'runtime/python/bin/python3'):join(root,'.venv/bin/python'))
+  return env.YAOYAO_KERNEL_PYTHON||(existsSync(join(root,'runtime/python/bin/python3'))?join(root,'runtime/python/bin/python3'):join(kernelVenv(root,env),'bin/python'))
 }
 
 function runCommand(command,args,{cwd,env,input,quiet=false}={}){
@@ -31,7 +36,8 @@ export function verifyKernel({root,env=process.env,python=kernelPython(root,env)
 
 async function resolveUv(root,env,run,fetchImpl){
   if(env.YAOYAO_UV){run(env.YAOYAO_UV,['--version'],{cwd:root,env,quiet:true});return env.YAOYAO_UV}
-  const local=join(root,'.tool-bin/uv')
+  const tools=env.YAOYAO_KERNEL_VENV?join(dirname(env.YAOYAO_KERNEL_VENV),'tool-bin'):join(root,'.tool-bin')
+  const local=join(tools,'uv')
   if(existsSync(local))return local
   try{run('uv',['--version'],{cwd:root,env,quiet:true});return 'uv'}catch{/* install a private copy below */}
   console.log(`正在安装内核依赖管理器 uv ${UV_VERSION}…`)
@@ -39,8 +45,8 @@ async function resolveUv(root,env,run,fetchImpl){
   if(!response.ok)throw new Error(`uv 下载失败（HTTP ${response.status}）`)
   const installer=await response.text()
   if(installer.length>1024*1024)throw new Error('uv 安装脚本大小异常')
-  mkdirSync(join(root,'.tool-bin'),{recursive:true})
-  run('sh',[],{cwd:root,env:{...env,UV_UNMANAGED_INSTALL:join(root,'.tool-bin'),UV_NO_MODIFY_PATH:'1'},input:installer})
+  mkdirSync(tools,{recursive:true})
+  run('sh',[],{cwd:root,env:{...env,UV_UNMANAGED_INSTALL:tools,UV_NO_MODIFY_PATH:'1'},input:installer})
   if(!existsSync(local))throw new Error('uv 安装未生成可执行文件')
   return local
 }
@@ -52,14 +58,15 @@ export async function prepareKernel({root,env=process.env,run=runCommand,fetchIm
   if(env.YAOYAO_KERNEL_PYTHON)return verifyKernel({root,env,python,run})
   if(python===join(root,'runtime/python/bin/python3'))return python
   const fingerprint=createHash('sha256').update(readFileSync(join(root,'runtime/requirements.lock'))).digest('hex')
-  const marker=join(root,'.venv/.yaoyao-requirements')
+  const venv=kernelVenv(root,env)
+  const marker=join(venv,'.yaoyao-requirements')
   if(!force&&existsSync(python)&&existsSync(marker)&&readFileSync(marker,'utf8')===fingerprint)return python
   // A previous successful fingerprint must not survive a failed repair.
   rmSync(marker,{force:true})
   try{
-    const installEnv={...env,UV_PYTHON_INSTALL_DIR:join(root,'.python'),UV_PYTHON_DOWNLOADS:'automatic'}
+    const installEnv={...env,UV_PYTHON_INSTALL_DIR:env.YAOYAO_KERNEL_VENV?join(dirname(venv),'python'):join(root,'.python'),UV_PYTHON_DOWNLOADS:'automatic'}
     const uv=await resolveUv(root,installEnv,run,fetchImpl)
-    if(!existsSync(python))run(uv,['venv','--managed-python','--python','3.11',join(root,'.venv')],{cwd:root,env:installEnv})
+    if(!existsSync(python))run(uv,['venv','--managed-python','--python','3.11',venv],{cwd:root,env:installEnv})
     console.log('正在准备 Hermes 内核依赖…')
     run(uv,['pip','sync','--python',python,'--require-hashes',join(root,'runtime/requirements.lock')],{cwd:root,env:installEnv})
     verifyKernel({root,env,python,run})

@@ -1,6 +1,6 @@
 # 内置 Hermes 迁移方案（草案，待确认）
 
-日期：2026-11-14　状态：**已确认，实施中（M0–M5 一次完成）**
+日期：2026-11-14　状态：**已实施（M0–M5），分支 `claude/zen-wozniak-309vnm`**
 
 目标：夭夭不再依赖外部 Hermes Dashboard（9119 HTTP/WebSocket），改为与 yaovi-agent 相同的方式，把 Hermes 源码内置在仓库中，由夭夭服务端直接拉起和管理内核进程。
 
@@ -160,3 +160,47 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 5. **Hermes 副本**：直接复用 yaovi-agent 的 `0.23.0+yaovi`（建议），还是从官方 0.23.0 重新内置、只带夭夭需要的修改？
 6. **远程节点**：同意节点之间改为夭夭到夭夭（要求对端也升级）吗？
 7. **范围**：先只做 M0–M2（Bot 不再依赖外部 Hermes），还是一次做到 M5？
+
+
+---
+
+## 11. 实施记录（2026-11-14）
+
+### 实际架构
+
+| 组件 | 位置 | 作用 |
+| --- | --- | --- |
+| 内置 Hermes | `runtime/hermes`、`runtime/*.py` | 取自 yaovi-agent 的 0.23.0+yaovi，仅把对模型的产品身份改为夭夭 |
+| 内核进程 | `src/server/hermes/kernel.ts` → `runtime/worker.py` | 每轮一个进程；工具调用回到 Node 执行 |
+| 管理进程 | `src/server/hermes/service.ts` → `runtime/hermes_service.py` | 每个 Hermes home 一个常驻进程；新增 `dashboard.call`（直接调用 Hermes 原生 Dashboard 处理函数）、`botmodels.*` |
+| 进程内 API | `src/server/hermes/api.ts` | 原来发往 9119 的 REST 请求在进程内应答，返回结构与 Dashboard 相同 |
+| 进程内网关 | `src/server/hermes/gateway.ts` | 实现原 TUI 网关的 JSON-RPC 方法与事件；Bot 执行（`WorkspaceGateway`）和原生对话（`realtimeBroker`，经 `EmbeddedSocket`）共用 |
+| 导入 | `runtime/hermes_import.py`、`src/server/hermes/import.ts` | 首次启动只读导入 |
+| 技能 | `src/server/hermes/skills.ts` | Profile 技能随轮次加载；Bot 自己的技能写入其 runtime home |
+
+### 与方案的差异
+
+1. **Profile（第 5 节）**：没有采用“从模板复制”。具名 Profile 保留 Hermes 原生布局（`<data>/hermes/profiles/<名称>`）；每个 Bot 有独立 runtime home（会话、上下文、自有技能），配置、`.env` 和凭据通过父级读取实时继承所选 Profile。效果上同样是“Bot 独立 home、不修改基础 Profile”，修改 Profile 的模型或凭据后 Bot 下一轮即生效。
+2. **原生对话协议（M3）**：内置网关实现了与原 Hermes 网关相同的 JSON-RPC 方法和事件，Web 客户端没有改动。移动端使用同一 HTTP+SSE 接口，理论上无需改协议；按你的决定，仍要求客户端升级后使用，旧版未做验证。
+3. **`/api/*` 转发**：保留了按白名单（status、profiles、sessions、model、files、attachments）转发的入口，供已配对设备读取会话和文件；现在由进程内 API 应答，不再访问 9119。通用 Dashboard 功能（Kanban、cron 页面等）已删除。
+4. **导入范围（第 4 节）**：导入整个 Hermes home（跳过 Hermes 程序、venv、日志、缓存、运行时下载和旧工具桥插件），而不是只导入已登记会话，这样历史记录视图能看到全部会话。
+5. **测试传输**：`createApplication({ fetchImpl })` 仍作为测试用的假 Dashboard 传输保留在 `UpstreamClient` 中；生产环境始终走进程内 API。
+
+### 验证
+
+- `npm run typecheck`、`npm run build` 通过。
+- `npm test`：2224 通过，28 失败；这 28 个在原提交 `f433741` 上同样失败（凭据保险箱、服务 CLI 版本、时间格式等与本环境相关的用例），没有新增失败。
+- `npm run kernel:test`：内核 11、模型服务 12、导入 2 个用例全部通过。
+- 新增真实内核 + 受控模型的测试：原生对话流式事件与续聊、授权工具调用、审批允许/拒绝、等待审批时中断、Profile 技能加载与新建、Bot 单聊与工具调用、扫码设备经 HTTP+SSE 对话、进程内 Dashboard API。
+- 桌面测试：93 通过、25 失败，与原提交完全相同（依赖 macOS/Electron 的用例）。
+- 生产构建冒烟：`node dist-server/server/index.js` 启动后 `/healthz`、`/readyz` 返回 200，9119 无监听；首次启动导入成功。
+
+### 已知限制与未完成项
+
+- **Docker 镜像未实际构建**：本环境没有 Docker 守护进程。已确认 `pip --require-hashes` 在 Python 3.11 下接受 `runtime/requirements.lock`；镜像构建和容器内运行需在有 Docker 的机器上验证。
+- **macOS 完整版桌面**：已把 `runtime/` 打进 `web-service/`，内核虚拟环境放在用户数据目录、首次启动自动准备；未实际打包验证。客户端版不受影响。
+- **执行节点（Runner）**：服务端发起的虚拟机工具会话（`toolsOnly`）不经过 Hermes；Runner 自身遗留的 Hermes 托管会话路径仍读取 `hermesURL`，服务端已不再使用该路径，未清理。
+- **未实现的网关方法**：`session.branch`（返回“暂不支持”）、`session.events.since`（断线重连时改为重置并从转录恢复）。
+- **会话标题**：使用首条消息截取，不再调用 Hermes 的标题生成。
+- **Hermes 内置 `memory` 工具**：yaovi-agent 版本已停用该工具，长期记忆走夭夭的工作区记忆工具；原生对话不再有 MEMORY.md/USER.md。
+- **用户数据隔离**：与原来连接同一个 9119 时相同，所有账号共用系统 Hermes 配置；Bot 按 ID 使用独立 runtime home。

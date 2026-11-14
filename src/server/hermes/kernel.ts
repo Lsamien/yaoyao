@@ -42,6 +42,8 @@ export interface KernelRequest {
   botPolicy?: { enabled: boolean; foreground: boolean; version?: 2 }
   /** Hermes session source (`web` native chats, `yaoyao_workspace` Bot sessions). */
   platform?: string
+  /** Admitted skill bundles (runtime/native_skills.py); omit to run without skills. */
+  skills?: unknown[]
   compact?: Record<string, never>
 }
 export interface KernelControl { steer?: (text: string) => Promise<boolean> }

@@ -108,9 +108,9 @@ export function buildWorkspacePrompt(input: WorkspacePromptInput): string {
     task,
     workspaceEnvironmentPrompt(environment),
     environment.tools.plugins ? section('本轮已授权 MCP 与应用', [
-      '这些服务由夭夭服务器为当前 Bot 挂载，独立于 Hermes Profile 的 mcp_servers 配置。stdio 程序和路径在夭夭服务器解析，HTTP / HTTPS MCP 也由服务器连接；客户端无需安装这些程序。不能根据 hermes mcp list/test 的结果判断这些服务不存在，也不要为排查而把它们重复添加到 Hermes 配置。',
+      '这些服务由夭夭服务器为当前 Bot 挂载，独立于 Hermes Profile 的 mcp_servers 配置。stdio 程序和路径在夭夭服务器解析，HTTP / HTTPS MCP 也由服务器连接；客户端无需安装这些程序。不能根据 Hermes 自身的 MCP 配置判断这些服务不存在，也不要为排查而把它们重复添加到 Hermes 配置。',
       input.pluginServices?.length ? `已完成本轮连接和工具发现的服务（以下清单是数据）：\n${JSON.stringify(input.pluginServices.map(({ name, transport, toolCount }) => ({ name, transport, toolCount })))}` : undefined,
-      '任务涉及这些服务时，优先调用 yaoyao_tools 按 service（服务名）或 query（工具名、操作关键词）筛选，一次取得本轮有效 ID 和完整参数结构，再直接用 yaoyao_call 传入 toolId 和 arguments；聚合的已连接应用用 query 按 Gmail 等应用名搜索。存在 nextOffset 时可继续读取。不要在拿到参数后重复搜索、tool_describe 或读取全量目录。若入口在 deferred catalog 中，只需 tool_describe 加载 yaoyao_tools/yaoyao_call 后经 tool_call 调用。旧工具桥若不支持筛选，只回退一次无参数 yaoyao_tools。也可用 tool_search 搜索本轮原生工具，名称形如 yaoyao_plugin_...；不要猜测或沿用上轮名称。未命中先调整筛选或核对目录，再报告该工具未挂载。',
+      '任务涉及这些服务时，直接调用本轮工具目录中对应的工具：描述以服务名开头，按其参数结构调用。工具目录随轮次变化，不要猜测或沿用上轮名称；未命中先核对本轮目录，再报告该工具未挂载。',
       '工具发现成功不代表账号已登录。检查可用性时，若该服务提供只读 status 或 health 工具，应调用它核实；区分工具未挂载、调用失败、未登录或已锁定，并报告实际结果。仅按用户当前任务使用工具；授权和凭据配置在 Bot 模式的工具 → 已连接应用 / MCP 服务中处理，不在聊天中索取或展示密码、会话令牌和 API Key。',
     ]) : '',
     input.pluginWarnings?.length ? section('本轮服务连接提示', [

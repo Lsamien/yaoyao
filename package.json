@@ -43,7 +43,7 @@
     "desktop:pack:win": "npm run desktop:build:win && node scripts/windows-desktop-release.mjs",
     "desktop:test:win": "node scripts/test-windows-desktop.mjs",
     "kernel:setup": "node scripts/kernel-setup.mjs",
-    "kernel:test": ".venv/bin/python tests/runtime/test_kernel.py && .venv/bin/python tests/runtime/test_hermes_service.py",
+    "kernel:test": ".venv/bin/python tests/runtime/test_kernel.py && .venv/bin/python tests/runtime/test_hermes_service.py && .venv/bin/python tests/runtime/test_hermes_import.py",
     "postinstall": "node scripts/kernel-setup.mjs --postinstall"
   },
   "dependencies": {

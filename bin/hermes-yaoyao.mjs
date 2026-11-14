@@ -40,15 +40,11 @@ function environment(env = process.env) {
   const allowed = [
     'HERMES_YAOYAO_HOST',
     'HERMES_YAOYAO_PORT',
-    'HERMES_YAOYAO_UPSTREAM',
-    'HERMES_YAOYAO_UPSTREAM_USERNAME',
-    'HERMES_YAOYAO_UPSTREAM_PASSWORD_FILE',
     'HERMES_YAOYAO_ALLOWED_HOSTS',
     'HERMES_YAOYAO_HOME',
     'HERMES_YAOYAO_TLS_CERT',
     'HERMES_YAOYAO_TLS_KEY',
     'HERMES_YAOYAO_ALLOW_INSECURE_LAN',
-    'HERMES_YAOYAO_SUPERVISE_DASHBOARD',
     'HERMES_YAOYAO_CHAT_CACHE_MODE',
     'HERMES_YAOYAO_RELEASE_SOURCE',
     'HERMES_YAOYAO_RELEASE_ROOT',
@@ -61,6 +57,9 @@ function environment(env = process.env) {
     'HERMES_YAOYAO_FCM_PROJECT_ID',
     'HERMES_YAOYAO_FCM_PACKAGE_NAME',
     'HERMES_YAOYAO_SERVICE_ROOT',
+    'YAOYAO_KERNEL_PYTHON',
+    'YAOYAO_KERNEL_VENV',
+    'YAOYAO_IMPORT_HERMES_HOME',
   ]
   return { ...Object.fromEntries(allowed.flatMap(key => env[key] ? [[key, env[key]]] : [])),
     HERMES_YAOYAO_RELEASE_SOURCE: normalizeReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE) }
@@ -74,8 +73,6 @@ export function launchAgentPlist(options = {}) {
     PATH: `${dirname(node)}:${join(homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
     NODE_ENV: 'production',
     HERMES_YAOYAO_PORT: '15300',
-    HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:9119',
-    HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1',
     ...environment(options.environment),
     HERMES_YAOYAO_HOME: resolveDataHome(options.environment?.YAOYAO_HOME || options.environment?.HERMES_YAOYAO_HOME || dataHome),
     YAOYAO_HOME: resolveDataHome(options.environment?.YAOYAO_HOME || options.environment?.HERMES_YAOYAO_HOME || dataHome),
@@ -184,7 +181,7 @@ async function restart() {
 
 function stop() {
   if (loaded()) run('launchctl', ['bootout', `${domain}/${label}`])
-  process.stdout.write(`已停止 ${label}；Hermes 9119 未被操作\n`)
+  process.stdout.write(`已停止 ${label}\n`)
 }
 
 async function uninstall() {

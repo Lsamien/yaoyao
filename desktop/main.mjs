@@ -375,6 +375,8 @@ else {
         return info
       })
     }
+    // Embedded Hermes: sources ship in web-service/runtime; the venv lives in writable user data.
+    const kernelEnvironment = () => ({ YAOYAO_KERNEL_ROOT: join(root, 'web-service'), YAOYAO_KERNEL_VENV: join(app.getPath('userData'), 'hermes-kernel', 'venv') })
     if (platform.server) {
     manager = new DesktopServiceManager({ home, port, version: packageVersion, log, onState: stateChanged,
       prepareHome: !fixtureHome ? onProgress => migrateLocalData({ home, port, root, onProgress }) : undefined,
@@ -382,16 +384,14 @@ else {
         ? onProgress => stopLocalService({home,port,root,fixture:Boolean(fixtureHome),onProgress}) : undefined,
       synchronize: (app.isPackaged && !fixtureHome) || (fixtureHome && process.env.HERMES_YAOYAO_DESKTOP_TEST_SYNC === '1')
         ? (onProgress, { force = false } = {}) => synchronizeLocalService({ home, port, root, fixture: Boolean(fixtureHome), onProgress, force,
-          environment: { HERMES_YAOYAO_UPSTREAM: process.env.HERMES_YAOYAO_UPSTREAM || 'http://127.0.0.1:9119', HERMES_YAOYAO_SUPERVISE_DASHBOARD: fixtureHome ? '0' : '1', HERMES_YAOYAO_DEFER_HERMES: '1' } })
+          environment: { ...kernelEnvironment(), HERMES_YAOYAO_DEFER_HERMES: '1' } })
         : undefined,
       fork: ({ home, port }) => {
         const env = { ...process.env, NODE_ENV: 'production', NODE_USE_ENV_PROXY: '0',
           PATH: [join(homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || '/usr/bin:/bin'].join(':'),
           HERMES_YAOYAO_DESKTOP: '1', HERMES_YAOYAO_HOME: home, HERMES_YAOYAO_HOST: '127.0.0.1',
           HERMES_YAOYAO_PORT: String(port), HERMES_YAOYAO_STATIC_DIR: join(root, 'ui'),
-          HERMES_YAOYAO_SUPERVISE_DASHBOARD: fixtureHome ? '0' : '1',
-          HERMES_YAOYAO_DEFER_HERMES: '1',
-          HERMES_YAOYAO_UPSTREAM: process.env.HERMES_YAOYAO_UPSTREAM || 'http://127.0.0.1:9119' }
+          HERMES_YAOYAO_DEFER_HERMES: '1', ...kernelEnvironment() }
         delete env.ELECTRON_RUN_AS_NODE
         delete env.HERMES_YAOYAO_TLS_CERT; delete env.HERMES_YAOYAO_TLS_KEY
         return utilityProcess.fork(join(root, 'server.mjs'), [], { cwd: root, env, stdio: 'pipe' })
