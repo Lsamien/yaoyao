@@ -745,7 +745,7 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('子账号助手')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect(child.getByRole('heading', { name: '子账号助手', exact: true })).toBeVisible()
-  for (const path of ['/history', '/kanban', '/files', '/chat']) {
+  for (const path of ['/history', '/files', '/chat']) {
     await child.goto(new URL(path, page.url()).href)
     await expect(child).toHaveURL(/\/conversations$/)
   }

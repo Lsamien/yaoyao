@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import HermesBridgePanel from '@/components/app/HermesBridgePanel.vue'
 import OpenVikingSessionSyncPanel from './OpenVikingSessionSyncPanel.vue'
 import { computed, ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
@@ -16,7 +15,6 @@ import {
   listUsers,
   saveAllowedHostsSettings,
   saveOpenVikingSettings,
-  setUpstreamCredentials,
   updateUser,
   type AllowedHostsSettings,
   type ManagedUser,
@@ -55,9 +53,6 @@ const userAssignments = ref<Record<string, string[]>>({})
 const users = ref<ManagedUser[]>([])
 const username = ref('')
 const password = ref('')
-const upstreamUsername = ref('')
-const upstreamPassword = ref('')
-const connectionBaseline = ref({ username: '', password: '' })
 const connectionStatus = ref<UpstreamConnectionStatus>()
 const allowedHostsSettings = ref<AllowedHostsSettings>()
 const allowedHostsText = ref('')
@@ -95,13 +90,6 @@ const fcmNotice = ref('')
 const currentAccessHost = window.location.hostname || 'localhost'
 const effectiveUpstreamReady = computed(() => connectionStatus.value?.ready ?? props.upstreamReady)
 const effectiveUpstreamError = computed(() => connectionStatus.value?.error || props.upstreamError)
-const passwordAuthentication = computed(() => !['loopback-token', 'loopback-direct'].includes(connectionStatus.value?.authMode ?? 'unknown'))
-const authModeLabel = computed(() => {
-  if (connectionStatus.value?.authMode === 'loopback-token') return '本机 Session Token（自动）'
-  if (connectionStatus.value?.authMode === 'loopback-direct') return '本机直连（兼容模式）'
-  if (connectionStatus.value?.authMode === 'password') return '用户名和密码'
-  return '等待检测'
-})
 const verifiedAtLabel = computed(() => {
   const value = connectionStatus.value?.lastVerifiedAt
   return value === undefined ? '尚未成功验证' : new Date(value).toLocaleString()
@@ -172,9 +160,7 @@ function fcmSnapshot(): FCMFormSnapshot {
 const dirty = computed(() => {
   if (props.section === 'users') return Boolean(username.value.trim() || password.value)
   if (props.section === 'connection') {
-    return upstreamUsername.value !== connectionBaseline.value.username
-      || upstreamPassword.value !== connectionBaseline.value.password
-      || allowedHostsText.value !== allowedHostsBaseline.value
+    return allowedHostsText.value !== allowedHostsBaseline.value
   }
   if (props.section === 'memory') {
     return openVikingSnapshot() !== openVikingBaseline.value
@@ -328,18 +314,6 @@ function remove(user: ManagedUser) {
   if (window.confirm(`删除用户“${user.username}”？`)) {
     void run(async () => { await deleteUser(user.id) })
   }
-}
-
-async function saveUpstream() {
-  if (busy.value) return
-  const submittedUsername = upstreamUsername.value.trim()
-  const submittedPassword = upstreamPassword.value
-  await run(async () => {
-    await setUpstreamCredentials(submittedUsername, submittedPassword)
-    upstreamUsername.value = submittedUsername
-    upstreamPassword.value = ''
-    connectionBaseline.value = { username: submittedUsername, password: '' }
-  })
 }
 
 function parsedAllowedHosts(): string[] {
@@ -500,25 +474,15 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
     </div>
 
     <div v-else-if="section === 'connection'" class="block">
-      <h3>Hermes 连接</h3>
-      <p :class="{ ok: effectiveUpstreamReady }">{{ effectiveUpstreamReady ? '9119 连接正常' : effectiveUpstreamError || '尚未验证上游连接' }}</p>
-      <div class="connection-summary" aria-label="Hermes 连接状态">
-        <span><small>9119 地址</small><b>{{ connectionStatus?.endpoint || '等待检测' }}</b></span>
-        <span><small>认证模式</small><b>{{ authModeLabel }}</b></span>
+      <h3>内置 Hermes</h3>
+      <p :class="{ ok: effectiveUpstreamReady }">{{ effectiveUpstreamReady ? '内置 Hermes 内核已就绪' : effectiveUpstreamError || '正在检查内置 Hermes 内核' }}</p>
+      <div class="connection-summary" aria-label="内置 Hermes 状态">
+        <span><small>Hermes 版本</small><b>{{ connectionStatus?.version || '—' }}</b></span>
+        <span><small>数据目录</small><b>{{ connectionStatus?.hermesHome || '—' }}</b></span>
         <span><small>15300 网络范围</small><b>{{ connectionStatus?.webNetworkScope === 'local' ? '仅本机' : '局域网可访问' }}</b></span>
-        <span><small>9119 网络范围</small><b>{{ connectionStatus?.networkScope === 'network' ? '网络可访问' : '仅本机' }}</b></span>
-        <span class="wide"><small>最近验证</small><b>{{ verifiedAtLabel }}</b></span>
+        <span class="wide"><small>最近检查</small><b>{{ verifiedAtLabel }}</b></span>
       </div>
-      <p v-if="connectionStatus?.authMode === 'loopback-token'" class="connection-mode-note">9119 使用本机临时 Token，15300 会自动读取并在 9119 重启后刷新；Token 不会在设置中显示。</p>
-      <p v-else-if="connectionStatus?.authMode === 'loopback-direct'" class="connection-mode-note">当前 9119 允许本机直接访问，不需要账号或 Token；该兼容模式只允许回环地址使用。</p>
-      <p class="network-description">直连本机 127.0.0.1 或 ::1 且 Hermes 启用本机授权时，自动使用临时会话令牌，无需配置用户名和密码。远程上游或已启用账号鉴权的 9119 仍需服务账号；15300 登录保护保持不变，不会自动修改 Hermes 账号配置。</p>
-      <h4 v-if="passwordAuthentication">服务账号（按需配置）</h4>
-      <form v-if="passwordAuthentication" @submit.prevent="saveUpstream">
-        <label><span>9119 用户名</span><input v-model="upstreamUsername" name="upstream-username" autocomplete="off" :disabled="busy" /></label>
-        <label><span>9119 密码</span><input v-model="upstreamPassword" name="upstream-password" type="password" autocomplete="new-password" :disabled="busy" /></label>
-        <button class="solid-button" :disabled="busy || !upstreamUsername.trim() || !upstreamPassword">验证并保存</button>
-      </form>
-      <HermesBridgePanel v-if="active" :profiles="profiles" />
+      <p class="network-description">Hermes 已内置在夭夭服务中运行，不再连接 9119，也不需要服务账号或工具桥插件。模型服务、Profile 与会话保存在上述数据目录；首次启动时会只读导入原有 ~/.hermes 数据。</p>
       <details class="runner-settings" @toggle="runnerSettingsOpen = ($event.target as HTMLDetailsElement).open">
         <summary>执行节点</summary>
         <RunnerSettingsPanel v-if="runnerSettingsOpen" />

@@ -17,6 +17,7 @@ import { isSupportedGroupProtocolVersion, SUPPORTED_GROUP_PROTOCOL_VERSION_LABEL
 import type { ServerConfig } from './config.js'
 import { isLoopbackHost, isLoopbackUpstream, isPrivateHost } from './config.js'
 import { HttpError } from './errors.js'
+import { kernelPaths, requireKernel } from './hermes/paths.js'
 import { compareReleaseVersions } from './releases.js'
 import {
   bearerToken,
@@ -62,7 +63,6 @@ type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
   hermes?: import('./hermes/embedded.js').EmbeddedHermes
-  hermesBridge: import('./hermesBridge.js').HermesBridgeManager
   onChatListChanged?: (owner:string,profile:string,id:string)=>void
   onServerIdentityChanged?: (identity: ServerIdentity) => void
   onUserAccessChanged?: (owner: string) => Promise<void>
@@ -519,214 +519,6 @@ async function proxyAdminFeature(
       throw new HttpError(501, '当前上游版本不支持此管理功能', 'upstream_feature_unsupported')
     }
     sendUpstreamResponse(ctx, response, jar)
-  })
-}
-
-const KANBAN_UPSTREAM_PREFIX = '/api/plugins/kanban'
-
-function sendKanbanUpstreamResponse(
-  ctx: Koa.Context,
-  response: UpstreamResponse,
-  jar: CookieJar,
-): void {
-  if (response.status === 401) {
-    throw new HttpError(502, '9119 Kanban 认证会话不可用', 'upstream_auth_unavailable')
-  }
-  sendUpstreamResponse(ctx, response, jar)
-}
-
-async function kanbanAvailability(
-  ctx: Koa.Context,
-  dependencies: RouteDependencies,
-): Promise<void> {
-  dependencies.auth.require(ctx)
-  const probe = await dependencies.upstreamSession.request(`${KANBAN_UPSTREAM_PREFIX}/boards`)
-  if (probe.status === 404 || probe.status === 405) {
-    json(ctx, 200, {
-      available: false,
-      reason: '9119 未安装、未启用或未挂载 Kanban API',
-    })
-    return
-  }
-  if (probe.status < 200 || probe.status >= 300) {
-    sendKanbanUpstreamResponse(ctx, probe, dependencies.upstreamSession.jar)
-    return
-  }
-  let version: string | undefined
-  try {
-    const metadata = await dependencies.upstreamSession.request('/api/dashboard/plugins')
-    if (metadata.status >= 200 && metadata.status < 300) {
-      const manifests = parseJsonValue(metadata)
-      if (Array.isArray(manifests)) {
-        const manifest = manifests.find(entry => (
-          entry && typeof entry === 'object' && !Array.isArray(entry)
-          && (entry as JsonObject).name === 'kanban'
-        )) as JsonObject | undefined
-        if (typeof manifest?.version === 'string') version = manifest.version
-      }
-    }
-  } catch { /* The mounted API is authoritative; metadata is optional. */ }
-  json(ctx, 200, {
-    available: true,
-    version,
-  })
-}
-
-async function proxyKanban(
-  ctx: Koa.Context,
-  dependencies: RouteDependencies,
-  path: string | (() => string),
-  options: {
-    allowedQuery?: readonly string[]
-    body?: 'required' | 'optional'
-    boardRequired?: boolean
-    requestBody?: () => JsonObject
-    sanitizeTaskDetail?: boolean
-  } = {},
-): Promise<void> {
-  if (ctx.method === 'GET' || ctx.method === 'HEAD') dependencies.auth.require(ctx)
-  else dependencies.auth.requireAdmin(ctx)
-  const resolvedPath = typeof path === 'function' ? path() : path
-  const requestBody = options.requestBody?.() ?? (options.body === 'required' ? body(ctx)
-    : options.body === 'optional' ? optionalBody(ctx) : undefined)
-  const search = searchFrom(ctx, options.allowedQuery ?? [])
-  if (options.boardRequired) {
-    const boardValues = search.getAll('board')
-    const board = boardValues[0]?.trim() ?? ''
-    if (boardValues.length === 0 || !board) {
-      throw new HttpError(400, 'Kanban board is required', 'kanban_board_required')
-    }
-    if (boardValues.length !== 1) {
-      throw new HttpError(400, 'Kanban board must be provided exactly once', 'invalid_kanban_board')
-    }
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(board)) {
-      throw new HttpError(400, 'Kanban board is invalid', 'invalid_kanban_board')
-    }
-    search.set('board', board)
-  }
-  const upstreamPath = `${KANBAN_UPSTREAM_PREFIX}${resolvedPath}`
-  if (options.sanitizeTaskDetail) {
-    await withJar(ctx, async (jar) => {
-      const response = await dependencies.upstream.request(upstreamPath, jar, {
-        method: ctx.method,
-        search,
-        body: requestBody,
-      })
-      if (response.status < 200 || response.status >= 300) {
-        sendKanbanUpstreamResponse(ctx, response, jar)
-        return
-      }
-      const payload = parseJson(response)
-      if (Object.prototype.hasOwnProperty.call(payload, 'attachments')) payload.attachments = []
-      json(ctx, response.status, payload)
-    })
-    return
-  }
-  await withJar(ctx, async (jar) => {
-    const response = await dependencies.upstream.request(upstreamPath, jar, {
-      method: ctx.method,
-      search,
-      body: requestBody,
-    })
-    sendKanbanUpstreamResponse(ctx, response, jar)
-  })
-}
-
-function kanbanBoardCreateBody(ctx: Koa.Context): JsonObject {
-  const input = body(ctx)
-  const output: JsonObject = {}
-  for (const key of ['slug', 'name', 'description']) {
-    if (Object.prototype.hasOwnProperty.call(input, key)) output[key] = input[key]
-  }
-  output.switch = false
-  return output
-}
-
-function kanbanCommentBody(ctx: Koa.Context, dependencies: RouteDependencies): JsonObject {
-  const input = body(ctx)
-  const admin = dependencies.auth.requireAdmin(ctx)
-  return {
-    body: input.body,
-    author: admin.username,
-  }
-}
-
-function registerKanbanRoutes(router: Router, dependencies: RouteDependencies, prefix: string): void {
-  router.get(`${prefix}/status`, async (ctx) => {
-    await kanbanAvailability(ctx, dependencies)
-  })
-  router.get(`${prefix}/boards`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, '/boards', {
-      allowedQuery: ['include_archived'],
-    })
-  })
-  router.post(`${prefix}/boards`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, '/boards', {
-      requestBody: () => kanbanBoardCreateBody(ctx),
-    })
-  })
-  router.get(`${prefix}/board`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, '/board', {
-      allowedQuery: ['board', 'include_archived'],
-      boardRequired: true,
-    })
-  })
-  router.get(`${prefix}/profiles`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, '/profiles')
-  })
-  router.get(`${prefix}/tasks/:taskID`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, () => {
-      const id = safeIdentifier(ctx.params.taskID, 'Kanban task ID')
-      return `/tasks/${encodeURIComponent(id)}`
-    }, {
-      allowedQuery: ['board', 'run_state_name', 'run_state_type'],
-      boardRequired: true,
-      sanitizeTaskDetail: true,
-    })
-  })
-  router.post(`${prefix}/tasks`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, '/tasks', {
-      allowedQuery: ['board'],
-      boardRequired: true,
-      body: 'required',
-    })
-  })
-  router.patch(`${prefix}/tasks/:taskID`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, () => {
-      const id = safeIdentifier(ctx.params.taskID, 'Kanban task ID')
-      return `/tasks/${encodeURIComponent(id)}`
-    }, {
-      allowedQuery: ['board'],
-      boardRequired: true,
-      body: 'required',
-    })
-  })
-  router.delete(`${prefix}/tasks/:taskID`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, () => {
-      const id = safeIdentifier(ctx.params.taskID, 'Kanban task ID')
-      return `/tasks/${encodeURIComponent(id)}`
-    }, {
-      allowedQuery: ['board'],
-      boardRequired: true,
-      body: 'optional',
-    })
-  })
-  router.post(`${prefix}/tasks/:taskID/comments`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, () => {
-      const id = safeIdentifier(ctx.params.taskID, 'Kanban task ID')
-      return `/tasks/${encodeURIComponent(id)}/comments`
-    }, {
-      allowedQuery: ['board'],
-      boardRequired: true,
-      requestBody: () => kanbanCommentBody(ctx, dependencies),
-    })
-  })
-  router.post(`${prefix}/dispatch`, async (ctx) => {
-    await proxyKanban(ctx, dependencies, '/dispatch', {
-      allowedQuery: ['board', 'dry_run', 'max'],
-      boardRequired: true,
-      body: 'optional',
-    })
   })
 }
 
@@ -1205,8 +997,6 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     json(ctx, 200, saveHostTools(dependencies.config.home, body(ctx)))
   })
 
-  registerKanbanRoutes(router, dependencies, '/api/app/kanban')
-  registerKanbanRoutes(router, dependencies, '/api/kanban/v1')
 
   router.get('/healthz', (ctx) => {
     ctx.set('Cache-Control', 'no-store')
@@ -1803,43 +1593,16 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     bestEffortRemoveUserPush(ctx, dependencies, userID)
     json(ctx, 200, { ok: true })
   })
-  router.put('/api/app/admin/upstream-credentials', async (ctx) => {
-    const admin = dependencies.auth.requireAdmin(ctx)
-    const request = body(ctx)
-    const username = typeof request.username === 'string' ? request.username : ''
-    const password = typeof request.password === 'string' ? request.password : ''
-    await dependencies.upstreamSession.verify({ username, password })
-    dependencies.auth.setUpstreamCredentials(admin, { username, password })
-    json(ctx, 200, { ok: true })
-  })
   router.get('/api/app/admin/upstream-connection', async (ctx) => {
     dependencies.auth.requireAdmin(ctx)
-    let ready = false
-    let error: string | undefined
-    try {
-      await dependencies.upstreamSession.ensure()
-      ready = true
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : '9119 不可用'
-    }
+    // Embedded Hermes: readiness is the installed kernel, not a remote 9119 session.
+    let ready = true, error: string | undefined
+    try { const paths = kernelPaths(); requireKernel(paths, paths.worker) } catch (cause) { ready = false; error = cause instanceof Error ? cause.message : '内置 Hermes 内核不可用' }
     json(ctx, 200, {
-      ...dependencies.upstreamSession.connectionInfo(),
-      ready,
-      error,
+      endpoint: 'embedded', authMode: 'embedded', networkScope: 'local', ready, error, lastVerifiedAt: Date.now(),
+      version: '0.23.0', hermesHome: dependencies.hermes?.home,
       webNetworkScope: isLoopbackHost(dependencies.config.host) ? 'local' : 'network',
     })
-  })
-  router.get('/api/app/admin/hermes-bridge', async ctx => {
-    dependencies.auth.requireAdmin(ctx)
-    json(ctx,200,await dependencies.hermesBridge.status())
-  })
-  router.post('/api/app/admin/hermes-bridge/install', async ctx => {
-    dependencies.auth.requireAdmin(ctx)
-    json(ctx,200,await dependencies.hermesBridge.install(body(ctx)))
-  })
-  router.post('/api/app/admin/hermes-bridge/restart', async ctx => {
-    dependencies.auth.requireAdmin(ctx)
-    json(ctx,200,await dependencies.hermesBridge.restartDashboard(body(ctx)))
   })
   router.get('/api/app/admin/model-services', async (ctx) => {
     await proxyAdminFeature(ctx, dependencies, '/api/providers/custom-endpoints', {
@@ -2419,12 +2182,6 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       method: ctx.method,
       search: new URLSearchParams(ctx.querystring),
       body: ['GET', 'HEAD'].includes(ctx.method) ? undefined : optionalBody(ctx),
-      // Hermes binds WebSocket tickets to the request address. The relay's
-      // upstream connection originates from 15300 itself, so forwarding the
-      // phone's address here would make 9119 reject the ticket during Upgrade.
-      clientAddress: upstreamPath === '/api/auth/ws-ticket'
-        ? undefined : ctx.req.socket.remoteAddress,
-
     })
     sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
   })

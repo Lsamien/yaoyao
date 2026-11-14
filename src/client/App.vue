@@ -7,7 +7,6 @@ import PasswordChangeView from '@/views/PasswordChangeView.vue'
 import { useUnreadStore } from '@/stores/unread'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
-import { useKanbanStore } from '@/stores/kanban'
 import { useThemeStore } from '@/stores/theme'
 import AgentIdentityFixture from '@/components/app/AgentIdentityFixture.vue'
 
@@ -18,7 +17,6 @@ watch(()=>auth.isAuthenticated ? `${auth.serverIdentity?.serverId ?? location.or
  else { unread.reset();void window.yaoyaoDesktop?.unreadState?.(null).catch(()=>{}) }
 },{immediate:true})
 const chat = useChatStore()
-const kanban = useKanbanStore()
 const theme = useThemeStore()
 const route = useRoute()
 const router = useRouter()
@@ -34,8 +32,6 @@ const pageTitle = computed(() => {
     ? '历史记录'
     : route.path.startsWith('/conversations')
     ? '聊天'
-    : route.path.startsWith('/kanban')
-      ? kanban.selectedBoard?.name || kanban.selectedBoardSlug || '看板'
     : route.path.startsWith('/files')
       ? '文件库'
       : chat.activeSession?.title || '对话'

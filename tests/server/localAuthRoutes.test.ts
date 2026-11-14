@@ -37,7 +37,7 @@ describe('15300 local authentication routes', () => {
       host: '127.0.0.1', port: 15300, upstream: new URL('http://127.0.0.1:9119'),
       allowedHosts: new Set(), home, mediaRoot: home, attachmentsRoot: home, imagesRoot: home,
       mediaOwner: 'tester', allowInsecureLan: false, insecureLan: false, production: true,
-      superviseDashboard: true, upstreamUsername: 'service', upstreamPassword: 'fixture-password',
+      upstreamUsername: 'service', upstreamPassword: 'fixture-password',
     }
     let rejected = true, modelRequests = 0
     const runtime = createApplication({ config, fetchImpl: async (input, init) => {
@@ -83,7 +83,7 @@ describe('15300 local authentication routes', () => {
     const config: ServerConfig = {
       host: '127.0.0.1', port: 15300, upstream: new URL('http://127.0.0.1:9119'),
       allowedHosts: new Set(), home, mediaRoot: home, attachmentsRoot: home, imagesRoot: home,
-      mediaOwner: 'tester', allowInsecureLan: false, insecureLan: false, production: false, superviseDashboard: true,
+      mediaOwner: 'tester', allowInsecureLan: false, insecureLan: false, production: false,
     }
     const runtime = createApplication({ config, fetchImpl: (async (input, init) => {
       const path = new URL(String(input)).pathname
@@ -127,7 +127,7 @@ describe('15300 local authentication routes', () => {
       host: '127.0.0.1', port: 15300, upstream: new URL('http://127.0.0.1:9119'),
       allowedHosts: new Set(), home, mediaRoot: home, attachmentsRoot: home, imagesRoot: home,
       mediaOwner: 'tester', allowInsecureLan: false, insecureLan: false, production: false,
-      superviseDashboard: true,
+     
       upstreamUsername: 'service', upstreamPassword: 'fixture-password',
     }
     let wsTicketForwardedFor: string | null | undefined
@@ -167,11 +167,10 @@ describe('15300 local authentication routes', () => {
     const connection = await agent.get('/api/app/admin/upstream-connection')
       .set('Host', '127.0.0.1:15300').expect(200)
     expect(connection.body).toMatchObject({
-      endpoint: 'http://127.0.0.1:9119',
-      authMode: 'password',
+      endpoint: 'embedded',
+      authMode: 'embedded',
       networkScope: 'local',
       webNetworkScope: 'local',
-      ready: true,
     })
     expect(connection.body.lastVerifiedAt).toEqual(expect.any(Number))
 

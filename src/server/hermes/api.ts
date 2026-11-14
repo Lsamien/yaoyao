@@ -1,5 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { HttpError } from '../errors.js'
 import type { HermesServicePool, HermesScope } from './service.js'
 import type { EmbeddedSessions } from './sessions.js'
@@ -23,7 +24,20 @@ export class HermesApi {
   /** Optional hooks for paths owned by other embedded components. */
   memoryExtract?: (profile: string, prompt: string) => Promise<unknown>
 
-  constructor(readonly pool: HermesServicePool, readonly sessions: EmbeddedSessions, readonly version = '0.23.0') {}
+  /** Home the embedded copy was imported from; old transcripts still reference files under it. */
+  private readonly legacyHome?: string
+
+  constructor(readonly pool: HermesServicePool, readonly sessions: EmbeddedSessions, readonly version = '0.23.0') {
+    const manifest = join(pool.systemHome, '.import.json')
+    try { if (existsSync(manifest)) this.legacyHome = String(JSON.parse(readFileSync(manifest, 'utf8')).source || '') || undefined } catch { /* no remap */ }
+  }
+
+  /** `~/.hermes/cache/x.png` in an imported message → the same file in the embedded copy. */
+  remapLegacyPath(path: string): string {
+    const legacy = this.legacyHome
+    if (!legacy || !path.startsWith(legacy + sep)) return path
+    return join(this.pool.systemHome, path.slice(legacy.length + 1))
+  }
 
   async handle(request: LocalRequest): Promise<LocalResponse> {
     const method = request.method.toUpperCase()
@@ -71,6 +85,7 @@ export class HermesApi {
   private async native(method: string, path: string, search: URLSearchParams, body: unknown, maxBytes = 64 * 1024 * 1024): Promise<LocalResponse> {
     const scope = this.scopeFor(path, search)
     const query = Object.fromEntries(search.entries())
+    if ((path.startsWith('/api/files') || path.startsWith('/api/fs/')) && typeof query.path === 'string') query.path = this.remapLegacyPath(query.path)
     const result = await this.pool.call<{ status: number; json?: unknown; text?: string; media_type?: string; file?: string; filename?: string; headers?: Record<string, string> }>(
       scope, 'dashboard.call', { method, path, query, ...(body === undefined ? {} : { body }) }, { timeoutMs: 120_000 })
     const deleted = method === 'DELETE' ? SESSION_PATH.exec(path)?.[1] : undefined

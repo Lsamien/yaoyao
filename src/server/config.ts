@@ -46,9 +46,7 @@ export interface ServerConfig {
   allowInsecureLan: boolean
   insecureLan: boolean
   production: boolean
-  superviseDashboard?: boolean
   localVmHost?: 'server' | 'runner'
-  hermesBridgeMount?: { home: string; python: string }
   composeDesktops?: ComposeDesktop[]
   releaseSource?: string
   releaseRoot?: string
@@ -161,8 +159,9 @@ export function loadServerConfig(
   const upstream = parseUpstream(env.HERMES_YAOYAO_UPSTREAM)
   const home = resolveDataHome(env.YAOYAO_HOME || env.HERMES_YAOYAO_HOME, { preserveActiveUpdate: true })
   const mediaRoot = resolve(env.HERMES_YAOYAO_MEDIA_ROOT?.trim() || `${homedir()}/Agents`)
-  const attachmentsRoot = resolve(`${homedir()}/.hermes/attachments`)
-  const imagesRoot = resolve(`${homedir()}/.hermes/images`)
+  // Embedded Hermes keeps generated attachments and images inside the Yaoyao data directory.
+  const attachmentsRoot = resolve(home, 'hermes', 'attachments')
+  const imagesRoot = resolve(home, 'hermes', 'images')
   const tlsCert = env.HERMES_YAOYAO_TLS_CERT?.trim() || undefined
   const tlsKey = env.HERMES_YAOYAO_TLS_KEY?.trim() || undefined
   if (Boolean(tlsCert) !== Boolean(tlsKey)) {
@@ -170,17 +169,8 @@ export function loadServerConfig(
   }
   const allowInsecureLan = flag(env.HERMES_YAOYAO_ALLOW_INSECURE_LAN)
   const production = env.NODE_ENV === 'production'
-  const superviseDashboard = flag(env.HERMES_YAOYAO_SUPERVISE_DASHBOARD)
   const localVmHost = env.HERMES_YAOYAO_LOCAL_VM_HOST?.trim() || 'server'
   if(localVmHost!=='server'&&localVmHost!=='runner')throw new Error('HERMES_YAOYAO_LOCAL_VM_HOST must be server or runner')
-  let hermesBridgeMount: ServerConfig['hermesBridgeMount']
-  if(flag(env.HERMES_YAOYAO_BRIDGE_MOUNTED)){
-    const home=env.HERMES_YAOYAO_BRIDGE_HOME?.trim()??''
-    const python=env.HERMES_YAOYAO_BRIDGE_PYTHON?.trim()||'/usr/bin/python3'
-    if(!home||!isAbsolute(home)||/[\0\r\n]/.test(home))throw new Error('HERMES_YAOYAO_BRIDGE_HOME must be an absolute mounted Hermes directory')
-    if(!isAbsolute(python)||/[\0\r\n]/.test(python))throw new Error('HERMES_YAOYAO_BRIDGE_PYTHON must be an absolute container Python path')
-    hermesBridgeMount={home:resolve(home),python}
-  }
   const chatCacheMode = parseChatCacheMode(env.HERMES_YAOYAO_CHAT_CACHE_MODE)
   const releaseSource = parseReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE)
   const releaseRoot = resolve(env.HERMES_YAOYAO_RELEASE_ROOT?.trim() || `${homedir()}/.local/share/hermes-yaoyao`)
@@ -221,9 +211,7 @@ export function loadServerConfig(
     allowInsecureLan,
     insecureLan,
     production,
-    superviseDashboard,
     localVmHost,
-    ...(hermesBridgeMount?{hermesBridgeMount}:{}),
     composeDesktops:parseComposeDesktops(env.HERMES_YAOYAO_COMPOSE_DESKTOPS),
     chatCacheMode,
     releaseSource,

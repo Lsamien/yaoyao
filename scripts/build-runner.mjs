@@ -6,8 +6,7 @@ import {browserRuntimeExternals,bundleBrowserRuntime} from './bundle-browser-run
 
 export async function buildRunner(directory = resolve(import.meta.dirname, '../.runner-build')) {
   await mkdir(directory, { recursive: true })
-  await cp(resolve(import.meta.dirname,'../integrations/hermes-bots-bridge'),resolve(directory,'hermes-bots-bridge'),{recursive:true,filter:source=>!source.includes('__pycache__')&&!source.endsWith('.pyc')&&!source.includes('/tests')})
-  await copyFile(resolve(import.meta.dirname,'install-hermes-bridge.py'),resolve(directory,'install-hermes-bridge.py'))
+  await copyFile(resolve(import.meta.dirname,'../src/runner/worker/file_transfer.py'),resolve(directory,'file_transfer.py'))
   await copyFile(resolve(import.meta.dirname,'../src/runner/worker/hermes_worker.py'),resolve(directory,'hermes_worker.py'))
   await copyFile(resolve(import.meta.dirname,'../src/runner/worker/profile_skills.py'),resolve(directory,'profile_skills.py'))
   await copyFile(resolve(import.meta.dirname,'../deploy/computer/skill_bundle.py'),resolve(directory,'skill_bundle.py'))

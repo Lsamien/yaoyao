@@ -76,13 +76,9 @@ import {LocalVmService} from './localVm.js'
 import {SharedComputers} from './sharedComputers.js'
 import {ComputerControlService} from './computerControls.js'
 import { RunnerHub } from './runnerHub.js'
-import { HermesBridgeManager } from './hermesBridge.js'
-import type { DashboardController } from './dashboardController.js'
 
 export interface ApplicationOptions {
   deferBackground?: boolean
-  dashboardSupervisor?: DashboardController
-  hermesBridge?: HermesBridgeManager
   config?: ServerConfig
   fetchImpl?: typeof fetch
   grokFetch?:typeof fetch
@@ -106,7 +102,6 @@ export interface ApplicationOptions {
 
 export interface ApplicationRuntime {
   credentialVault: CredentialVaultCoordinator
-  hermesBridge: HermesBridgeManager
   runners: RunnerHub
   workspace: WorkspaceStore
   workspaceRuntime: WorkspaceRuntime
@@ -289,13 +284,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   executionSettings.testProxy=()=>runners.testNetworks()
   executionSettings.nodeStatus=()=>runners.networkStatus()
   executionSettings.activeTurns=()=>workspaceRuntime.activeExecutionTurns()
-  let pendingDashboardMutations=0
-  const hermesBridge=options.hermesBridge??new HermesBridgeManager(config,upstreamSession,{
-    dashboard:options.dashboardSupervisor,
-    isIdle:()=>workspaceRuntime.idleForUpdate&&runners.idleForUpdate&&realtime.broker.idleForUpdate&&desktopEnvironments.idleForUpdate,
-    isRestartIdle:()=>pendingDashboardMutations===0,
-  })
-  workspaceRuntime.assertCanSubmit=()=>hermesBridge.assertDashboardAvailable()
   const workspaceMemory = new WorkspaceMemorySynthesis(workspaceRuntime)
   const openVikingSessionSync = new OpenVikingSessionSync(workspace, openVikingService, owner => auth.isUserActive(owner))
   let backgroundStarted = false, closed = false
@@ -323,7 +311,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   workspaceRuntime.inspector=workspaceInspector
   const workspaceRoutines=new WorkspaceRoutines(workspace,auth,workspaceNodes,workspaceRuntime)
   workspaceRuntime.routineTools=new WorkspaceRoutineTools(workspaceRoutines,workspace,workspaceNodes,workspaceRuntime)
-  workspaceRoutines.paused=()=>hermesBridge.dashboardRestarting
   const workspacePlugins=new WorkspacePlugins(workspace,workspaceNodes,auth,workspaceRuntime,config.home,options.pluginFetch)
   workspaceRuntime.plugins=workspacePlugins
   workspaceRuntime.retireHelper=(owner,helper)=>runners.retireHelper(owner,helper)
@@ -344,7 +331,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     chatCache?.store.ownsSession(owner, profile, sessionID) ?? false)
   if (upstream.embedded) realtime.gateway = hermes.gateway
   realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
-  realtime.broker.assertCanCommand=()=>hermesBridge.assertDashboardAvailable()
   realtime.transcriptsAvailable = chatCache.store.transcripts.enabled
   realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
     chatCache?.observe(owner, profile, storedId, frame)
@@ -429,16 +415,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     await next()
   })
   app.use(jsonCompression)
-  app.use(async (ctx,next)=>{
-    // Count admitted requests before async parsing/authorization. A restart must
-    // not race a request which has not yet reached the runtime's task counters.
-    const mutation=isMutation(ctx.method)&&!/^\/api\/runner\/.*\/(poll|heartbeat)$/.test(ctx.path)
-      &&ctx.path!=='/api/app/admin/hermes-bridge/restart'
-    if(!mutation){await next();return}
-    hermesBridge.assertDashboardAvailable()
-    pendingDashboardMutations++
-    try{await next()}finally{pendingDashboardMutations--}
-  })
   app.use(runners.middleware())
   app.use(desktopHosts.middleware())
   app.use(async (ctx, next) => {
@@ -575,7 +551,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     openVikingService,
     openVikingSessionSync,
     allowedHostsConfiguration,
-    hermesBridge,
     chatCache,
   })
   app.use(router.routes())
@@ -593,7 +568,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   return {
     credentialVault,
     runners,
-    hermesBridge,
     localVm,
     workspace,
     workspaceRuntime,

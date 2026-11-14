@@ -20,7 +20,7 @@ const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspa
 const BotSettingsDialog = defineAsyncComponent(() => import('@/components/workspace/BotSettingsDialog.vue'))
 
 type NavItem = {
-  key: 'chat' | 'history' | 'groups' | 'kanban' | 'files'
+  key: 'chat' | 'history' | 'groups' | 'files'
   label: string
   path: string
   icon: 'chat' | 'history' | 'groups' | 'board' | 'files'
@@ -168,7 +168,6 @@ const navItems: NavItem[] = [
   { key: 'chat', label: '聊天', path: '/chat', icon: 'chat' },
   { key: 'history', label: '历史记录', path: '/history', icon: 'history' },
   { key: 'groups', label: '聊天', path: '/conversations', icon: 'groups' },
-  { key: 'kanban', label: '看板', path: '/kanban', icon: 'board' },
   { key: 'files', label: '文件库', path: '/files', icon: 'files' },
 ]
 
@@ -187,11 +186,10 @@ const contextHeading = computed(() => ({
   chat: '聊天',
   history: '历史记录',
   groups: '聊天列表',
-  kanban: '看板列表',
   files: '历史记录',
 })[activeNav.value.key])
 
-const hasPrimaryAction = computed(() => ['chat', 'groups', 'kanban', 'files'].includes(activeNav.value.key))
+const hasPrimaryAction = computed(() => ['chat', 'groups', 'files'].includes(activeNav.value.key))
 
 async function navigate(path: string) {
   mobileDrawerOpen.value = false
@@ -398,7 +396,7 @@ function toggleSidebar() {
 }
 
 function navIcon(key: NavItem['key']): 'chat' | 'history' | 'folder' | 'people' | 'board' {
-  return key === 'groups' ? 'people' : key === 'kanban' ? 'board' : key === 'files' ? 'folder' : key === 'history' ? 'history' : 'chat'
+  return key === 'groups' ? 'people' : key === 'files' ? 'folder' : key === 'history' ? 'history' : 'chat'
 }
 
 async function openSidebarSearch(host: HTMLElement | null) {
@@ -531,7 +529,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
 
 
       <button
-        v-if="!applicationWorkspace && !['files', 'kanban'].includes(activeNav.key)"
+        v-if="!applicationWorkspace && activeNav.key !== 'files'"
         class="sidebar-search-trigger"
         :class="{ 'sidebar-search-trigger--searching': sidebarSearchOpen && !applicationWorkspace }"
         type="button"
@@ -640,7 +638,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
       </div>
 
       <button
-        v-if="!applicationWorkspace && !['files', 'kanban'].includes(activeNav.key)"
+        v-if="!applicationWorkspace && activeNav.key !== 'files'"
         class="sidebar-search-trigger"
         :class="{ 'sidebar-search-trigger--searching': sidebarSearchOpen && !applicationWorkspace }"
         type="button"

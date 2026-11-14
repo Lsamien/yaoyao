@@ -23,8 +23,7 @@ extraResources:
       - hermes_worker.py
       - profile_skills.py
       - skill_bundle.py
-      - hermes-bots-bridge/**/*
-      - install-hermes-bridge.py
+      - file_transfer.py
       - guest_proxy.py
       - release.json
       - build-info.json

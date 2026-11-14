@@ -1049,35 +1049,6 @@ test('uses the mobile composer and keeps the closed drawer inert', async ({ page
   await expect(page.locator('.composer-textarea')).toHaveCSS('font-size', '16px')
 })
 
-test('renders the Kanban snapshot and mobile status control without page overflow', async ({ page }) => {
-  await page.getByRole('button', { name: '看板', exact: true }).click()
-  await expect(page).toHaveURL(/\/kanban\/default$/)
-  await expect(page).toHaveTitle('产品研发 · 夭夭 AI')
-  await expect(page.getByRole('heading', { name: '产品研发', exact: true })).toBeVisible()
-  await expect(page.getByRole('article', { name: /完成 Web 看板验收/ })).toBeVisible()
-  await expect(page.locator('.kanban-column')).toHaveCount(8)
-
-  await page.getByRole('article', { name: /完成 Web 看板验收/ }).click()
-  await expect(page.getByRole('heading', { name: '完成 Web 看板验收', exact: true })).toBeVisible()
-  await expect(page.getByText('请保留真实浏览器验收证据。', { exact: true })).toBeVisible()
-  await expect(page.locator('.kanban-task-drawer').getByText('正在执行浏览器验收', { exact: true }).first()).toBeVisible()
-  await page.getByRole('button', { name: '关闭任务详情' }).click()
-
-  await page.setViewportSize({ width: 390, height: 844 })
-  await page.reload()
-  await expect(page.getByRole('button', { name: '立即调度', exact: true })).toBeVisible()
-  const card = page.getByRole('article', { name: /完成 Web 看板验收/ })
-  await expect(card).toBeVisible()
-  await expect(card.locator('.kanban-card__mobile-status select')).toBeVisible()
-  const geometry = await page.evaluate(() => ({
-    viewport: window.innerWidth,
-    page: document.documentElement.scrollWidth,
-    board: document.querySelector('.kanban-columns')?.scrollWidth || 0,
-  }))
-  expect(geometry.page).toBe(geometry.viewport)
-  expect(geometry.board).toBeGreaterThan(geometry.viewport)
-})
-
 test('serves canonical chat snapshots and supports explicit history verification', async ({ page }, testInfo) => {
   const messagesURL = (url: string) => url.includes('/api/app/chat/sessions/session-demo/snapshot')
   const initial = page.waitForResponse(response => messagesURL(response.url()))

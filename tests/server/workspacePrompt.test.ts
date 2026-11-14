@@ -135,7 +135,7 @@ describe('Bot prompt composition', () => {
     expect(text).toContain('yaoyao_call')
     expect(text).toContain('按 service（服务名）或 query')
     expect(text).toContain('不要在拿到参数后重复搜索')
-    expect(text).toContain('普通 Bot 对话不是 Hermes 看板任务')
+    expect(text).not.toContain('看板')
     expect(text).toContain('不重复相同的无效调用')
     expect(text).toContain('yaoyao_plugin_')
     expect(text).not.toContain('工具名以 plugin_ 开头')

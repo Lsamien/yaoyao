@@ -34,15 +34,11 @@ export async function deleteUser(id: string): Promise<void> {
   await apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE', body: {} })
 }
 
-export async function setUpstreamCredentials(username: string, password: string): Promise<void> {
-  await apiRequest('/api/app/admin/upstream-credentials', {
-    method: 'PUT', body: { username, password } as unknown as JsonValue,
-  })
-}
-
 export interface UpstreamConnectionStatus {
   endpoint: string
-  authMode: 'unknown' | 'loopback-token' | 'loopback-direct' | 'password'
+  authMode: 'embedded'
+  version?: string
+  hermesHome?: string
   networkScope: 'local' | 'network'
   webNetworkScope: 'local' | 'network'
   ready: boolean

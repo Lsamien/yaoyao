@@ -4,15 +4,12 @@ import send from 'koa-send'
 import serve from 'koa-static'
 import { createApplication, createNodeServer } from './app.js'
 import { loadServerConfig } from './config.js'
-import { DashboardSupervisor } from './dashboardSupervisor.js'
-import { isLocalAuthorizationTarget } from './loopbackAuthorization.js'
 import { acquireServiceInstance } from './serviceInstance.js'
 import { readReleaseManifest } from './releases.js'
 import { readBuildIdentity } from './buildIdentity.js'
 import { migrateDataHome } from '../../bin/lib/data-migration.mjs'
 import { legacyDataHome, resolveDataHome } from '../../bin/lib/data-home.mjs'
 import { spawn } from 'node:child_process'
-import { ServerDashboardController } from './dashboardController.js'
 import { DesktopActivation } from './desktopActivation.js'
 import { importLegacyHermes } from './hermes/import.js'
 
@@ -25,27 +22,22 @@ if (config.home === legacyDataHome() && process.platform === 'darwin') {
 }
 const instance = acquireServiceInstance(config.home, readReleaseManifest(resolve(process.cwd(), 'release.json')).webVersion, process.env.HERMES_YAOYAO_DESKTOP === '1', readBuildIdentity(process.cwd()))
 process.once('exit', () => instance.release())
+const retiredHermesVariables = ['HERMES_YAOYAO_UPSTREAM', 'HERMES_YAOYAO_UPSTREAM_USERNAME', 'HERMES_YAOYAO_UPSTREAM_PASSWORD', 'HERMES_YAOYAO_UPSTREAM_PASSWORD_FILE', 'HERMES_YAOYAO_SUPERVISE_DASHBOARD', 'HERMES_YAOYAO_BRIDGE_MOUNTED', 'HERMES_YAOYAO_BRIDGE_HOME', 'HERMES_YAOYAO_BRIDGE_PYTHON'].filter(name => process.env[name])
+if (retiredHermesVariables.length) console.warn(`Hermes 已内置在夭夭中，以下变量不再生效：${retiredHermesVariables.join('、')}`)
 // First start with the embedded kernel: copy an existing ~/.hermes (read-only) into <data>/hermes.
 const hermesImport = importLegacyHermes(config.home)
 if (hermesImport.status === 'imported') console.log(`已导入原 Hermes 数据（${hermesImport.source}，${hermesImport.files} 个文件）`)
 else if (hermesImport.status === 'failed') console.error(`原 Hermes 数据导入失败，内置 Hermes 将从空数据启动：${hermesImport.error}`)
-const dashboardSupervisor = config.superviseDashboard
-  && isLocalAuthorizationTarget(config.upstream) && config.upstream.hostname === '127.0.0.1'
-  && config.upstream.protocol === 'http:' && config.upstream.port === '9119'
-  ? new DashboardSupervisor({ managed: process.env.HERMES_YAOYAO_DESKTOP === '1' })
-  : undefined
-const dashboardController = new ServerDashboardController(config.upstream, dashboardSupervisor)
-const runtime = createApplication({config, dashboardSupervisor: dashboardController, deferBackground: true})
+const runtime = createApplication({config, deferBackground: true})
 const nodeRuntime = createNodeServer(runtime, {deferBackground:true})
 const desktopActivation = new DesktopActivation(config.home, process.env.HERMES_YAOYAO_DEFER_HERMES === '1', () => {
   nodeRuntime.startBackground()
-  dashboardSupervisor?.start()
 })
 let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).
 // The capability is loopback-only and never shared with the Web renderer.
 runtime.app.middleware.unshift(instance.middleware(shutdown, () => runtime.realtime.broker.idleForUpdate
-  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermesBridge.idleForUpdate, ctx=>runtime.desktopEnvironments.bridge(ctx), desktopActivation, ctx => {
+  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermes.gateway.idle, ctx=>runtime.desktopEnvironments.bridge(ctx), desktopActivation, ctx => {
     const user = runtime.auth.localDesktopSession(ctx)
     ctx.body = { user, setCookies: ctx.response.get('set-cookie') }
   }))
@@ -116,14 +108,11 @@ async function shutdown(): Promise<void> {
   if (closing) return
   closing = true
   instance.beginShutdown()
-  dashboardController.stop()
   try {
-    dashboardSupervisor?.stop()
     await closeFrontend()
     // Existing browser/SSE connections must not keep an explicitly stopped
     // background process alive after its workers and VMs have been cleaned up.
     await nodeRuntime.close(true)
-    await dashboardSupervisor?.stopOwned()
   } finally {
     instance.release()
     process.exitCode = 0

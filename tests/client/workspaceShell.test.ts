@@ -32,7 +32,6 @@ async function mountShell(start = '/chat') {
       { path: '/conversations/automations', component: { template: '<div></div>' } },
       { path: '/conversations', component: { template: '<div></div>' } },
       { path: '/groups', component: { template: '<div></div>' } },
-      { path: '/kanban', component: { template: '<div></div>' } },
       { path: '/files', component: { template: '<div></div>' } },
     ],
   })
@@ -76,18 +75,6 @@ afterEach(() => {
 })
 
 describe('Workspace shell account controls', () => {
-  it('includes the Kanban workspace in desktop and mobile navigation', async () => {
-    const wrapper = await mountShell()
-    expect(wrapper.get('.desktop-sidebar').text()).toContain('看板')
-    expect(wrapper.get('.desktop-sidebar').text()).toContain('历史记录')
-    expect(wrapper.get('.mobile-drawer').text()).toContain('看板')
-    await wrapper.get('.desktop-sidebar .sidebar-feature-nav button[title="看板"]').trigger('click')
-    await vi.waitFor(() => expect(wrapper.get('.sidebar-context__heading').text()).toContain('看板列表'))
-    expect(wrapper.get('.desktop-sidebar').find('button[aria-label="搜索"]').exists()).toBe(false)
-    expect(wrapper.get('.mobile-drawer').find('button[aria-label="搜索"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
   it('keeps Agent switching focused and opens settings from its independent button', async () => {
     const wrapper = await mountShell()
     const desktop = wrapper.get('.desktop-sidebar')
@@ -234,7 +221,7 @@ it('opens dedicated Bot settings from tools and routes the existing VM shortcut 
 })
 
 
-it.each(['/chat', '/history', '/conversations', '/kanban', '/files'])('opens an independent About dialog from the menu in %s', async path => {
+it.each(['/chat', '/history', '/conversations', '/files'])('opens an independent About dialog from the menu in %s', async path => {
   const wrapper = await mountShell(path)
   const trigger = wrapper.get<HTMLButtonElement>(path === '/conversations' ? '.desktop-sidebar .sidebar-account-switcher__main' : '.desktop-sidebar .sidebar-settings-trigger')
   await trigger.trigger('click')

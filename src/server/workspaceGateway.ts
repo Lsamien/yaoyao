@@ -93,11 +93,8 @@ export class WorkspaceNodes {
     let target = this.targets.get(key)
     if (!target) {
       if (node.transport === 'paired-web') throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
-      const credentials = this.open<{ username: string; password: string }>(node.secret)
-      const url = new URL(node.url),
-        client = new UpstreamClient(url)
-      target = { url, client, session: new UpstreamServiceSession(client, () => credentials) }
-      this.targets.set(key, target)
+      // Hermes is embedded in every Yaoyao server; nodes connect Yaoyao to Yaoyao, never to a remote 9119.
+      throw new HttpError(410, '直连远程 Hermes（9119）的节点已停用，请在对方夭夭上扫码配对。', 'remote_hermes_node_removed')
     }
     return target
   }

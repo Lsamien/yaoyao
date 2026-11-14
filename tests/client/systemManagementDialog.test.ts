@@ -12,7 +12,7 @@ vi.mock('@/api/admin', () => ({
     source: 'none', hosts: [], editableHosts: [], environmentHosts: [],
   })),
   getUpstreamConnectionStatus: vi.fn(async () => ({
-    endpoint: 'http://127.0.0.1:9119', authMode: 'loopback-token', networkScope: 'local',
+    endpoint: 'embedded', authMode: 'embedded', networkScope: 'local', version: '0.23.0', hermesHome: '/data/.yaoyao/hermes',
     webNetworkScope: 'network', ready: true, lastVerifiedAt: 1_788_273_600_000,
   })),
   listUsers: vi.fn(async () => []),
@@ -49,7 +49,7 @@ async function mountOpen(): Promise<VueWrapper> {
   const wrapper = mount(SystemManagementDialog, {
     attachTo: document.body,
     props: { open: false },
-    global: { stubs: { AppIcon: true, HermesBridgePanel: true } },
+    global: { stubs: { AppIcon: true } },
   })
   await wrapper.setProps({ open: true })
   await flushPromises()
@@ -84,31 +84,27 @@ afterEach(() => {
 })
 
 describe('System management APNs configuration', () => {
-  it('shows automatic loopback authentication and separate 15300/9119 network boundaries', async () => {
+  it('shows the embedded Hermes status without 9119 credentials or the bridge plugin', async () => {
     const wrapper = await mountOpen()
 
-    expect(document.body.textContent).toContain('本机 Session Token（自动）')
-    expect(document.body.textContent).toContain('http://127.0.0.1:9119')
+    expect(document.body.textContent).toContain('内置 Hermes 内核已就绪')
+    expect(document.body.textContent).toContain('/data/.yaoyao/hermes')
     expect(document.body.textContent).toContain('局域网可访问')
-    expect(document.body.textContent).toContain('9119 网络范围')
-    expect(document.body.textContent).toContain('仅本机')
+    expect(document.body.textContent).not.toContain('9119 网络范围')
     expect(input('upstream-username')).toBeNull()
-    expect(document.body.textContent).toContain('Token 不会在设置中显示')
+    expect(input('upstream-password')).toBeNull()
     wrapper.unmount()
   })
 
-  it('shows credential controls when 9119 requires password authentication', async () => {
+  it('explains a missing kernel installation', async () => {
     vi.mocked(getUpstreamConnectionStatus).mockResolvedValueOnce({
-      endpoint: 'https://hermes.example.test', authMode: 'password', networkScope: 'network',
-      webNetworkScope: 'network', ready: false, error: '9119 服务账号验证失败',
+      endpoint: 'embedded', authMode: 'embedded', networkScope: 'local',
+      webNetworkScope: 'network', ready: false, error: '内置 Hermes 内核尚未安装，请运行 yaoyao setup',
     })
     const wrapper = await mountOpen()
 
-    expect(document.body.textContent).toContain('用户名和密码')
-    expect(document.body.textContent).toContain('9119 服务账号验证失败')
-    expect(input('upstream-username')).not.toBeNull()
-    expect(input('upstream-password')).not.toBeNull()
-    expect(button('验证并保存')).not.toBeUndefined()
+    expect(document.body.textContent).toContain('内置 Hermes 内核尚未安装')
+    expect(button('验证并保存')).toBeUndefined()
     wrapper.unmount()
   })
 
