@@ -603,6 +603,7 @@ export class UpstreamServiceSession {
   get authorizationMode(): 'local' | 'account' { return this.#localAuthorization ? 'local' : 'account' }
 
   async webSocketCredential(): Promise<{ name: 'token' | 'ticket'; value: string }> {
+    if (this.client.embedded) throw new HttpError(410, '内置 Hermes 不提供 WebSocket 连接', 'embedded_hermes')
     await this.ensure()
     if (this.#localAuthorization) {
       if (!this.#jar.sessionToken) await this.#renewAuthorization(this.#generation)
@@ -632,10 +633,11 @@ export class UpstreamServiceSession {
 
   connectionInfo(): {
     endpoint: string
-    authMode: 'unknown' | 'loopback-token' | 'loopback-direct' | 'password'
+    authMode: 'unknown' | 'loopback-token' | 'loopback-direct' | 'password' | 'embedded'
     networkScope: 'local' | 'network'
     lastVerifiedAt?: number
   } {
+    if (this.client.embedded) return { endpoint: 'embedded', authMode: 'embedded', networkScope: 'local', lastVerifiedAt: this.#now() }
     return {
       endpoint: this.client.baseURL.origin,
       authMode: this.#authMode,
@@ -645,6 +647,7 @@ export class UpstreamServiceSession {
   }
 
   async ensure(): Promise<void> {
+    if (this.client.embedded) return
     this.#syncCredentials()
     if (this.#validatedUntil > this.#now()) return
     if (this.#ensureTask) return this.#ensureTask
@@ -718,6 +721,7 @@ export class UpstreamServiceSession {
   }
 
   async verify(credentials: UpstreamCredentials): Promise<void> {
+    if (this.client.embedded) throw new HttpError(410, '内置 Hermes 不使用上游账号', 'embedded_hermes')
     await this.#authenticate(credentials, new CookieJar(''))
   }
 

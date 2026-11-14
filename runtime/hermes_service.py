@@ -29,6 +29,8 @@ sys.stdout = sys.stderr  # Hermes helpers print; keep the wire clean.
 _wire_lock = threading.Lock()
 
 # Native sections compiled into Bot runs; client reads are always redacted.
+DASHBOARD_ROUTES = []  # (method, path template, handler) recorded by the FastAPI shim
+
 CONFIG_KEYS = ("model", "providers", "custom_providers", "fallback_model", "auxiliary", "credential_pool_strategies", "image_gen", "video_gen", "web")
 
 
@@ -44,12 +46,24 @@ def _install_fastapi_shim():
     if "fastapi" in sys.modules:
         return
     fa = types.ModuleType("fastapi")
+    fa.__path__ = []  # a package, so ``fastapi.responses`` style imports resolve to the stubs below
 
     class APIRouter:
+        """Records routes so ``dashboard.call`` can dispatch to the native handler functions."""
         def __init__(self, *a, **k):
             pass
 
-        def __getattr__(self, _name):
+        def _route(self, method):
+            def register(path, *a, **k):
+                def decorate(fn):
+                    DASHBOARD_ROUTES.append((method, path, fn))
+                    return fn
+                return decorate
+            return register
+
+        def __getattr__(self, name):
+            if name in ("get", "post", "put", "patch", "delete"):
+                return self._route(name.upper())
             return lambda *a, **k: (lambda fn: fn)
 
     class Request:
@@ -61,13 +75,37 @@ def _install_fastapi_shim():
     fa.HTTPException = ServiceError
     fa.APIRouter = APIRouter
     fa.Request = Request
-    for name in ("Depends", "Query", "Body", "Header", "WebSocket", "WebSocketDisconnect", "UploadFile", "File", "Form", "Path"):
+    def _default(default=None, *a, **k):
+        # Query(20, ge=0) keeps its default so handlers called directly see native defaults.
+        return None if default is Ellipsis else default
+
+    for name in ("Depends", "WebSocket", "WebSocketDisconnect", "UploadFile"):
         setattr(fa, name, _noop)
+    for name in ("Query", "Body", "Header", "File", "Form", "Path"):
+        setattr(fa, name, _default)
     sys.modules["fastapi"] = fa
     responses = types.ModuleType("fastapi.responses")
+    def _capture(self, *a, **k):
+        self.args, self.kwargs = a, k
+
     for name in ("JSONResponse", "FileResponse", "HTMLResponse", "Response", "StreamingResponse", "PlainTextResponse", "RedirectResponse"):
-        setattr(responses, name, type(name, (), {"__init__": lambda self, *a, **k: None}))
+        setattr(responses, name, type(name, (), {"__init__": _capture}))
     sys.modules["fastapi.responses"] = responses
+    fa.responses = responses
+    encoders = types.ModuleType("fastapi.encoders")
+
+    def jsonable_encoder(value, *a, **k):
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if isinstance(value, dict):
+            return {str(key): jsonable_encoder(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [jsonable_encoder(item) for item in value]
+        return value
+
+    encoders.jsonable_encoder = jsonable_encoder
+    sys.modules["fastapi.encoders"] = encoders
+    fa.encoders = encoders
     concurrency = types.ModuleType("fastapi.concurrency")
 
     async def run_in_threadpool(fn, *a, **k):
@@ -174,6 +212,12 @@ def _run(value):
 def _model(cls_name, args):
     from hermes_cli import web_models
     return getattr(web_models, cls_name)(**args)
+
+
+def op_dashboard_call(args):
+    """Native dashboard REST handler for this home (sessions, profiles, config, models, files)."""
+    import hermes_dashboard
+    return hermes_dashboard.call(DASHBOARD_ROUTES, ServiceError, args)
 
 
 # ── ops ────────────────────────────────────────────────────────────────────────────────────────

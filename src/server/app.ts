@@ -40,6 +40,7 @@ import {
   isExactOrigin,
 } from './security.js'
 import { UpstreamHttpError, UpstreamClient } from './upstream.js'
+import { createEmbeddedHermes, type EmbeddedHermes } from './hermes/embedded.js'
 import { UploadStore } from './uploads.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
@@ -91,6 +92,7 @@ export interface ApplicationOptions {
   auth?: LocalAuthStore
   pluginFetch?: typeof fetch
   upstreamSession?: UpstreamServiceSession
+  hermes?: EmbeddedHermes
   accountPairings?: AccountLoginPairingStore
   profileIdentities?: UpstreamProfileIdentityService
   push?: PushCoordinator
@@ -117,6 +119,7 @@ export interface ApplicationRuntime {
   updates: SystemUpdateManager
   auth: LocalAuthStore
   upstreamSession: UpstreamServiceSession
+  hermes: EmbeddedHermes
   accountPairings: AccountLoginPairingStore
   profileIdentities: UpstreamProfileIdentityService
   push: PushCoordinator
@@ -175,6 +178,10 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const csrf = new CsrfProtection(persistentCsrfSecret(config.home, options.csrfSecret), Boolean(config.tlsCert))
   const pairings = options.pairings ?? new NodePairingStore(config.home)
   const upstream = new UpstreamClient(config.upstream, options.fetchImpl, Boolean(config.tlsCert))
+  // Embedded Hermes: the kernel runs as child processes under <data>/hermes; nothing listens on 9119.
+  const hermes = options.hermes ?? createEmbeddedHermes(config.home)
+  // `fetchImpl` is a test-only fake Dashboard transport; production always answers in process.
+  if (!options.upstreamSession && !options.fetchImpl) upstream.local = hermes.api
   const uploads = options.uploads ?? new UploadStore(config.home)
   const updates = options.updates ?? new SystemUpdateManager(config)
   const auth = options.auth ?? new LocalAuthStore(config.home, Boolean(config.tlsCert))
@@ -549,6 +556,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     updates,
     auth,
     upstreamSession,
+    hermes,
     accountPairings,
     profileIdentities,
     push,
@@ -595,6 +603,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     updates,
     auth,
     upstreamSession,
+    hermes,
     accountPairings,
     profileIdentities,
     push,
@@ -625,6 +634,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       workspaceRuntime.close()
       workspaceNodes.close()
       upstream.close()
+      if (!options.hermes) hermes.close()
       realtime.close()
       chatPushJobs.stop()
       push.close()

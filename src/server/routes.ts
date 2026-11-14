@@ -61,6 +61,7 @@ import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
+  hermes?: import('./hermes/embedded.js').EmbeddedHermes
   hermesBridge: import('./hermesBridge.js').HermesBridgeManager
   onChatListChanged?: (owner:string,profile:string,id:string)=>void
   onServerIdentityChanged?: (identity: ServerIdentity) => void

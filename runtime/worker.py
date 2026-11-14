@@ -24,6 +24,8 @@ steer_ready = False
 startup_steers = []
 # Prefix of the per-turn application state Yaovi renders (src/server/workspacePrompt.ts).
 TURN_CONTEXT_SENTINEL = "[[YAOVI_TURN_CONTEXT_V1]]"
+# Control-plane RPCs whose replies are JSON values, never model-facing tool output.
+CONTROL_TOOLS = ("yaovi_clarify", "yaovi_native_authorize", "yaovi_native_check")
 
 
 def emit(kind, **payload):
@@ -46,8 +48,15 @@ def dispatch(name, args, **metadata):
         value = reply.get() if persistent_waits else reply.get(timeout=600)
         if "error" in value:
             return json.dumps({"error": value["error"], "isError": True})
+        result = value.get("result")
+        if name not in CONTROL_TOOLS:
+            # Yaoyao normalizes application tool results (text, or Hermes' native multimodal envelope).
+            if isinstance(result, dict) and result.get("_multimodal") is True:
+                return result
+            if isinstance(result, str):
+                return result
         from workspace_media import computer_result
-        return computer_result(name, value.get("result"))
+        return computer_result(name, result)
     finally:
         with lock:
             pending.pop(call_id, None)
@@ -303,7 +312,7 @@ def main():
         base_url=runtime.get("base_url"), api_key=runtime.get("api_key"),
         api_mode=runtime.get("api_mode"), credential_pool=runtime.get("credential_pool"),
         fallback_model=config.get("fallback_model") or None,
-        session_id=session, session_db=db, platform="yaovi",
+        session_id=session, session_db=db, platform=str(request.get("platform") or "yaovi"),
         **({'cwd': host_cwd} if host_cwd else {}),
         max_iterations=config["agent"]["max_iterations"],
         reasoning_config=(None if route.get("reasoningEffort") in (None, "default")
@@ -318,6 +327,8 @@ def main():
         tool_progress_callback=lambda kind, name=None, preview=None, args=None, **kw: emit("kernel.event", name=kind, value={"tool":name,"preview":preview,"args":args,**kw}),
         clarify_callback=clarify,
     )
+    # Tag tool progress with the model's call id so the host can pair started/completed events.
+    agent._yaovi_embedded = True
     if request.get('reportOnlyReview') is True:
         # The Host admitted only the structured decision and session attachment
         # reader. Native skill,

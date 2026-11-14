@@ -14,6 +14,7 @@ import { legacyDataHome, resolveDataHome } from '../../bin/lib/data-home.mjs'
 import { spawn } from 'node:child_process'
 import { ServerDashboardController } from './dashboardController.js'
 import { DesktopActivation } from './desktopActivation.js'
+import { importLegacyHermes } from './hermes/import.js'
 
 migrateDataHome(resolveDataHome(process.env.YAOYAO_HOME || process.env.HERMES_YAOYAO_HOME, { preserveActiveUpdate: true }))
 const config = loadServerConfig()
@@ -24,6 +25,10 @@ if (config.home === legacyDataHome() && process.platform === 'darwin') {
 }
 const instance = acquireServiceInstance(config.home, readReleaseManifest(resolve(process.cwd(), 'release.json')).webVersion, process.env.HERMES_YAOYAO_DESKTOP === '1', readBuildIdentity(process.cwd()))
 process.once('exit', () => instance.release())
+// First start with the embedded kernel: copy an existing ~/.hermes (read-only) into <data>/hermes.
+const hermesImport = importLegacyHermes(config.home)
+if (hermesImport.status === 'imported') console.log(`已导入原 Hermes 数据（${hermesImport.source}，${hermesImport.files} 个文件）`)
+else if (hermesImport.status === 'failed') console.error(`原 Hermes 数据导入失败，内置 Hermes 将从空数据启动：${hermesImport.error}`)
 const dashboardSupervisor = config.superviseDashboard
   && isLocalAuthorizationTarget(config.upstream) && config.upstream.hostname === '127.0.0.1'
   && config.upstream.protocol === 'http:' && config.upstream.port === '9119'

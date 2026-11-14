@@ -12,7 +12,9 @@ import { kernelEnv, kernelPaths, requireKernel } from './paths.js'
  * The system home is `<data>/hermes`; a Bot home is `<data>/bots/<agentId>/runtime` and reads the
  * system home as its Hermes profile parent (config, .env and auth.json read-through).
  */
-export type HermesScope = 'system' | { botId: string }
+/** `system` is the default profile; named profiles live in `<system>/profiles/<name>` (native layout). */
+export type HermesScope = 'system' | { profile: string } | { botId: string; profile?: string }
+const PROFILE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 export interface HermesServiceOptions { env?: NodeJS.ProcessEnv; idleMs?: number }
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
 type Proc = { child: ChildProcessWithoutNullStreams; ready: Promise<void>; pending: Map<string, Pending>; idle?: ReturnType<typeof setTimeout>; holds: number }
@@ -31,13 +33,25 @@ export class HermesServicePool {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(botId)) throw new HttpError(400, 'Bot 标识无效', 'invalid_bot')
     return join(this.dataHome, 'bots', botId, 'runtime')
   }
-  home(scope: HermesScope) { return scope === 'system' ? this.systemHome : this.botHome(scope.botId) }
+  profileHome(profile = 'default') {
+    if (profile === 'default') return this.systemHome
+    if (!PROFILE.test(profile)) throw new HttpError(400, 'Profile 名称无效', 'invalid_profile')
+    return join(this.systemHome, 'profiles', profile)
+  }
+  home(scope: HermesScope) {
+    if (scope === 'system') return this.systemHome
+    return 'botId' in scope ? this.botHome(scope.botId) : this.profileHome(scope.profile)
+  }
+  /** Profile parent read through for config, .env and auth.json; profiles use Hermes' native layout. */
+  parent(scope: HermesScope): string | undefined {
+    return scope !== 'system' && 'botId' in scope ? this.profileHome(scope.profile) : undefined
+  }
 
   /** Call one service op. `hold` keeps the process alive (pending OAuth sessions live in its memory). */
   async call<T = any>(scope: HermesScope, op: string, args: Record<string, unknown> = {}, opts: HermesCallOptions = {}): Promise<T> {
     opts.signal?.throwIfAborted()
     const home = this.home(scope)
-    const proc = this.start(home)
+    const proc = this.start(home, this.parent(scope))
     await proc.ready
     if (proc.idle) clearTimeout(proc.idle)
     if (opts.hold) proc.holds++
@@ -80,13 +94,13 @@ export class HermesServicePool {
     proc.idle.unref?.()
   }
 
-  private start(home: string): Proc {
+  private start(home: string, parent?: string): Proc {
     const existing = this.procs.get(home)
     if (existing && existing.child.exitCode === null && !existing.child.killed) return existing
     const paths = kernelPaths(this.env)
     requireKernel(paths, paths.service)
     mkdirSync(home, { recursive: true, mode: 0o700 })
-    const env = kernelEnv(home, this.env, this.systemHome)
+    const env = kernelEnv(home, this.env, parent)
     const child = spawn(paths.python, ['-u', paths.service], { cwd: dirname(paths.service), env, stdio: ['pipe', 'pipe', 'pipe'] })
     const pending = new Map<string, Pending>()
     let ready!: () => void, failed!: (e: Error) => void
