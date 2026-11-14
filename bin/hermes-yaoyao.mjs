@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { normalizeReleaseSource } from './lib/release-source.mjs'
 import { resolveDataHome } from './lib/data-home.mjs'
 import { migrateDataHome } from './lib/data-migration.mjs'
+import { prepareKernel, verifyKernel } from './lib/kernel-setup.mjs'
 
 const label = 'com.samien.hermes-yaoyao'
 const sourceProjectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -239,7 +240,9 @@ async function main() {
     if (command === 'uninstall') return uninstall()
   }
   if (group === 'uploads' && command === 'prune') return pruneUploads(args)
-  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
+  if (group === 'setup') { await prepareKernel({ root: serviceRoot, force: command === '--force' }); process.stdout.write('内置 Hermes 内核已就绪\n'); return }
+  if (group === 'doctor') { verifyKernel({ root: serviceRoot }); return }
+  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao setup [--force]   准备内置 Hermes 内核\n  yaoyao doctor            检查内置 Hermes 内核\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
 }
 
 export function isMainModule(entry = process.argv[1]) {

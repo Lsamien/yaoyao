@@ -33,3 +33,10 @@ build-info.json
 integrations/**/__pycache__/
 integrations/**/*.py[cod]
 scripts/__pycache__/
+
+# Embedded Hermes kernel runtime artifacts
+.venv/
+.python/
+.tool-bin/
+**/__pycache__/
+*.py[cod]

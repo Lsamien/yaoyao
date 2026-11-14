@@ -41,7 +41,10 @@
     "runner:build": "node scripts/build-runner.mjs",
     "desktop:build:win": "npm run build && node scripts/build-windows-desktop.mjs",
     "desktop:pack:win": "npm run desktop:build:win && node scripts/windows-desktop-release.mjs",
-    "desktop:test:win": "node scripts/test-windows-desktop.mjs"
+    "desktop:test:win": "node scripts/test-windows-desktop.mjs",
+    "kernel:setup": "node scripts/kernel-setup.mjs",
+    "kernel:test": ".venv/bin/python tests/runtime/test_kernel.py && .venv/bin/python tests/runtime/test_hermes_service.py",
+    "postinstall": "node scripts/kernel-setup.mjs --postinstall"
   },
   "dependencies": {
     "@koa/bodyparser": "^5.0.0",
@@ -119,7 +122,13 @@
     "NOTICE",
     "THIRD_PARTY_NOTICES.md",
     "release.json",
-    "build-info.json"
+    "build-info.json",
+    "runtime",
+    "!runtime/**/__pycache__/**",
+    "!runtime/**/*.pyc",
+    "!runtime/**/.env",
+    "!runtime/**/auth.json",
+    "scripts/kernel-setup.mjs"
   ],
   "homepage": "https://github.com/Lsamien/yaoyao"
 }

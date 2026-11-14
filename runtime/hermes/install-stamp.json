@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "source": "local",
+  "distribution": "yaovi-agent",
+  "updateMechanism": "external",
+  "baseVersion": "0.23.0",
+  "displayVersion": "0.23.0+yaovi",
+  "distance": 0,
+  "commit": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
+  "commitDate": 1793908658,
+  "branch": null,
+  "dirty": true
+}
