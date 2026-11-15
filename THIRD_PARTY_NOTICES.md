@@ -38,5 +38,5 @@ MIT, Copyright (c) 2025 Nous Research; see `runtime/hermes/LICENSE`.
 
 `runtime/hermes/plugins/memory/openviking/` is the unmodified OpenViking Hermes memory plugin
 (MIT, Copyright (c) 2025 Nous Research); see `licenses/openviking-hermes/LICENSE`.
-Python dependencies are pinned in `runtime/requirements.lock`; Slack Bolt/SDK and discord.py
-licenses are in `licenses/slack-bolt`, `licenses/slack-sdk` and `licenses/discord.py`.
+Python dependencies are pinned in `runtime/requirements.lock`. Hermes' optional skills catalog,
+plugin catalog, messaging-channel adapters and standalone batch/trajectory runners are not shipped.

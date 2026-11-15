@@ -343,8 +343,6 @@ def main():
         agent.valid_tool_names = {tool['function']['name'] for tool in agent.tools}
         agent.enabled_toolsets = ['yaovi']
         agent.disabled_toolsets = []
-    if request.get('nativeMemory') and not any(getattr(p, '_client', None) for p in getattr(agent._memory_manager, 'providers', [])):
-        emit('memory.provider.degraded', message='Hermes 原生记忆暂不可用，本轮未接入远程记忆；不会改用 user 模式。')
     agent._iters_since_skill = checkpoint.get("skillIterations", 0) if isinstance(checkpoint, dict) else 0
     if request.get("compact") is not None:
         # specs/102: the Host compresses a settled session between turns. No conversation turn runs,
@@ -452,14 +450,29 @@ def main():
         **{k: v for k, v in context_fields.items() if v is not None},
         **({"breakdown": breakdown} if breakdown else {}),
     })
-    if request.get("nativeMemory") and agent._memory_manager:
-        agent._memory_manager.flush_pending(timeout=15)
     agent.close()
     db.close()
 
 
+def preload():
+    """Import Hermes-independent libraries before the turn request arrives.
+
+    A standby worker is spawned ahead of the next turn and blocks on its first stdin line; doing
+    this work first removes it from the turn's latency. Hermes modules are not imported here: they
+    capture HERMES_HOME at import time and must load after the runtime context is installed.
+    """
+    import importlib
+    for name in ("openai", "httpx", "pydantic", "psutil", "rich.console", "jinja2", "requests",
+                 "tenacity", "ruamel.yaml", "dotenv", "anyio", "jsonschema"):
+        try:
+            importlib.import_module(name)
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     try:
+        preload()
         main()
     except BaseException as error:
         emit("failed", message=str(error), code=type(error).__name__)

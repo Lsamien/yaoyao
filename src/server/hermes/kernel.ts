@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { dirname } from 'node:path'
@@ -59,6 +59,59 @@ export interface KernelOptions {
   env?: NodeJS.ProcessEnv
   onEvent: (type: string, frame: any) => void
   call: (name: string, args: unknown, id: string, frame: any) => Promise<unknown>
+  /** Pre-started workers; a matching one is used instead of spawning a new process. */
+  standby?: KernelStandby
+}
+
+function spawnWorker(source: NodeJS.ProcessEnv, dataRoot: string, hermesRoot?: string): ChildProcessWithoutNullStreams {
+  const paths = kernelPaths(source)
+  requireKernel(paths, paths.worker)
+  const env = kernelEnv(dataRoot, source, hermesRoot)
+  return spawn(paths.python, ['-u', paths.worker], { cwd: dirname(paths.worker), env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
+}
+
+/**
+ * A few workers started ahead of the next turn for a known Hermes home. A standby process has
+ * already started Python and imported its libraries, and waits for the turn request on stdin, so
+ * a turn skips that startup. The environment is identical to a fresh spawn for the same home.
+ */
+export class KernelStandby {
+  private readonly ready = new Map<string, { child: ChildProcessWithoutNullStreams; timer: ReturnType<typeof setTimeout> }>()
+  constructor(private readonly options: { env?: NodeJS.ProcessEnv; max?: number; idleMs?: number } = {}) {}
+
+  private key(dataRoot: string, hermesRoot?: string) { return JSON.stringify([dataRoot, hermesRoot ?? '']) }
+
+  prepare(dataRoot: string, hermesRoot?: string): void {
+    const key = this.key(dataRoot, hermesRoot)
+    if (this.ready.has(key)) return
+    while (this.ready.size >= (this.options.max ?? 3)) this.discard(this.ready.keys().next().value!)
+    let child: ChildProcessWithoutNullStreams
+    try { child = spawnWorker(this.options.env ?? process.env, dataRoot, hermesRoot) } catch { return }
+    child.on('error', () => {})
+    child.stderr.resume() // drained until a turn takes it; startup writes nothing of interest
+    child.once('exit', () => { if (this.ready.get(key)?.child === child) { clearTimeout(this.ready.get(key)!.timer); this.ready.delete(key) } })
+    const timer = setTimeout(() => this.discard(key), this.options.idleMs ?? 120_000)
+    timer.unref()
+    this.ready.set(key, { child, timer })
+  }
+
+  take(dataRoot: string, hermesRoot?: string): ChildProcessWithoutNullStreams | undefined {
+    const key = this.key(dataRoot, hermesRoot), entry = this.ready.get(key)
+    if (!entry) return undefined
+    this.ready.delete(key)
+    clearTimeout(entry.timer)
+    return entry.child.exitCode === null && !entry.child.killed && !entry.child.stdin.destroyed ? entry.child : undefined
+  }
+
+  private discard(key: string) {
+    const entry = this.ready.get(key)
+    if (!entry) return
+    this.ready.delete(key)
+    clearTimeout(entry.timer)
+    entry.child.stdin.end() // EOF before a request: the worker exits without doing anything
+  }
+
+  close(): void { for (const key of [...this.ready.keys()]) this.discard(key) }
 }
 
 /** Default Hermes agent configuration admitted for each worker. */
@@ -69,11 +122,8 @@ export function defaultKernelConfig(overrides: Record<string, unknown> = {}): Re
 export async function runKernel(request: KernelRequest, options: KernelOptions): Promise<KernelResult> {
   options.signal.throwIfAborted()
   const source = options.env ?? process.env
-  const paths = kernelPaths(source)
-  requireKernel(paths, paths.worker)
-  const env = kernelEnv(request.dataRoot, source, request.hermesRoot)
   const group = process.platform !== 'win32'
-  const child = spawn(paths.python, ['-u', paths.worker], { cwd: dirname(paths.worker), env, detached: group, stdio: ['pipe', 'pipe', 'pipe'] })
+  const child = options.standby?.take(request.dataRoot, request.hermesRoot) ?? spawnWorker(source, request.dataRoot, request.hermesRoot)
   return new Promise((resolveResult, reject) => {
     let settled = false, done: KernelResult | undefined, bytes = 0, failure: Error | undefined
     let killTimer: ReturnType<typeof setTimeout> | undefined, termTimer: ReturnType<typeof setTimeout> | undefined

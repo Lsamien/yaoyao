@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { HttpError } from '../errors.js'
 import type { GatewayFrame } from '../workspaceGateway.js'
-import { defaultKernelConfig, runKernel, type KernelControl, type KernelTool } from './kernel.js'
+import { defaultKernelConfig, KernelStandby, runKernel, type KernelControl, type KernelTool } from './kernel.js'
 import type { HermesScope, HermesServicePool } from './service.js'
 import type { EmbeddedSession, EmbeddedSessions, SessionModel } from './sessions.js'
 import { collectSkills, commitSkills } from './skills.js'
@@ -125,7 +125,19 @@ export class EmbeddedGateway {
   private readonly queues = new Map<string, string[]>()
   private readonly defaults = new Map<string, { at: number; value: Promise<Record<string, any>> }>()
 
-  constructor(private readonly options: EmbeddedGatewayOptions) {}
+  /** Workers pre-started for recently used homes (disabled with YAOYAO_KERNEL_STANDBY=0). */
+  private readonly standby?: KernelStandby
+
+  constructor(private readonly options: EmbeddedGatewayOptions) {
+    if ((options.env ?? process.env).YAOYAO_KERNEL_STANDBY !== '0') this.standby = new KernelStandby({ ...(options.env ? { env: options.env } : {}) })
+  }
+
+  /** Start a worker for the session's home ahead of its next prompt. */
+  private warm(session: EmbeddedSession) {
+    if (!this.standby || this.turns.has(session.id)) return
+    const scope = this.options.sessions.scope(session.id)
+    try { this.standby.prepare(this.options.pool.home(scope), this.options.pool.parent(scope)) } catch { /* a cold spawn still works */ }
+  }
 
   get idle(): boolean { return this.turns.size === 0 }
   running(sessionId: string): boolean { return this.turns.has(sessionId) }
@@ -158,6 +170,7 @@ export class EmbeddedGateway {
   }
 
   close(): void {
+    this.standby?.close()
     for (const turn of this.turns.values()) turn.controller.abort()
     for (const channel of this.channels) { channel.closed = true; channel.disconnect() }
     this.channels.clear()
@@ -194,6 +207,7 @@ export class EmbeddedGateway {
 
   private async opened(channel: Channel, session: EmbeddedSession, extra: Record<string, unknown> = {}) {
     channel.sessions.add(session.id)
+    this.warm(session)
     const info = await this.info(session)
     return { session_id: session.id, stored_session_id: session.id, session_key: session.id, running: this.turns.has(session.id),
       info, model: info.model, provider: info.provider, fast: info.fast, ...(this.usage.get(session.id) ?? {}), ...extra }
@@ -379,10 +393,9 @@ export class EmbeddedGateway {
     void this.run(session, turn, text).finally(() => {
       if (this.turns.get(session.id) === turn) this.turns.delete(session.id)
       const next = this.queues.get(session.id)?.shift()
-      if (next !== undefined) {
-        const latest = this.options.sessions.get(session.id)
-        if (latest) this.start(latest, next)
-      }
+      const latest = this.options.sessions.get(session.id)
+      if (next !== undefined) { if (latest) this.start(latest, next) }
+      else if (latest) this.warm(latest)
     })
   }
 
@@ -464,7 +477,7 @@ export class EmbeddedGateway {
         config: defaultKernelConfig(config), instructions: grant ? GRANT_INSTRUCTIONS : '', text: input, tools,
         botPolicy: { enabled: true, foreground: true, version: 2 }, platform: session.source || 'web', skills,
       }, {
-        signal: turn.controller.signal, control: turn.control, env: this.options.env,
+        signal: turn.controller.signal, control: turn.control, env: this.options.env, ...(this.standby ? { standby: this.standby } : {}),
         maxSeconds: this.options.maxTurnSeconds ?? 6 * 3600, waiting: () => turn.pending.size > 0,
         onEvent: (type, frame) => {
           if (type === 'message.delta') { turn.text += str(frame.text); emit('message.delta', { text: str(frame.text) }) }

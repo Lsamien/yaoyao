@@ -84,15 +84,36 @@ def compact_skill_index_enabled() -> bool:
     return config.get('version') == 1 and config.get('mode') == 'on_demand'
 
 
-def configuration(defaults: dict[str, Any]) -> dict[str, Any] | None:
-    if _context is None:
-        return None
+# The admitted context is immutable, so the merged view is computed once per defaults object.
+_merged: tuple[int, dict[str, Any], dict[str, Any]] | None = None
+
+
+def _merged_configuration(defaults: dict[str, Any]) -> dict[str, Any]:
+    global _merged
+    if _merged is not None and _merged[0] == id(defaults) and _merged[1] is defaults:
+        return _merged[2]
     def merge(base, overlay):
         result = deepcopy(base)
         for key, value in overlay.items():
             result[key] = merge(result[key], value) if isinstance(value, dict) and isinstance(result.get(key), dict) else deepcopy(value)
         return result
-    return merge(defaults, _context.get("config", {}))
+    merged = merge(defaults, _context.get("config", {}))
+    _merged = (id(defaults), defaults, merged)
+    return merged
+
+
+def configuration(defaults: dict[str, Any]) -> dict[str, Any] | None:
+    """A private copy callers may mutate."""
+    if _context is None:
+        return None
+    return deepcopy(_merged_configuration(defaults))
+
+
+def configuration_readonly(defaults: dict[str, Any]) -> dict[str, Any] | None:
+    """The shared merged view; callers must not mutate it (``load_config_readonly`` contract)."""
+    if _context is None:
+        return None
+    return _merged_configuration(defaults)
 
 
 def load_tools(agent) -> bool:

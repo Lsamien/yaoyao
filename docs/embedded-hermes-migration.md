@@ -204,3 +204,28 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 - **会话标题**：使用首条消息截取，不再调用 Hermes 的标题生成。
 - **Hermes 内置 `memory` 工具**：yaovi-agent 版本已停用该工具，长期记忆走夭夭的工作区记忆工具；原生对话不再有 MEMORY.md/USER.md。
 - **用户数据隔离**：与原来连接同一个 9119 时相同，所有账号共用系统 Hermes 配置；Bot 按 ID 使用独立 runtime home。
+
+
+## 12. 精简与性能（2026-11-15，`only-0.1` 分支）
+
+### 删除的代码
+
+- **内核适配**：删除 yaoyao 不使用的 `hermes_channels.py`（消息渠道）、`hermes_pairing.py`、`hermes_ecosystem.py`（技能目录）、`hermes_mcp.py`（Hermes 侧 MCP 管理，夭夭自己管理 MCP）、`native_openviking*.py`（夭夭的 OpenViking 在 Node 侧），以及 `hermes_service.py` 中对应的操作；内核中原生记忆提供者分支一并删除。模型服务退出时不再为渠道配对加载 Telegram/Slack/Discord/钉钉 SDK。
+- **Hermes 源码**：删除 `optional-skills/`（14 MB）、`plugin-catalog/`（4.3 MB）和互相引用的独立脚本 `batch_runner.py`、`trajectory_compressor.py`、`mini_swe_runner.py`、`toolset_distributions.py`。保留 `skills/`、`cli.py`、`uv.lock` 等仍被运行路径引用的文件。
+- **Python 依赖**：去掉消息渠道 SDK（python-telegram-bot、lark-oapi、dingtalk-stream、alibabacloud-dingtalk、qrcode、slack-bolt、slack-sdk、discord.py）及其传递依赖，锁文件从 105 个包减到 79 个，安装更快、镜像更小。
+- **前端**：删除没有任何入口引用的旧页面和组件（旧群组管理、成果库、节点配对、系统更新、远程 Bot 选择等对话框）、对应的 store/api 和只测试这些死代码的用例，以及无人引用的聚合导出文件。
+- 已跟踪的 `runtime/` 体积从 68.6 MB 降到 55.4 MB。
+
+判断依据：在所有内核与内置网关测试中记录每个 Python 进程实际加载的模块，再对候选文件逐个检索引用。`agent/`、`tools/`、`plugins/`、`hermes_cli/` 内未被测试加载的文件可能在选择特定供应商或功能时才导入，因此没有按覆盖率删除。
+
+### 性能优化
+
+- **预启动内核进程**：会话打开或一轮结束后，为该会话的 Hermes home 预先启动一个 worker，提前完成 Python 启动和第三方库导入，下一次提交直接使用。最多保留 3 个，空闲 2 分钟退出；设置 `YAOYAO_KERNEL_STANDBY=0` 关闭。Hermes 模块会在导入时记录 `HERMES_HOME`，必须在安装运行上下文之后加载，所以不提前导入 Hermes 自身。
+- **配置合并缓存**：内置模式下每轮约 80 次读取配置都在重新深拷贝合并，改为每个 worker 合并一次，只读调用直接复用（每轮约 0.6 s → 0.1 s）。
+- 实测（立即返回的假模型，排除模型耗时）：每轮从约 2.5 s 降到约 2.0 s。
+
+### 验证
+
+- `npm run typecheck`、`npm run build` 通过；`npm run kernel:test` 25 个用例通过；内置网关与 Bot 端到端测试通过。
+- `npm test`：仍只有原有的 28 个环境相关失败（另有 1 个托管浏览器用例在全量并发时偶发失败，单独运行通过）。
+- 桌面测试结果与原提交一致。

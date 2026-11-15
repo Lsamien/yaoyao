@@ -560,59 +560,6 @@ def op_media_generate(args):
             "provider": result.get("provider"), "model": result.get("model")}
 
 
-def op_openviking_connection(args):
-    from native_openviking import connection
-    from hermes_constants import get_hermes_home
-    return connection(get_hermes_home())
-
-
-def _openviking_config_call(name, args):
-    import native_openviking_config as native
-    from hermes_constants import get_hermes_home
-    try:
-        if name == 'read': return native.read_configuration(get_hermes_home())
-        if name == 'test': return native.test_configuration(get_hermes_home(), args.get('config'))
-        if name == 'prepare': return native.prepare(get_hermes_home(), args.get('config'))
-        return native.transaction(args.get('token'), args.get('action'), get_hermes_home())
-    except native.ConfigurationError as error:
-        raise ServiceError(error.status, str(error)) from None
-
-
-def op_openviking_test(args):
-    return _openviking_config_call('test', args)
-
-
-def op_openviking_config(args):
-    return _openviking_config_call('read', args)
-
-
-def op_openviking_config_prepare(args):
-    return _openviking_config_call('prepare', args)
-
-
-def op_openviking_config_transaction(args):
-    return _openviking_config_call('transaction', args)
-
-
-def op_openviking_remove_peer(args):
-    from native_openviking import connection_client
-    from plugins.memory.openviking import _resolve_user_space
-    import re
-    peer = str(args.get("peerId", ""))
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", peer):
-        raise ServiceError(400, "peer 名称无效")
-    client = connection_client(op_openviking_connection({}), peer)
-    user = _resolve_user_space(client, timeout=5, raise_on_timeout=True)
-    if not user or user != args.get("user"):
-        raise ServiceError(409, "原 OpenViking user 未确认，保留待清理记录")
-    try:
-        client.delete("/api/v1/fs", params={"uri": f"viking://user/{user}/peers/{peer}", "recursive": True}, timeout=30)
-    except Exception as exc:
-        if getattr(exc, "status_code", None) != 404:
-            raise ServiceError(502, "peer 清理失败，将保留待重试记录") from None
-    return {"ok": True}
-
-
 def op_config_get(args):
     """Raw (non-default-merged) provider sections of this home's config.yaml, secrets redacted."""
     from hermes_cli.config import read_raw_config
@@ -796,61 +743,6 @@ def op_provider_runtime(args):
             "model": model or rt.get("model") or ""}
 
 
-def _mcp_call(fn):
-    def run(args):
-        import hermes_mcp
-        try:
-            return getattr(hermes_mcp, fn)(args)
-        except hermes_mcp.McpError as e:
-            raise ServiceError(e.status, str(e))
-    return run
-
-
-op_mcp_list = _mcp_call("op_list")
-op_mcp_raw = _mcp_call("op_raw")
-op_mcp_upsert = _mcp_call("op_upsert")
-op_mcp_remove = _mcp_call("op_remove")
-op_mcp_enabled = _mcp_call("op_enabled")
-op_mcp_test = _mcp_call("op_test")
-op_mcp_authStart = _mcp_call("op_auth_start")
-op_mcp_authStatus = _mcp_call("op_auth_status")
-op_mcp_authCancel = _mcp_call("op_auth_cancel")
-op_mcp_authCallback = _mcp_call("op_auth_callback")
-
-
-
-def _channels_call(fn):
-    def run(args):
-        import hermes_channels
-        try:
-            return getattr(hermes_channels, fn)(args)
-        except hermes_channels.ChannelError as e:
-            raise ServiceError(e.status, str(e))
-    return run
-
-
-op_channels_prepare = _channels_call("op_prepare")
-op_channels_whatsappStart = _channels_call("op_whatsapp_start")
-op_channels_whatsappApply = _channels_call("op_whatsapp_apply")
-op_channels_whatsappStatus = _channels_call("op_whatsapp_status")
-op_channels_whatsappCancel = _channels_call("op_whatsapp_cancel")
-op_channels_list = _channels_call("op_list")
-op_channels_enabled = _channels_call("op_enabled")
-op_channels_upsert = _channels_call("op_upsert")
-op_channels_setEnabled = _channels_call("op_set_enabled")
-op_channels_remove = _channels_call("op_remove")
-op_channels_test = _channels_call("op_test")
-op_channels_pairingApprove = _channels_call("op_pairing_approve")
-op_channels_pairingRevoke = _channels_call("op_pairing_revoke")
-
-
-def op_ecosystem_skills(args):
-    from hermes_ecosystem import skills_catalog
-    return skills_catalog()
-def op_ecosystem_bundle(args):
-    from hermes_ecosystem import skill_bundle
-    return skill_bundle(args['sourcePath'], args.get('fingerprint'))
-
 OPS = {name[3:].replace("_", ".", 1): fn for name, fn in globals().items() if name.startswith("op_")}
 
 
@@ -875,7 +767,7 @@ def handle(message):
         args = message.get("args") or {}
         op = message.get("op", "")
         with (contextlib.nullcontext() if op in ('config.get', 'config.compiled') else _aux_lock), model_network.scope(message.get("network"), args.get("provider") if op.startswith("oauth.") or op == "network.test" else None,
-                                            login=op in ("oauth.start", "oauth.submit", "oauth.poll"), model_operation=not op.startswith(("mcp.", "channels.", "web.", "ecosystem."))):
+                                            login=op in ("oauth.start", "oauth.submit", "oauth.poll"), model_operation=not op.startswith("web.")):
             result = fn(args)
         emit({"id": rid, "ok": True, "result": result})
     except ServiceError as e:
@@ -908,11 +800,7 @@ def main():
     _bootstrap()
     import model_network
     model_network.install()
-    import atexit,signal
-    def cleanup():
-        from hermes_pairing import manager
-        manager.close()
-    atexit.register(cleanup)
+    import signal
     signal.signal(signal.SIGTERM,lambda *_:sys.exit(0))
     emit({"type": "ready"})
     for line in sys.stdin:

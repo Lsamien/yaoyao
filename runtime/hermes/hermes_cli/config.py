@@ -1990,8 +1990,8 @@ def load_config_readonly() -> dict[str, Any]:
     """``load_config()`` without the defensive deepcopy (~half of the 265us cache-hit cost).
     **Mutating the returned dict (or any nested structure) corrupts the in-process cache for
     every subsequent caller** — only for code paths that never write to the result."""
-    from agent.runtime_context import configuration
-    embedded = configuration(DEFAULT_CONFIG)
+    from agent.runtime_context import configuration_readonly
+    embedded = configuration_readonly(DEFAULT_CONFIG)
     return embedded if embedded is not None else _load_config_impl(want_deepcopy=False)
 
 

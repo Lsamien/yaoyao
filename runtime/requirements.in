@@ -27,19 +27,7 @@ ddgs==9.16.0
 firecrawl-py==4.17.0
 exa-py==2.10.2
 parallel-web==0.4.2
-# Per-Bot messaging channels (Hermes platform adapters): Telegram, Feishu/Lark, DingTalk, WeCom.
-python-telegram-bot[webhooks]==22.8
+# Used by Hermes web/message tools and XML parsing.
 aiohttp==3.14.3
-lark-oapi==1.6.8
-dingtalk-stream==0.24.3
-alibabacloud-dingtalk==2.2.42
-qrcode==7.4.2
 defusedxml==0.7.1
-
-# Hermes OpenViking native plugin (pinned in plugins/memory/openviking/UPSTREAM.json).
 packaging==25.0
-
-# Local Slack and Discord message channels (text and attachments).
-slack-bolt==1.30.0
-slack-sdk==3.44.1
-discord.py==2.7.1
