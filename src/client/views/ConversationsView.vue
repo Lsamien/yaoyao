@@ -43,7 +43,6 @@ import { workspaceAgentActivity, workspaceAvatarMembers, workspaceAvatarState, w
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { apiRequest, ApiError } from '@/api/client'
-import { updateProfileIdentity, type ProfileIdentityInput } from '@/api/profiles'
 import { encodeAgentAvatar, randomAgentIdentity } from '@shared/agentIdentity'
 import type { JsonValue } from '@shared/types'
 import {
@@ -92,9 +91,6 @@ const text = ref(''),
   files = ref<WorkspaceFile[]>([]),
   mentions = ref<string[]>([]),
   older = ref(true)
-const identityBusy = ref(false),
-  identityError = ref(''),
-  identityResetVersion = ref(0)
 const respondingInteractionId = ref(''), interactionError = ref('')
 watch(() => `${route.params.id}:${interactions.value[0]?.id}`, () => { interactionError.value = '' })
 const agentActivity = computed(() => workspaceAgentActivity(conversations.value))
@@ -278,22 +274,6 @@ const thinkingIdentity = computed(() => {
 })
 const isAgentDialog = computed(() => dialog.value === 'agent' || dialog.value === 'editAgent')
 const body = (v: unknown) => v as JsonValue
-async function saveProfileIdentity(input: ProfileIdentityInput) {
-  const profile = auth.activeProfile
-  if (!profile) return
-  identityBusy.value = true
-  identityError.value = ''
-  try {
-    await updateProfileIdentity(profile, input)
-    await auth.refreshProfiles()
-    await auth.refreshProfileAvatars()
-    identityResetVersion.value += 1
-  } catch (cause) {
-    identityError.value = cause instanceof Error ? cause.message : '保存机器人身份失败'
-  } finally {
-    identityBusy.value = false
-  }
-}
 async function refresh() {
   const startedAtCursor = transcriptStore.cursor
   const owner = auth.user?.id
@@ -996,16 +976,11 @@ onBeforeUnmount(() => {
     :upstream-error="auth.upstreamError"
     :theme="theme.resolvedTheme"
     :theme-preference="theme.theme"
-    :identity-busy="identityBusy"
-    :identity-error="identityError"
-    :identity-reset-version="identityResetVersion"
     sidebar-title="聊天"
     sidebar-context-title="聊天列表"
     @logout="auth.logout"
-    @select-profile="auth.selectProfile"
     @toggle-theme="theme.toggle"
     @set-theme="theme.setTheme"
-    @save-identity="saveProfileIdentity"
     @create-agent="openDialog('agent')"
     @create-group="openDialog('group')"
     @bot-settings-changed="knowledgeChanged"

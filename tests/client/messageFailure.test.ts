@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { collapseDuplicateFailures, messageFailure } from '@/utils/messageFailure'
 import MessageFailureNotice from '@/components/messages/MessageFailureNotice.vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
 import { workspaceMessagesToUi } from '@/components/workspace/viewModels'
 import type { UiMessage } from '@/components/messages/types'
@@ -43,7 +42,7 @@ describe('conversation failure presentation', () => {
     wrapper.unmount()
   })
 
-  it.each([MessageTimeline, WorkspaceMessageTimeline])('uses the same disclosure and keeps partial content in each timeline', async component => {
+  it.each([WorkspaceMessageTimeline])('uses the same disclosure and keeps partial content in each timeline', async component => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
     Element.prototype.scrollTo = vi.fn()
     const wrapper = mount(component, { props: { messages: [failed, duplicate], identity: 'test' }, global: { stubs: { AgentAvatar: true, MarkdownContent: { props: ['content'], template: '<p class="answer">{{ content }}</p>' } } } })

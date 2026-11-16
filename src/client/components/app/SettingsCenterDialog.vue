@@ -63,7 +63,7 @@ const props = withDefaults(defineProps<{
   identityError?: string
   identityResetVersion?: number
 }>(), {
-  initialPage: 'agent-identity',
+  initialPage: 'account-profile',
   userName: '',
   userAvatar: '',
   pairingUserName: '',
@@ -86,13 +86,12 @@ const emit = defineEmits<{
   'select-profile': [profile: string]
   'save-identity': [input: ProfileIdentityInput]
   'set-theme': [theme: ThemePreference]
-  'switch-mode': []
 }>()
 
 const dialog = ref<HTMLElement>()
 const contentTitle = ref<HTMLElement>()
 const settingsAgentTrigger = ref<HTMLButtonElement>()
-const activePage = ref<SettingsPage>('agent-identity')
+const activePage = ref<SettingsPage>('account-profile')
 const profileMenuOpen = ref(false)
 const mobileDetailOpen = ref(false)
 const updateLocked = ref(false)
@@ -101,14 +100,12 @@ const dirtyPages = reactive<Partial<Record<SettingsPage, boolean>>>({})
 const settingsQuery = ref('')
 const desktopModesAvailable = Boolean(window.yaoyaoDesktop?.modeState && window.yaoyaoDesktop?.switchMode)
 
-const agentItems = computed<NavigationItem[]>(() => !props.isAdmin || props.botMode ? [] : [
-  { key: 'agent-identity', label: '身份与头像', icon: 'users' },
-  ...(props.isAdmin ? [{ key: 'agent-models', label: '模型与 Provider', icon: 'model' } satisfies NavigationItem] : []),
-])
+// Bot mode is the only interface: base Profile identity and models are managed per Bot.
+const agentItems = computed<NavigationItem[]>(() => [])
 const accountItems = computed<NavigationItem[]>(() => [
   { key: 'account-profile', label: '账号资料', icon: 'users' },
   { key: 'account-security', label: '登录与安全', icon: 'settings' },
-  ...(props.botMode ? [{ key:'credential-vault',label:'密码管理',icon:'settings' } satisfies NavigationItem] : []),
+  { key:'credential-vault',label:'密码管理',icon:'settings' },
   ...(desktopModesAvailable ? [{ key: 'desktop-mode', label: '运行模式', icon: 'monitor' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
   ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
@@ -152,7 +149,7 @@ const activeTitle = computed(() => ({
   'system-update': '更新与回滚',
 })[activePage.value])
 const accountName = computed(() => props.pairingUserName || props.userName || '当前账号')
-const showAgentSelector = computed(() => !props.botMode && activePage.value.startsWith('agent-'))
+const showAgentSelector = computed(() => false)
 const activeScope = computed(() => {
   if (activePage.value.startsWith('agent-')) return `正在设置：${profileTitle(props.activeProfile)} / ${props.activeProfile?.name || '未选择'}`
   if (activePage.value === 'account-profile') return '管理你的账号头像与服务器名称。'
@@ -271,17 +268,13 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
   }
   activePage.value = allAllowedPages.value.has(initialPage)
     ? initialPage
-    : !props.botMode && props.isAdmin && props.activeProfile ? 'agent-identity' : 'account-profile'
+    : 'account-profile'
   settingsQuery.value = ''
   for (const key of Object.keys(dirtyPages) as SettingsPage[]) dirtyPages[key] = false
   profileMenuOpen.value = false
   mobileDetailOpen.value = false
   void nextTick(() => dialog.value?.focus())
 }, { immediate: true })
-function requestModeSwitch() {
-  if (updateLocked.value || !confirmDiscard()) return
-  emit('switch-mode')
-}
 </script>
 
 <template>
@@ -335,7 +328,6 @@ function requestModeSwitch() {
                     <h3>基础机器人</h3>
                     <button v-for="item in visibleAgents" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
-                  <section v-if="isAdmin && !settingsQuery"><button type="button" :disabled="updateLocked" @click="requestModeSwitch"><AppIcon :name="botMode ? 'chat' : 'users'" :size="18" /><span>{{ botMode ? '进入聊天模式' : '进入 Bot 模式' }}</span></button></section>
                   <p v-if="!visibleAccounts.length && (!isAdmin || !visibleSystems.length) && !visibleAgents.length" class="settings-search-empty">没有匹配的设置</p>
                 </nav>
               </div>
@@ -362,7 +354,7 @@ function requestModeSwitch() {
                 />
                 <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择机器人。</p>
                 <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin && !botMode" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
-                <CredentialVaultPanel v-else-if="activePage === 'credential-vault' && botMode" />
+                <CredentialVaultPanel v-else-if="activePage === 'credential-vault'" />
                 <AccountSecurityPanel
                   v-else-if="activePage === 'account-security' || activePage === 'account-profile'"
                   :key="activePage"

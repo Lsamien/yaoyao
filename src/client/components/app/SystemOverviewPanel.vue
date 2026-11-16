@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { listUsers, type ManagedUser } from '@/api/admin'
 import { getDuplexVoiceSettings, type DuplexVoiceSettings } from '@/api/agentManagement'
-import { pairedDevices, type PairedDevicesResponse } from '@/api/pairing'
 import { getPushSystemStatus, type PushSystemStatus } from '@/api/push'
 import { systemUpdateStatus, type SystemUpdateStatus } from '@/api/systemUpdate'
 
@@ -22,7 +21,6 @@ const emit = defineEmits<{ navigate: [destination: Destination] }>()
 
 const users = ref<ManagedUser[]>()
 const push = ref<PushSystemStatus>()
-const devices = ref<PairedDevicesResponse>()
 const voice = ref<DuplexVoiceSettings>()
 const update = ref<SystemUpdateStatus>()
 const checking = ref(false)
@@ -49,16 +47,14 @@ async function refresh() {
   const results = await Promise.allSettled([
     listUsers(),
     getPushSystemStatus(),
-    pairedDevices(),
     getDuplexVoiceSettings(),
     // Publish local update status immediately, without waiting for 9119 panels.
     systemUpdateStatus().then(value => { update.value = value; return value }),
   ])
   if (results[0]?.status === 'fulfilled') users.value = results[0].value
   if (results[1]?.status === 'fulfilled') push.value = results[1].value
-  if (results[2]?.status === 'fulfilled') devices.value = results[2].value
-  if (results[3]?.status === 'fulfilled') voice.value = results[3].value
-  if (results[4]?.status === 'fulfilled') update.value = results[4].value
+  if (results[2]?.status === 'fulfilled') voice.value = results[2].value
+  if (results[3]?.status === 'fulfilled') update.value = results[3].value
   const failed = results.filter(result => result.status === 'rejected').length
   if (failed) error.value = failed === results.length ? '无法读取系统状态' : `${failed} 项状态暂时无法读取，可进入对应页面重试。`
   checking.value = false

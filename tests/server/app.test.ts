@@ -268,47 +268,6 @@ describe('15300 BFF', () => {
     expect(loopback.headers['cross-origin-opener-policy']).toBe('same-origin')
   })
 
-  it('degrades unsupported Gateway unread endpoints without browser 404 responses', async () => {
-    const records: RecordedRequest[] = []
-    const baseGateway = fakeGateway(records)
-    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(input instanceof Request ? input.url : String(input))
-      if (url.pathname.startsWith('/api/session-unread')) {
-        records.push({
-          path: url.pathname,
-          method: init?.method ?? 'GET',
-          search: url.searchParams,
-          headers: new Headers(init?.headers),
-        })
-        const status = (init?.method ?? 'GET') === 'PATCH' ? 405 : 404
-        return jsonResponse({ detail: status === 405 ? 'Method Not Allowed' : 'Not Found' }, { status })
-      }
-      return baseGateway(input, init)
-    }) as typeof fetch
-    const runtime = createApplication({ config: makeConfig(), fetchImpl })
-    runtimes.push(runtime)
-
-    const unread = await request(runtime.app.callback())
-      .get('/api/app/sessions/unread?profile=yaoer')
-      .set('Host', '127.0.0.1:15300')
-      .expect(200)
-    expect(unread.body).toEqual({ profile: 'yaoer', total_unread: 0, sessions: [], supported: true })
-
-    const bootstrap = await request(runtime.app.callback())
-      .get('/api/app/bootstrap')
-      .set('Host', '127.0.0.1:15300')
-      .expect(200)
-    runtime.chatCache!.store.recordCommand(String(bootstrap.body.user.id),'yaoer','session-1','session.create',{})
-    const marked = await request(runtime.app.callback())
-      .patch('/api/app/sessions/unread/session-1?profile=yaoer')
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
-      .set('Cookie', cookieHeader(bootstrap))
-      .set('X-CSRF-Token', bootstrap.body.csrfToken)
-      .send({ readMessageCount: 12 })
-      .expect(200)
-    expect(marked.body).toMatchObject({session_id:'session-1',read_message_count:0,unread_count:0})
-  })
 
   it('requires exact Origin and CSRF on local login without forwarding credentials upstream', async () => {
     const records: RecordedRequest[] = []
@@ -345,28 +304,6 @@ describe('15300 BFF', () => {
     expect(JSON.stringify(response.body)).not.toContain('passwordHash')
   })
 
-  it('forces visibility and compressed-history query invariants', async () => {
-    const records: RecordedRequest[] = []
-    const runtime = createApplication({ config: makeConfig(), fetchImpl: fakeGateway(records) })
-    runtimes.push(runtime)
-    await request(runtime.app.callback())
-      .get('/api/app/sessions?exclude_sources=evil')
-      .set('Host', '127.0.0.1:15300')
-      .expect(200)
-    expect(records.at(-1)?.path).toBe('/api/profiles/sessions')
-    expect(records.at(-1)?.search.get('exclude_sources')).toBe('cron,ios_group,yaoyao_workspace')
-
-    await request(runtime.app.callback())
-      .get('/api/app/sessions/session-1/messages?view=history&offset=3&limit=50&order=oldest&include_compacted=false&profile=default')
-      .set('Host', '127.0.0.1:15300')
-      .expect(200)
-    const history = records.at(-1)!
-    expect(history.search.get('offset')).toBe('3')
-    expect(history.search.get('limit')).toBe('50')
-    expect(history.search.get('order')).toBe('latest')
-    expect(history.search.get('include_compacted')).toBe('true')
-    expect(history.search.get('profile')).toBe('default')
-  })
 
   it('keeps unknown API routes out of the SPA fallback', async () => {
     const runtime = createApplication({ config: makeConfig(), fetchImpl: fakeGateway([]) })
@@ -375,7 +312,7 @@ describe('15300 BFF', () => {
       .get('/api/anything')
       .set('Host', '127.0.0.1:15300')
       .expect(404)
-    expect(response.body.code).toBe('node_route_not_found')
+    expect(response.body.code).toBe('not_found')
   })
 
   it('reuses a valid CSRF token across tabs instead of invalidating the first tab', async () => {

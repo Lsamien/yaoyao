@@ -23,7 +23,7 @@ const SettingsCenterDialogStub = defineComponent({
   template: '<div v-if="open" data-testid="settings-center" :data-page="initialPage"><button data-testid="close-settings" type="button" @click="$emit(\'close\')">close</button></div>',
 })
 
-async function mountShell(start = '/chat') {
+async function mountShell(start = '/conversations') {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -74,76 +74,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('Workspace shell account controls', () => {
-  it('keeps Agent switching focused and opens settings from its independent button', async () => {
-    const wrapper = await mountShell()
-    const desktop = wrapper.get('.desktop-sidebar')
 
-    const agentTrigger = desktop.get('.sidebar-account-switcher__main')
-    expect(agentTrigger.attributes('aria-haspopup')).toBe('listbox')
-    expect(agentTrigger.attributes('aria-expanded')).toBe('false')
-    await agentTrigger.trigger('click')
-    expect(agentTrigger.attributes('aria-expanded')).toBe('true')
-    const menu = desktop.get('.profile-menu')
-    expect(menu.attributes('role')).toBe('listbox')
-    expect(menu.text()).toContain('切换机器人')
-    expect(menu.text()).toContain('丫头')
-    expect(menu.text()).toContain('运维机器人')
-    expect(menu.text()).not.toContain('机器人设置')
-    expect(menu.findAll('button')).toHaveLength(profiles.length)
-    expect(menu.findAll('[role="option"]').map(option => option.attributes('aria-selected'))).toEqual(['true', 'false'])
-    expect(menu.text()).not.toContain('账号安全')
-    expect(menu.text()).not.toContain('系统管理')
-    expect(menu.text()).not.toContain('系统更新')
-    expect(menu.text()).not.toContain('退出登录')
-
-    expect(document.activeElement).toBe(menu.find('[role="option"][aria-selected="true"]').element)
-    await menu.trigger('keydown', { key: 'ArrowDown' })
-    const targetProfile = menu.findAll<HTMLButtonElement>('button')
-      .find(button => button.text().includes('运维机器人'))!
-    expect(document.activeElement).toBe(targetProfile.element)
-    await targetProfile.trigger('click')
-    expect(wrapper.emitted('selectProfile')).toEqual([['ops:blue/team']])
-    expect(desktop.find('.profile-menu').exists()).toBe(false)
-
-    const settingsTrigger = desktop.get<HTMLButtonElement>('.sidebar-settings-trigger')
-    expect(settingsTrigger.text()).toBe('')
-    expect(settingsTrigger.attributes('aria-label')).toBe('设置与模式')
-    await settingsTrigger.trigger('click')
-    const actions = document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')
-    expect([...actions].map(button => button.textContent?.trim())).toEqual(['我的设置', '关于', '检测更新', '帮助', '进入 Bot 模式'])
-    actions[0]!.click()
-    await wrapper.vm.$nextTick()
-    const settings = wrapper.get('[data-testid="settings-center"]')
-    expect(settings.attributes('data-page')).toBe('agent-identity')
-    expect(desktop.find('.profile-menu').exists()).toBe(false)
-
-    await wrapper.get('[data-testid="close-settings"]').trigger('click')
-    await wrapper.vm.$nextTick()
-    expect(document.activeElement).toBe(settingsTrigger.element)
-
-    const mobileNavigation = wrapper.get<HTMLButtonElement>('.mobile-header button[aria-label="打开导航"]')
-    await mobileNavigation.trigger('click')
-    await wrapper.vm.$nextTick()
-    expect(wrapper.get('.mobile-header').attributes()).toHaveProperty('inert')
-    expect(document.activeElement).toBe(wrapper.get('.mobile-drawer button[aria-label="关闭导航"]').element)
-    await wrapper.get('.mobile-drawer .sidebar-settings-trigger').trigger('click')
-    document.querySelector<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')!.click()
-    await wrapper.vm.$nextTick()
-    await wrapper.get('[data-testid="close-settings"]').trigger('click')
-    await wrapper.vm.$nextTick()
-    expect(document.activeElement).toBe(mobileNavigation.element)
-
-    expect(desktop.findAll('.sidebar-feature-nav button').map(button => button.text())).not.toContain('聊天')
-    await settingsTrigger.trigger('click')
-    document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu [role="menuitem"]')[4]!.click()
-    await vi.waitFor(() => expect(wrapper.classes()).toContain('workspace-shell--conversations'))
-    expect(document.querySelector('.workspace-settings-menu')).toBeNull()
-    wrapper.unmount()
-  })
-})
-
-it('uses the reference Bot list header and keeps mode changes in settings', async () => {
+it('uses the reference Bot list header and offers no interface mode switch', async () => {
   const wrapper = await mountShell('/conversations')
   const rail = wrapper.get('.desktop-sidebar')
   expect(wrapper.find('.sidebar-settings-trigger').exists()).toBe(false)
@@ -159,7 +91,7 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   expect(rail.find('.sidebar-context__heading').exists()).toBe(false)
   await rail.get('.sidebar-account-switcher__main').trigger('click')
   const accountItems = [...document.querySelectorAll<HTMLElement>('.workspace-settings-menu [role="menuitem"]')]
-  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['我的设置', '关于', '检测更新', '帮助', '进入聊天模式'])
+  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['我的设置', '关于', '检测更新', '帮助'])
   expect(document.querySelector<HTMLAnchorElement>('.workspace-settings-menu a')?.href).toBe('https://yaoyao.samien.cn/')
   accountItems[0]!.click(); await wrapper.vm.$nextTick()
   expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('account-profile')
@@ -181,10 +113,7 @@ it('uses the reference Bot list header and keeps mode changes in settings', asyn
   wrapper.unmount()
 })
 
-it('shows Bot tools only in Bot mode and restores keyboard focus after closing', async () => {
-  const normal = await mountShell('/chat')
-  expect(normal.find('.sidebar-tools-trigger').exists()).toBe(false)
-  normal.unmount()
+it('shows Bot tools and restores keyboard focus after closing', async () => {
   const wrapper = await mountShell('/conversations')
   const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-tools-trigger')
   await trigger.trigger('click')
@@ -221,9 +150,9 @@ it('opens dedicated Bot settings from tools and routes the existing VM shortcut 
 })
 
 
-it.each(['/chat', '/history', '/conversations', '/files'])('opens an independent About dialog from the menu in %s', async path => {
-  const wrapper = await mountShell(path)
-  const trigger = wrapper.get<HTMLButtonElement>(path === '/conversations' ? '.desktop-sidebar .sidebar-account-switcher__main' : '.desktop-sidebar .sidebar-settings-trigger')
+it('opens an independent About dialog from the account menu', async () => {
+  const wrapper = await mountShell('/conversations')
+  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-account-switcher__main')
   await trigger.trigger('click')
   const item = [...document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu button')].find(b => b.textContent?.trim() === '关于')!
   item.click(); await flushPromises()
@@ -277,7 +206,7 @@ it('opens the native updater, prevents duplicate clicks and lets a failed openin
   wrapper.unmount()
 })
 
-it('keeps desktop downloads and restart beside the bell in both workspaces', async () => {
+it('keeps desktop downloads and restart beside the bell', async () => {
   vi.useFakeTimers()
   let state: DesktopUpdateState = { phase: 'checked', installMode: 'restart', currentVersion: '0.4.80', latestVersion: '0.4.81', available: true, received: 0, total: 100, message: '发现更新' }
   let finish!: (state: DesktopUpdateState) => void
@@ -318,9 +247,6 @@ it('keeps desktop downloads and restart beside the bell in both workspaces', asy
     expect(entry().text()).toBe('重新启动')
     expect(entry().classes()).toContain('desktop-update-entry--ready')
     expect(entry().get('button').attributes('title')).toContain('点击重新启动')
-    await wrapper.vm.$router.push('/chat'); await flushPromises()
-    expect(wrapper.find('.sidebar-status-actions .desktop-update-entry').exists()).toBe(true)
-    expect(entry().element.previousElementSibling?.classList.contains('unread-entry')).toBe(true)
     expect(updateAction).toHaveBeenCalledTimes(1)
     await entry().get('button').trigger('click'); await flushPromises()
     expect(updateAction).toHaveBeenLastCalledWith('install')

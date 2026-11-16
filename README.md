@@ -42,7 +42,7 @@ npm start
 
 Web 数据默认保存在 `~/.yaoyao`，可用 `YAOYAO_HOME` 指定（兼容 `HERMES_YAOYAO_HOME`）。旧默认目录 `~/.hermes-yaoyao` 会在服务空闲并停止后整体迁移至 `~/.yaoyao`，保留账号、会话、文件和密钥；两目录同时有数据时停止迁移，避免覆盖。备份应包含整个数据目录及加密密钥。
 
-由 Web 或 iOS 创建的普通聊天会按登录用户、Profile 和 Session ID 在 `chat-cache.sqlite3` 中登记所有权并持久化；后续续聊与列表展示以这份服务端登记为准，不再单独依赖 Hermes 的 `source` 标记。Web 的只读历史记录不进入该数据库，按需读取内置 Hermes 的会话库。可通过 `HERMES_YAOYAO_CHAT_CACHE_MODE=upstream-only|shadow|prefer-local` 切换策略，默认 `prefer-local`。
+夭夭只保留 Bot 模式：所有账号（包括管理员）都在「聊天」中通过 Bot 单聊和群聊使用 Hermes。原来的普通聊天、只读历史、文件库页面和 `chat-cache.sqlite3` 已删除，旧链接 `/chat`、`/history`、`/files` 会跳转到 `/conversations`；需要旧会话内容时，请在 Bot 中引用或重新发起。
 
 ## macOS 桌面版
 

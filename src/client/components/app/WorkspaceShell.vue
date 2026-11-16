@@ -10,7 +10,6 @@ import type { ProfileIdentityInput } from '@/api/profiles'
 import AppIcon from '@/components/common/AppIcon.vue'
 import BrandMark from '@/components/common/BrandMark.vue'
 import SettingsCenterDialog from '@/components/app/SettingsCenterDialog.vue'
-import { rememberInterfacePath } from '@/utils/interfaceMode'
 import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
 import DesktopUpdateEntry from './DesktopUpdateEntry.vue'
 import { useDesktopUpdate } from '@/composables/useDesktopUpdate'
@@ -18,13 +17,6 @@ const AboutDialog = defineAsyncComponent(() => import('./AboutDialog.vue'))
 const UpdateCheckDialog = defineAsyncComponent(() => import('./UpdateCheckDialog.vue'))
 const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspace/BotPluginsDialog.vue'))
 const BotSettingsDialog = defineAsyncComponent(() => import('@/components/workspace/BotSettingsDialog.vue'))
-
-type NavItem = {
-  key: 'chat' | 'history' | 'groups' | 'files'
-  label: string
-  path: string
-  icon: 'chat' | 'history' | 'groups' | 'board' | 'files'
-}
 
 type SettingsPage =
   | 'agent-identity'
@@ -41,7 +33,6 @@ type SettingsPage =
   | 'system-voice'
   | 'system-update'
 
-const SIDEBAR_COLLAPSED_KEY = 'hermes-yaoyao:sidebar-collapsed'
 const SIDEBAR_SEARCH_EVENT = 'hermes-yaoyao:sidebar-search'
 const SIDEBAR_SEARCH_CLOSE_EVENT = 'hermes-yaoyao:sidebar-search-close'
 
@@ -112,7 +103,6 @@ function openUnread(event: MouseEvent) {
   const entry = unreadTrigger.getBoundingClientRect()
   const sidebar = unreadTrigger.closest('aside')!.getBoundingClientRect()
   unreadAnchor.value = { left: sidebar.right + 12, top: entry.top }
-  profileMenuOpen.value = false
   createMenuOpen.value = false
   settingsMenuOpen.value = false
   toolsMenuOpen.value = false
@@ -126,7 +116,6 @@ function closeUnread() {
 const route = useRoute()
 const router = useRouter()
 const mobileDrawerOpen = ref(false)
-const profileMenuOpen = ref(false)
 const settingsOpen = ref(false)
 const standalone = ref<'plugins' | 'about' | 'update' | 'bot-settings' | null>(null)
 const botSettingsPage = ref<'projects' | 'vm'>('projects')
@@ -135,8 +124,6 @@ const settingsPage = ref<SettingsPage>('agent-identity')
 const settingsReturnFocus = ref<HTMLButtonElement>()
 const mobileNavigationTrigger = ref<HTMLButtonElement>()
 const mobileDrawerClose = ref<HTMLButtonElement>()
-const profileMenuTrigger = ref<HTMLButtonElement>()
-const sidebarCollapsed = ref(false)
 const sidebarSearchOpen = ref(false)
 const createMenuOpen = ref(false)
 const createMenu = ref<HTMLElement | null>(null)
@@ -160,40 +147,8 @@ let toolsTrigger: HTMLButtonElement | null = null
 const desktopSidebarContext = ref<HTMLElement | null>(null)
 const mobileSidebarContext = ref<HTMLElement | null>(null)
 
-function profileTitle(profile?: Profile): string {
-  return profile?.agentName || profile?.displayName || profile?.name || '未选择机器人'
-}
-
-const navItems: NavItem[] = [
-  { key: 'chat', label: '聊天', path: '/chat', icon: 'chat' },
-  { key: 'history', label: '历史记录', path: '/history', icon: 'history' },
-  { key: 'groups', label: '聊天', path: '/conversations', icon: 'groups' },
-  { key: 'files', label: '文件库', path: '/files', icon: 'files' },
-]
-
-// The active workspace is already represented by its main canvas and sidebar
-// context. Keep this strip focused on destinations the user can switch to.
-const featureNavItems = computed(() => !props.isAdmin ? [] : navItems.filter(item => item.key !== 'groups' && item.key !== activeNav.value.key
- ))
-
-const applicationWorkspace = computed(() => route.path.startsWith('/conversations'))
-const activeNav = computed(() => {
-  const item = navItems.find(entry => route.path.startsWith(entry.path))
-  return item ?? navItems[0]
-})
-
-const contextHeading = computed(() => ({
-  chat: '聊天',
-  history: '历史记录',
-  groups: '聊天列表',
-  files: '历史记录',
-})[activeNav.value.key])
-
-const hasPrimaryAction = computed(() => ['chat', 'groups', 'files'].includes(activeNav.value.key))
-
 async function navigate(path: string) {
   mobileDrawerOpen.value = false
-  rememberInterfacePath(path)
   await router.push(path)
 }
 
@@ -209,7 +164,6 @@ function closeMobileDrawer() {
 
 function closeMenus(event: MouseEvent) {
   const target = event.target as HTMLElement
-  if (!target.closest('.sidebar-account-switcher')) profileMenuOpen.value = false
   if (!target.closest('.workspace-create-menu, .sidebar-create-trigger')) createMenuOpen.value = false
   if (!target.closest('.workspace-settings-menu, .sidebar-settings-trigger')) settingsMenuOpen.value = false
   if (!target.closest('.workspace-tools-menu, .sidebar-tools-trigger')) toolsMenuOpen.value = false
@@ -223,7 +177,6 @@ async function openCreateMenu(event: Event) {
   createTrigger = event.currentTarget as HTMLElement
   const rect = createTrigger.getBoundingClientRect()
   createPosition.value = { left: `${Math.max(8, Math.min(rect.left, window.innerWidth - 192))}px`, top: `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 96))}px` }
-  profileMenuOpen.value = false
   createMenuOpen.value = true
   await nextTick()
   createMenu.value?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
@@ -252,7 +205,6 @@ async function openSettingsMenu(event: MouseEvent) {
   const rect = settingsTrigger.getBoundingClientRect()
   const height = ((props.isAdmin ? 4 : 3) + Number(canCheckUpdates.value)) * (window.innerWidth < 768 ? 44 : 36) + 18
   settingsMenuPosition.value = { left: `${Math.max(8, Math.min(rect.right - 180, window.innerWidth - 188))}px`, top: `${Math.max(8, rect.top - height)}px` }
-  profileMenuOpen.value = false
   createMenuOpen.value = false
   toolsMenuOpen.value = false
   updateError.value = ''
@@ -286,9 +238,8 @@ function openUpdateSettings() {
   standalone.value = null
   openSettings('system-update')
 }
-function chooseSettingsAction(action: 'settings' | 'bots' | 'about') {
+function chooseSettingsAction(action: 'settings' | 'about') {
   settingsMenuOpen.value = false
-  if (action === 'bots') { switchInterfaceMode(); return }
   settingsReturnFocus.value = settingsTrigger?.closest('.mobile-drawer')
     ? mobileNavigationTrigger.value : settingsTrigger ?? undefined
   if (action === 'about') {
@@ -297,12 +248,11 @@ function chooseSettingsAction(action: 'settings' | 'bots' | 'about') {
     standalone.value = 'about'
     return
   }
-  openSettings(applicationWorkspace.value ? 'account-profile' : 'agent-identity')
+  openSettings('account-profile')
 }
 function closeStandalone() { standalone.value = null; void nextTick(() => standaloneReturnFocus.value?.isConnected && standaloneReturnFocus.value.focus()) }
 function closeToolsMenu() { toolsMenuOpen.value = false; void nextTick(() => toolsTrigger?.isConnected && toolsTrigger.focus()) }
 async function openToolsMenu(event: MouseEvent) {
-  if (!applicationWorkspace.value) return
   if (toolsMenuOpen.value) { closeToolsMenu(); return }
   toolsTrigger = event.currentTarget as HTMLButtonElement
   const rect = toolsTrigger.getBoundingClientRect()
@@ -319,63 +269,20 @@ function chooseTool(page: 'apps' | 'automations' | 'bot-settings') {
   botSettingsPage.value = 'projects'
   standalone.value = page === 'bot-settings' ? 'bot-settings' : 'plugins'
 }
-function switchInterfaceMode() {
-  if (!props.isAdmin) return
-  settingsOpen.value = false
-  void navigate(applicationWorkspace.value ? '/chat' : '/conversations')
-}
 function workspaceKeydown(event: KeyboardEvent) {
-  if (!applicationWorkspace.value || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' || settingsOpen.value || document.querySelector('dialog[open]')) return
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' || settingsOpen.value || document.querySelector('dialog[open]')) return
   event.preventDefault()
   if (sidebarSearchOpen.value) document.dispatchEvent(new CustomEvent(SIDEBAR_SEARCH_CLOSE_EVENT))
   else void openSidebarSearch(null)
 }
 
-function toggleProfileMenu(event: MouseEvent) {
-  const trigger = event.currentTarget
-  if (trigger instanceof HTMLButtonElement) profileMenuTrigger.value = trigger
-  profileMenuOpen.value = !profileMenuOpen.value
-  if (!profileMenuOpen.value) return
-  void nextTick(() => {
-    trigger instanceof HTMLElement
-      && trigger.closest('.sidebar-account-switcher')?.querySelector<HTMLButtonElement>('.profile-menu [role="option"][aria-selected="true"]')?.focus()
-  })
-}
-
-function chooseProfile(name: string) {
-  emit('selectProfile', name)
-  profileMenuOpen.value = false
-  void nextTick(() => profileMenuTrigger.value?.focus())
-}
-
-function handleProfileMenuKeydown(event: KeyboardEvent) {
-  const options = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="option"]')]
-  if (!options.length) return
-  const current = Math.max(0, options.indexOf(document.activeElement as HTMLButtonElement))
-  let next: number | undefined
-  if (event.key === 'ArrowDown') next = (current + 1) % options.length
-  else if (event.key === 'ArrowUp') next = (current - 1 + options.length) % options.length
-  else if (event.key === 'Home') next = 0
-  else if (event.key === 'End') next = options.length - 1
-  else if (event.key === 'Escape') {
-    event.preventDefault()
-    profileMenuOpen.value = false
-    void nextTick(() => profileMenuTrigger.value?.focus())
-    return
-  }
-  if (next === undefined) return
-  event.preventDefault()
-  options[next]?.focus()
-}
-
-function openSettings(page: SettingsPage = 'agent-identity', event?: MouseEvent) {
+function openSettings(page: SettingsPage = 'account-profile', event?: MouseEvent) {
   const trigger = event?.currentTarget
   if (trigger instanceof HTMLButtonElement) {
     settingsReturnFocus.value = trigger.closest('.mobile-drawer')
       ? mobileNavigationTrigger.value
       : trigger
   }
-  profileMenuOpen.value = false
   toolsMenuOpen.value = false
   settingsMenuOpen.value = false
   mobileDrawerOpen.value = false
@@ -388,33 +295,10 @@ function closeSettings() {
   void nextTick(() => settingsReturnFocus.value?.focus())
 }
 
-function toggleSidebar() {
+async function openSidebarSearch(_host: HTMLElement | null) {
   createMenuOpen.value = false
-  settingsMenuOpen.value = false
-  sidebarCollapsed.value = !sidebarCollapsed.value
-  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value ? '1' : '0') } catch { /* optional persistence */ }
-}
-
-function navIcon(key: NavItem['key']): 'chat' | 'history' | 'folder' | 'people' | 'board' {
-  return key === 'groups' ? 'people' : key === 'files' ? 'folder' : key === 'history' ? 'history' : 'chat'
-}
-
-async function openSidebarSearch(host: HTMLElement | null) {
-  if (applicationWorkspace.value) {
-    createMenuOpen.value = false
-    sidebarSearchOpen.value = true
-    document.dispatchEvent(new CustomEvent(SIDEBAR_SEARCH_EVENT, { detail: { section: 'groups' } }))
-    return
-  }
-  if (sidebarCollapsed.value) {
-    sidebarCollapsed.value = false
-    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '0') } catch { /* optional persistence */ }
-    await nextTick()
-  }
   sidebarSearchOpen.value = true
-  document.dispatchEvent(new CustomEvent(SIDEBAR_SEARCH_EVENT, { detail: { section: activeNav.value.key } }))
-  await nextTick()
-  host?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
+  document.dispatchEvent(new CustomEvent(SIDEBAR_SEARCH_EVENT, { detail: { section: 'groups' } }))
 }
 
 async function closeSidebarSearch(host: HTMLElement | null, clear = false, restoreFocus = false) {
@@ -445,10 +329,6 @@ function handleSidebarFocusout(event: FocusEvent) {
 function handleSidebarSearchClosed() { sidebarSearchOpen.value = false }
 
 watch(() => route.fullPath, () => { mobileDrawerOpen.value = false; createMenuOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false; standalone.value = null })
-watch(() => activeNav.value.key, () => {
-  sidebarSearchOpen.value = false
-  profileMenuOpen.value = false
-})
 
 function showLocalVmSettings(){
   if(!props.isAdmin)return
@@ -458,7 +338,6 @@ function showLocalVmSettings(){
 }
 onMounted(() => {
   window.addEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
-  try { sidebarCollapsed.value = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1' } catch { /* optional persistence */ }
   document.addEventListener('mousedown', closeMenus)
   document.addEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.addEventListener('keydown', workspaceKeydown)
@@ -473,12 +352,12 @@ defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
-  <div class="workspace-shell" :data-desktop-update-inline="desktopUpdate.supported ? '' : undefined" :class="{ 'workspace-shell--collapsed': sidebarCollapsed && !applicationWorkspace, 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': applicationWorkspace, 'workspace-shell--conversation-open': applicationWorkspace && !!route.params.id }" :inert="(unreadOpen || settingsOpen || !!standalone || (applicationWorkspace && sidebarSearchOpen)) ? true : undefined">
+  <div class="workspace-shell" :data-desktop-update-inline="desktopUpdate.supported ? '' : undefined" :class="{ 'workspace-shell--sidebar-focused': sidebarFocusMode, 'workspace-shell--conversations': true, 'workspace-shell--conversation-open': !!route.params.id }" :inert="(unreadOpen || settingsOpen || !!standalone || sidebarSearchOpen) ? true : undefined">
     <header class="mobile-header" :inert="mobileDrawerOpen">
       <button ref="mobileNavigationTrigger" class="icon-button" type="button" aria-label="打开导航" @click="openMobileDrawer">
         <AppIcon name="menu" :size="20" />
       </button>
-      <button class="mobile-brand" type="button" aria-label="返回聊天" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
+      <button class="mobile-brand" type="button" aria-label="返回聊天" @click="navigate('/conversations')">
         <BrandMark :size="28" compact />
       </button>
       <button class="icon-button" type="button" :aria-label="theme === 'dark' ? '切换浅色主题' : '切换深色主题'" @click="emit('toggleTheme')">
@@ -488,11 +367,10 @@ defineExpose({openLocalVm:showLocalVmSettings})
 
     <aside
       class="desktop-sidebar rail"
-      :class="{ 'desktop-sidebar--collapsed': sidebarCollapsed && !applicationWorkspace }"
       aria-label="主导航"
       :inert="mobileDrawerOpen"
     >
-      <div v-if="applicationWorkspace" class="bot-list-header">
+      <div class="bot-list-header">
         <button class="bot-logo-trigger sidebar-brand" type="button" aria-label="返回 Bot 列表" title="夭夭 AI" @click="navigate('/conversations')"><BrandMark :size="32" :label="false" compact bare /></button>
         <span class="bot-list-header__spacer" />
         <button class="bot-list-toolbar-button unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" aria-haspopup="dialog" aria-controls="unread-center" :aria-expanded="unreadOpen" title="未读消息" @click="openUnread">
@@ -503,65 +381,10 @@ defineExpose({openLocalVm:showLocalVmSettings})
         <button class="bot-list-toolbar-button sidebar-search-trigger" type="button" aria-label="搜索" :aria-expanded="sidebarSearchOpen" @click="openSidebarSearch(desktopSidebarContext)"><AppIcon name="search" :size="21" /></button>
         <button class="bot-list-toolbar-button sidebar-create-trigger" type="button" aria-label="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="23" /></button>
       </div>
-      <div v-else class="sidebar-brand-row">
-        <button class="rail__brand sidebar-brand" type="button" aria-label="返回聊天" title="夭夭 AI" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
-          <BrandMark :size="sidebarCollapsed ? 26 : 32" :label="false" compact bare />
-        </button>
-        <div class="sidebar-status-actions">
-          <button class="unread-entry" type="button" :aria-label="`未读消息，${unread.total} 条`" aria-haspopup="dialog" aria-controls="unread-center" :aria-expanded="unreadOpen" title="未读消息" @click="openUnread">
-            <AppIcon name="bell" :size="20" />
-            <b v-if="unread.total" class="unread-entry__count" aria-hidden="true">{{ unread.total > 99 ? '99+' : unread.total }}</b>
-          </button>
-          <DesktopUpdateEntry v-if="desktopUpdate.supported && desktopUpdateVisible" :state="desktopUpdateState" :pending="desktopUpdatePending" :error="desktopUpdateError" @activate="desktopUpdate.run()" />
-        </div>
-      </div>
-      <button
-        v-if="!applicationWorkspace"
-        class="sidebar-collapse"
-        :class="{ 'sidebar-collapse--collapsed': sidebarCollapsed }"
-        type="button"
-        :aria-label="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
-        :title="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'"
-        @click="toggleSidebar"
-      >
-        <AppIcon name="chevron-left" :size="18" />
-      </button>
 
 
-      <button
-        v-if="!applicationWorkspace && activeNav.key !== 'files'"
-        class="sidebar-search-trigger"
-        :class="{ 'sidebar-search-trigger--searching': sidebarSearchOpen && !applicationWorkspace }"
-        type="button"
-        aria-label="搜索"
-        title="搜索"
-        :aria-expanded="sidebarSearchOpen"
-        :aria-hidden="sidebarSearchOpen && !applicationWorkspace ? 'true' : undefined"
-        :tabindex="sidebarSearchOpen && !applicationWorkspace ? -1 : 0"
-        @click="openSidebarSearch(desktopSidebarContext)"
-      >
-        <YaoYaoSidebarIcon name="search" />
-        <span>搜索</span>
-      </button>
 
-      <div v-if="hasPrimaryAction && !applicationWorkspace" class="sidebar-primary-action">
-        <slot name="sidebar-action" />
-      </div>
 
-      <nav v-if="!applicationWorkspace" class="sidebar-feature-nav" aria-label="功能入口">
-        <button
-          v-for="item in featureNavItems"
-          :key="item.key"
-          type="button"
-          :class="{ active: activeNav.key === item.key }"
-          :aria-current="activeNav.key === item.key ? 'page' : undefined"
-          :title="item.label"
-          @click="navigate(item.path)"
-        >
-          <YaoYaoSidebarIcon :name="navIcon(item.key)" />
-          <span>{{ item.label }}</span>
-        </button>
-      </nav>
 
       <section
         ref="desktopSidebarContext"
@@ -572,48 +395,21 @@ defineExpose({openLocalVm:showLocalVmSettings})
         @focusout.capture="handleSidebarFocusout"
       >
         <slot name="sidebar-before-heading" />
-        <header v-if="!applicationWorkspace" class="sidebar-context__heading">
-          <strong>{{ sidebarContextTitle || contextHeading }}</strong>
-          <span v-if="sidebarSubtitle">{{ sidebarSubtitle }}</span>
-        </header>
         <div class="sidebar-context__body">
           <slot name="sidebar" />
         </div>
       </section>
 
       <div class="sidebar-footer">
-        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
+        <button class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
-          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? 'menu' : 'listbox'" :aria-expanded="applicationWorkspace ? settingsMenuOpen : profileMenuOpen" @click="applicationWorkspace ? openSettingsMenu($event) : toggleProfileMenu($event)">
-            <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
-            <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
+          <button class="sidebar-account-switcher__main" type="button" :title="'当前账号'" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu($event)">
+            <AccountInitialAvatar :name="userName" :image-url="userAvatar" :size="30" />
             <span class="account-copy">
-              <strong>{{ applicationWorkspace ? userName : profileTitle(activeProfile) }}</strong>
-              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择机器人') }}</span>
+              <strong>{{ userName }}</strong>
+              <span>{{ serverName || '当前账号' }}</span>
             </span>
-            <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
-          <button v-if="!applicationWorkspace" class="sidebar-settings-trigger" type="button" title="设置与模式" aria-label="设置与模式" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu">
-            <AppIcon name="settings" :size="17" />
-          </button>
-          <Transition name="menu-fade">
-            <div v-if="profileMenuOpen" class="profile-menu" role="listbox" aria-label="切换机器人" @keydown="handleProfileMenuKeydown">
-              <strong class="profile-menu__heading">切换机器人</strong>
-              <button
-                v-for="profile in profiles"
-                :key="profile.name"
-                type="button"
-                role="option"
-                :class="{ active: profile.name === activeProfile?.name }"
-                :aria-selected="profile.name === activeProfile?.name"
-                @click="chooseProfile(profile.name)"
-              >
-                <AgentAvatar :name="profileTitle(profile)" :avatar="profile.agentAvatar || ''" :size="24" />
-                <strong>{{ profileTitle(profile) }}</strong>
-                <AppIcon v-if="profile.name === activeProfile?.name" name="check" :size="15" />
-              </button>
-            </div>
-          </Transition>
         </div>
       </div>
     </aside>
@@ -629,47 +425,16 @@ defineExpose({openLocalVm:showLocalVmSettings})
       :inert="!mobileDrawerOpen"
     >
       <div class="mobile-drawer__header">
-        <button class="sidebar-brand" type="button" aria-label="返回聊天" @click="navigate(applicationWorkspace ? '/conversations' : '/chat')">
+        <button class="sidebar-brand" type="button" aria-label="返回聊天" @click="navigate('/conversations')">
           <BrandMark :size="32" compact />
         </button>
         <div class="mobile-drawer__actions"><DesktopUpdateEntry v-if="desktopUpdate.supported && desktopUpdateVisible" :state="desktopUpdateState" :pending="desktopUpdatePending" :error="desktopUpdateError" @activate="desktopUpdate.run()" /><button ref="mobileDrawerClose" class="icon-button" type="button" aria-label="关闭导航" @click="closeMobileDrawer">
           <AppIcon name="close" />
-        </button><button v-if="applicationWorkspace" class="sidebar-create-trigger" type="button" aria-label="新建" title="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="19" /></button></div>
+        </button><button class="sidebar-create-trigger" type="button" aria-label="新建" title="新建" aria-haspopup="menu" :aria-expanded="createMenuOpen" @click="openCreateMenu"><AppIcon name="plus" :size="19" /></button></div>
       </div>
 
-      <button
-        v-if="!applicationWorkspace && activeNav.key !== 'files'"
-        class="sidebar-search-trigger"
-        :class="{ 'sidebar-search-trigger--searching': sidebarSearchOpen && !applicationWorkspace }"
-        type="button"
-        aria-label="搜索"
-        title="搜索"
-        :aria-expanded="sidebarSearchOpen"
-        :aria-hidden="sidebarSearchOpen && !applicationWorkspace ? 'true' : undefined"
-        :tabindex="sidebarSearchOpen && !applicationWorkspace ? -1 : 0"
-        @click="openSidebarSearch(mobileSidebarContext)"
-      >
-        <AppIcon name="search" :size="18" />
-        <span>搜索</span>
-      </button>
 
-      <div v-if="hasPrimaryAction && !applicationWorkspace" class="sidebar-primary-action">
-        <slot name="sidebar-action" />
-      </div>
 
-      <nav v-if="!applicationWorkspace" class="sidebar-feature-nav" aria-label="功能入口">
-        <button
-          v-for="item in featureNavItems"
-          :key="item.key"
-          type="button"
-          :class="{ active: activeNav.key === item.key }"
-          :aria-current="activeNav.key === item.key ? 'page' : undefined"
-          @click="navigate(item.path)"
-        >
-          <AppIcon :name="item.icon" :size="18" />
-          <span>{{ item.label }}</span>
-        </button>
-      </nav>
 
       <section
         ref="mobileSidebarContext"
@@ -680,48 +445,21 @@ defineExpose({openLocalVm:showLocalVmSettings})
         @focusout.capture="handleSidebarFocusout"
       >
         <slot name="sidebar-before-heading" />
-        <header v-if="!applicationWorkspace" class="sidebar-context__heading">
-          <strong>{{ sidebarContextTitle || contextHeading }}</strong>
-          <span v-if="sidebarSubtitle">{{ sidebarSubtitle }}</span>
-        </header>
         <div class="sidebar-context__body">
           <slot name="mobile-sidebar" />
         </div>
       </section>
 
       <div class="sidebar-footer mobile-drawer__footer">
-        <button v-if="applicationWorkspace" class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
+        <button class="sidebar-tools-trigger" type="button" aria-haspopup="menu" :aria-expanded="toolsMenuOpen" @click="openToolsMenu"><YaoYaoSidebarIcon name="tools" :size="18" /><span>工具</span><AppIcon name="chevron-down" :size="15" /></button>
         <div class="sidebar-account-switcher">
-          <button class="sidebar-account-switcher__main" type="button" :title="applicationWorkspace ? '当前账号' : `切换机器人：${profileTitle(activeProfile)}`" :aria-haspopup="applicationWorkspace ? 'menu' : 'listbox'" :aria-expanded="applicationWorkspace ? settingsMenuOpen : profileMenuOpen" @click="applicationWorkspace ? openSettingsMenu($event) : toggleProfileMenu($event)">
-            <AccountInitialAvatar v-if="applicationWorkspace" :name="userName" :image-url="userAvatar" :size="30" />
-            <AgentAvatar v-else :name="profileTitle(activeProfile)" :avatar="activeProfile?.agentAvatar || ''" :size="30" />
+          <button class="sidebar-account-switcher__main" type="button" :title="'当前账号'" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu($event)">
+            <AccountInitialAvatar :name="userName" :image-url="userAvatar" :size="30" />
             <span class="account-copy">
-              <strong>{{ applicationWorkspace ? userName : profileTitle(activeProfile) }}</strong>
-              <span>{{ serverName || (applicationWorkspace ? '当前账号' : activeProfile?.name || userName || '未选择机器人') }}</span>
+              <strong>{{ userName }}</strong>
+              <span>{{ serverName || '当前账号' }}</span>
             </span>
-            <AppIcon v-if="!applicationWorkspace" class="sidebar-account-switcher__chevron" name="chevron-down" :size="14" />
           </button>
-          <button v-if="!applicationWorkspace" class="sidebar-settings-trigger" type="button" title="设置与模式" aria-label="设置与模式" aria-haspopup="menu" :aria-expanded="settingsMenuOpen" @click="openSettingsMenu">
-            <AppIcon name="settings" :size="17" />
-          </button>
-          <Transition name="menu-fade">
-            <div v-if="profileMenuOpen" class="profile-menu" role="listbox" aria-label="切换机器人" @keydown="handleProfileMenuKeydown">
-              <strong class="profile-menu__heading">切换机器人</strong>
-              <button
-                v-for="profile in profiles"
-                :key="profile.name"
-                type="button"
-                role="option"
-                :class="{ active: profile.name === activeProfile?.name }"
-                :aria-selected="profile.name === activeProfile?.name"
-                @click="chooseProfile(profile.name)"
-              >
-                <AgentAvatar :name="profileTitle(profile)" :avatar="profile.agentAvatar || ''" :size="24" />
-                <strong>{{ profileTitle(profile) }}</strong>
-                <AppIcon v-if="profile.name === activeProfile?.name" name="check" :size="15" />
-              </button>
-            </div>
-          </Transition>
         </div>
       </div>
     </aside>
@@ -743,12 +481,11 @@ defineExpose({openLocalVm:showLocalVmSettings})
 
     <AboutDialog v-if="standalone === 'about'" @close="closeStandalone" />
     <UpdateCheckDialog v-if="standalone === 'update' && isAdmin" @close="closeStandalone" @manage="openUpdateSettings" />
-    <BotPluginsDialog v-if="standalone === 'plugins' && applicationWorkspace" @close="closeStandalone" />
+    <BotPluginsDialog v-if="standalone === 'plugins'" @close="closeStandalone" />
     <BotSettingsDialog v-if="standalone === 'bot-settings'" :is-admin="isAdmin" :initial-page="botSettingsPage" @close="closeStandalone" @changed="emit('botSettingsChanged')" />
     <SettingsCenterDialog
       :open="settingsOpen"
-      :bot-mode="applicationWorkspace"
-      @switch-mode="switchInterfaceMode"
+      :bot-mode="true"
       :initial-page="settingsPage"
       :user-name="userName"
       :user-avatar="userAvatar"
@@ -780,10 +517,9 @@ defineExpose({openLocalVm:showLocalVmSettings})
           <p v-if="updateError" class="update-menu-error" role="alert">{{ updateError }}</p>
           <p v-if="desktopUpdate.supported && (desktopUpdateError || desktopUpdateState?.error)" class="update-menu-error" role="alert">{{ desktopUpdateError || desktopUpdateState?.error }}</p>
           <a role="menuitem" href="https://yaoyao.samien.cn" target="_blank" rel="noopener noreferrer" @click="closeSettingsMenu"><AppIcon name="external" :size="17" />帮助</a>
-          <button v-if="isAdmin" type="button" role="menuitem" @click="chooseSettingsAction('bots')"><AppIcon :name="applicationWorkspace ? 'chat' : 'users'" :size="17" />{{ applicationWorkspace ? '进入聊天模式' : '进入 Bot 模式' }}</button>
         </div>
       </div>
-      <div v-if="toolsMenuOpen && applicationWorkspace" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('bot-settings')"><AppIcon name="settings" :size="17" />Bot 设置</button><button type="button" role="menuitem" @click="chooseTool('automations')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
+      <div v-if="toolsMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeToolsMenu" @keydown.esc.prevent.stop="closeToolsMenu"><div ref="toolsMenu" class="workspace-create-menu workspace-tools-menu" :style="toolsPosition" role="menu" aria-label="工具" @keydown="actionMenuKeydown"><button type="button" role="menuitem" @click="chooseTool('bot-settings')"><AppIcon name="settings" :size="17" />Bot 设置</button><button type="button" role="menuitem" @click="chooseTool('automations')"><AppIcon name="clock" :size="17" />自动化</button><button type="button" role="menuitem" @click="chooseTool('apps')"><AppIcon name="link" :size="17" />已连接应用</button></div></div>
       <div v-if="createMenuOpen" class="workspace-create-dismiss" @pointerdown.self="closeCreateMenu" @keydown.esc.prevent.stop="closeCreateMenu">
         <div ref="createMenu" class="workspace-create-menu" :style="createPosition" role="menu" aria-label="新建聊天" @keydown="actionMenuKeydown">
           <button type="button" role="menuitem" @click="chooseCreate('agent')"><AppIcon name="users" :size="17" />新建 Bot</button>

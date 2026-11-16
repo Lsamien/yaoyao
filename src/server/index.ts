@@ -49,8 +49,7 @@ const desktopActivation = new DesktopActivation(config.home, process.env.HERMES_
 let closeFrontend = async (): Promise<void> => undefined
 // Native update admission runs before routes (including streamed requests).
 // The capability is loopback-only and never shared with the Web renderer.
-runtime.app.middleware.unshift(instance.middleware(shutdown, () => runtime.realtime.broker.idleForUpdate
-  && runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermes.gateway.idle, ctx=>runtime.desktopEnvironments.bridge(ctx), desktopActivation, ctx => {
+runtime.app.middleware.unshift(instance.middleware(shutdown, () => runtime.runners.idleForUpdate && runtime.workspaceRuntime.idleForUpdate && runtime.desktopEnvironments.idleForUpdate && runtime.hermes.gateway.idle, ctx=>runtime.desktopEnvironments.bridge(ctx), desktopActivation, ctx => {
     const user = runtime.auth.localDesktopSession(ctx)
     ctx.body = { user, setCookies: ctx.response.get('set-cookie') }
   }))

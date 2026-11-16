@@ -34,7 +34,7 @@ test(`sending and queued Bot replies keep the ${kind} chat frame stable through 
     Object.assign(window, { yaoyaoDesktop: { deviceHost: async () => ({ deviceHost: 'local' }) } })
   })
   await login(page)
-  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const capabilities = await (await page.request.get('/api/app/bootstrap')).json()
   const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
   const created = await page.request.post('/api/app/agents', { headers, data: { name: `发送布局验收 ${surface} ${kind}`, profile: 'default' } })
   expect(created.ok(), await created.text()).toBe(true)
@@ -121,7 +121,7 @@ test(`sending and queued Bot replies keep the ${kind} chat frame stable through 
 
 test('UTF-8 attachments stay inside the composer and retain their names after sending and reload', async ({ page }, testInfo) => {
   await login(page)
-  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const capabilities = await (await page.request.get('/api/app/bootstrap')).json()
   const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
   const created = await page.request.post('/api/app/agents', { headers, data: { name: '附件验收', profile: 'default' } })
   expect(created.ok(), await created.text()).toBe(true)
@@ -173,7 +173,7 @@ test('UTF-8 attachments stay inside the composer and retain their names after se
 
 test('Bot unread dots sync across viewers and neither detail nor read requests delay navigation', async ({ page, context }, testInfo) => {
   await login(page)
-  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
+  const capabilities = await (await page.request.get('/api/app/bootstrap')).json()
   const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
   const create = async (name: string) => {
     const response = await page.request.post('/api/app/agents', { headers, data: { name, profile: 'default' } })
@@ -247,117 +247,7 @@ test('Bot unread dots sync across viewers and neither detail nor read requests d
   }
 })
 
-test('an open Web chat list receives cross-client sessions and real title events without reload', async ({
-  page,
-  context,
-}) => {
-  await login(page)
-  const pageAChannelOpened = page.waitForResponse(response =>
-    response.request().method() === 'POST'
-      && response.url().endsWith('/api/realtime/channels'))
-  await page.goto('/chat')
-  await pageAChannelOpened
-  await expect(page.getByRole('button', { name: '新建聊天', exact: true })).toBeVisible()
 
-  const marker = `${Date.now()}-${Math.random().toString(16).slice(2)}`
-  const initialTitle = `跨端新会话 ${marker}`
-  const generatedTitle = `自动标题 ${marker}`
-  const sentinel = `page-a-${marker}`
-  await page.evaluate(value => {
-    ;(window as Window & { __crossClientProjectionSentinel?: string })
-      .__crossClientProjectionSentinel = value
-  }, sentinel)
-
-  const pageB = await context.newPage()
-  const pageBChannelOpened = pageB.waitForResponse(response =>
-    response.request().method() === 'POST'
-      && response.url().endsWith('/api/realtime/channels'))
-  await pageB.goto('/chat')
-  await pageBChannelOpened
-  await pageB.getByRole('button', { name: '新建聊天', exact: true }).click()
-  const pageBComposer = pageB.getByRole('textbox', {
-    name: '输入消息，Enter 发送，Shift + Enter 换行',
-  })
-  await pageBComposer.fill(`[cross-client-title:${initialTitle}] 创建跨端会话`)
-  const pageBSend = pageB.getByRole('button', { name: '发送消息', exact: true })
-  await expect(pageBSend).toBeEnabled()
-  await pageBSend.click()
-  await expect(pageB).toHaveURL(/\/chat\/(?!draft-)[^/?]+(?:\?.*)?$/)
-  const sessionId = decodeURIComponent(new URL(pageB.url()).pathname.split('/').at(-1) || '')
-  expect(sessionId).not.toMatch(/^draft-/)
-  await expect(pageB.locator('.message--assistant')).toContainText('会话独立保存')
-  const cwdCalls = await (await page.request.get('http://127.0.0.1:19120/__calls')).json()
-  const created = cwdCalls.calls.filter((call: { method: string }) => call.method === 'session.create').at(-1)
-  expect(created.params.cwd).toBe('/tmp/hermes-fixture/default')
-  const aligned = cwdCalls.calls.filter((call: { method: string }) => call.method === 'session.cwd.set').at(-1)
-  expect(aligned.params.cwd).toBe('/tmp/hermes-fixture/default')
-
-  const sessionRow = page.locator(`.desktop-sidebar .sidebar-item[data-sidebar-id="${sessionId}"]`)
-  await expect(sessionRow).toContainText(initialTitle)
-  expect(await page.evaluate(() =>
-    (window as Window & { __crossClientProjectionSentinel?: string })
-      .__crossClientProjectionSentinel)).toBe(sentinel)
-  await pageB.close()
-
-  const titled = await page.request.post(
-    `http://127.0.0.1:19120/__test/sessions/title?id=${encodeURIComponent(sessionId)}`
-      + `&title=${encodeURIComponent(generatedTitle)}`,
-  )
-  expect(titled.ok(), await titled.text()).toBe(true)
-
-  await expect(sessionRow).toContainText(generatedTitle)
-  await expect(sessionRow).not.toContainText(initialTitle)
-  expect(await page.evaluate(() =>
-    (window as Window & { __crossClientProjectionSentinel?: string })
-      .__crossClientProjectionSentinel)).toBe(sentinel)
-})
-
-test('an idle Web viewer follows an iOS-origin run and restores thinking after reload', async ({ page }, testInfo) => {
-  await login(page)
-  const capabilities = await (await page.request.get('/api/realtime/capabilities')).json()
-  const headers = { 'X-CSRF-Token': capabilities.csrfToken, Origin: new URL(page.url()).origin }
-  const opened = await page.request.post('/api/realtime/channels', { headers, data: { channel: 'chat', chatProtocol: 'ordinary-chat-transcript-v2' } })
-  expect(opened.ok(), await opened.text()).toBe(true)
-  const channel = (await opened.json()).id
-  let sequence = 0
-  async function command(method: string, params: Record<string, unknown>) {
-    const response = await page.request.post(`/api/realtime/channels/${channel}/commands`, {
-      headers: { ...headers, 'Idempotency-Key': `ios-live-${Date.now()}-${++sequence}` },
-      data: { jsonrpc: '2.0', method, params },
-    })
-    expect(response.ok(), await response.text()).toBe(true)
-    const receipt = await response.json()
-    expect(receipt.state).toBe('confirmed')
-    return receipt.response.result
-  }
-  const session = await command('session.create', { profile: 'default', source: 'ios' })
-  const subscribed = page.waitForResponse(response => response.url().endsWith('/commands')
-    && response.request().postDataJSON()?.method === 'session.resume')
-  await page.goto(`/chat/${session.stored_session_id}?profile=default`)
-  await subscribed
-  await page.getByRole('button', { name: '设置', exact: true }).click()
-  await page.getByRole('switch', { name: /显示思考/ }).click()
-  await page.getByRole('button', { name: '设置', exact: true }).click()
-  await command('prompt.submit', { session_id: session.session_id, text: '[cross-client-live] 检查文件' })
-  const typing = page.getByTestId('chat-run-thinking-dots')
-  await expect(typing).toBeVisible()
-  await expect(typing.locator('.agent-avatar')).toBeVisible()
-  await expect(typing.locator('.thinking-indicator__dot')).toHaveCount(3)
-  await expect(typing).toContainText('秒')
-  await page.getByText('思考与工具', { exact: true }).click()
-  await expect(page.getByText('read_file', { exact: true })).toBeVisible()
-  await expect(typing).toBeVisible()
-  await page.screenshot({ path: testInfo.outputPath('ios-run-web-thinking-tools.png') })
-
-  // This Web page has never submitted a prompt or written an in-flight marker.
-  await page.evaluate(() => sessionStorage.clear())
-  await page.reload()
-  await expect(typing).toBeVisible()
-  await page.request.post('http://127.0.0.1:19120/__release')
-  await expect(page.locator('.message--assistant')).toContainText('会话独立保存')
-  await expect(typing).toHaveCount(0)
-  await page.screenshot({ path: testInfo.outputPath('ios-run-web-completed.png') })
-})
 
 test('created roles and editable teams share a durable chat list without plugin calls', async ({
   page,
@@ -439,21 +329,6 @@ test('created roles and editable teams share a durable chat list without plugin 
   await rail.getByRole('button', { name: '搜索', exact: true }).click()
   await expect(page.getByRole('dialog', { name: '搜索聊天' })).toBeVisible()
   await page.keyboard.press('Escape')
-  await page.goto('/chat')
-  await expect(rail).toHaveCSS('width', '264px')
-  await expect(rail.getByRole('button', { name: '聊天', exact: true })).toHaveCount(0)
-  await rail.getByRole('button', { name: '设置与模式', exact: true }).click()
-  const settingsMenu = page.getByRole('menu', { name: '账号菜单', exact: true })
-  await expect(settingsMenu.getByRole('menuitem')).toHaveText(['我的设置', '关于', '检测更新', '帮助', '进入 Bot 模式'])
-  await page.screenshot({ path: testInfo.outputPath('chat-settings-mode-menu.png') })
-  await settingsMenu.getByRole('menuitem', { name: '我的设置', exact: true }).click()
-  await expect(page.getByRole('dialog', { name: '我的设置', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '关闭我的设置', exact: true }).click()
-  await expect(rail.getByRole('button', { name: '设置与模式', exact: true })).toBeFocused()
-  await rail.getByRole('button', { name: '设置与模式', exact: true }).click()
-  await settingsMenu.getByRole('menuitem', { name: '进入 Bot 模式', exact: true }).click()
-  await expect(page).toHaveURL(/\/conversations$/)
-  await expect(rail).toHaveCSS('width', '360px')
   await page.addInitScript(() => { Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true }) })
   await page.reload()
   await createAgent(page, '产品经理')
@@ -621,8 +496,6 @@ test('created roles and editable teams share a durable chat list without plugin 
   await page.goto(directURL)
   await expect(page.locator('.message--assistant')).toHaveCount(1)
   await expect(page.locator('.message--assistant')).toContainText('我是产品经理')
-  await page.goto('/chat')
-  await expect(page).toHaveURL(/\/chat/)
   expect(pluginCalls).toEqual([])
   await second.close()
   await page.goto('/conversations')
@@ -723,7 +596,7 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
 
   const childContext = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const child = await childContext.newPage()
-  await child.goto(new URL('/chat', page.url()).href)
+  await child.goto(new URL('/conversations', page.url()).href)
   await child.getByRole('textbox', { name: '账号', exact: true }).fill(username)
   await child.getByRole('textbox', { name: '密码', exact: true }).fill('temporary-pass')
   await child.getByRole('button', { name: '登录', exact: true }).click()
@@ -752,29 +625,24 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   await childContext.close()
 })
 
-for (const mode of ['普通聊天', 'Bot 单聊', '群聊', '普通长回复'] as const) {
+for (const mode of ['Bot 单聊', '群聊'] as const) {
   test(`${mode} 在完成前格式化流式 Markdown 并保留最终内容`, async ({ page }, testInfo) => {
     await login(page)
-    if (mode.startsWith('普通')) {
-      await page.goto('/chat')
-      await page.getByRole('button', { name: '新建聊天', exact: true }).click()
-    } else {
-      await createAgent(page, `${mode}流式验证助手`)
-      if (mode === '群聊') {
-        await createAgent(page, '群聊流式协作成员')
-        await openCreate(page, '新建群聊')
-        const dialog = page.getByRole('dialog')
-        await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('流式验证群')
-        await dialog.getByRole('checkbox', { name: `${mode}流式验证助手`, exact: true }).check()
-        await dialog.getByRole('checkbox', { name: '群聊流式协作成员', exact: true }).check()
-        await dialog.getByText('高级协作设置', { exact: true }).click()
-        await dialog.getByRole('combobox', { name: '协作方式', exact: true }).selectOption('host')
-        await dialog.getByRole('combobox', { name: '负责人', exact: true }).selectOption({ label: `${mode}流式验证助手` })
-        await dialog.getByRole('button', { name: '保存', exact: true }).click()
-        await expect(page.getByRole('heading', { name: '流式验证群', exact: true })).toBeVisible()
-      }
+    await createAgent(page, `${mode}流式验证助手`)
+    if (mode === '群聊') {
+      await createAgent(page, '群聊流式协作成员')
+      await openCreate(page, '新建群聊')
+      const dialog = page.getByRole('dialog')
+      await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('流式验证群')
+      await dialog.getByRole('checkbox', { name: `${mode}流式验证助手`, exact: true }).check()
+      await dialog.getByRole('checkbox', { name: '群聊流式协作成员', exact: true }).check()
+      await dialog.getByText('高级协作设置', { exact: true }).click()
+      await dialog.getByRole('combobox', { name: '协作方式', exact: true }).selectOption('host')
+      await dialog.getByRole('combobox', { name: '负责人', exact: true }).selectOption({ label: `${mode}流式验证助手` })
+      await dialog.getByRole('button', { name: '保存', exact: true }).click()
+      await expect(page.getByRole('heading', { name: '流式验证群', exact: true })).toBeVisible()
     }
-    await page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行').fill(`[streaming-markdown] ${mode === '普通长回复' ? '[long]' : ''} 演示排版`)
+    await page.getByPlaceholder('输入消息，Enter 发送，Shift + Enter 换行').fill('[streaming-markdown]  演示排版')
     await page.getByRole('button', { name: '发送消息', exact: true }).click()
     const message = page.locator('.message--assistant').last()
     await expect(message.locator('.markdown--streaming h1')).toHaveText('流式标题')
@@ -783,20 +651,11 @@ for (const mode of ['普通聊天', 'Bot 单聊', '群聊', '普通长回复'] a
     await expect(message.locator('pre code').first()).toContainText('const answer = 42')
     await expect(message).not.toContainText('最终完整标记')
     await page.screenshot({ path: testInfo.outputPath('streaming-markdown.png'), fullPage: true })
-    if (mode === '普通长回复') {
-      await expect(message.getByText('流式末尾标记', { exact: true })).toBeInViewport()
-      await page.locator('.timeline').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
-      await expect(message.getByRole('heading', { name: '流式标题', exact: true })).toBeInViewport()
-    }
     const released = await page.request.post('http://127.0.0.1:19120/__release')
     expect(released.ok()).toBe(true)
     await expect(message).toContainText('最终完整标记')
     await expect(message.locator('table')).toContainText('项目')
     await expect(message.locator('.markdown--streaming')).toHaveCount(0)
-    if (mode === '普通长回复') {
-      await expect(message.getByRole('heading', { name: '流式标题', exact: true })).toBeInViewport()
-      await expect(message.getByText('最终完整标记', { exact: true })).not.toBeInViewport()
-    }
   })
 }
 

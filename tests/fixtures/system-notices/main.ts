@@ -1,6 +1,5 @@
 import { createApp, defineComponent, h } from 'vue'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import type { UiMessage } from '@/components/messages/types'
 import '@/styles/tokens.css'
 import '@/styles/global.css'
@@ -20,6 +19,6 @@ const messages: UiMessage[] = [
 const simple = query.has('reference')
 createApp(defineComponent({ setup() {
   return () => h('main', { style: 'height:100dvh;display:flex;flex-direction:column' }, [
-    h(query.has('ordinary') ? MessageTimeline : WorkspaceMessageTimeline, { identity: 'system-notice-preview', title: '公众号文案团队', showAssistantIdentity: false, messages: simple ? messages.slice(0, 4) : messages }),
+    h(WorkspaceMessageTimeline, { identity: 'system-notice-preview', title: '公众号文案团队', showAssistantIdentity: false, messages: simple ? messages.slice(0, 4) : messages }),
   ])
 } })).mount('#app')

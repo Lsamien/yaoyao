@@ -57,13 +57,11 @@ import {
   canonicalAllowedHosts,
   normalizeAllowedHost,
 } from './allowedHostsConfiguration.js'
-import { chatCacheKey, type ChatCacheCoordinator } from './chatCache.js'
 
 type JsonObject = Record<string, unknown>
 
 export interface RouteDependencies {
   hermes?: import('./hermes/embedded.js').EmbeddedHermes
-  onChatListChanged?: (owner:string,profile:string,id:string)=>void
   onServerIdentityChanged?: (identity: ServerIdentity) => void
   onUserAccessChanged?: (owner: string) => Promise<void>
   workspace: WorkspaceStore
@@ -84,7 +82,6 @@ export interface RouteDependencies {
   openVikingService: OpenVikingService
   openVikingSessionSync: OpenVikingSessionSync
   allowedHostsConfiguration: AllowedHostsConfigurationManager
-  chatCache?: ChatCacheCoordinator
 }
 
 function body(ctx: Koa.Context): JsonObject {
@@ -108,14 +105,6 @@ function parseJson(response: UpstreamResponse): JsonObject {
     const value = JSON.parse(response.body.toString('utf8')) as unknown
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object')
     return value as JsonObject
-  } catch {
-    throw new HttpError(502, 'Hermes returned invalid JSON', 'invalid_upstream_json')
-  }
-}
-
-function parseJsonValue(response: UpstreamResponse): unknown {
-  try {
-    return JSON.parse(response.body.toString('utf8')) as unknown
   } catch {
     throw new HttpError(502, 'Hermes returned invalid JSON', 'invalid_upstream_json')
   }
@@ -313,109 +302,6 @@ function requestOrigin(ctx: Koa.Context, config: ServerConfig): string {
   return `${secure ? 'https' : 'http'}://${ctx.host}`
 }
 
-function pairingScopes(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined
-  if (!Array.isArray(value) || !value.every((scope) => typeof scope === 'string')) {
-    throw new HttpError(400, 'scopes must be a string array', 'invalid_scope')
-  }
-  return value
-}
-
-function pairedProxyScope(path: string, method: string): NodeScope {
-  if (path === '/profiles' || path.startsWith('/profiles/')) {
-    return path.includes('/sessions') ? 'history.read' : 'agents.read'
-  }
-  if (path === '/sessions' || path.startsWith('/sessions/')) {
-    return ['GET', 'HEAD'].includes(method) ? 'history.read' : 'sessions.execute'
-  }
-  return 'sessions.execute'
-}
-
-function isNativeSessionMutation(path: string, method: string): boolean {
-  if (['GET', 'HEAD'].includes(method)) return false
-  return path === '/sessions'
-    || path.startsWith('/sessions/')
-    || /^\/profiles\/[^/]+\/sessions(?:\/|$)/.test(path)
-}
-
-function nativeSessionsReadOnly(): never {
-  throw new HttpError(
-    410,
-    '原生 Hermes 会话仅供历史查看；请在聊天中开始或继续对话',
-    'native_sessions_read_only',
-  )
-}
-
-function requireWritableOwnedSession(response: UpstreamResponse, locallyOwned = false): void {
-  requireSuccess(response)
-  if (!locallyOwned) nativeSessionsReadOnly()
-}
-
-function isMissingSessionResponse(response: UpstreamResponse): boolean {
-  if (response.status !== 404) return false
-  try {
-    const payload = parseJson(response)
-    if (payload.code === 'session_not_found') return true
-    const detail = payload.detail
-    // Hermes also uses this detail for a stored session absent from its history.
-    if (typeof detail === 'string' && /^not found[.!]?$/i.test(detail.trim())) return true
-    const message = [payload.error, payload.message, detail,
-      detail && typeof detail === 'object' && 'message' in detail ? detail.message : undefined]
-      .find(value => typeof value === 'string')
-    return typeof message === 'string'
-      && /^(session not found|session ?不存在|会话不存在)([.!。！]|\s*[:：].*)?$/i
-        .test(message.trim().replace(/\s+/g, ' '))
-  } catch {
-    return false
-  }
-}
-
-function writableSessionPatch(input: JsonObject): JsonObject {
-  const allowed = new Set(['title', 'archived', 'pinned'])
-  const unknown = Object.keys(input).filter(key => !allowed.has(key))
-  if (unknown.length) {
-    throw new HttpError(400, `Session field is not writable: ${unknown[0]}`, 'invalid_session_patch')
-  }
-  const patch: JsonObject = {}
-  if (Object.hasOwn(input, 'title')) {
-    if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 500) {
-      throw new HttpError(400, 'Session title is invalid', 'invalid_session_patch')
-    }
-    patch.title = input.title.trim()
-  }
-  for (const key of ['archived', 'pinned'] as const) {
-    if (!Object.hasOwn(input, key)) continue
-    if (typeof input[key] !== 'boolean') {
-      throw new HttpError(400, `Session ${key} must be a boolean`, 'invalid_session_patch')
-    }
-    patch[key] = input[key]
-  }
-  if (!Object.keys(patch).length) {
-    throw new HttpError(400, 'Session patch is empty', 'invalid_session_patch')
-  }
-  return patch
-}
-
-function pairedProxyPath(rawPath: string): string {
-  const path = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
-  if (path.includes('\\') || path.includes('\u0000') || path.length > 2_048) {
-    throw new HttpError(400, 'Paired node path is invalid', 'invalid_node_path')
-  }
-  const allowed = path === '/status'
-    || path === '/auth/me'
-    || path === '/profiles'
-    || path.startsWith('/profiles/')
-    || path === '/sessions'
-    || path.startsWith('/sessions/')
-    || path.startsWith('/model/')
-    || path.startsWith('/models/')
-    || path.startsWith('/files/')
-    || path.startsWith('/attachments/')
-
-  if (!allowed) throw new HttpError(404, 'Paired node route is not available', 'node_route_not_found')
-  return `/api${path}`
-}
-
 async function proxy(
   ctx: Koa.Context,
   upstream: UpstreamClient,
@@ -440,64 +326,6 @@ async function proxy(
   })
 }
 
-async function completeSessionList(
-  upstream: UpstreamClient,
-  path: string,
-  jar: CookieJar,
-  baseSearch: URLSearchParams,
-): Promise<UpstreamResponse> {
-  const rows = new Map<string, unknown>()
-  let firstResponse: UpstreamResponse | undefined
-  let firstPayload: JsonObject | undefined
-  let collectionKey: 'items' | 'sessions' | undefined
-  let offset = 0
-  const limit = 100
-  for (let page = 0; page < 1_000; page++) {
-    const search = new URLSearchParams(baseSearch)
-    search.set('offset', String(offset))
-    search.set('limit', String(limit))
-    const response = await upstream.request(path, jar, { search })
-    if (!firstResponse) firstResponse = response
-    if (response.status < 200 || response.status >= 300) return response
-    const payload = parseJson(response)
-    const key = Array.isArray(payload.items) ? 'items'
-      : Array.isArray(payload.sessions) ? 'sessions' : undefined
-    if (!key) return response
-    if (!firstPayload) { firstPayload = payload; collectionKey = key }
-    const values = payload[key] as unknown[]
-    values.forEach((value, index) => {
-      const item = value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined
-      const id = item ? String(item.id ?? item.session_id ?? item.sessionId ?? '') : ''
-      const profile = item ? String(item.profile ?? item.profile_name ?? '') : ''
-      rows.set(id ? `${profile}\u0000${id}` : `${offset}\u0000${index}`, value)
-    })
-    const responseOffset = Math.max(0, Number(payload.offset ?? offset) || offset)
-    const responseLimit = Math.max(1, Number(payload.limit ?? limit) || limit)
-    const total = Math.max(0, Number(payload.total ?? 0) || 0)
-    const nextOffset = responseOffset + responseLimit
-    if (!values.length || (total > 0 && nextOffset >= total)
-      || (total === 0 && values.length < responseLimit)) break
-    if (nextOffset <= offset) throw new HttpError(502, 'Hermes session pagination did not advance', 'invalid_upstream_pagination')
-    offset = nextOffset
-    if (page === 999) throw new HttpError(502, 'Hermes session list is too large to project', 'upstream_pagination_limit')
-  }
-  const response = firstResponse!
-  const payload = firstPayload!
-  const headers = new Headers(response.headers)
-  headers.delete('content-length')
-  return {
-    ...response,
-    headers,
-    body: Buffer.from(JSON.stringify({
-      ...payload,
-      [collectionKey!]: [...rows.values()],
-      total: rows.size,
-      offset: 0,
-      limit: rows.size,
-    })),
-  }
-}
-
 async function proxyAdminFeature(
   ctx: Koa.Context,
   dependencies: RouteDependencies,
@@ -520,78 +348,6 @@ async function proxyAdminFeature(
     }
     sendUpstreamResponse(ctx, response, jar)
   })
-}
-
-async function proxyOptionalUnread(
-  ctx: Koa.Context,
-  upstream: UpstreamClient,
-  path: string,
-  options: {
-    search?: URLSearchParams
-    method?: string
-    requestBody?: unknown
-  },
-  fallback: unknown,
-): Promise<void> {
-  await withJar(ctx, async (jar) => {
-    const response = await upstream.request(path, jar, {
-      method: options.method,
-      search: options.search,
-      body: options.requestBody,
-    })
-    if (response.status === 404 || response.status === 405) {
-      json(ctx, 200, fallback)
-      return
-    }
-    sendUpstreamResponse(ctx, response, jar)
-  })
-}
-
-async function cachedChatRead(
-  ctx: Koa.Context,
-  dependencies: RouteDependencies,
-  options: {
-    key: string
-    kind: 'list' | 'detail' | 'messages'
-    profile: string
-    sessionID?: string
-    offset?: number
-    limit?: number
-    archived?: string
-    ownedList?: boolean
-    load: (jar: CookieJar) => Promise<UpstreamResponse>
-  },
-): Promise<void> {
-  const user = dependencies.auth.require(ctx)
-  const load = async () => {
-    await dependencies.upstreamSession.ensure()
-    return options.load(dependencies.upstreamSession.jar)
-  }
-  if (!dependencies.chatCache) {
-    throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
-  }
-  // Explicit native history browsing retains its independent upstream path.
-  if(ctx.query.view==='history' || ctx.state.hermesBotNative || !ctx.path.startsWith('/api/app/')){
-    const response=await load()
-    sendUpstreamResponse(ctx,options.sessionID?dependencies.chatCache.store.markSessionOwnership(user.id,options.profile,options.sessionID,response):response,dependencies.upstreamSession.jar)
-    return
-  }
-  const result = dependencies.chatCache.readLocal(user.id, options.kind, options.profile, options.sessionID,
-    {offset:options.offset,limit:options.limit,archived:options.archived},ctx.get('x-yaoyao-cache').toLowerCase()==='bypass')
-  ctx.set('X-Yaoyao-Data-Source', result.source)
-  ctx.set('X-Yaoyao-Sync-State', result.state)
-  sendUpstreamResponse(
-    ctx,
-    options.sessionID
-      ? dependencies.chatCache.store.markSessionOwnership(
-          user.id,
-          options.profile,
-          options.sessionID,
-          result.response,
-        )
-      : result.response,
-    dependencies.upstreamSession.jar,
-  )
 }
 
 async function bootstrap(
@@ -691,58 +447,6 @@ async function setup(ctx: Koa.Context, dependencies: RouteDependencies): Promise
   await bootstrap(ctx, dependencies, true)
 }
 
-async function independentPairingCookies(
-  ctx: Koa.Context,
-  dependencies: RouteDependencies,
-  authenticatedJar: CookieJar,
-  request: JsonObject | undefined,
-): Promise<string> {
-  const status = requireSuccess(
-    await dependencies.upstream.request('/api/status', authenticatedJar),
-  )
-  if (!authRequired(status)) {
-    const cookies = authenticatedJar.header || (dependencies.upstream.embedded ? 'yaoyao_embedded=1' : undefined)
-    if (!cookies) throw new HttpError(401, 'Hermes session is unavailable', 'authentication_required')
-    return cookies
-  }
-  const username = typeof request?.username === 'string' ? request.username.trim() : ''
-  const password = typeof request?.password === 'string' ? request.password : ''
-  if (!username || !password || username.length > 320 || password.length > 4_096) {
-    throw new HttpError(
-      400,
-      'Hermes username and password are required to create an independent paired-device session',
-      'pairing_credentials_required',
-    )
-  }
-  const jar = new CookieJar('')
-  const providersBody = requireSuccess(
-    await dependencies.upstream.request('/api/auth/providers', jar),
-  )
-  const providers = Array.isArray(providersBody.providers) ? providersBody.providers : []
-  const provider = providers.find((entry) => Boolean(
-    entry && typeof entry === 'object' && !Array.isArray(entry)
-      && (entry as JsonObject).supports_password === true
-      && String((entry as JsonObject).name).toLowerCase() === 'basic',
-  )) as JsonObject | undefined
-  if (!provider || typeof provider.name !== 'string') {
-    throw new HttpError(
-      403,
-      'Hermes does not offer independent password sessions for QR pairing',
-      'pairing_login_unavailable',
-    )
-  }
-  const response = await dependencies.upstream.request('/auth/password-login', jar, {
-    method: 'POST',
-    body: { provider: provider.name, username, password, next: '' },
-    clientAddress: ctx.req.socket.remoteAddress,
-  })
-  const result = requireSuccess(response)
-  if (result.ok !== true) throw new HttpError(401, 'Hermes rejected the pairing login', 'pairing_login_failed')
-  await requireGatewayAuthentication(ctx, dependencies, jar)
-  if (!jar.header) throw new HttpError(502, 'Hermes did not issue paired-device cookies', 'pairing_session_missing')
-  return jar.header
-}
-
 async function requireGatewayAuthentication(
   ctx: Koa.Context,
   dependencies: RouteDependencies,
@@ -757,80 +461,6 @@ async function requireGatewayAuthentication(
     throw new HttpError(401, 'Hermes authentication is required', 'authentication_required')
   }
   requireSuccess(identity)
-}
-
-async function searchSessions(ctx: Koa.Context, dependencies: RouteDependencies): Promise<void> {
-  const owner = dependencies.auth.require(ctx).id
-  if (!dependencies.chatCache) {
-    throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
-  }
-  const chatCache = dependencies.chatCache
-  await withJar(ctx, async (jar) => {
-    const view = ctx.query.view === 'chat' || ctx.query.view === 'history'
-      ? ctx.query.view : undefined
-    const query = searchFrom(ctx, ['q', 'limit', 'source', 'profile'])
-    const text = query.get('q')?.trim()
-    if (!text) throw new HttpError(400, 'q is required', 'missing_query')
-    const limit = Math.max(1, Math.min(100, Number(query.get('limit') ?? '50') || 50))
-    query.set('limit', '100')
-    if (view) query.delete('source')
-    if (!query.get('source')) query.set('exclude_sources', 'cron,ios_group,yaoyao_workspace')
-    if (query.get('profile')) {
-      const response = await dependencies.upstream.request('/api/sessions/search', jar, { search: query })
-      sendUpstreamResponse(
-        ctx,
-        chatCache.store.markOwnedSearchResults(
-          owner,
-          query.get('profile') || 'default',
-          response,
-          view,
-          limit,
-        ),
-        jar,
-      )
-      return
-    }
-
-    const profilesResponse = await dependencies.upstream.request('/api/profiles', jar)
-    const profileObjects = normalizedProfiles(requireSuccess(profilesResponse))
-    const profiles = profileObjects.flatMap((entry) => {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
-      const name = (entry as JsonObject).name
-      return typeof name === 'string' && name.trim() ? [name.trim()] : []
-    })
-    const results: JsonObject[] = []
-    for (const profile of profiles) {
-      const scoped = new URLSearchParams(query)
-      scoped.set('profile', profile)
-      const response = await dependencies.upstream.request('/api/sessions/search', jar, { search: scoped })
-      const value = requireSuccess(response)
-      for (const raw of Array.isArray(value.results) ? value.results : []) {
-        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-          results.push({ profile, ...(raw as JsonObject) })
-        }
-      }
-    }
-    results.sort((left, right) => {
-      const leftRank = Number(left.rank ?? left.last_active ?? left.started_at ?? 0)
-      const rightRank = Number(right.rank ?? right.last_active ?? right.started_at ?? 0)
-      return rightRank - leftRank
-    })
-    const marked = results.map((result) => {
-      const profile = typeof result.profile === 'string' ? result.profile : 'default'
-      const id = String(result.id ?? result.session_id ?? result.sessionId ?? '')
-      const metadata = id
-        ? chatCache.store.ownedSessionMetadata(owner, profile, id)
-        : { owned: false }
-      return {
-        ...result,
-        ...(metadata.authoritativeTitle ? { title: metadata.authoritativeTitle } : {}),
-        owned: metadata.owned,
-      }
-    })
-    const projected = marked.filter(result => !view
-      || (view === 'chat' ? result.owned : !result.owned))
-    json(ctx, 200, { results: projected.slice(0, limit), total: projected.length })
-  })
 }
 
 function localMediaPath(root: string, relativePath: string): string {
@@ -909,15 +539,8 @@ function hermesMediaPath(ctx: Koa.Context, rootDirectory = 'cache'): string {
 }
 
 async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencies, rootDirectory = 'cache'): Promise<void> {
-  const user = dependencies.auth.require(ctx)
+  dependencies.auth.require(ctx)
   const path = await authorizeFileRead(dependencies.config, dependencies.upstreamSession, hermesMediaPath(ctx, rootDirectory), ctx.params.profile || String(ctx.query.profile || ctx.get('x-hermes-profile') || 'default'))
-  const cached = dependencies.chatCache?.store.attachment(user.id, path)
-  if (cached) {
-    ctx.set('X-Yaoyao-Data-Source', 'local')
-    sendLocalMedia(ctx, cached.localPath, cached.mimeType, basename(path))
-    prepareFilePreview(ctx, basename(path), true)
-    return
-  }
   // Generated media belongs to Hermes, which may run on a different machine
   // or inside a container. Let its file API enforce the managed-root policy.
   const response = await dependencies.upstreamSession.request('/api/files/download', {
@@ -925,32 +548,9 @@ async function proxyHermesMedia(ctx: Koa.Context, dependencies: RouteDependencie
     headers: ctx.get('range') ? { range: ctx.get('range') } : undefined,
     maxResponseBytes: 100 * 1_024 * 1_024,
   })
-  ctx.set('X-Yaoyao-Data-Source', 'upstream')
-  if (!ctx.get('range') && dependencies.chatCache?.store.knowsAttachment(user.id, path)) {
-    dependencies.chatCache.store.storeAttachment(user.id, path, response)
-  } else if (ctx.get('range')) {
-    void dependencies.chatCache?.cacheAttachment(user.id, path)
-  }
   sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
   ctx.set('Cache-Control', 'private, no-store')
   if (response.status >= 200 && response.status < 300) prepareFilePreview(ctx, basename(path))
-}
-
-function pairedLocalMediaPath(config: ServerConfig, rawPath: string): string {
-  if (!rawPath || rawPath.length > 8_192 || rawPath.includes('\u0000')) {
-    throw new HttpError(400, '远程文件路径无效', 'invalid_node_file_path')
-  }
-  let file: string
-  try { file = realpathSync(rawPath) } catch {
-    throw new HttpError(404, '远程文件不存在', 'node_file_not_found')
-  }
-  const roots = [config.mediaRoot, config.attachmentsRoot, config.imagesRoot].flatMap(root => {
-    try { return [realpathSync(root)] } catch { return [] }
-  })
-  if (!roots.some(root => file.startsWith(`${root}${sep}`)) || !statSync(file).isFile()) {
-    throw new HttpError(403, '远程文件不在允许的目录中', 'node_file_forbidden')
-  }
-  return file
 }
 
 export function createApiRouter(dependencies: RouteDependencies): Router {
@@ -1000,12 +600,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
 
   router.get('/healthz', (ctx) => {
     ctx.set('Cache-Control', 'no-store')
-    json(ctx, 200, {
-      ok: true,
-      chatCache: dependencies.chatCache
-        ? { available: true, mode: dependencies.chatCache.mode, ...dependencies.chatCache.store.stats(), reads: dependencies.chatCache.diagnostics }
-        : { available: false, mode: dependencies.config.chatCacheMode ?? 'upstream-only' },
-    })
+    json(ctx, 200, { ok: true })
   })
 
   // Hermes Gateway-compatible authentication surface for native clients.
@@ -1226,189 +821,6 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       serverUrl: requestOrigin(ctx, dependencies.config),
       user,
     })
-  })
-
-  router.post('/api/app/pairings', async (ctx) => {
-    const pairingOwner = dependencies.auth.requireAdmin(ctx)
-    await withJar(ctx, async (jar) => {
-      await requireGatewayAuthentication(ctx, dependencies, jar)
-      const request = optionalBody(ctx)
-      // Embedded Hermes has no account cookies; the device token alone authorizes paired access.
-      const cookieHeader = jar.header || (dependencies.upstream.embedded ? 'yaoyao_embedded=1' : undefined)
-      if (!cookieHeader) throw new HttpError(503, '9119 服务会话尚未就绪', 'upstream_session_missing')
-      const pairing = dependencies.pairings.create(
-        cookieHeader,
-        pairingScopes(request?.scopes),
-        pairingOwner.id,
-      )
-      const origin = requestOrigin(ctx, dependencies.config)
-      const deepLink = new URL('yaoyao://pair')
-      deepLink.searchParams.set('v', String(NODE_PAIRING_PROTOCOL_VERSION))
-      deepLink.searchParams.set('url', origin)
-      deepLink.searchParams.set('node', pairing.nodeID)
-      deepLink.searchParams.set('id', pairing.id)
-      deepLink.searchParams.set('secret', pairing.secret)
-      deepLink.searchParams.set('fingerprint', pairing.fingerprint)
-      json(ctx, 201, {
-        protocolVersion: NODE_PAIRING_PROTOCOL_VERSION,
-        serviceType: 'yaoyao-web',
-        pairingId: pairing.id,
-        nodeId: pairing.nodeID,
-        fingerprint: pairing.fingerprint,
-        scopes: pairing.scopes,
-        expiresAt: pairing.expiresAt,
-        qrPayload: deepLink.toString(),
-      })
-    })
-  })
-
-  router.get('/api/app/pairings/:pairingID', async (ctx) => {
-    dependencies.auth.requireAdmin(ctx)
-    await withJar(ctx, async (jar) => {
-      await requireGatewayAuthentication(ctx, dependencies, jar)
-      json(ctx, 200, dependencies.pairings.status(ctx.params.pairingID))
-    })
-  })
-
-  router.get('/api/app/paired-devices', async (ctx) => {
-    dependencies.auth.requireAdmin(ctx)
-    await withJar(ctx, async (jar) => {
-      await requireGatewayAuthentication(ctx, dependencies, jar)
-      json(ctx, 200, {
-        nodeId: dependencies.pairings.nodeID,
-        fingerprint: dependencies.pairings.fingerprint,
-        devices: dependencies.pairings.list(),
-      })
-    })
-  })
-
-  router.delete('/api/app/paired-devices/:deviceID', async (ctx) => {
-    dependencies.auth.requireAdmin(ctx)
-    await withJar(ctx, async (jar) => {
-      await requireGatewayAuthentication(ctx, dependencies, jar)
-      try {
-        const delegated = new CookieJar(
-          dependencies.pairings.delegatedCookies(ctx.params.deviceID),
-        )
-        await dependencies.upstream.request('/auth/logout', delegated, {
-          method: 'POST', clientAddress: ctx.req.socket.remoteAddress,
-        })
-      } catch {
-        // Revocation of the local delegation remains authoritative even when
-        // Hermes is temporarily unreachable; its cookie is never returned.
-      }
-      if (!dependencies.pairings.revoke(ctx.params.deviceID)) {
-        throw new HttpError(404, 'Paired device was not found', 'paired_device_not_found')
-      }
-      json(ctx, 200, { ok: true })
-    })
-  })
-
-  router.post('/api/pair/v1/claim', (ctx) => {
-    const request = body(ctx)
-    const pairingID = typeof request.pairingId === 'string' ? request.pairingId : ''
-    const secret = typeof request.secret === 'string' ? request.secret : ''
-    const deviceName = typeof request.deviceName === 'string' ? request.deviceName : ''
-    const existingDeviceID = typeof request.existingDeviceId==='string' ? request.existingDeviceId : undefined
-    const claimed = dependencies.pairings.claim({ pairingID, secret, deviceName, existingDeviceID,
-      existingToken: existingDeviceID ? bearerToken(ctx.get('authorization')) : undefined })
-    const origin = requestOrigin(ctx, dependencies.config)
-    json(ctx, 201, {
-      protocolVersion: NODE_PAIRING_PROTOCOL_VERSION,
-      serviceType: 'yaoyao-web',
-      nodeId: claimed.nodeID,
-      fingerprint: claimed.fingerprint,
-      deviceId: claimed.device.id,
-      deviceName: claimed.device.name,
-      token: claimed.token,
-      scopes: claimed.scopes,
-      serverUrl: `${origin}/node/${claimed.device.id}`,
-    })
-  })
-
-  router.get('/api/pair/v1/capabilities', (ctx) => {
-    json(ctx, 200, {
-      protocolVersion: NODE_PAIRING_PROTOCOL_VERSION,
-      serviceType: 'yaoyao-web',
-      nodeId: dependencies.pairings.nodeID,
-      fingerprint: dependencies.pairings.fingerprint,
-      scopes: [...DEFAULT_NODE_SCOPES],
-      features: ['bots', 'history', 'workspace-agents', 'pair-renewal'],
-    })
-  })
-
-  router.delete('/api/pair/v1/devices/:deviceID', async (ctx) => {
-    const token = bearerToken(ctx.get('authorization'))
-    const cookies = dependencies.pairings.authorize(ctx.params.deviceID, token)
-    try {
-      await dependencies.upstream.request('/auth/logout', new CookieJar(cookies), {
-        method: 'POST', clientAddress: ctx.req.socket.remoteAddress,
-      })
-    } catch {
-      // The paired bearer is revoked locally even if upstream logout fails.
-    }
-    if (!dependencies.pairings.revoke(ctx.params.deviceID)) {
-      throw new HttpError(404, 'Paired device was not found', 'paired_device_not_found')
-    }
-    json(ctx, 200, { ok: true })
-  })
-
-  router.get('/node/:deviceID/api/node-files', (ctx) => {
-    const token = bearerToken(ctx.get('authorization'))
-    dependencies.pairings.authorize(
-      ctx.params.deviceID,
-      token,
-      'history.read',
-    )
-    const value = typeof ctx.query.path === 'string' ? ctx.query.path : ''
-    sendLocalMedia(
-      ctx,
-      pairedLocalMediaPath(dependencies.config, value),
-    )
-  })
-  router.get('/node/:deviceID/api/profile-identities', async (ctx) => {
-    const token = bearerToken(ctx.get('authorization'))
-    dependencies.pairings.authorize(
-      ctx.params.deviceID,
-      token,
-      'agents.read',
-    )
-    json(ctx, 200, { profiles: await dependencies.profileIdentities.load() })
-  })
-
-  router.all('/node/:deviceID/api/*nodePath', async (ctx) => {
-    const rawPath = Array.isArray(ctx.params.nodePath)
-      ? ctx.params.nodePath.join('/')
-      : ctx.params.nodePath
-    const path = pairedProxyPath(rawPath)
-    if (isNativeSessionMutation(path.slice('/api'.length), ctx.method)) {
-      nativeSessionsReadOnly()
-    }
-    const scope = pairedProxyScope(path.slice('/api'.length), ctx.method)
-    const token = bearerToken(ctx.get('authorization'))
-    const cookieHeader = dependencies.pairings.authorize(
-      ctx.params.deviceID,
-      token,
-      scope,
-    )
-    if (ctx.querystring.length > 8_192) {
-      throw new HttpError(414, 'Paired node query is too long', 'node_query_too_long')
-    }
-    const jar = new CookieJar(cookieHeader)
-    if (fileReadRequest(ctx, path)) await authorizeFileQuery(ctx, path, {
-      request: (path, options) => dependencies.upstream.request(path, jar, options),
-    })
-    const response = await dependencies.upstream.withReadScope(`device:${ctx.params.deviceID}`, ctx.get('x-yaoyao-cache') === 'bypass', () => dependencies.upstream.request(path, jar, {
-      method: ctx.method,
-      search: new URLSearchParams(ctx.querystring),
-      body: ['GET', 'HEAD'].includes(ctx.method)
-        ? undefined : optionalBody(ctx),
-      headers: { 'x-yaoyao-node-client': ctx.params.deviceID },
-      clientAddress: path === '/api/auth/ws-ticket'
-        ? undefined : ctx.req.socket.remoteAddress,
-    }))
-    dependencies.pairings.updateCookies(ctx.params.deviceID, jar.header)
-    sendUpstreamResponse(ctx, response, jar)
   })
 
   // Keep the original URL usable by inline Markdown, the lightbox and downloads.
@@ -1923,267 +1335,31 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     search.set('explicit_only', 'true')
     await proxy(ctx, dependencies.upstream, '/api/model/options', { search })
   })
-  router.get('/api/app/sessions/search', async (ctx) => {
-    await searchSessions(ctx, dependencies)
-  })
-  router.get('/api/app/sessions/pins', ctx => {
-    const owner=dependencies.auth.require(ctx).id
-    ctx.body={session_ids:dependencies.chatCache!.store.pins(owner,String(ctx.query.profile??''))}
-  })
   const unreadInput=z.object({items:z.array(z.object({mode:z.enum(['bot','chat']),id:z.string().min(1).max(256),profile:z.string().max(256).optional(),messages:z.array(z.object({id:z.string().min(1).max(512),seq:z.number().int().nonnegative(),version:z.number().int().nonnegative().optional(),taskId:z.string().max(256).optional()}).strict()).max(20000)}).strict()).max(1000)}).strict()
   router.get('/api/app/unread',ctx=>{
     const owner=dependencies.auth.require(ctx).id
     ctx.set('Cache-Control','no-store')
-    ctx.body=unreadSnapshot(dependencies.workspace,dependencies.chatCache!.store,owner,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
+    ctx.body=unreadSnapshot(dependencies.workspace,owner,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
   })
   router.post('/api/app/unread/read',ctx=>{
     const owner=dependencies.auth.require(ctx).id,input=unreadInput.safeParse(body(ctx))
     if(!input.success)throw new HttpError(400,'未读快照格式无效','invalid_unread_snapshot')
-    acknowledgeUnread(dependencies.workspace,dependencies.chatCache!.store,owner,input.data.items,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
-    for(const item of input.data.items)if(item.mode==='chat')dependencies.onChatListChanged?.(owner,item.profile ?? 'default',item.id)
-    ctx.body=unreadSnapshot(dependencies.workspace,dependencies.chatCache!.store,owner,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
-  })
-  router.get('/api/app/sessions/unread', ctx => {
-    const owner=dependencies.auth.require(ctx).id
-    ctx.body=dependencies.chatCache!.store.unread(owner,String(ctx.query.profile??''))
-  })
-  router.patch('/api/app/sessions/unread/:sessionID', ctx => {
-    const owner=dependencies.auth.require(ctx).id,profile=String(ctx.query.profile??'default'),id=safeIdentifier(ctx.params.sessionID,'session ID')
-    const input=body(ctx) as Record<string,unknown>,value=input.readMessageCount??input.read_message_count
-    ctx.body=dependencies.chatCache!.store.markRead(owner,profile,id,typeof value==='number'&&Number.isFinite(value)?value:undefined)
-    dependencies.onChatListChanged?.(owner,profile,id)
-  })
-  router.post('/api/app/sessions/:sessionID/sync',ctx=>{
-    const owner=dependencies.auth.require(ctx).id,profile=String(ctx.query.profile??'default'),id=safeIdentifier(ctx.params.sessionID,'session ID')
-    dependencies.chatCache!.store.requireOwned(owner,profile,id)
-    dependencies.chatCache!.schedule(owner,profile,id,true)
-    ctx.status=202;ctx.body={sync_state:'syncing'}
-  })
-  router.get('/api/app/sessions', async (ctx) => {
-    const view = ctx.query.view === 'history' || ctx.query.view === 'chat' ? ctx.query.view : undefined
-    const search = searchFrom(ctx, ['limit', 'offset', 'order', 'archived', 'profile', 'source'])
-    const offset = Math.max(0, Number(search.get('offset') ?? '0') || 0)
-    const limit = Math.max(1, Math.min(200, Number(search.get('limit') ?? '100') || 100))
-    search.set('offset', String(offset))
-    search.set('limit', String(limit))
-    if (!search.get('order')) search.set('order', 'recent')
-    if (!search.get('archived')) search.set('archived', 'exclude')
-    if (view) search.delete('source')
-    search.set('exclude_sources', 'cron,ios_group,yaoyao_workspace')
-    const path = search.get('profile') ? '/api/sessions' : '/api/profiles/sessions'
-    if (view && !dependencies.chatCache) {
-      throw new HttpError(503, 'Chat ownership registry is unavailable', 'chat_registry_unavailable')
-    }
-    if (view === 'history' && dependencies.chatCache) {
-      const owner = dependencies.auth.require(ctx).id
-      const profile = search.get('profile') || ''
-      await withJar(ctx, async (jar) => {
-        const response = await completeSessionList(dependencies.upstream, path, jar, search)
-        sendUpstreamResponse(
-          ctx,
-          dependencies.chatCache!.store.excludeOwnedSessionsFromList(
-            owner,
-            profile,
-            response,
-            { offset, limit },
-          ),
-          jar,
-        )
-      })
-      return
-    }
-    if (view !== 'chat') {
-      await proxy(ctx, dependencies.upstream, path, { search })
-      return
-    }
-    const profile = search.get('profile') || ''
-    const upstreamSearch = new URLSearchParams(search)
-    upstreamSearch.set('offset', '0')
-    upstreamSearch.set('limit', '100')
-    await cachedChatRead(ctx, dependencies, {
-      key: chatCacheKey('list', profile, undefined, search),
-      kind: 'list', profile, ownedList: true, offset, limit,
-      archived: search.get('archived') || 'exclude',
-      load: jar => completeSessionList(dependencies.upstream, path, jar, upstreamSearch),
-    })
-  })
-  router.get('/api/app/sessions/:sessionID/messages', async (ctx) => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    const incoming = searchFrom(ctx, ['offset', 'limit', 'profile'])
-    const offset = Math.max(0, Number(incoming.get('offset') ?? '0') || 0)
-    const limit = Math.max(1, Math.min(500, Number(incoming.get('limit') ?? '100') || 100))
-    incoming.set('offset', String(offset))
-    incoming.set('limit', String(limit))
-    incoming.set('order', 'latest')
-    incoming.set('include_compacted', 'true')
-    const profile = incoming.get('profile') || 'default'
-    await cachedChatRead(ctx, dependencies, {
-      key: chatCacheKey('messages', profile, id, incoming),
-      kind: 'messages', profile, sessionID: id, offset, limit,
-      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}/messages`, jar, { search: incoming }),
-    })
-  })
-  router.get('/api/app/sessions/:sessionID', async (ctx) => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    const search = searchFrom(ctx, ['profile'])
-    const profile = search.get('profile') || 'default'
-    await cachedChatRead(ctx, dependencies, {
-      key: chatCacheKey('detail', profile, id, search),
-      kind: 'detail', profile, sessionID: id,
-      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
-    })
-  })
-  router.patch('/api/app/sessions/:sessionID', async (ctx) => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    const search = searchFrom(ctx, ['profile'])
-    const localPatch=writableSessionPatch(body(ctx))
-    if(Object.keys(localPatch).every(key=>['title','pinned','archived'].includes(key))){
-      const owner=dependencies.auth.require(ctx).id,profile=search.get('profile')||'default'
-      if(!dependencies.chatCache!.store.ownsSession(owner,profile,id))throw new HttpError(410,'原生历史只读','native_sessions_read_only')
-      dependencies.chatCache!.store.patchLocal(owner,profile,id,localPatch)
-      dependencies.onChatListChanged?.(owner,profile,id)
-      ctx.body={ok:true};return
-    }
-    await withJar(ctx, async jar => {
-      const profile = search.get('profile') || 'default'
-      const owner = dependencies.auth.require(ctx).id
-      requireWritableOwnedSession(
-        await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
-        dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
-      )
-      const request = writableSessionPatch(body(ctx))
-      const requestedProfile = search.get('profile')
-      if (requestedProfile) request.profile = requestedProfile
-      const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'PATCH', search, body: request })
-      if (response.status >= 200 && response.status < 300) {
-        if (typeof request.title === 'string') {
-          dependencies.chatCache?.store.recordAuthoritativeTitle(
-            owner,
-            profile,
-            id,
-            request.title,
-          )
-        }
-        dependencies.chatCache?.store.markListsStale(owner)
-        void dependencies.chatCache?.reconcile(owner, profile, id).catch(() => {})
-      }
-      sendUpstreamResponse(ctx, response, jar)
-    })
-  })
-  router.delete('/api/app/sessions/:sessionID', async (ctx) => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    const search = searchFrom(ctx, ['profile'])
-    await withJar(ctx, async jar => {
-      const profile = search.get('profile') || 'default'
-      const owner = dependencies.auth.require(ctx).id
-      const existing = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search })
-      if (isMissingSessionResponse(existing)) {
-        // Only this account's cached copy remains; no upstream mutation is needed.
-        dependencies.chatCache?.store.deleteSession(owner, profile, id)
-        dependencies.onChatListChanged?.(owner, profile, id)
-        ctx.body = { ok: true }
-        return
-      }
-      requireWritableOwnedSession(
-        existing,
-        dependencies.chatCache?.store.ownsSession(owner, profile, id) ?? false,
-      )
-      const response = await dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { method: 'DELETE', search })
-      const alreadyMissing = isMissingSessionResponse(response)
-      if ((response.status >= 200 && response.status < 300) || alreadyMissing) {
-        dependencies.chatCache?.store.deleteSession(
-          owner,
-          profile,
-          id,
-        )
-        dependencies.onChatListChanged?.(owner, profile, id)
-      }
-      if (alreadyMissing) {
-        ctx.body = { ok: true }
-        return
-      }
-      sendUpstreamResponse(ctx, response, jar)
-    })
-  })
-
-  for (const listPath of ['/api/sessions', '/api/profiles/sessions']) {
-    router.get(listPath, async ctx => {
-      const search = new URLSearchParams(ctx.querystring)
-      await withJar(ctx, async jar => sendUpstreamResponse(
-        ctx,
-        await dependencies.upstream.request(listPath, jar, { search }),
-        jar,
-      ))
-    })
-  }
-  router.get('/api/sessions/:sessionID/messages', async ctx => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    const search = new URLSearchParams(ctx.querystring)
-    const profile = search.get('profile') || 'default'
-    const offset = Math.max(0, Number(search.get('offset') ?? 0) || 0)
-    const limit = Math.max(1, Math.min(500, Number(search.get('limit') ?? 100) || 100))
-    await cachedChatRead(ctx, dependencies, {
-      key: chatCacheKey('messages', profile, id, search),
-      kind: 'messages', profile, sessionID: id, offset, limit,
-      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}/messages`, jar, { search }),
-    })
-  })
-  router.get('/api/sessions/:sessionID', async ctx => {
-    const id = safeIdentifier(ctx.params.sessionID, 'session ID')
-    const search = new URLSearchParams(ctx.querystring)
-    const profile = search.get('profile') || 'default'
-    await cachedChatRead(ctx, dependencies, {
-      key: chatCacheKey('detail', profile, id, search),
-      kind: 'detail', profile, sessionID: id,
-      load: jar => dependencies.upstream.request(`/api/sessions/${encodeURIComponent(id)}`, jar, { search }),
-    })
+    acknowledgeUnread(dependencies.workspace,owner,input.data.items,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
+    ctx.body=unreadSnapshot(dependencies.workspace,owner,(node,profile)=>dependencies.auth.canUseSource(owner,node,profile))
   })
   router.get('/api/files/download', async ctx => {
-    const user = dependencies.auth.require(ctx)
+    dependencies.auth.require(ctx)
     const path = typeof ctx.query.path === 'string' ? ctx.query.path : ''
     if (!path) throw new HttpError(400, 'path is required', 'missing_path')
-    const cached = dependencies.chatCache?.store.attachment(user.id, path)
-    if (cached) {
-      ctx.set('X-Yaoyao-Data-Source', 'local')
-      sendLocalMedia(ctx, cached.localPath, cached.mimeType, basename(path))
-      prepareFilePreview(ctx, basename(path), true)
-      return
-    }
     const response = await dependencies.upstreamSession.request('/api/files/download', {
       search: new URLSearchParams({ path }),
       headers: ctx.get('range') ? { range: ctx.get('range') } : undefined,
       maxResponseBytes: 100 * 1_024 * 1_024,
     })
-    ctx.set('X-Yaoyao-Data-Source', 'upstream')
-    if (!ctx.get('range') && dependencies.chatCache?.store.knowsAttachment(user.id, path)) {
-      dependencies.chatCache.store.storeAttachment(user.id, path, response)
-    } else if (ctx.get('range')) {
-      void dependencies.chatCache?.cacheAttachment(user.id, path)
-    }
     sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
     ctx.set('Cache-Control', 'private, no-store')
     ctx.set('X-Content-Type-Options', 'nosniff')
     if (response.status >= 200 && response.status < 300 && ctx.query.preview === '1') prepareFilePreview(ctx, basename(path))
-  })
-
-  router.all('/api/*gatewayPath', async (ctx) => {
-    if (ctx.path.startsWith('/api/app/') || ctx.path.startsWith('/api/pair/')) {
-      throw new HttpError(404, 'Route not found', 'not_found')
-    }
-    dependencies.auth.require(ctx, ctx.path === '/api/profiles')
-    const raw = Array.isArray(ctx.params.gatewayPath)
-      ? ctx.params.gatewayPath.join('/')
-      : ctx.params.gatewayPath
-    const upstreamPath = pairedProxyPath(raw)
-    if (isNativeSessionMutation(upstreamPath.slice('/api'.length), ctx.method)) {
-      nativeSessionsReadOnly()
-    }
-    const response = await dependencies.upstreamSession.request(upstreamPath, {
-      method: ctx.method,
-      search: new URLSearchParams(ctx.querystring),
-      body: ['GET', 'HEAD'].includes(ctx.method) ? undefined : optionalBody(ctx),
-    })
-    sendUpstreamResponse(ctx, response, dependencies.upstreamSession.jar)
   })
 
   return router

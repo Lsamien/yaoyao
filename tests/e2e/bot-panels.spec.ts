@@ -93,7 +93,7 @@ test('robot sidebar, source changes, requests, routines and group boundaries wor
  await create(page,'群聊成员')
  const all=(await(await page.request.get('/api/app/agents')).json()).agents
  const second=all.find((a:any)=>a.name==='群聊成员')
- const capabilities=await(await page.request.get('/api/realtime/capabilities')).json()
+ const capabilities=await(await page.request.get('/api/app/bootstrap')).json()
  const response=await page.request.post('/api/app/conversations',{headers:{'X-CSRF-Token':capabilities.csrfToken,Origin:'http://127.0.0.1:18832'},data:{name:'群聊侧栏验收',memberIds:[first.id,second.id],administratorId:first.id}})
  expect(response.ok(),await response.text()).toBe(true)
  const group=(await response.json()).conversation

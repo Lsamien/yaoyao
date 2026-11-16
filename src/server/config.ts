@@ -11,7 +11,6 @@ import {
   loadAllowedHostsConfiguration,
   type AllowedHostsConfigurationSnapshot,
 } from './allowedHostsConfiguration.js'
-import type { ChatCacheMode } from './chatCache.js'
 import {parseComposeDesktops} from './composeDesktops.js'
 import type {ComposeDesktop} from '../shared/composeDesktops.js'
 export { DEFAULT_APNS_TOPIC } from './apnsConfiguration.js'
@@ -60,7 +59,6 @@ export interface ServerConfig {
   fcmConfigurationError?: string
   fcmSettings?: FCMConfigurationSnapshot
   allowedHostsSettings?: AllowedHostsConfigurationSnapshot
-  chatCacheMode?: ChatCacheMode
 }
 
 export { DEFAULT_RELEASE_SOURCE as DEFAULT_YAOYAO_RELEASE_SOURCE } from '../../bin/lib/release-source.mjs'
@@ -77,13 +75,6 @@ function parsePort(value: string | undefined): number {
   return port
 }
 
-function parseChatCacheMode(value: string | undefined): ChatCacheMode {
-  const mode = value?.trim() || 'prefer-local'
-  if (!['upstream-only', 'shadow', 'prefer-local'].includes(mode)) {
-    throw new Error('HERMES_YAOYAO_CHAT_CACHE_MODE must be upstream-only, shadow, or prefer-local')
-  }
-  return mode as ChatCacheMode
-}
 
 function parseUpstream(value: string | undefined): URL {
   const upstream = new URL(value ?? 'http://127.0.0.1:9119')
@@ -171,7 +162,6 @@ export function loadServerConfig(
   const production = env.NODE_ENV === 'production'
   const localVmHost = env.HERMES_YAOYAO_LOCAL_VM_HOST?.trim() || 'server'
   if(localVmHost!=='server'&&localVmHost!=='runner')throw new Error('HERMES_YAOYAO_LOCAL_VM_HOST must be server or runner')
-  const chatCacheMode = parseChatCacheMode(env.HERMES_YAOYAO_CHAT_CACHE_MODE)
   const releaseSource = parseReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE)
   const releaseRoot = resolve(env.HERMES_YAOYAO_RELEASE_ROOT?.trim() || `${homedir()}/.local/share/hermes-yaoyao`)
   const allowRemoteUpdate = flag(env.HERMES_YAOYAO_ALLOW_REMOTE_UPDATE)
@@ -213,7 +203,6 @@ export function loadServerConfig(
     production,
     localVmHost,
     composeDesktops:parseComposeDesktops(env.HERMES_YAOYAO_COMPOSE_DESKTOPS),
-    chatCacheMode,
     releaseSource,
     releaseRoot,
     allowRemoteUpdate,

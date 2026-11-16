@@ -230,3 +230,30 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 - `npm run typecheck`、`npm run build` 通过；`npm run kernel:test` 25 个用例通过；内置网关与 Bot 端到端测试通过。
 - `npm test`：仍只有原有的 28 个环境相关失败（另有 1 个托管浏览器用例在全量并发时偶发失败，单独运行通过）。
 - 桌面测试结果与原提交一致。
+
+
+## 13. 只保留 Bot 模式（2026-11-16，`only-0.1` 分支）
+
+用户确认：原来的普通模式（直接与 Hermes Profile 对话）不再保留，所有账号只使用 Bot 模式。
+
+### 行为变化
+
+- 管理员与子账号使用同一套界面：「聊天」里的 Bot 单聊和群聊，以及工具菜单（电脑接管、自动化等）。设置中心默认打开「我的资料」，不再有模式切换。
+- 旧链接 `/`、`/chat/*`、`/history/*`、`/files`、`/artifacts` 及未知路径都跳转到 `/conversations`。
+- 未读只统计 Bot 会话；为兼容旧客户端，接口仍返回 `chat` 字段，固定为 0。
+- 账号扫码登录保留；设备配对（`/api/app/pairings*`、`/api/app/paired-devices*`、`/api/pair/v1/*`）删除。远程 Bot 已在此前停用，因此已有节点记录只能查看和删除，新的子节点配对会因对端没有配对接口而失败。
+- 不再写入 `chat-cache.sqlite3` 和 `realtime-receipts.sqlite3`；已有文件保留在数据目录中，可手动删除。`HERMES_YAOYAO_CHAT_CACHE_MODE` 已停用。
+
+### 删除的代码
+
+- 前端：普通聊天、历史、文件库页面及其 store、实时协议客户端、会话工具函数，`MessageTimeline.vue` 等仅普通模式使用的组件；Profile 显示名编辑接口改为只读的 `/api/profile-identities`。
+- 服务端：`/api/app/sessions*`、`/api/sessions/*`、`/api/realtime/*`、`/node/:deviceID/api/*` 和兜底转发 `/api/*`；聊天缓存、转录存储、实时代理/回执、普通聊天推送、Hermes 原生 Bot 中继、远程 Bot 导出。所有客户端 WebSocket 升级请求一律拒绝。
+- 测试：只覆盖普通模式的单元测试、Playwright 用例（`workspace.spec`、`ordinary-local`、`session-deletion`、`model-confirmation`、`hermesMedia`）和依赖 yaoyao-mobile 普通聊天的 `test:pair:mobile`；混合用例改为只验证 Bot 时间线。文档 `http-sse-realtime.md`、`ordinary-chat-incremental-sync.md`、`read-cache.md`、`hermes-bot-relay.md` 删除。
+
+### 验证
+
+- `npm run typecheck`、`npm run build` 通过。
+- `npm test`：仍是原有的 28 个环境相关失败（messageTime、credentialVault*、workspaceStopUi、serviceCli），无新增失败。
+- 内置内核多账号测试改为断言普通聊天接口对所有账号返回 403/404。
+- 用构建产物启动服务并在浏览器中创建管理员：旧链接全部跳转到 `/conversations`，页面无控制台错误，也没有 4xx 请求。
+- 剩余 Playwright 套件仍依赖旧的假 9119 夹具，本次只做了能被 `--list` 解析的修改，未实际运行。

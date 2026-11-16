@@ -165,20 +165,16 @@ describe('Settings center dialog', () => {
     expect(wrapper.find('.bot-about').exists()).toBe(false)
     wrapper.unmount()
   })
-  it('groups administrator pages and routes Agent, voice, and system content to the right scope', async () => {
+  it('groups administrator pages and routes account, voice, and system content to the right scope', async () => {
     const wrapper = mountSettings()
 
+    // Bot mode only: base Profile identity and models live in each Bot's profile.
     expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual([
       '个人',
       '管理',
-      '基础机器人',
     ])
-
-    await navigationButton(wrapper, '模型与 Provider').trigger('click')
-    expect(navigationButton(wrapper, '模型与 Provider').attributes('aria-current')).toBe('page')
-    const modelPanel = wrapper.get('[data-testid="model-services"]')
-    expect(modelPanel.attributes('data-profile')).toBe('ops:blue/team')
-    expect(wrapper.get('.settings-content__header').text()).toContain('正在设置：运维机器人 / ops:blue/team')
+    expect(wrapper.get('.settings-sidebar nav').text()).not.toContain('模型与 Provider')
+    expect(wrapper.get('.settings-sidebar nav').text()).not.toContain('身份与头像')
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
@@ -198,7 +194,6 @@ describe('Settings center dialog', () => {
 
     expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['个人'])
     expect(navigation.text()).not.toContain('模型与 Provider')
-    expect(navigation.text()).not.toContain('管理')
     expect(navigation.text()).not.toContain('系统概览')
     expect(navigation.text()).not.toContain('双流语音')
     expect(navigation.text()).not.toContain('更新与回滚')
@@ -226,28 +221,19 @@ describe('Settings center dialog', () => {
 
   it('asks before discarding an edited page and keeps the current page when declined', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
-    const wrapper = mountSettings()
-    wrapper.findComponent({ name: 'AgentIdentityPanel' }).vm.$emit('dirty-change', true)
-    await wrapper.vm.$nextTick()
+    const wrapper = mountSettings({ initialPage: 'system-voice' })
+    await wrapper.get('[data-testid="dirty-voice"]').trigger('click')
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(confirm).toHaveBeenCalledWith('放弃当前页面未保存的更改？')
-    expect(wrapper.get('.settings-content__header').text()).toContain('身份与头像')
+    expect(wrapper.get('.settings-content__header').text()).toContain('双流语音')
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(wrapper.find('[data-testid="account-security"]').exists()).toBe(true)
   })
 
-  it('protects Provider and global voice drafts from silent navigation or close', async () => {
+  it('protects global voice drafts from silent close', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const modelWrapper = mountSettings({ initialPage: 'agent-models' })
-    await modelWrapper.get('[data-testid="dirty-model"]').trigger('click')
-    await navigationButton(modelWrapper, '登录与安全').trigger('click')
-    expect(confirm).toHaveBeenCalledWith('放弃当前页面未保存的更改？')
-    expect(modelWrapper.find('[data-testid="model-services"]').exists()).toBe(true)
-    modelWrapper.unmount()
-
-    confirm.mockClear()
     const voiceWrapper = mountSettings({ initialPage: 'system-voice' })
     await voiceWrapper.get('[data-testid="dirty-voice"]').trigger('click')
     await voiceWrapper.get('.settings-center__close').trigger('click')
@@ -258,14 +244,14 @@ describe('Settings center dialog', () => {
   it('moves mobile focus into details and back to the active category', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
     const wrapper = mountSettings()
-    const identity = navigationButton(wrapper, '身份与头像')
-    await identity.trigger('click')
+    const profile = navigationButton(wrapper, '账号资料')
+    await profile.trigger('click')
     await wrapper.vm.$nextTick()
     expect(document.activeElement).toBe(wrapper.get('.settings-content__header h3').element)
 
     await wrapper.get('.mobile-back').trigger('click')
     await wrapper.vm.$nextTick()
-    expect(document.activeElement).toBe(identity.element)
+    expect(document.activeElement).toBe(profile.element)
 
     const security = navigationButton(wrapper, '登录与安全')
     await security.trigger('click')
@@ -277,17 +263,4 @@ describe('Settings center dialog', () => {
     expect(document.activeElement).toBe(security.element)
   })
 
-  it('supports listbox keyboard navigation for the Agent selector', async () => {
-    const wrapper = mountSettings()
-    const trigger = wrapper.get('.settings-agent-selector > button')
-    expect(trigger.attributes('aria-haspopup')).toBe('listbox')
-    await trigger.trigger('click')
-    await wrapper.vm.$nextTick()
-    const menu = wrapper.get('.settings-agent-menu')
-    const options = menu.findAll<HTMLButtonElement>('[role="option"]')
-    expect(document.activeElement).toBe(options[0]!.element)
-
-    await menu.trigger('keydown', { key: 'ArrowDown' })
-    expect(document.activeElement).toBe(options[1]!.element)
-  })
 })

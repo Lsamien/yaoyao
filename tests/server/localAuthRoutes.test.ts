@@ -62,12 +62,13 @@ describe('15300 local authentication routes', () => {
     const setup = await agent.post('/api/app/setup').set('Host', host).set('Origin', `http://${host}`)
       .set('X-CSRF-Token', boot.body.csrfToken).send({ username: 'owner', password: 'fixture-password' }).expect(200)
 
-    for (const path of ['/api/app/models', '/api/model/options']) {
+    // Native Hermes routes are no longer relayed; the app model list still reports the failure.
+    for (const path of ['/api/app/models']) {
       const failed = await agent.get(path).set('Host', host).expect(502)
       expect(failed.body.code).toBe('upstream_auth_unavailable')
       expect(failed.headers['set-cookie']).toBeUndefined()
     }
-    expect(modelRequests).toBe(4)
+    expect(modelRequests).toBe(2)
     expect((await agent.get('/api/app/bootstrap?inspectOnly=1').set('Host', host).expect(200)).body)
       .toMatchObject({ authenticated: true, user: { id: setup.body.user.id } })
     expect((await agent.get('/api/auth/me').set('Host', host).expect(200)).body.user_id).toBe(setup.body.user.id)
@@ -117,7 +118,7 @@ describe('15300 local authentication routes', () => {
     expect((await agent.get('/api/auth/me').set('Host', '127.0.0.1:15300').expect(200)).body.avatar).toBe(avatar)
     await agent.put('/api/app/account/avatar').set('Host', '127.0.0.1:15300').set('Origin', origin)
       .set('X-CSRF-Token', ready.body.csrfToken).send({ avatar: 'https://example.test/avatar.png' }).expect(400)
-    await agent.post('/api/realtime/channels').set('Host', '127.0.0.1:15300').set('Origin', origin).send({ channel: 'chat' }).expect(403)
+    await agent.post('/api/realtime/channels').set('Host', '127.0.0.1:15300').set('Origin', origin).send({ channel: 'chat' }).expect(404)
     await request(server).get('/api/realtime/capabilities').set('Host', '127.0.0.1:15300').expect(401)
   })
   it('creates an explicit administrator, then serves shared profiles through the service account', async () => {
@@ -208,7 +209,7 @@ describe('15300 local authentication routes', () => {
     expect(nativeProfiles.body.profiles[0]).toMatchObject({
       name: 'default', description: '丫头', display_name: '丫头', agentName: '丫头',
     })
-    await native.post('/api/auth/ws-ticket').set('Host', '127.0.0.1:15300').send({}).expect(410)
+    await native.post('/api/auth/ws-ticket').set('Host', '127.0.0.1:15300').send({}).expect(404)
     expect(wsTicketForwardedFor).toBeUndefined()
   })
 })

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +10,6 @@ import { createApplication, type ApplicationRuntime } from '../../src/server/app
 import { loadServerConfig } from '../../src/server/config'
 import { createEmbeddedHermes } from '../../src/server/hermes/embedded'
 import { kernelPaths } from '../../src/server/hermes/paths'
-import { CHAT_TRANSCRIPT_FEATURE } from '../../src/shared/chatTranscript'
 
 const kernel = existsSync(kernelPaths().python)
 const host = '127.0.0.1:15300'
@@ -115,27 +114,23 @@ describe.skipIf(!kernel)('multiple accounts on the embedded Hermes kernel', () =
     await call(child, 'post', `/api/app/conversations/${adminConversation.id}/messages`, childCSRF).send({ requestId: randomUUID(), content: '越权' }).expect(404)
   }, 240_000)
 
-  it('keeps native chats, Hermes data and administration out of reach of a sub-account', async () => {
-    const { admin, child, adminCSRF } = await setup()
-    // The administrator holds a native Hermes session.
-    const channel = (await call(admin, 'post', '/api/realtime/channels', adminCSRF).send({ channel: 'chat', chatProtocol: CHAT_TRANSCRIPT_FEATURE }).expect(201)).body.id as string
-    const created = await call(admin, 'post', `/api/realtime/channels/${channel}/commands`, adminCSRF).set('Idempotency-Key', randomUUID())
-      .send({ method: 'session.create', params: { profile: 'default', source: 'web' } }).expect(200)
-    const sessionId = JSON.stringify(created.body).match(/"session_id":"([A-Za-z0-9_-]+)"/)?.[1]
-    expect(sessionId).toBeTruthy()
-
-    // Every native, Hermes and administrative surface is denied to the sub-account.
-    for (const path of [
-      `/api/sessions/${sessionId}`, `/api/sessions/${sessionId}/messages`, '/api/sessions',
-      `/api/app/sessions/${sessionId}/messages`, '/api/app/sessions', '/api/config', '/api/model/options',
-      '/api/app/admin/model-services', '/api/app/admin/upstream-connection', `/api/files/download?path=${encodeURIComponent(join(home, 'hermes', 'config.yaml'))}`,
-    ]) expect((await call(child, 'get', path)).status, path).toBe(403)
-    expect((await call(child, 'post', '/api/realtime/channels').send({ channel: 'chat', chatProtocol: CHAT_TRANSCRIPT_FEATURE })).status).toBe(403)
-    // Profile names are not disclosed to sub-accounts.
+  it('serves only Bot mode: native chat surfaces are gone and Hermes data stays out of reach of a sub-account', async () => {
+    const { admin, child } = await setup()
+    // Ordinary (native Hermes) chat is retired for every account.
+    for (const client of [admin, child]) {
+      for (const path of ['/api/app/sessions', '/api/app/sessions/abc/messages', '/api/sessions', '/api/sessions/abc/messages']) {
+        expect([403, 404], path).toContain((await call(client, 'get', path)).status)
+      }
+      expect([403, 404]).toContain((await call(client, 'post', '/api/realtime/channels').send({ channel: 'chat' })).status)
+    }
+    // Hermes data and administration remain denied to the sub-account.
+    for (const path of ['/api/config', '/api/model/options', '/api/app/admin/model-services', '/api/app/admin/upstream-connection',
+      `/api/files/download?path=${encodeURIComponent(join(home, 'hermes', 'config.yaml'))}`]) expect((await call(child, 'get', path)).status, path).toBe(403)
+    // Profile names are not disclosed to sub-accounts; the administrator sees the embedded Profiles.
     expect((await call(child, 'get', '/api/profiles').expect(200)).body.profiles).toEqual([])
-    // The administrator still sees the full Profile list from the embedded home.
     const names = (await call(admin, 'get', '/api/profiles').expect(200)).body.profiles.map((p: { name: string }) => p.name)
     expect(names).toEqual(expect.arrayContaining(['default', 'allowed', 'private']))
-    expect(readdirSync(join(home, 'hermes'))).toContain('yaoyao-sessions.json')
+    // Unread counts only Bot conversations.
+    expect((await call(admin, 'get', '/api/app/unread').expect(200)).body).toMatchObject({ chat: 0 })
   }, 240_000)
 })
