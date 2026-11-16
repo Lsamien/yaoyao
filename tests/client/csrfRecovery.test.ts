@@ -49,7 +49,7 @@ describe('long-lived desktop CSRF recovery', () => {
     expect(new Headers(mutations[1]![1]?.headers).get('X-CSRF-Token')).not.toBe(old)
   })
 
-  it('shares one refresh across concurrent ordinary-chat and Bot requests', async () => {
+  it('shares one refresh across concurrent Bot and account requests', async () => {
     setApiCsrfToken('expired', 'account-a')
     let release!: (value: Response) => void
     const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
@@ -57,7 +57,7 @@ describe('long-lived desktop CSRF recovery', () => {
       return new Headers(init?.headers).get('X-CSRF-Token') === 'renewed' ? response({ ok: true }) : invalid()
     })
     vi.stubGlobal('fetch', fetchMock)
-    const paths = ['/api/realtime/channels/chat/commands', '/api/app/conversations/bot/messages', '/api/app/account/avatar']
+    const paths = ['/api/app/conversations/group/messages', '/api/app/conversations/bot/messages', '/api/app/account/avatar']
     const jobs = paths.map(path => apiRequest(path, { method: 'POST', body: { requestId: path } }))
     await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => path === refreshPath)).toHaveLength(1))
     release(response({ csrfToken: 'renewed', userId: 'account-a' }))

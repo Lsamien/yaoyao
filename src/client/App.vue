@@ -6,8 +6,6 @@ import LoginView from '@/views/LoginView.vue'
 import PasswordChangeView from '@/views/PasswordChangeView.vue'
 import { useUnreadStore } from '@/stores/unread'
 import { useAuthStore } from '@/stores/auth'
-import { useChatStore } from '@/stores/chat'
-import { useKanbanStore } from '@/stores/kanban'
 import { useThemeStore } from '@/stores/theme'
 import AgentIdentityFixture from '@/components/app/AgentIdentityFixture.vue'
 
@@ -17,28 +15,19 @@ watch(()=>auth.isAuthenticated ? `${auth.serverIdentity?.serverId ?? location.or
  if(auth.isAuthenticated&&auth.user)unread.start(auth.user.id)
  else { unread.reset();void window.yaoyaoDesktop?.unreadState?.(null).catch(()=>{}) }
 },{immediate:true})
-const chat = useChatStore()
-const kanban = useKanbanStore()
 const theme = useThemeStore()
 const route = useRoute()
 const router = useRouter()
-const allowedRoute = computed(() => !auth.isBotOnly || /^\/conversations(?:\/|$)/.test(route.path))
-watch([() => auth.isBotOnly, () => route.path], () => {
+// Bot mode is the only interface for every account.
+const allowedRoute = computed(() => /^\/conversations(?:\/|$)/.test(route.path))
+watch(() => route.path, () => {
   if (!allowedRoute.value) void router.replace('/conversations')
 }, { immediate: true, flush: 'sync' })
 const agentIdentityFixture = import.meta.env.DEV
   && new URLSearchParams(window.location.search).get('fixture') === 'agent-identity'
 
 const pageTitle = computed(() => {
-  const name = route.name === 'computer' ? '电脑接管' : route.name === 'bot-automations' ? '自动化' : route.path.startsWith('/history')
-    ? '历史记录'
-    : route.path.startsWith('/conversations')
-    ? '聊天'
-    : route.path.startsWith('/kanban')
-      ? kanban.selectedBoard?.name || kanban.selectedBoardSlug || '看板'
-    : route.path.startsWith('/files')
-      ? '文件库'
-      : chat.activeSession?.title || '对话'
+  const name = route.name === 'computer' ? '电脑接管' : route.name === 'bot-automations' ? '自动化' : '聊天'
   return `${name} · 夭夭 AI`
 })
 

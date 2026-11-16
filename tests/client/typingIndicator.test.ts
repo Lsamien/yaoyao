@@ -2,7 +2,6 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, nextTick, type Component } from 'vue'
 import TypingIndicator from '@/components/common/TypingIndicator.vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
 import type { UiMessage } from '@/components/messages/types'
 
@@ -75,7 +74,6 @@ describe('TypingIndicator', () => {
 
 describe('message timeline typing state', () => {
   const timelines: Array<{ name: string; component: Component }> = [
-    { name: 'ordinary', component: MessageTimeline },
     { name: 'workspace', component: WorkspaceMessageTimeline },
   ]
 

@@ -6,10 +6,6 @@ const testUserID = '11111111-1111-4111-8111-111111111112'
 process.once('exit', () => rmSync(testHome, { recursive: true, force: true }))
 mkdirSync(testHome, { recursive: true, mode: 0o700 })
 
-// The browser fixture exercises the ownership registry, not the mutable
-// upstream `source` field. Seed only the sessions that were explicitly
-// created by this local Web user; session-history-only deliberately remains
-// unowned even though fake Hermes labels it source=web.
 const salt = randomBytes(16)
 const now = Date.now()
 writeFileSync(`${testHome}/users.json`, JSON.stringify({
@@ -34,33 +30,12 @@ writeFileSync(`${testHome}/users.json`, JSON.stringify({
   }],
 }), { mode: 0o600 })
 
-const ownedSessions = [
-  ['session-demo', 'yaoyao'],
-  ['session-second', 'yaoyao'],
-  ['session-yaoer', 'yaoer'],
-  ['session-media', 'yaoer'],
-  ['session-user-media', 'yaoer'],
-  ...Array.from({ length: 101 }, (_, index) => [`session-page-${index + 1}`, 'yaoyao']),
-]
-const { ChatCacheStore } = await import('../../dist-server/server/chatCache.js')
 // General media fixtures intentionally span several server directories.
 // Permission-specific QA leaves the production cwd-only default intact.
 if (process.env.YAOYAO_FILE_ACCESS_TEST_MODE !== 'cwd') {
   const { saveFileAccess } = await import('../../dist-server/server/fileAccess.js')
   saveFileAccess(testHome, { mode: 'all', folders: [] })
 }
-const registry = new ChatCacheStore(testHome, testUserID)
-for (const [sessionID, profile] of ownedSessions) {
-  registry.recordCommand(testUserID, profile, sessionID, 'session.create', {
-    profile,
-    source: 'web',
-  })
-}
-// These are existing Hermes histories, not empty sessions created by this build.
-// Exercise the durable background import, never a blocking list fallback.
-registry.db.exec('UPDATE chat_sessions SET metadata_complete=0,complete=0,message_total=NULL')
-registry.db.exec('INSERT OR IGNORE INTO chat_recovery_jobs(owner,profile,session_id) SELECT owner,profile,session_id FROM chat_sessions WHERE owned_at IS NOT NULL')
-registry.close()
 
 Object.assign(process.env, {
   NODE_ENV: 'production',

@@ -406,6 +406,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     // Rebuild old exclusive-environment sessions once: their Hermes Agent may
     // still retain restricted native context even after a new tool binding.
     const resetReason = (execution&&(binding?.executionRevision!==execution.revision||binding?.executionPolicyVersion!==2)?'execution_environment_changed':undefined) ?? memoryReset ?? (sourceReset ? 'source_changed' : movedRunner ? 'runner_changed' : undefined)
+    // Set when the stored Hermes session was missing and a new one replaced it; replays recent history.
+    let sessionRecreated = false
     if(resetReason) {
       if(recovering)throw new HttpError(409,'执行节点已变化，不能在另一节点重放原执行','runner_target_changed')
       this.inspector?.record(owner, c.id, { method: 'bot.session-reset', direction: 'event', agentId: agent.id, runId: run.runId, taskId: run.conversationTaskId,
@@ -782,6 +784,8 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       // stays a YaoYao policy; it is not a session-create parameter.
       const createSession = () => gateway.rpc('session.create', {
             profile: agent.profile,
+            // Embedded kernel: each Bot keeps its own Hermes runtime home under <data>/bots/<id>.
+            bot_id: agent.id,
             title: `Yaoyao ${c.id}${run.conversationTaskId ? ` / ${run.conversationTaskId}` : ''}`,
             source: 'yaoyao_workspace',
             ...(cwd ? { cwd } : {}),
@@ -802,8 +806,12 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         } catch (error) {
           const code = error instanceof HttpError ? error.code : ''
           const message = error instanceof Error ? error.message : ''
-          if (recovering || (code !== 'computer_session_mode_changed' && !message.includes('执行方式已改变'))) throw error
+          // A Hermes session missing from this server (e.g. the legacy ~/.hermes was never imported)
+          // starts a fresh one; the Bot transcript itself lives in the workspace store.
+          const missing = error instanceof HttpError && error.status === 404 && (code === 'session_not_found' || message === '会话不存在')
+          if (recovering || (!missing && code !== 'computer_session_mode_changed' && !message.includes('执行方式已改变'))) throw error
           binding = undefined
+          sessionRecreated = missing
           opened = await createSession()
         }
       } else opened = await createSession()
@@ -1003,8 +1011,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         }
         const members = run.turnConfiguration!.members
         const goal = run.conversationTaskId ? this.store.get<import('../shared/agentTasks.js').AgentGoal>(owner, 'goal', run.conversationTaskId) : undefined
-        const text = c.kind === 'group' ? this.contextText(owner, c, agent, run, binding.contextSeq ?? 0, !!resetReason)
-          : resetReason ? `${movedRunner ? '执行节点已切换' : '记忆或授权范围已变化，会话已重新建立'}。以下是原会话的近期记录，旧路径和执行状态需要在当前节点重新核实；不要重新执行已完成的操作。\n\n${this.contextText(owner,c,agent,run,0,true)}` : trigger.content
+        const replay = !!resetReason || sessionRecreated
+        const text = c.kind === 'group' ? this.contextText(owner, c, agent, run, binding.contextSeq ?? 0, replay)
+          : replay ? `${movedRunner ? '执行节点已切换' : resetReason ? '记忆或授权范围已变化，会话已重新建立' : '原 Hermes 会话已不存在，会话已重新建立'}。以下是原会话的近期记录，旧路径和执行状态需要在当前节点重新核实；不要重新执行已完成的操作。\n\n${this.contextText(owner,c,agent,run,0,true)}` : trigger.content
         const admission = this.getWork(owner, run.id)
         if (!this.store.taskMemberIds(owner,this.store.require<Conversation>(owner,'conversation',c.id),run.conversationTaskId).includes(agent.id)) {
           admission.status = 'interrupted'; admission.error = '执行前成员已移除'; this.saveWork(owner, admission)
@@ -1028,7 +1037,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
             knowledgeRules: knowledge ? BOT_KNOWLEDGE_RULES : undefined,
             memory: memoryDelta(memory, binding.memoryState), noReply: NO_REPLY,
             marker: `[yaoyao-run:${run.runId}:${resultMessage.id}]`,
-            content: text+(systemTurn?.description.length?'\n[本轮系统服务目录，仅含元数据]\n'+JSON.stringify(systemTurn.description):''), contentKind: c.kind === 'group' || !!resetReason ? 'history' : 'user', attachmentRefs,
+            content: text+(systemTurn?.description.length?'\n[本轮系统服务目录，仅含元数据]\n'+JSON.stringify(systemTurn.description):''), contentKind: c.kind === 'group' || replay ? 'history' : 'user', attachmentRefs,
           })
           this.inspector?.record(owner,c.id,{method:'bot.environment',direction:'request',agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId,
             data:{snapshot:environment,computerToolIds:environmentCatalog.map(tool=>tool.id),pluginServices,pluginWarnings:resultMessage.serviceWarnings}})

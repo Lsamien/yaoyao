@@ -1072,11 +1072,10 @@ export class WorkspaceStore {
       .map((r) => this.messageForDisplay(owner, JSON.parse(String(r.data)) as Message))
       .reverse()
   }
-  nativeMessageForFile?: (owner: string, file: StoredWorkspaceFile) => Message | undefined
   visibleFiles(owner: string): StoredWorkspaceFile[] {
     const messages = new Map(this.list<Message>(owner, 'message').map(message => [message.id, message]))
     return this.list<StoredWorkspaceFile>(owner, 'file').filter(file =>
-      isVisibleMessageFile(file, messages.get(file.messageId ?? '') ?? this.nativeMessageForFile?.(owner, file)))
+      isVisibleMessageFile(file, messages.get(file.messageId ?? '')))
       .map(file => file.sender === 'user' ? { ...file, name: normalizeUploadName(file.name) } : file)
   }
   messageForDisplay(owner: string, message: Message): Message {
@@ -1235,15 +1234,6 @@ export class WorkspaceStore {
       .map(row => JSON.parse(String(row.data)) as {id:string;agentId:string;status:string;updatedAt:number})
     conversation.avatarSignals = Object.fromEntries(outcomes.filter(turn => Date.now() - turn.updatedAt < 2000).map(turn => [turn.agentId, { id:turn.id, state:turn.status === 'failed' ? 'failure' as const : 'success' as const, at:turn.updatedAt }]))
     conversation.queuedMessageCount = roots.filter(run => run.status === 'queued').length
-  }
-  ownsUpstream(id: string): boolean {
-    return Boolean(
-      this.db
-        .prepare(
-          `SELECT 1 FROM workspace_entities WHERE kind='binding' AND (json_extract(data,'$.storedId')=? OR json_extract(data,'$.runtimeId')=? OR EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.aliases')) WHERE value=?)) LIMIT 1`,
-        )
-        .get(id, id, id),
-    )
   }
   close(): void {
     for (const timer of this.summaryTimers.values()) clearTimeout(timer)

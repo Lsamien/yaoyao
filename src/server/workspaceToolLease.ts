@@ -72,6 +72,7 @@ export interface LeaseInput {
 /** A private loopback listener; no browser credentials or authority in prompts. */
 export async function createWorkspaceToolLease(input: LeaseInput): Promise<WorkspaceToolLease> {
   if(input.target.runner)return input.target.runner.lease(input)
+  if(input.target.embedded)return embeddedLease(input.target.embedded, input)
   const token = randomBytes(32).toString('base64url'), tokenHash = createHash('sha256').update(token).digest()
   const generation = `${input.workId}:${randomUUID()}`
   let expiresAt = Date.now() + TTL, closed = false, url = ''
@@ -252,4 +253,58 @@ function canonical(value: unknown, depth = 0): unknown {
   if (Array.isArray(value)) return value.map(item => canonical(item, depth + 1))
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item, depth + 1)]))
   return value
+}
+
+/**
+ * Embedded kernel: the grant is handed to the in-process gateway, which declares the catalog to the
+ * Hermes worker and routes each call back here. No loopback listener, token or plugin is involved.
+ */
+function embeddedLease(gateway: import('./hermes/gateway.js').EmbeddedGateway, input: LeaseInput): WorkspaceToolLease {
+  let closed = false, revoke: (() => void) | undefined, sessionId = ''
+  const calls = new Map<string, { fingerprint: string; result: Promise<unknown> }>()
+  const assertActive = () => {
+    if (closed || input.signal.aborted) throw new HttpError(410, '本轮组队授权已失效', 'team_tools_expired')
+    input.assertActive()
+  }
+  const dispose = async () => { closed = true; revoke?.(); revoke = undefined; calls.clear(); input.signal.removeEventListener('abort', abort) }
+  const abort = () => { void dispose() }
+  input.signal.addEventListener('abort', abort, { once: true })
+  return {
+    async bind() {
+      assertActive()
+      const current = input.session().runtimeId
+      if (revoke && current === sessionId) return
+      revoke?.()
+      sessionId = current
+      revoke = gateway.grant(current, {
+        catalog: () => { assertActive(); return input.catalog() },
+        call: async (toolId, args, callId = randomUUID()) => {
+          assertActive()
+          if (!input.catalog().some(tool => tool.id === toolId)) throw new HttpError(404, '本轮未授权此工具', 'team_tool_not_found')
+          const fingerprint = JSON.stringify(canonical([toolId, args]))
+          let previous = calls.get(callId)
+          if (previous && previous.fingerprint !== fingerprint) throw new HttpError(409, '同一调用编号不能用于不同操作', 'idempotency_conflict')
+          if (!previous) {
+            if (calls.size >= 128) throw new HttpError(429, '本轮团队工具调用已达上限，请在后续对话继续。', 'team_tool_call_limit')
+            const result = Promise.resolve().then(async () => {
+              try {
+                const value = await input.call(toolId, args, callId)
+                if (value && typeof value === 'object' && Array.isArray((value as { content?: unknown }).content)) return value
+                return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }
+              } catch (error) {
+                const message = error instanceof Error && error.message ? error.message.slice(0, 1000) : '团队操作失败，请检查当前状态后再重试。'
+                return { content: [{ type: 'text', text: JSON.stringify({ error: message, code: error instanceof HttpError ? error.code : 'team_tool_failed' }) }], isError: true }
+              }
+            })
+            previous = { fingerprint, result }
+            calls.set(callId, previous)
+          }
+          const value = await previous.result
+          assertActive()
+          return value
+        },
+      })
+    },
+    dispose,
+  }
 }

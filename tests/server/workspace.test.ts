@@ -144,8 +144,8 @@ it('includes only the connected per-turn MCP inventory in the submitted Bot prom
   expect(services).toHaveBeenCalledOnce()
   const prompt = requests.find(frame => frame.method === 'prompt.submit')!.params.text
   expect(prompt).toContain('"name":"vaultwarden","transport":"stdio","toolCount":59')
-  expect(prompt).toContain('yaoyao_tools')
-  expect(prompt).toContain('不能根据 hermes mcp list/test 的结果判断这些服务不存在')
+  expect(prompt).toContain('直接调用本轮工具目录中对应的工具')
+  expect(prompt).toContain('不能根据 Hermes 自身的 MCP 配置判断这些服务不存在')
 })
 it('executes a structured assignment on its actual worker and leaves acceptance to its coordinator', async () => {
   const lead = store.updateAgent(owner, agent('负责人').id, { canManageTeam: true })

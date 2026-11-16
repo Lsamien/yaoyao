@@ -3,7 +3,7 @@
 ## 准备
 
 - 安装 Docker Engine 和 Compose，或 Docker Desktop。
-- 准备容器可访问的 Hermes Dashboard/Gateway，通常使用 9119 端口。
+- 不需要单独的 Hermes 服务：镜像已内置 Hermes 0.23.0 内核及其 Python 依赖。
 - 获取本项目源码，在仓库目录执行后续命令。
 
 ## 已发布的远程镜像
@@ -35,13 +35,12 @@ cp docker.env.example docker.env
 | 配置 | 用途 |
 | --- | --- |
 | `HERMES_YAOYAO_IMAGE` | 远程镜像可设为 `samienluo/yaoyao:v0.4.77` 或 `samienluo/yaoyao:latest`；未设置时使用本地构建名称 |
-| `HERMES_YAOYAO_UPSTREAM` | Hermes 上游地址，默认 `http://host.docker.internal:9119` |
+| `HERMES_YAOYAO_HERMES_DIR` | 可选，原有 Hermes 数据目录的宿主机路径，配合 `compose.hermes-import.yaml` 首次启动只读导入 |
 | `HERMES_YAOYAO_BIND_ADDRESS` | Web 的宿主机发布地址，默认 `127.0.0.1`；局域网访问可设为 `0.0.0.0` |
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
 | `HERMES_YAOYAO_ALLOWED_HOSTS` | 使用域名访问时填写对应域名，多个值用英文逗号分隔 |
-| `HERMES_YAOYAO_CHAT_CACHE_MODE` | 普通聊天缓存策略，默认 `prefer-local` |
 
-Docker Desktop 可通过 `host.docker.internal` 访问宿主机。Linux 上 Compose 将该名称映射到宿主机网关；Hermes 需要监听容器可访问的宿主机地址。远程 Hermes 直接填写其可访问地址。
+内置 Hermes 的会话、Profile、模型配置和凭据都保存在 `yaoyao-data` 数据卷的 `hermes/` 目录；首次登录后在“系统设置 → 模型服务”中配置模型。
 
 使用远程镜像时，在 `docker.env` 设置上述镜像标签后执行：
 
@@ -62,64 +61,20 @@ docker compose --env-file docker.env ps
 
 默认打开 `http://127.0.0.1:15300`。局域网设备使用宿主机 IP 和发布端口访问。首次打开页面创建管理员账号，再到系统设置配置 Hermes 连接凭据。通过域名提供公网访问时，在反向代理上配置 HTTPS，并将域名加入允许列表。
 
-## 映射 Hermes 目录以安装工具桥
+## 导入原有 Hermes 数据
 
-可额外加载 `compose.hermes-bridge.yaml`，让“设置 → Hermes 连接 → 工具桥插件”直接检查、安装和修复共享目录中的插件。这个可选文件适用于普通 Web、标准共享桌面和 Cursor 共享桌面三种 Compose 配置。
+已有 Hermes 数据目录（包含 `config.yaml`、`state.db`、`profiles/` 等）时，可在首次启动时只读导入：
 
-在 `docker.env` 中填写 **上游 Hermes 实际使用的数据目录** 的宿主机绝对路径。该目录应包含 `config.yaml`，命名 Profile 位于其中的 `profiles/`：
-
-```dotenv
-# Linux 示例；macOS 可填写 /Users/你的用户名/.hermes。
+```sh
+# docker.env 中填写宿主机绝对路径；Linux 示例 /srv/hermes-data，macOS 示例 /Users/你的用户名/.hermes
 HERMES_YAOYAO_HERMES_DIR=/srv/hermes-data
+docker compose --env-file docker.env -f compose.yaml -f compose.hermes-import.yaml up -d --build web
 ```
 
-普通 Web 使用：
-
-```sh
-docker compose --env-file docker.env -f compose.yaml -f compose.hermes-bridge.yaml config --quiet
-docker compose --env-file docker.env -f compose.yaml -f compose.hermes-bridge.yaml up -d --build web
-```
-
-若使用共享桌面，将上面的第一个 `-f compose.yaml` 换成 `-f compose.desktops.yaml` 或 `-f compose.desktops.cursor.yaml`，保留第二个映射文件。
-
-- 宿主目录以读写方式挂载到容器 `/hermes`，必须已存在；路径写错时不会自动创建一个空 Hermes 目录。
-- 选择与 `HERMES_YAOYAO_UPSTREAM` 对应实例相同的数据目录。远程主机的目录需要先以共享存储等方式提供给 Docker 宿主机。
-- Web 仍使用非 root 用户，默认 UID/GID 为 `1000:1000`。映射目录需要允许该用户读取配置，并写入 `config.yaml`、`plugins/`、`profiles/` 和 `backups/`。权限不匹配时应在宿主机配置对应用户或 ACL；Web 页面会报告读取或安装失败。
-- 镜像自带 Linux Python 3 和 PyYAML。安装器只使用容器 `/usr/bin/python3`，宿主机的 `venv` 和 Hermes 程序不会被执行。
-- 映射模式只安装共享数据目录中的工具桥，不执行 `--repair-profile-runtime`。Profile 模型兼容修复必须在实际运行 Hermes 的容器或节点，使用其 Python 单独执行；页面会明确提示这一点。
-- 安装前备份插件与配置，先安装默认 Profile 的后台入口，再处理命名 Profile。安装后在 Hermes 所在节点重启服务，再在 Web 点击“重新检查”。
-- 映射不会赋予 Web 管理 Docker 或 Hermes 进程的能力；既有 Compose 桌面数量、隔离设置及生命周期继续按原配置管理。
-
-此功能需要包含本次改动的新镜像；旧的远程镜像标签不会因添加目录映射而自动获得安装功能。可按上述命令从当前源码构建。
-
-自定义部署可使用以下容器环境变量：
-
-| 配置 | 用途 |
-| --- | --- |
-| `HERMES_YAOYAO_BRIDGE_MOUNTED=1` | 明确允许通过映射目录安装工具桥 |
-| `HERMES_YAOYAO_BRIDGE_HOME=/hermes` | 容器内实际挂载路径，必须是绝对路径 |
-| `HERMES_YAOYAO_BRIDGE_PYTHON=/usr/bin/python3` | 容器自身的 Python 路径 |
-
-仅设置目录但没有开启 `BRIDGE_MOUNTED` 时，外部 Hermes 仍只提供状态检查，不开放目录安装。
-
-### Docker 安装报 Profile 模型兼容修复失败
-
-旧版 Web 安装接口会无条件添加 `--repair-profile-runtime`。当 Hermes 与夭夭运行在不同容器、仅共享数据目录时，夭夭容器的 Python 找不到 `tui_gateway`，即使目录可写也会报“工具桥或 Profile 模型兼容修复安装失败”。应更新到包含修复的 Web 镜像，或从当前源码构建；添加目录映射、反复重启不会修复旧版接口。
-
-暂未更新镜像时，可直接调用镜像内的安装器，仅安装工具桥。以下假设容器名为 `yaoyao`、`hermes-agent`，共享目录在夭夭中为 `/hermes`：
-
-```sh
-docker exec yaoyao /usr/bin/python3 /app/dist-server/runner/install-hermes-bridge.py \
-  --hermes-home /hermes --profile default --enable
-```
-
-每个使用中的命名 Profile 也需安装，将 `default` 替换为对应名称；先完成默认 Profile。命令会备份配置和旧插件，失败会直接显示具体原因。安装成功后，在空闲时执行 `docker restart hermes-agent`，再回 Web 重新检查。
-
-此命令不修复 Hermes 核心模型解析。需要该修复时，将同一 Web 镜像中的安装器和插件包复制到 Hermes 容器，使用运行 Hermes 的 Python 执行安装器并添加 `--repair-profile-runtime`。修复需要 Hermes 源码写入权限，并会先验证兼容性；验证失败时不修改核心文件。Hermes 程序位于容器自身文件系统时，核心修复不会随共享数据目录持久化，重建或升级 Hermes 容器后需重新检查。
-
-共享数据目录还需要匹配两个服务的运行 UID/GID。可用 `docker exec yaoyao id` 和 Hermes 容器中实际服务用户的 `id` 核对。安装器会原子替换配置文件，只有旧文件的写权限并不足够，新的配置也必须能由 Hermes 服务用户读取；优先对齐两端运行 UID/GID，不要仅放宽旧文件权限。
-
-若两个服务在同一 Compose 网络，直接设置 `HERMES_YAOYAO_UPSTREAM: http://hermes-agent:9119`。宿主机发布的 `9120:9119` 用于从宿主机访问；不需要把 `hermes-agent` 通过 `extra_hosts` 覆盖成宿主机网关。
+- 目录以只读方式挂载到 `/import/hermes`，导入过程不会写入原目录；SQLite 数据库使用在线备份读取，原 Hermes 仍在运行时也能得到一致副本，但建议先停止原 Hermes。
+- 只在 `yaoyao-data` 中的 `hermes/` 为空时导入一次；重复启动不会覆盖已有数据。导入失败时内置 Hermes 从空数据启动，原因写入日志和数据目录中的 `hermes-import-error.json`。
+- 导入完成后可移除 `compose.hermes-import.yaml` 和挂载。
+- `compose.hermes-import.yaml` 也可与 `compose.desktops.yaml`、`compose.desktops.cursor.yaml` 组合使用。
 
 ## 验证
 
@@ -131,7 +86,7 @@ curl --fail http://127.0.0.1:15300/readyz
 docker compose --env-file docker.env logs --tail=100 web
 ```
 
-`healthz` 检查 Web 服务，`readyz` 检查 Hermes 上游。若上游不可达，检查 `HERMES_YAOYAO_UPSTREAM`、Hermes 监听地址及网络连通性；若需要认证，在 Web 系统设置中保存连接凭据。
+`healthz` 检查 Web 服务，`readyz` 检查内置 Hermes 是否可用。系统设置中的“内置 Hermes”页面显示内核状态和数据目录。
 
 登录后创建会话、收发消息、上传并下载附件，验证实际使用流程。
 
@@ -143,7 +98,7 @@ docker compose --env-file docker.env logs --tail=100 web
 
 ```sh
 cp docker.env.example docker.env
-# 配置 Web 发布地址、端口和已有 Hermes 的 9119 地址。
+# 配置 Web 发布地址和端口。
 docker compose --env-file docker.env -f compose.desktops.yaml up -d --build
 docker compose --env-file docker.env -f compose.desktops.yaml ps
 ```
@@ -192,7 +147,6 @@ cp -n docker.env.example docker.env
 
 ```dotenv
 HERMES_YAOYAO_IMAGE=yaoyao:local
-HERMES_YAOYAO_UPSTREAM=http://host.docker.internal:9119
 HERMES_YAOYAO_BIND_ADDRESS=127.0.0.1
 HERMES_YAOYAO_PUBLISHED_PORT=15300
 YAOYAO_CURSOR_DESKTOP_IMAGE=yaoyao-desktop:cursor
@@ -256,11 +210,11 @@ docker compose --env-file docker.env -f compose.desktops.cursor.yaml -f compose.
 
 聊天电脑面板显示每台桌面的镜像名称，机器人通过选择已有桌面来选择环境。不同桌面各自使用独立数据卷，可同时使用不同镜像；共享同一桌面的成员只能使用该桌面的一个镜像。改变现有条目的镜像会在下次 Compose 部署时重建该实例，请先结束使用它的任务，保留原有 ID、service 和数据卷。
 
-### Hermes 执行连接
+### 执行节点
 
-Compose 管理桌面，Hermes 执行连接负责模型运行和工具调用。沿用已有执行节点；新部署可在 **设置 → 本地虚拟机 → 打开执行节点设置** 下载程序和注册配置。此部署生成的配置自动带 `managedBy: compose`，执行节点不再创建桌面，也不需要安装 Docker。
+Compose 管理桌面，执行节点负责连接桌面并执行虚拟机工具；模型运行由 Web 内置的 Hermes 完成。沿用已有执行节点；新部署可在 **设置 → 本地虚拟机 → 打开执行节点设置** 下载程序和注册配置。此部署生成的配置自动带 `managedBy: compose`，执行节点不再创建桌面，也不需要安装 Docker。
 
-执行节点只需已有 Hermes 和 Node.js 24+。默认 Hermes 路径可留空；自定义安装填写绝对路径。把下载的程序和 `runner.json` 放在运行 Hermes 的电脑：
+执行节点需要 Node.js 24+。把下载的程序和 `runner.json` 放在执行节点所在的电脑：
 
 ```sh
 mkdir -p yaoyao-runner

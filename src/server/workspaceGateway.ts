@@ -23,6 +23,8 @@ export interface WorkspaceNode {
 }
 export interface GatewayExecutionScope {taskEnvironment?:()=>import('../shared/executionEnvironment.js').TaskEnvironment;workId:string;cleanupOnly?:boolean;sessionId?:string;authorize():void;publishArtifact?(name:string,bytes:Buffer):Promise<unknown>}
 export interface GatewayTarget {
+  /** In-process Hermes gateway (embedded kernel). Takes precedence over every network transport. */
+  embedded?: import('./hermes/gateway.js').EmbeddedGateway
   url: URL
   client: UpstreamClient
   session: Pick<UpstreamServiceSession, 'request' | 'webSocketCredential'>
@@ -91,11 +93,8 @@ export class WorkspaceNodes {
     let target = this.targets.get(key)
     if (!target) {
       if (node.transport === 'paired-web') throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
-      const credentials = this.open<{ username: string; password: string }>(node.secret)
-      const url = new URL(node.url),
-        client = new UpstreamClient(url)
-      target = { url, client, session: new UpstreamServiceSession(client, () => credentials) }
-      this.targets.set(key, target)
+      // Hermes is embedded in every Yaoyao server; nodes connect Yaoyao to Yaoyao, never to a remote 9119.
+      throw new HttpError(410, '直连远程 Hermes（9119）的节点已停用，请在对方夭夭上扫码配对。', 'remote_hermes_node_removed')
     }
     return target
   }
@@ -297,6 +296,11 @@ export class WorkspaceGateway {
     const generation = ++this.generation
     const active = () => !this.closed && generation === this.generation
     const disconnected = () => { if(active()){this.available=false;this.onDisconnect()} }
+    if(this.target.embedded&&!this.target.runner){
+      const channel=this.target.embedded.open(frame=>{if(active())this.onEvent(frame)},disconnected)
+      if(!active()){channel.close();throw new Error('Hermes connection closed')}
+      this.runner=channel;this.available=true;return
+    }
     if(this.target.runner){
       const runner=await this.target.runner.open(frame=>{if(active())this.onEvent(frame)},disconnected,this.scope)
       if(!active()){runner.close();throw new Error('Hermes connection closed')}

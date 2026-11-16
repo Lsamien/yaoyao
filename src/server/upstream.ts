@@ -143,7 +143,10 @@ export class UpstreamClient {
     readonly publicSecure = false,
     now: () => number = Date.now,
   ) { this.readCache = new UpstreamReadCache(now) }
-  get directAgent() { return isLocalAuthorizationTarget(this.baseURL) ? this.loopback.agent(this.baseURL) : undefined }
+  /** In-process Hermes (embedded kernel). When set, requests never leave the process. */
+  local?: import('./hermes/api.js').HermesApi
+  get embedded(): boolean { return !!this.local }
+  get directAgent() { return !this.local && isLocalAuthorizationTarget(this.baseURL) ? this.loopback.agent(this.baseURL) : undefined }
   close(): void { this.readCache.close(); this.loopback.close() }
 
   withReadScope<T>(scope: string, fresh: boolean, run: () => T): T {
@@ -225,6 +228,11 @@ export class UpstreamClient {
   ): Promise<UpstreamResponse> {
     if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
       throw new HttpError(500, 'Invalid internal upstream path')
+    }
+    if (this.local) {
+      let body = options.body
+      if (body === undefined && typeof options.rawBody === 'string') { try { body = JSON.parse(options.rawBody) } catch { body = undefined } }
+      return this.local.handle({ method: options.method ?? 'GET', path, search: options.search, body, maxResponseBytes: options.maxResponseBytes })
     }
     const url = new URL(this.baseURL)
     const prefix = this.baseURL.pathname === '/' ? '' : this.baseURL.pathname.replace(/\/$/, '')

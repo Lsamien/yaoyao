@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { normalizeReleaseSource } from './lib/release-source.mjs'
 import { resolveDataHome } from './lib/data-home.mjs'
 import { migrateDataHome } from './lib/data-migration.mjs'
+import { prepareKernel, verifyKernel } from './lib/kernel-setup.mjs'
 
 const label = 'com.samien.hermes-yaoyao'
 const sourceProjectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -39,15 +40,11 @@ function environment(env = process.env) {
   const allowed = [
     'HERMES_YAOYAO_HOST',
     'HERMES_YAOYAO_PORT',
-    'HERMES_YAOYAO_UPSTREAM',
-    'HERMES_YAOYAO_UPSTREAM_USERNAME',
-    'HERMES_YAOYAO_UPSTREAM_PASSWORD_FILE',
     'HERMES_YAOYAO_ALLOWED_HOSTS',
     'HERMES_YAOYAO_HOME',
     'HERMES_YAOYAO_TLS_CERT',
     'HERMES_YAOYAO_TLS_KEY',
     'HERMES_YAOYAO_ALLOW_INSECURE_LAN',
-    'HERMES_YAOYAO_SUPERVISE_DASHBOARD',
     'HERMES_YAOYAO_CHAT_CACHE_MODE',
     'HERMES_YAOYAO_RELEASE_SOURCE',
     'HERMES_YAOYAO_RELEASE_ROOT',
@@ -60,6 +57,9 @@ function environment(env = process.env) {
     'HERMES_YAOYAO_FCM_PROJECT_ID',
     'HERMES_YAOYAO_FCM_PACKAGE_NAME',
     'HERMES_YAOYAO_SERVICE_ROOT',
+    'YAOYAO_KERNEL_PYTHON',
+    'YAOYAO_KERNEL_VENV',
+    'YAOYAO_IMPORT_HERMES_HOME',
   ]
   return { ...Object.fromEntries(allowed.flatMap(key => env[key] ? [[key, env[key]]] : [])),
     HERMES_YAOYAO_RELEASE_SOURCE: normalizeReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE) }
@@ -73,8 +73,6 @@ export function launchAgentPlist(options = {}) {
     PATH: `${dirname(node)}:${join(homedir(), '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
     NODE_ENV: 'production',
     HERMES_YAOYAO_PORT: '15300',
-    HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:9119',
-    HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1',
     ...environment(options.environment),
     HERMES_YAOYAO_HOME: resolveDataHome(options.environment?.YAOYAO_HOME || options.environment?.HERMES_YAOYAO_HOME || dataHome),
     YAOYAO_HOME: resolveDataHome(options.environment?.YAOYAO_HOME || options.environment?.HERMES_YAOYAO_HOME || dataHome),
@@ -183,7 +181,7 @@ async function restart() {
 
 function stop() {
   if (loaded()) run('launchctl', ['bootout', `${domain}/${label}`])
-  process.stdout.write(`已停止 ${label}；Hermes 9119 未被操作\n`)
+  process.stdout.write(`已停止 ${label}\n`)
 }
 
 async function uninstall() {
@@ -239,7 +237,9 @@ async function main() {
     if (command === 'uninstall') return uninstall()
   }
   if (group === 'uploads' && command === 'prune') return pruneUploads(args)
-  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
+  if (group === 'setup') { await prepareKernel({ root: serviceRoot, force: command === '--force' }); process.stdout.write('内置 Hermes 内核已就绪\n'); return }
+  if (group === 'doctor') { verifyKernel({ root: serviceRoot }); return }
+  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao setup [--force]   准备内置 Hermes 内核\n  yaoyao doctor            检查内置 Hermes 内核\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
 }
 
 export function isMainModule(entry = process.argv[1]) {

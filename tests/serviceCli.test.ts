@@ -125,11 +125,13 @@ describe('hermes-yaoyao LaunchAgent plist', () => {
     expect(plist).toContain(`${join(homedir(), '.local', 'bin')}:`)
   })
 
-  it('enables Dashboard supervision by default', () => {
-    expect(launchAgentPlist()).toContain('<key>HERMES_YAOYAO_SUPERVISE_DASHBOARD</key>')
+  it('no longer configures an external Hermes Dashboard', () => {
+    const plist = launchAgentPlist({ environment: { HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:9119', HERMES_YAOYAO_SUPERVISE_DASHBOARD: '1' } })
+    expect(plist).not.toContain('HERMES_YAOYAO_SUPERVISE_DASHBOARD')
+    expect(plist).not.toContain('HERMES_YAOYAO_UPSTREAM')
   })
 
-  it('uses 15300 without injecting credentials into 9119 startup', () => {
+  it('uses 15300 without injecting Hermes service credentials', () => {
     const plist = launchAgentPlist({ environment: {} })
 
     expect(plist).toContain('<key>HERMES_YAOYAO_PORT</key>\n      <string>15300</string>')
@@ -137,12 +139,11 @@ describe('hermes-yaoyao LaunchAgent plist', () => {
     expect(plist).not.toContain('HERMES_YAOYAO_UPSTREAM_PASSWORD')
   })
 
-  it('binds managed Web to the trusted LAN and enables local Dashboard supervision by default', () => {
+  it('binds managed Web to the trusted LAN by default', () => {
     const plist = launchAgentPlist({ environment: {} })
 
     expect(plist).toContain('<key>HERMES_YAOYAO_HOST</key>\n      <string>0.0.0.0</string>')
     expect(plist).toContain('<key>HERMES_YAOYAO_ALLOW_INSECURE_LAN</key>\n      <string>1</string>')
-    expect(plist).toContain('<key>HERMES_YAOYAO_SUPERVISE_DASHBOARD</key>\n      <string>1</string>')
   })
 
   it('keeps the managed installation on LAN even with stale loopback environment', () => {

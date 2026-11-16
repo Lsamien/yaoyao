@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import WorkspaceTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import { workspaceMessagesToUi } from '@/components/workspace/viewModels'
 import { WorkspaceTranscriptStore } from '@/components/workspace/transcriptStore'
 import { buildMessageTimelineRows } from '@/utils/turnTrace'
@@ -24,13 +23,13 @@ it('keeps warning-only messages visible independently of tool trace aggregation 
   expect(textOnly?.serviceWarnings).toBeUndefined()
 })
 
-it.each(['workspace','session'])('shows non-blocking, escaped service notices with tools hidden in the %s timeline',async(timeline)=>{
+it.each(['workspace'])('shows non-blocking, escaped service notices with tools hidden in the %s timeline',async(timeline)=>{
   vi.stubGlobal('ResizeObserver',class {observe(){}disconnect(){}})
   const scrollTo=HTMLElement.prototype.scrollTo
   HTMLElement.prototype.scrollTo=vi.fn()
   const unsafe={code:'plugin_unavailable',service:'<img src=x onerror="alert(1)">',message:'<script>alert(2)</script> [修复](javascript:alert(3))'}
   const messages=workspaceMessagesToUi([{...message,serviceWarnings:[warning,unsafe]}])
-  const wrapper=mount(timeline==='workspace'?WorkspaceTimeline:MessageTimeline,{props:{identity:'chat',messages,showTools:false},global:{plugins:[createPinia()],stubs:{AppIcon:true,AgentAvatar:true,MarkdownContent:{props:['content'],template:'<div class="fixture-content">{{content}}</div>'}}}})
+  const wrapper=mount(WorkspaceTimeline,{props:{identity:'chat',messages,showTools:false},global:{plugins:[createPinia()],stubs:{AppIcon:true,AgentAvatar:true,MarkdownContent:{props:['content'],template:'<div class="fixture-content">{{content}}</div>'}}}})
   try{
     await flushPromises()
     const notices=wrapper.get('[aria-label="服务状态提示"]')

@@ -66,7 +66,7 @@ test('npm update downloads in place, survives reopening, and refreshes only afte
     const signedIn = await page.request.post(origin + '/api/app/setup', { headers: { Origin: origin, 'X-CSRF-Token': boot.csrfToken }, data: { username: 'admin', password: 'npm-e2e-password' } })
     expect(signedIn.ok()).toBe(true)
     page.on('dialog', dialog => { confirmations++; void dialog.dismiss() })
-    await page.goto(origin + '/chat')
+    await page.goto(origin + '/conversations')
     let dialog = await openUpdates()
     await expect(dialog).toContainText('不保留旧版本')
     await expect(dialog.getByRole('button', { name: '回滚上一版本', exact: true })).toHaveCount(0)

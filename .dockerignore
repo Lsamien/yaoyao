@@ -26,11 +26,8 @@
 !bin/**
 !src/
 !src/**
-!integrations/
-!integrations/hermes-bots-bridge/
-!integrations/hermes-bots-bridge/**
-
-integrations/hermes-bots-bridge/tests/**
+!runtime/
+!runtime/**
 **/__pycache__/**
 **/*.py[cod]
 

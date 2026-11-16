@@ -1,6 +1,5 @@
 import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest'
 import { nextTick } from 'vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
 import { mount } from '@vue/test-utils'
 import { appearancePreset, bubbleColors, bubbleVariables, contrast, normalizeAppearance } from '@/utils/chatAppearance'
@@ -20,9 +19,9 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); useChatAppearance().selectPreset('current') })
 describe('chat bubble appearance', () => {
-  it.each([MessageTimeline, WorkspaceMessageTimeline])('updates rendered bubbles when a preset changes without replacing messages', async (component) => {
+  it.each([WorkspaceMessageTimeline])('updates rendered bubbles when a preset changes without replacing messages', async (component) => {
     const store = useChatAppearance()
-    const wrapper = mount(component as typeof MessageTimeline, {
+    const wrapper = mount(component as typeof WorkspaceMessageTimeline, {
       props: {identity: 'appearance', messages: [{id:'u',role:'user',content:'问题'}, {id:'a',role:'assistant',content:'长回复'}, {id:'s',role:'system',content:'系统信息'}]},
       global: {stubs: {AgentAvatar:true, AppIcon:true}},
     })

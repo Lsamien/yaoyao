@@ -3,7 +3,6 @@ import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { systemMessageNotice } from '@/utils/systemMessageNotice'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import type { UiMessage } from '@/components/messages/types'
 
 const assignment: UiMessage = { id: 'assigned', role: 'system', content: '由管理员分派的子任务：终审文章\n\n- 核验来源\n- 检查配图' }
@@ -25,7 +24,7 @@ describe('system event disclosures', () => {
     expect(systemMessageNotice({ ...message, timelineMetadata: { exit_code: 143, signal: 'SIGTERM' } })?.title).toBe('后台子任务已终止')
   })
 
-  it.each([MessageTimeline, WorkspaceMessageTimeline])('keeps full requirements behind a short title in both timelines', async component => {
+  it.each([WorkspaceMessageTimeline])('keeps full requirements behind a short title in both timelines', async component => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
     Element.prototype.scrollTo = vi.fn()
     const wrapper = mount(component, { props: { identity: 'test', messages: [assignment] }, global: { stubs: { AgentAvatar: true, MarkdownContent: { props: ['content'], template: '<p>{{ content }}</p>' } } } })

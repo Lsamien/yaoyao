@@ -51,7 +51,7 @@ test('opens settings and schedules an independent Web update while all 9119 requ
     const signedIn = await login.json()
     expect(login.ok(), `${login.status()} ${signedIn.error || ''}`).toBe(true)
     expect((await page.request.get(origin + '/readyz')).status()).toBe(503)
-    await page.goto(origin + '/chat', { waitUntil: 'domcontentloaded' })
+    await page.goto(origin + '/conversations', { waitUntil: 'domcontentloaded' })
     await page.getByRole('button', { name: /^(打开我的设置|设置与模式)$/ }).click()
     await page.getByRole('menuitem', { name: '我的设置', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: '我的设置' })

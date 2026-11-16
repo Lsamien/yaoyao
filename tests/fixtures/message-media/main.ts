@@ -1,6 +1,5 @@
 import { createApp, defineComponent, h, ref } from 'vue'
 import WorkspaceMessageTimeline from '@/components/workspace/WorkspaceMessageTimeline.vue'
-import MessageTimeline from '@/components/messages/MessageTimeline.vue'
 import type { UiMessage } from '@/components/messages/types'
 import { useChatAppearance } from '@/stores/chatAppearance'
 import '@/styles/tokens.css'
@@ -24,7 +23,7 @@ if (query.has('order')) messages.splice(0, messages.length, { id:'order',role:'a
 createApp(defineComponent({ setup() {
   const opened = ref('')
   return () => h('main', { style: `height:100dvh;display:flex;flex-direction:column;${mobile ? 'max-width:390px;margin:auto;border-inline:1px solid var(--line)' : ''}` }, [
-    h(query.has('ordinary') ? MessageTimeline : WorkspaceMessageTimeline, { identity:'media-preview',title:'竹儿',showAssistantIdentity:false,messages,onPreview:(file:any)=>opened.value=file.name,onPreviewFile:(file:any)=>opened.value=file.name }),
+    h(WorkspaceMessageTimeline, { identity:'media-preview',title:'竹儿',showAssistantIdentity:false,messages,onPreview:(file:any)=>opened.value=file.name,onPreviewFile:(file:any)=>opened.value=file.name }),
     h('footer', {style:'padding:12px 24px;border-top:1px solid var(--line);color:var(--text-muted)'}, '向竹儿提问'),
     opened.value ? h('dialog',{open:true,style:'position:fixed;inset:20% auto auto 50%;transform:translateX(-50%);border:1px solid var(--line);border-radius:20px;padding:24px;background:var(--surface);color:var(--text-primary)'},[h('p',opened.value), h('button',{onClick:()=>opened.value=''},'关闭预览')]) : null,
   ])

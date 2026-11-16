@@ -3,13 +3,13 @@
 ## 前提
 
 - 源码安装需要 Node.js 24；容器安装需要 Docker Engine 或 Docker Desktop。
-- 可访问的 Hermes Dashboard/Gateway（通常为 9119），支持会话创建、恢复、提示词提交、附件及审批 RPC。
+- 不需要单独的 Hermes 服务：Hermes 0.23.0 已内置。源码部署运行 `npm run kernel:setup`（npm 安装运行 `yaoyao setup`）准备 Python 3.11 依赖。
 
 ## 源码安装
 
 在仓库执行 `npm ci`、`npm run build`，然后执行 `npm start`。Web 默认监听 `127.0.0.1:15300`。
 
-上游地址由 `HERMES_YAOYAO_UPSTREAM` 配置。远端凭据在 Web 系统设置中保存。需要环境配置时使用 `HERMES_YAOYAO_UPSTREAM_USERNAME` 和 `HERMES_YAOYAO_UPSTREAM_PASSWORD`，不要把凭据嵌入 URL。
+模型供应商、默认模型和凭据在 Web 的“系统设置 → 模型服务”中配置，保存在数据目录的 `hermes/` 下。首次启动会只读导入原有 `~/.hermes`。
 
 首次打开 Web 时创建管理员账号和至少 8 位的密码。服务不会生成固定的默认账号或密码；iOS 使用 Web 账号或手机登录二维码。
 
@@ -19,7 +19,7 @@
 
 ## Docker 安装
 
-复制 `docker.env.example` 为 `docker.env`，填写容器可访问的 `HERMES_YAOYAO_UPSTREAM`，然后执行：
+复制 `docker.env.example` 为 `docker.env`，按需填写发布地址（导入原有数据见 [Docker 部署说明](docker-install.md#导入原有-hermes-数据)），然后执行：
 
 ```sh
 docker compose --env-file docker.env config --quiet

@@ -5,7 +5,6 @@ import {CredentialVaultCoordinator} from './credentialVault/coordinator.js'
 import {createCredentialVaultClient} from './credentialVault/localClient.js'
 import {ManagedBrowsers} from './managedBrowsers.js'
 import { isWorkspaceAccountPath } from './subaccountAccess.js'
-import { chatTranscriptRouter } from './chatTranscriptApi.js'
 import {DesktopEnvironments} from './desktopEnvironments.js'
 import {DesktopHostHub} from './desktopHosts.js'
 import type {GrokAuth} from './grokAuth.js'
@@ -14,9 +13,6 @@ import {WorkspaceInspector} from './workspaceInspector.js'
 import {WorkspaceRoutines} from './workspaceRoutines.js'
 import {WorkspaceRoutineTools} from './workspaceRoutineTools.js'
 import { WorkspacePlugins } from './botPlugins/workspacePlugins.js'
-import { nativeMessageFileText } from '../shared/messageFiles.js'
-import { hermesBotRelay } from './hermesBotRelay.js'
-import { remoteAgentExports } from './workspaceRemoteAgents.js'
 import { randomBytes, createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
@@ -24,7 +20,6 @@ import { createServer as createHttpsServer } from 'node:https'
 import { join } from 'node:path'
 import { bodyParser } from '@koa/bodyparser'
 import Koa from 'koa'
-import { RealtimeAPI } from './realtimeApi.js'
 import type { ServerConfig } from './config.js'
 import { loadServerConfig } from './config.js'
 import { errorMessage, HttpError } from './errors.js'
@@ -40,6 +35,8 @@ import {
   isExactOrigin,
 } from './security.js'
 import { UpstreamHttpError, UpstreamClient } from './upstream.js'
+import { createEmbeddedHermes, type EmbeddedHermes } from './hermes/embedded.js'
+import { readHostTools } from './hostToolSettings.js'
 import { UploadStore } from './uploads.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
@@ -60,27 +57,17 @@ import {
 import { OpenVikingConfigurationManager } from './openVikingConfiguration.js'
 import { OpenVikingService } from './openVikingService.js'
 import { OpenVikingSessionSync } from './openVikingSessionSync.js'
-import { PushCoordinatorEventAdapter } from './pushEventAdapter.js'
 import {
   AllowedHostsConfigurationManager,
   type AllowedHostsConfigurationSnapshot,
 } from './allowedHostsConfiguration.js'
-import {
-  ChatPushJobManager,
-  HermesChatNotificationResolver,
-} from './pushEvents.js'
-import { ChatCacheCoordinator, ChatCacheStore } from './chatCache.js'
 import {LocalVmService} from './localVm.js'
 import {SharedComputers} from './sharedComputers.js'
 import {ComputerControlService} from './computerControls.js'
 import { RunnerHub } from './runnerHub.js'
-import { HermesBridgeManager } from './hermesBridge.js'
-import type { DashboardController } from './dashboardController.js'
 
 export interface ApplicationOptions {
   deferBackground?: boolean
-  dashboardSupervisor?: DashboardController
-  hermesBridge?: HermesBridgeManager
   config?: ServerConfig
   fetchImpl?: typeof fetch
   grokFetch?:typeof fetch
@@ -91,6 +78,7 @@ export interface ApplicationOptions {
   auth?: LocalAuthStore
   pluginFetch?: typeof fetch
   upstreamSession?: UpstreamServiceSession
+  hermes?: EmbeddedHermes
   accountPairings?: AccountLoginPairingStore
   profileIdentities?: UpstreamProfileIdentityService
   push?: PushCoordinator
@@ -98,16 +86,13 @@ export interface ApplicationOptions {
   fcmConfiguration?: FCMConfigurationManager
   openVikingConfiguration?: OpenVikingConfigurationManager
   allowedHostsConfiguration?: AllowedHostsConfigurationManager
-  chatCache?: ChatCacheCoordinator
 }
 
 export interface ApplicationRuntime {
   credentialVault: CredentialVaultCoordinator
-  hermesBridge: HermesBridgeManager
   runners: RunnerHub
   workspace: WorkspaceStore
   workspaceRuntime: WorkspaceRuntime
-  realtime: RealtimeAPI
   app: Koa
   config: ServerConfig
   csrf: CsrfProtection
@@ -117,6 +102,7 @@ export interface ApplicationRuntime {
   updates: SystemUpdateManager
   auth: LocalAuthStore
   upstreamSession: UpstreamServiceSession
+  hermes: EmbeddedHermes
   accountPairings: AccountLoginPairingStore
   profileIdentities: UpstreamProfileIdentityService
   push: PushCoordinator
@@ -126,9 +112,6 @@ export interface ApplicationRuntime {
   openVikingService: OpenVikingService
   openVikingSessionSync: OpenVikingSessionSync
   allowedHostsConfiguration: AllowedHostsConfigurationManager
-  pushEventCoordinator: PushCoordinatorEventAdapter
-  chatPushJobs: ChatPushJobManager
-  chatCache?: ChatCacheCoordinator
   desktopEnvironments:DesktopEnvironments
   desktopHosts:DesktopHostHub
   grokAuth:GrokAuth
@@ -175,6 +158,17 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const csrf = new CsrfProtection(persistentCsrfSecret(config.home, options.csrfSecret), Boolean(config.tlsCert))
   const pairings = options.pairings ?? new NodePairingStore(config.home)
   const upstream = new UpstreamClient(config.upstream, options.fetchImpl, Boolean(config.tlsCert))
+  // Embedded Hermes: the kernel runs as child processes under <data>/hermes; nothing listens on 9119.
+  const hermes = options.hermes ?? createEmbeddedHermes(config.home, {
+    defaultCwd: config.mediaRoot,
+    policy: () => {
+      // Same global switch the Hermes dashboard used for native approvals.
+      try { const tools = readHostTools(config.home); return { approval: tools.approvalPolicy, denyHostTools: tools.denyServerTools } }
+      catch { return { approval: 'ask', denyHostTools: false } }
+    },
+  })
+  // `fetchImpl` is a test-only fake Dashboard transport; production always answers in process.
+  if (!options.upstreamSession && !options.fetchImpl) upstream.local = hermes.api
   const uploads = options.uploads ?? new UploadStore(config.home)
   const updates = options.updates ?? new SystemUpdateManager(config)
   const auth = options.auth ?? new LocalAuthStore(config.home, Boolean(config.tlsCert))
@@ -185,17 +179,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     upstream,
     () => auth.upstreamCredentials(configuredUpstreamCredentials),
   )
-  let chatCache = options.chatCache
-  if (!chatCache) {
-    chatCache = new ChatCacheCoordinator(
-      new ChatCacheStore(
-        config.home,
-        auth.soleUserIDForLegacyMigration(),
-      ),
-      upstreamSession,
-      config.chatCacheMode ?? 'prefer-local',
-    )
-  }
   const accountPairings = options.accountPairings ?? new AccountLoginPairingStore()
   const profileIdentities = options.profileIdentities
     ?? new UpstreamProfileIdentityService(config, upstreamSession)
@@ -242,18 +225,11 @@ export function createApplication(options: ApplicationOptions = {}): Application
     isUserActive: userID => auth.isUserActive(userID),
     userAuthorizationVersion: userID => auth.pushAuthorizationVersion(userID),
   })
-  const pushEventCoordinator = new PushCoordinatorEventAdapter(push)
-  const chatPushJobs = new ChatPushJobManager(config, upstreamSession, pushEventCoordinator, {
-    resolver: new HermesChatNotificationResolver(
-      upstreamSession,
-      (localUserID, prompt) => push.promptDigest(localUserID, prompt),
-    ),
-  })
   // The application owns group events. No Dashboard plugin is queried.
   const workspace = new WorkspaceStore(config.home)
-  push.setUnreadCounter(owner => unreadSnapshot(workspace, chatCache!.store, owner,(node,profile)=>auth.canUseSource(owner,node,profile)).total)
+  push.setUnreadCounter(owner => unreadSnapshot(workspace, owner,(node,profile)=>auth.canUseSource(owner,node,profile)).total)
   const openVikingService = new OpenVikingService(workspace, openVikingConfiguration)
-  const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession }, pairings.nodeID)
+  const workspaceNodes = new WorkspaceNodes(workspace, config, { url: config.upstream, client: upstream, session: upstreamSession, ...(upstream.embedded ? { embedded: hermes.gateway } : {}) }, pairings.nodeID)
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
   const runners=new RunnerHub(workspace,auth,workspaceNodes.local)
   runners.hermesUpstream=config.upstream.origin
@@ -274,13 +250,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   executionSettings.testProxy=()=>runners.testNetworks()
   executionSettings.nodeStatus=()=>runners.networkStatus()
   executionSettings.activeTurns=()=>workspaceRuntime.activeExecutionTurns()
-  let pendingDashboardMutations=0
-  const hermesBridge=options.hermesBridge??new HermesBridgeManager(config,upstreamSession,{
-    dashboard:options.dashboardSupervisor,
-    isIdle:()=>workspaceRuntime.idleForUpdate&&runners.idleForUpdate&&realtime.broker.idleForUpdate&&desktopEnvironments.idleForUpdate,
-    isRestartIdle:()=>pendingDashboardMutations===0,
-  })
-  workspaceRuntime.assertCanSubmit=()=>hermesBridge.assertDashboardAvailable()
   const workspaceMemory = new WorkspaceMemorySynthesis(workspaceRuntime)
   const openVikingSessionSync = new OpenVikingSessionSync(workspace, openVikingService, owner => auth.isUserActive(owner))
   let backgroundStarted = false, closed = false
@@ -308,7 +277,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   workspaceRuntime.inspector=workspaceInspector
   const workspaceRoutines=new WorkspaceRoutines(workspace,auth,workspaceNodes,workspaceRuntime)
   workspaceRuntime.routineTools=new WorkspaceRoutineTools(workspaceRoutines,workspace,workspaceNodes,workspaceRuntime)
-  workspaceRoutines.paused=()=>hermesBridge.dashboardRestarting
   const workspacePlugins=new WorkspacePlugins(workspace,workspaceNodes,auth,workspaceRuntime,config.home,options.pluginFetch)
   workspaceRuntime.plugins=workspacePlugins
   workspaceRuntime.retireHelper=(owner,helper)=>runners.retireHelper(owner,helper)
@@ -322,45 +290,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     if (c.kind === 'group' && !push.isGroupSubscribed(owner,c.id)) return
     push.enqueueNotification({ kind: interaction ? interaction.kind === 'approval' ? 'chat.approval.requested' : 'chat.clarification.requested' : run.status === 'failed' ? 'chat.failed' : 'chat.completed', eventID: `workspace:${interaction?.id ?? run.id}`, localUserID: owner, title: c.name, body: (interaction?.message || message?.content || run.error || '回复完成').slice(0,180), collapseID: `workspace:${c.id}:${run.conversationTaskId ?? 'direct'}`, data: { conversationId:c.id, ...(run.conversationTaskId ? { conversationTaskId: run.conversationTaskId } : {}), workspace:'1' }, ...(c.kind === 'group' ? {roomID:c.id} : {}) })
   }
-  const realtime = new RealtimeAPI(config, auth, csrf, pairings, upstream, upstreamSession, {
-    coordinator: pushEventCoordinator,
-    resolver: new HermesChatNotificationResolver(upstreamSession, (user, prompt) => push.promptDigest(user, prompt)),
-  }, (owner, profile, sessionID) =>
-    chatCache?.store.ownsSession(owner, profile, sessionID) ?? false)
-  realtime.broker.protectedSession = id => workspace.ownsUpstream(id)
-  realtime.broker.assertCanCommand=()=>hermesBridge.assertDashboardAvailable()
-  realtime.transcriptsAvailable = chatCache.store.transcripts.enabled
-  realtime.broker.onNativeEvent = (owner, profile, storedId, frame) => {
-    chatCache?.observe(owner, profile, storedId, frame)
-    if (owner.startsWith('device:')) return
-    if (!['message.complete', 'attachment.staged'].includes(frame.type)) return
-    const data = frame.payload ?? {}, text = frame.type === 'attachment.staged' ? JSON.stringify(data) : nativeMessageFileText(data)
-    const messageId = String(chatCache.store.projectedMessageID(owner,profile,storedId) ?? data.row_id ?? data.message_id ?? data.id ?? createHash('sha256').update(text).digest('hex'))
-    void workspaceAssets.archiveText(owner, text, 'local', profile, storedId, messageId, frame.type === 'attachment.staged' ? 'user' : 'agent').catch(() => {})
-  }
-  workspace.nativeMessageForFile = (owner, file) => {
-    const message = chatCache?.store.fileSourceMessage(owner, file.profile ?? 'default', file.conversationId ?? '', file.messageId ?? '')
-    if (!message) return undefined
-    return {
-      id: file.messageId!, conversationId: file.conversationId!, seq: 0,
-      role: message.role === 'assistant' ? 'assistant' : message.role === 'user' ? 'user' : 'system',
-      content: nativeMessageFileText(message), reasoning: '', status: 'complete',
-      attachments: [], tools: [], createdAt: file.createdAt,
-    }
-  }
-  realtime.broker.onNativeGlobalEvent = (owner, type, upstreamInvalidation) => chatCache?.observeGlobal(owner, type, upstreamInvalidation)
-  chatCache.onSynchronized = (owner, profile, sessionID) => {
-    realtime.broker.publishOwnerSessionsChanged(owner, 'cache.synced', profile, sessionID)
-  }
-  realtime.broker.onNativeCommand = (owner, profile, storedId, method, params) => {
-    chatCache?.command(owner, profile, storedId, method, params)
-  }
-  realtime.broker.nativeSourceCursor = (owner,profile,id,runtime,epoch)=>chatCache.store.transcripts.sourceCursor(owner,profile,id,runtime,epoch)
-  realtime.broker.onNativeRoute = (owner, profile, storedId, runtimeId, running, snapshot) => {
-    chatCache?.route(owner, profile, storedId, runtimeId, snapshot?undefined:running)
-    if(snapshot)chatCache.store.recordEvent(owner,profile,storedId,{type:'route.resumed',payload:snapshot})
-  }
-  chatPushJobs.setTransportFactory(realtime.recoveryTransport, job => realtime.ownsPushJob(job.id))
   try {
     uploads.cleanupUncommitted()
   } catch {
@@ -413,16 +342,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     await next()
   })
   app.use(jsonCompression)
-  app.use(async (ctx,next)=>{
-    // Count admitted requests before async parsing/authorization. A restart must
-    // not race a request which has not yet reached the runtime's task counters.
-    const mutation=isMutation(ctx.method)&&!/^\/api\/runner\/.*\/(poll|heartbeat)$/.test(ctx.path)
-      &&ctx.path!=='/api/app/admin/hermes-bridge/restart'
-    if(!mutation){await next();return}
-    hermesBridge.assertDashboardAvailable()
-    pendingDashboardMutations++
-    try{await next()}finally{pendingDashboardMutations--}
-  })
   app.use(runners.middleware())
   app.use(desktopHosts.middleware())
   app.use(async (ctx, next) => {
@@ -440,9 +359,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
     await next()
   })
-  app.use(hermesBotRelay(workspaceNodes, auth, csrf))
-  app.use(remoteAgentExports(workspace,workspaceNodes,pairings,auth))
-  app.use(realtime.middleware())
   const parseBody = (limit: string) => bodyParser({
     encoding: 'utf-8',
     enableTypes: ['json'],
@@ -515,28 +431,9 @@ export function createApplication(options: ApplicationOptions = {}): Application
   app.use(applicationRouter.routes())
   app.use(async (ctx, next) => {
     if (ctx.path.includes('/plugins/yaoyao') || ctx.path.startsWith('/api/app/groups')) throw new HttpError(410, '请使用新版聊天接口', 'retired_plugin_api')
-    const id = /\/sessions\/([^/]+)/.exec(ctx.path)?.[1]
-    if (id && workspace.ownsUpstream(decodeURIComponent(id))) throw new HttpError(404, '会话不存在', 'session_not_found')
     await next()
-    // Native history is a separate surface, including search and profile projections.
-    if (ctx.path.includes('/sessions') || ctx.path.endsWith('/profiles')) {
-      let value: any = ctx.body
-      const buffered = Buffer.isBuffer(value)
-      try {
-        if (buffered) value = JSON.parse(value.toString())
-        const filter = (v: any): any => {
-          if (Array.isArray(v)) return v.filter(x => !x || typeof x !== 'object' || (x.source !== 'yaoyao_workspace' && !workspace.ownsUpstream(String(x.id ?? x.session_id ?? x.sessionId ?? '')))).map(filter)
-          if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k,x]) => [k, filter(x)]))
-          return v
-        }
-        ctx.body = buffered ? Buffer.from(JSON.stringify(filter(value))) : filter(value)
-      } catch { /* Preserve non-JSON error responses. */ }
-    }
   })
-  app.use(chatTranscriptRouter(chatCache, auth).routes())
   const router = createApiRouter({
-    onChatListChanged: (owner,profile,id) => realtime.broker.publishOwnerSessionsChanged(owner,'local-state',profile,id),
-    onServerIdentityChanged: identity => realtime.broker.publishServerIdentity(identity, config.upstream.href),
     onUserAccessChanged: async owner => {
       for (const c of workspace.list<{ id: string }>(owner, 'conversation')) await workspaceRuntime.stopConversation(owner, c.id)
     },
@@ -549,6 +446,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     updates,
     auth,
     upstreamSession,
+    hermes,
     accountPairings,
     profileIdentities,
     push,
@@ -558,8 +456,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     openVikingService,
     openVikingSessionSync,
     allowedHostsConfiguration,
-    hermesBridge,
-    chatCache,
   })
   app.use(router.routes())
   app.use(router.allowedMethods({ throw: false }))
@@ -576,7 +472,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   return {
     credentialVault,
     runners,
-    hermesBridge,
     localVm,
     workspace,
     workspaceRuntime,
@@ -585,7 +480,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     desktopEnvironments,
     desktopHosts,
     grokAuth:grokCloud.authorization,
-    realtime,
     app,
     config,
     csrf,
@@ -595,6 +489,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     updates,
     auth,
     upstreamSession,
+    hermes,
     accountPairings,
     profileIdentities,
     push,
@@ -604,9 +499,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
     openVikingService,
     openVikingSessionSync,
     allowedHostsConfiguration,
-    pushEventCoordinator,
-    chatPushJobs,
-    chatCache,
     startBackground,
     close: () => {
       credentialVault.close()
@@ -625,13 +517,10 @@ export function createApplication(options: ApplicationOptions = {}): Application
       workspaceRuntime.close()
       workspaceNodes.close()
       upstream.close()
-      realtime.close()
-      chatPushJobs.stop()
+      if (!options.hermes) hermes.close()
       push.close()
       uploads.close()
       workspace.close()
-      chatCache?.close()
-      chatCache?.store.close()
     },
   }
 }
@@ -651,14 +540,6 @@ export function createNodeServer(runtime: ApplicationRuntime, options: { deferBa
       }, runtime.app.callback())
     : createHttpServer(runtime.app.callback())
   let backgroundStarted = false, localVmStarted = false, closed = false
-  const synchronizePushObservers = (enabled = runtime.push.isAnyProviderEnabled()) => {
-    if (!backgroundStarted || closed) return
-    if (enabled) {
-      runtime.chatPushJobs.start()
-    } else {
-      runtime.chatPushJobs.stop()
-    }
-  }
   const startLocalVm = () => {
     if (!backgroundStarted || localVmStarted || closed) return
     const address = server.address()
@@ -674,22 +555,18 @@ export function createNodeServer(runtime: ApplicationRuntime, options: { deferBa
     runtime.workspaceRuntime.start()
     runtime.workspaceRoutines.start()
     runtime.grokAuth.start()
-    synchronizePushObservers()
     startLocalVm()
   }
   server.once('listening', startLocalVm)
   if (!options.deferBackground) startBackground()
-  const removePushConfigurationListener = runtime.push.onEnabledChange(synchronizePushObservers)
-  const removeWebSockets = runtime.realtime.rejectLegacyUpgrades(server)
+  const removeWebSockets = rejectWebSocketUpgrades(server, config.production)
   return {
     server,
     startBackground,
     close: async (closeConnections = false) => {
       closed = true
       await runtime.localVm.close()
-      removePushConfigurationListener()
       removeWebSockets()
-      runtime.realtime.close()
       if (closeConnections) server.closeAllConnections()
       await new Promise<void>((resolve, reject) => {
         if (!server.listening) {
@@ -701,4 +578,16 @@ export function createNodeServer(runtime: ApplicationRuntime, options: { deferBa
       runtime.close()
     },
   }
+}
+
+/** Clients use HTTP; reject WebSocket upgrades explicitly (Vite owns HMR sockets in development). */
+function rejectWebSocketUpgrades(server: HttpServer, production: boolean): () => void {
+  const upgrade = (request: import('node:http').IncomingMessage, socket: import('node:stream').Duplex) => {
+    const path = (request.url ?? '/').split('?')[0]!
+    if (!production && !path.startsWith('/api/') && !path.startsWith('/node/') && !path.startsWith('/ws/')) return
+    const body = JSON.stringify({ code: 'http_required', error: 'WebSockets are not supported; use HTTP' })
+    socket.end('HTTP/1.1 410 Gone\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body)
+  }
+  server.on('upgrade', upgrade)
+  return () => server.off('upgrade', upgrade)
 }

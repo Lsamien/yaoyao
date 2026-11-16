@@ -93,7 +93,7 @@ test('UI approval survives port edits, closing settings and a full server proces
     await expect(page.locator('.desktop-sidebar .sidebar-account-switcher__main')).toBeVisible()
   }
   const settings=async()=>{await page.locator('.desktop-sidebar .sidebar-account-switcher__main').click();await page.getByRole('menuitem',{name:'我的设置',exact:true}).click();await page.getByRole('button',{name:'密码管理',exact:true}).click()}
-  const headers=async()=>({Origin:base,'X-CSRF-Token':(await(await page.request.get(base+'/api/realtime/capabilities')).json()).csrfToken})
+  const headers=async()=>({Origin:base,'X-CSRF-Token':(await(await page.request.get(base+'/api/app/bootstrap')).json()).csrfToken})
   try{
     await start();await login()
     const agentResponse=await page.request.post(base+'/api/app/agents',{headers:await headers(),data:{name:'竹儿测试',profile:'default'}});expect(agentResponse.ok()).toBe(true)

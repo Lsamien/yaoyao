@@ -1,0 +1,14 @@
+# Optional overlay: import an existing Hermes data directory once, read-only.
+# The embedded Hermes copies it into the yaoyao-data volume on first start and never writes to it.
+# Combine with compose.yaml (or a desktops compose file): docker compose -f compose.yaml -f compose.hermes-import.yaml up -d
+services:
+  web:
+    environment:
+      YAOYAO_IMPORT_HERMES_HOME: /import/hermes
+    volumes:
+      - type: bind
+        source: "${HERMES_YAOYAO_HERMES_DIR:?Set HERMES_YAOYAO_HERMES_DIR to the existing Hermes data directory}"
+        target: /import/hermes
+        read_only: true
+        bind:
+          create_host_path: false

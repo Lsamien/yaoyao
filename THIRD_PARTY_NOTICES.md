@@ -26,3 +26,17 @@ Avatar silhouette paths and original two-eye expressions from zhulin025/LaoA-Gro
 ## Application supplier logos
 
 `public/provider-logos/*.svg` contains the Gmail, Google Drive, Google Calendar, GitHub, Notion, Slack, Linear, Discord, Outlook, Trello, Airtable and X logos retrieved from `https://logos.composio.dev/api/{slug}` on 2026-10-02. These assets identify the corresponding integrations. Each brand's logo and trademark rights belong to its respective owner.
+
+## Embedded Hermes kernel
+
+`runtime/hermes/` embeds NousResearch/hermes-agent v0.23.0 (commit
+`2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`), taken with its embedded-kernel adaptations from the
+yaovi-agent project (`0.23.0+yaovi`); Yaoyao only changes the product identity strings.
+MIT, Copyright (c) 2025 Nous Research; see `runtime/hermes/LICENSE`.
+`runtime/*.py` (worker, model service and adapters), `bin/lib/kernel-setup.mjs` and
+`src/server/hermes/{kernel,service}.ts` are adapted from yaovi-agent (Apache-2.0).
+
+`runtime/hermes/plugins/memory/openviking/` is the unmodified OpenViking Hermes memory plugin
+(MIT, Copyright (c) 2025 Nous Research); see `licenses/openviking-hermes/LICENSE`.
+Python dependencies are pinned in `runtime/requirements.lock`. Hermes' optional skills catalog,
+plugin catalog, messaging-channel adapters and standalone batch/trajectory runners are not shipped.

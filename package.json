@@ -24,7 +24,6 @@
     "brand:verify": "node scripts/verify-brand.mjs",
     "release:verify": "node scripts/verify-release.mjs",
     "verify:lifecycle": "node scripts/verify-lifecycle.mjs",
-    "test:pair:mobile": "node --import tsx --test scripts/verify-mobile-pair.test.ts",
     "test:e2e:workspace": "npm run build && playwright test -c playwright.workspace.config.ts",
     "test:e2e:desktop-hosts": "npm run build && playwright test -c playwright.desktop-hosts.config.ts",
     "test:e2e:team-tools": "npm run build && playwright test -c playwright.team-tools.config.ts",
@@ -41,7 +40,10 @@
     "runner:build": "node scripts/build-runner.mjs",
     "desktop:build:win": "npm run build && node scripts/build-windows-desktop.mjs",
     "desktop:pack:win": "npm run desktop:build:win && node scripts/windows-desktop-release.mjs",
-    "desktop:test:win": "node scripts/test-windows-desktop.mjs"
+    "desktop:test:win": "node scripts/test-windows-desktop.mjs",
+    "kernel:setup": "node scripts/kernel-setup.mjs",
+    "kernel:test": ".venv/bin/python tests/runtime/test_kernel.py && .venv/bin/python tests/runtime/test_hermes_service.py && .venv/bin/python tests/runtime/test_hermes_import.py",
+    "postinstall": "node scripts/kernel-setup.mjs --postinstall"
   },
   "dependencies": {
     "@koa/bodyparser": "^5.0.0",
@@ -119,7 +121,13 @@
     "NOTICE",
     "THIRD_PARTY_NOTICES.md",
     "release.json",
-    "build-info.json"
+    "build-info.json",
+    "runtime",
+    "!runtime/**/__pycache__/**",
+    "!runtime/**/*.pyc",
+    "!runtime/**/.env",
+    "!runtime/**/auth.json",
+    "scripts/kernel-setup.mjs"
   ],
   "homepage": "https://github.com/Lsamien/yaoyao"
 }

@@ -22,12 +22,10 @@ services:
       NODE_ENV: production
       HERMES_YAOYAO_HOST: 0.0.0.0
       HERMES_YAOYAO_PORT: 15300
-      HERMES_YAOYAO_UPSTREAM: "${HERMES_YAOYAO_UPSTREAM:-http://host.docker.internal:9119}"
       # Permit localhost access when the published host port differs from the
       # container's fixed 15300 port; configured public host names remain opt-in.
       HERMES_YAOYAO_ALLOWED_HOSTS: "localhost,127.0.0.1,${HERMES_YAOYAO_ALLOWED_HOSTS:-}"
       HERMES_YAOYAO_ALLOW_INSECURE_LAN: "1"
-      HERMES_YAOYAO_SUPERVISE_DASHBOARD: "0"
       HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
       HERMES_YAOYAO_COMPOSE_DESKTOPS: "[{\"id\":\"647fbb98-0c40-4d96-91e0-3290eb9020eb\",\"name\":\"Cursor 开发桌面\",\"socketPath\":\"/run/yaoyao-desktops/desktop-cursor/desktop.sock\",\"networkSocketPath\":\"/run/yaoyao-networks/desktop-cursor/gateway.sock\",\"imageKey\":\"cursor\"}]"
       HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
