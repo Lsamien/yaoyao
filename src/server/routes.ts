@@ -18,6 +18,7 @@ import type { ServerConfig } from './config.js'
 import { isLoopbackHost, isLoopbackUpstream, isPrivateHost } from './config.js'
 import { HttpError } from './errors.js'
 import { kernelPaths, requireKernel } from './hermes/paths.js'
+import { registerHermesAdminRoutes } from './hermesAdminRoutes.js'
 import { compareReleaseVersions } from './releases.js'
 import {
   bearerToken,
@@ -1059,6 +1060,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       method: 'DELETE', search: searchFrom(ctx, ['profile']),
     })
   })
+  registerHermesAdminRoutes(router, dependencies)
   router.get('/api/app/admin/legacy-model-services', async (ctx) => {
     dependencies.auth.requireAdmin(ctx)
     await withJar(ctx, async (jar) => {

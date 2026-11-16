@@ -29,7 +29,7 @@ npm run build
 npm start
 ```
 
-默认 Web 地址为 `http://127.0.0.1:15300`。首次打开 Web 时自行创建管理员账号；服务不会生成固定的默认账号或密码。之后在“系统设置 → 模型服务”中配置模型供应商和默认模型。
+默认 Web 地址为 `http://127.0.0.1:15300`。首次打开 Web 时自行创建管理员账号；服务不会生成固定的默认账号或密码。之后在“我的设置 → 管理 → 模型服务”中配置模型供应商和默认模型。
 
 ### 内置 Hermes
 
@@ -37,6 +37,7 @@ npm start
 - 数据保存在 `<数据目录>/hermes`：默认 Profile 即该目录，具名 Profile 在 `hermes/profiles/<名称>`；每个 Bot 使用独立的 `bots/<Bot ID>/runtime`，以所选 Profile 为父级读取配置和凭据。
 - 首次启动时如果检测到原有 `~/.hermes`（或 `YAOYAO_IMPORT_HERMES_HOME` 指定的目录），会只读导入会话、Profile、配置、凭据、技能和附件，不修改原目录；导入失败时从空数据启动并在日志中提示。设置 `YAOYAO_IMPORT_HERMES=0` 可跳过导入。
 - Hermes 原生终端、文件和代码工具在服务器上执行，按系统设置中的审批策略逐次确认。
+- 管理员在「我的设置 → 管理 → 模型服务」中配置供应商与默认模型、订阅账号登录（设备码 / 粘贴凭据）、API Key 与工具密钥，以及视觉、压缩、标题等辅助模型，替代原来的 Hermes Dashboard 页面。可按 Profile 分别配置。
 - 不再支持：连接外部 9119、工具桥插件 `yaoyao-bot-bridge`、Hermes 看板（Kanban）、直连远程 Hermes 的节点。设置 `HERMES_YAOYAO_UPSTREAM*`、`HERMES_YAOYAO_SUPERVISE_DASHBOARD`、`HERMES_YAOYAO_BRIDGE_*` 后，启动时会提示这些变量已停用。
 - 迁移方案与实施记录见 [内置 Hermes 迁移](docs/embedded-hermes-migration.md)。
 
@@ -94,7 +95,7 @@ docker compose --env-file docker.env config --quiet
 docker compose --env-file docker.env up -d --build
 ```
 
-默认访问 `http://127.0.0.1:15300`。应用数据保存在 `yaoyao-data` 命名卷，容器内路径为 `/home/node/.yaoyao`。首次打开页面创建管理员账号，并在“系统设置 → 模型服务”中配置模型。
+默认访问 `http://127.0.0.1:15300`。应用数据保存在 `yaoyao-data` 命名卷，容器内路径为 `/home/node/.yaoyao`。首次打开页面创建管理员账号，并在“我的设置 → 管理 → 模型服务”中配置模型。
 
 宿主机连接、局域网访问、验证及升级步骤见 [Docker 部署说明](docs/docker-install.md)。
 

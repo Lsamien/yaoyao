@@ -6,7 +6,7 @@ import { getDuplexVoiceSettings, type DuplexVoiceSettings } from '@/api/agentMan
 import { getPushSystemStatus, type PushSystemStatus } from '@/api/push'
 import { systemUpdateStatus, type SystemUpdateStatus } from '@/api/systemUpdate'
 
-type Destination = 'system-users' | 'system-connection' | 'system-push' | 'system-voice' | 'system-update'
+type Destination = 'system-models' | 'system-users' | 'system-connection' | 'system-push' | 'system-voice' | 'system-update'
 
 const props = withDefaults(defineProps<{
   active?: boolean
@@ -72,6 +72,11 @@ watch(() => props.active, active => { if (active) void refresh() }, { immediate:
     <p v-if="error" class="overview-warning" role="status">{{ error }}</p>
 
     <div class="overview-list">
+      <button type="button" @click="emit('navigate', 'system-models')">
+        <AppIcon name="model" :size="22" />
+        <span><strong>模型服务</strong><small>供应商、账号登录、API Key 与辅助模型</small></span>
+        <AppIcon class="chevron" name="chevron-left" :size="18" />
+      </button>
       <button type="button" @click="emit('navigate', 'system-users')">
         <AppIcon name="users" :size="22" />
         <span><strong>用户与权限</strong><small>{{ userStatus }}</small></span>

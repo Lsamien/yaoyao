@@ -27,6 +27,7 @@ type SettingsPage =
   | 'account-mobile'
   | 'appearance'
   | 'system-overview'
+  | 'system-models'
   | 'system-users'
   | 'system-connection'
   | 'system-push'

@@ -40,7 +40,7 @@ cp docker.env.example docker.env
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
 | `HERMES_YAOYAO_ALLOWED_HOSTS` | 使用域名访问时填写对应域名，多个值用英文逗号分隔 |
 
-内置 Hermes 的会话、Profile、模型配置和凭据都保存在 `yaoyao-data` 数据卷的 `hermes/` 目录；首次登录后在“系统设置 → 模型服务”中配置模型。
+内置 Hermes 的会话、Profile、模型配置和凭据都保存在 `yaoyao-data` 数据卷的 `hermes/` 目录；首次登录后在“我的设置 → 管理 → 模型服务”中配置模型。
 
 使用远程镜像时，在 `docker.env` 设置上述镜像标签后执行：
 

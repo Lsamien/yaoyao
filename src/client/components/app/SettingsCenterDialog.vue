@@ -8,6 +8,7 @@ import DesktopModePanel from '@/components/app/DesktopModePanel.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
 import DuplexVoicePanel from '@/components/app/DuplexVoicePanel.vue'
 import ModelServicesPanel from '@/components/app/ModelServicesPanel.vue'
+import HermesModelSettingsPanel from '@/components/app/HermesModelSettingsPanel.vue'
 import NodePairingPanel from '@/components/app/NodePairingPanel.vue'
 import WorkspaceVoiceProviders from '@/components/workspace/WorkspaceVoiceProviders.vue'
 import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
@@ -29,6 +30,7 @@ type SettingsPage =
   | 'chat-appearance'
   | 'desktop-mode'
   | 'system-overview'
+  | 'system-models'
   | 'system-users'
   | 'system-connection'
   | 'system-push'
@@ -112,13 +114,15 @@ const accountItems = computed<NavigationItem[]>(() => [
 ])
 const systemItems: NavigationItem[] = [
   { key: 'system-overview', label: '系统概览', icon: 'panel' },
+  { key: 'system-models', label: '模型服务', icon: 'model' },
   { key: 'system-connection', label: 'Hermes 连接', icon: 'link' },
   { key: 'system-users', label: '用户与权限', icon: 'users' },
   { key: 'system-push', label: '消息推送', icon: 'bell' },
   { key: 'system-voice', label: '双流语音', icon: 'audio' },
   { key: 'system-update', label: '更新与回滚', icon: 'refresh' },
 ]
-const matchesSearch = (item: NavigationItem) => (item.key === 'appearance' ? `${item.label} 聊天气泡 Grok Bot Codex 颜色` : item.label).toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
+const SEARCH_ALIASES: Partial<Record<SettingsPage, string>> = { appearance: '聊天气泡 Grok Bot Codex 颜色', 'system-models': '模型 供应商 Provider API Key 密钥 辅助模型 OAuth 登录' }
+const matchesSearch = (item: NavigationItem) => `${item.label} ${SEARCH_ALIASES[item.key] ?? ''}`.toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
 const visibleAccounts = computed(() => accountItems.value.filter(matchesSearch))
 const visibleSystems = computed(() => systemItems.filter(matchesSearch))
 const visibleAgents = computed(() => agentItems.value.filter(matchesSearch))
@@ -142,6 +146,7 @@ const activeTitle = computed(() => ({
   'chat-appearance': '聊天气泡',
   'desktop-mode': '运行模式',
   'system-overview': '系统概览',
+  'system-models': '模型服务',
   'system-users': '用户与权限',
   'system-connection': 'Hermes 连接',
   'system-push': '消息推送',
@@ -383,6 +388,7 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
                 </section>
                 <ChatAppearancePanel v-else-if="activePage === 'chat-appearance'" :theme="theme" />
                 <SystemOverviewPanel v-else-if="activePage === 'system-overview' && isAdmin" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @navigate="selectPage" />
+                <HermesModelSettingsPanel v-else-if="activePage === 'system-models' && isAdmin" :profiles="profiles" @dirty-change="setDirty('system-models', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :profiles="profiles" :active="true" @dirty-change="setDirty('system-users', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :profiles="profiles" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />
                 <SystemManagementPanel v-else-if="activePage === 'system-push' && isAdmin" section="push" :active="true" @dirty-change="setDirty('system-push', $event)" />
