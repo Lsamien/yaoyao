@@ -180,6 +180,8 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 
 ### 与方案的差异
 
+0. **模型服务配置（2026-11-16 用户确认）**：所有账号共用同一套系统 Hermes 模型服务配置和凭据，不按账号区分；会话、Bot 和原生对话仍按账号隔离，每个 Bot 使用独立 runtime home。
+
 1. **Profile（第 5 节）**：没有采用“从模板复制”。具名 Profile 保留 Hermes 原生布局（`<data>/hermes/profiles/<名称>`）；每个 Bot 有独立 runtime home（会话、上下文、自有技能），配置、`.env` 和凭据通过父级读取实时继承所选 Profile。效果上同样是“Bot 独立 home、不修改基础 Profile”，修改 Profile 的模型或凭据后 Bot 下一轮即生效。
 2. **原生对话协议（M3）**：内置网关实现了与原 Hermes 网关相同的 JSON-RPC 方法和事件，Web 客户端没有改动。移动端使用同一 HTTP+SSE 接口，理论上无需改协议；按你的决定，仍要求客户端升级后使用，旧版未做验证。
 3. **`/api/*` 转发**：保留了按白名单（status、profiles、sessions、model、files、attachments）转发的入口，供已配对设备读取会话和文件；现在由进程内 API 应答，不再访问 9119。通用 Dashboard 功能（Kanban、cron 页面等）已删除。
@@ -203,7 +205,6 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 - **未实现的网关方法**：`session.branch`（返回“暂不支持”）、`session.events.since`（断线重连时改为重置并从转录恢复）。
 - **会话标题**：使用首条消息截取，不再调用 Hermes 的标题生成。
 - **Hermes 内置 `memory` 工具**：yaovi-agent 版本已停用该工具，长期记忆走夭夭的工作区记忆工具；原生对话不再有 MEMORY.md/USER.md。
-- **用户数据隔离**：与原来连接同一个 9119 时相同，所有账号共用系统 Hermes 配置；Bot 按 ID 使用独立 runtime home。
 
 
 ## 12. 精简与性能（2026-11-15，`only-0.1` 分支）
