@@ -17,9 +17,7 @@ extraResources:
       - github-release.mjs
       - electron-updater.cjs
       - keychain-helper
-      - keychain-helper-dev
       - computer-helper
-      - computer-helper-dev
 asar: true
 npmRebuild: false
 mac:

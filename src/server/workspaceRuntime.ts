@@ -61,6 +61,8 @@ export { mentionedAgents } from './workspaceMentions.js'
 type Run = WorkspaceRun
 
 export interface WorkspaceBinding {
+  /** Reuse only an acknowledged model on the same live runtime and Profile revision. */
+  confirmedModel?: { provider: string; model: string; profileMtime: number }
   executionRevision?:number
   executionPolicyVersion?:number
   memoryVersion?: string
@@ -446,6 +448,19 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     }
     if(!recovering&&message.status==='queued'){message.status='streaming';message.error=undefined;message.visible=run.replyMode!=='automatic'||run.requiredReply}
     const resultMessage = message
+    // Resolution is read-only and independent of session/tool preparation. Keep
+    // rejection handled while setup runs; application still follows tool binding.
+    const modelEntry = { method: 'bot.model-settings', agentId: agent.id, runId: run.runId, taskId: run.conversationTaskId }
+    const modelSnapshot = { revision: agent.revision, settings: agent.modelSettings }
+    const modelResolution = !recovering && agent.modelSettings !== undefined ? (() => {
+      this.inspector?.record(owner, c.id, { ...modelEntry, direction: 'request', data: modelSnapshot })
+      const started = Date.now()
+      return resolveBotModelSettings(target, agent.profile, agent.modelSettings).then(
+        value => ({ value, resolveMs: Date.now() - started }),
+        error => ({ error, resolveMs: Date.now() - started }),
+      )
+    })() : undefined
+    let currentModelInfo: { model?: string; provider?: string } | undefined
     let submitted = recovering,
       settled = false,
       completedEvidence = false,
@@ -457,6 +472,13 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
     let submittedText = ''
     let reconnecting: Promise<void> | undefined
     const toolController = new AbortController()
+    const requirePreparing = () => {
+      this.requireAuthorization(owner, run.runId)
+      this.nodes.requireSource(owner, agent)
+      const current = this.getWork(owner, run.id)
+      if (this.closing || toolController.signal.aborted || current.cancelRequested || current.status === 'interrupted'
+        || this.store.require<Run>(owner, 'run', run.runId).stopRequested) throw new Error('运行已停止')
+    }
     let toolLease: WorkspaceToolLease | undefined
     let credentialTurn: ReturnType<CredentialVaultCoordinator['openTurn']> | undefined
     let pluginLease: OpenBotPlugins | undefined
@@ -486,6 +508,11 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       try {
         // Retention requires the still-active work grant. Complete the VM
         // channel before persisting terminal status or ending system resources.
+        delete resultMessage.activity
+        if (!retainBrowser && binding?.confirmedModel) {
+          delete binding.confirmedModel
+          this.store.put(owner, 'binding', key, binding)
+        }
         if(!error&&vmTools)try{await vmTools.complete()}catch(failure){
           resultMessage.serviceWarnings??=[]
           resultMessage.serviceWarnings.push({service:'虚拟机',code:'computer_completion_failed',message:`虚拟机未能保留运行：${failure instanceof Error?failure.message:'执行节点收尾失败'}`.slice(0,1000)})
@@ -651,17 +678,27 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
       this.inspector?.record(owner,c.id,{direction:'event',method:frame.type,data:frame.payload,agentId:agent.id,runId:run.runId,taskId:run.conversationTaskId})
       const p = frame.payload ?? {},
         type = frame.type
-      const firstContent = type === 'message.delta' && !resultMessage.content.trim()
+      const firstContent = ['message.delta', 'message.interim'].includes(type) && !resultMessage.content.trim()
       if(type==='computer.paused'||type==='computer.resumed'){const current=this.getWork(owner,run.id);current.status=type==='computer.paused'?'waiting':'running';this.saveWork(owner,current);return}
       if (type === 'message.delta') {
+        delete resultMessage.activity
         resultMessage.content += String(p.text ?? p.delta ?? '')
         if (resultMessage.content.trim() && !NO_REPLY.startsWith(resultMessage.content.trim()) && !resultMessage.content.trim().startsWith('[[YAOYAO_')) resultMessage.visible = true
       }
       else if (type === 'reasoning.delta')
         resultMessage.reasoning += String(p.text ?? p.delta ?? '')
       else if (type === 'message.interim') {
+        delete resultMessage.activity
+        if (p.already_streamed === false && typeof p.text === 'string') {
+          resultMessage.content += p.text
+          if (resultMessage.content.trim() && !NO_REPLY.startsWith(resultMessage.content.trim()) && !resultMessage.content.trim().startsWith('[[YAOYAO_')) resultMessage.visible = true
+        }
         resultMessage.content += '\n\n'
+      } else if (type === 'status.update') {
+        if (p.kind === 'compacting') resultMessage.activity = 'compacting'
+        else delete resultMessage.activity
       } else if (type.startsWith('tool.')) {
+        delete resultMessage.activity
         resultMessage.visible = true
         const id = String(p.tool_id ?? p.id ?? ''),
           index = resultMessage.tools.findIndex((t) => t.id === id)
@@ -748,6 +785,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         this.store.put(owner, 'context', run.conversationTaskId ?? c.id, context)
         this.store.event(owner, 'context.changed', context, c.id)
       } else if (type === 'session.info' && binding) {
+        currentModelInfo = { model: p.model, provider: p.provider }
         const storedId = p.stored_session_id ?? p.session_key
         if (typeof storedId === 'string' && storedId && storedId !== binding.storedId) {
           binding.aliases = [...new Set([...binding.aliases, binding.storedId, storedId])]
@@ -825,7 +863,9 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         (opened.info?.profile_name && opened.info.profile_name !== agent.profile)
       )
         throw new Error('Hermes 会话身份不匹配')
+      currentModelInfo = { model: opened.info?.model, provider: opened.info?.provider }
       binding = {
+        confirmedModel: binding?.runtimeId === runtimeId && binding.storedId === storedId ? binding.confirmedModel : undefined,
         toolsBound: recovering ? binding?.toolsBound : undefined,
         memoryVersion: binding?.memoryVersion,
         memoryState: binding?.memoryState,
@@ -968,16 +1008,34 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
         environment.cwd=workingDirectory?.resolved
         // Binding initializes cold Hermes sessions; its persisted runtime can overwrite
         // pre-build config acknowledgements. Apply Bot settings only after that boundary.
-        if (agent.modelSettings !== undefined) {
-          const entry = { method: 'bot.model-settings', agentId: agent.id, runId: run.runId, taskId: run.conversationTaskId }
-          const snapshot = { revision: agent.revision, settings: agent.modelSettings }
-          this.inspector?.record(owner, c.id, { ...entry, direction: 'request', data: snapshot })
+        if (modelResolution) {
           try {
-            const resolution = await resolveBotModelSettings(target, agent.profile, agent.modelSettings)
+            const resolved = await modelResolution
+            if (settled) return await completion
+            requirePreparing()
+            if ('error' in resolved) throw resolved.error
+            const resolution = resolved.value
             const confirmed = agent.modelSettingsConfirmation === botModelTarget(resolution.effective)
             if (resolution.confirmationMessage && !confirmed) throw new HttpError(409, '此模型需要确认，请打开 Bot 个人资料保存模型设置。', 'model_confirmation_required')
-            await applyBotModelSettings((method, params) => gateway.rpc(method, params), runtimeId, resolution.effective, confirmed)
-            this.inspector?.record(owner, c.id, { ...entry, direction: 'response', data: { ...snapshot, applied: true, effective: resolution.effective } })
+            // Profile changes and cold/rebuilt sessions must take the full path.
+            // Older gateways without this revision read also keep that behavior.
+            const revision = await gateway.rpc('config.get', { session_id: runtimeId, profile: agent.profile, key: 'mtime' }).catch(() => undefined)
+            if (settled) return await completion
+            requirePreparing()
+            const profileMtime = typeof revision?.mtime === 'number' && Number.isFinite(revision.mtime) && revision.mtime > 0 ? revision.mtime : undefined
+            const previous = binding.confirmedModel
+            const reusedModel = !!previous && profileMtime !== undefined && profileMtime === previous.profileMtime
+              && previous.model === resolution.effective.model && previous.provider === resolution.effective.provider
+              && currentModelInfo?.model === previous.model && currentModelInfo?.provider === previous.provider
+            delete binding.confirmedModel
+            this.store.put(owner, 'binding', key, binding)
+            const applyStarted = Date.now()
+            await applyBotModelSettings((method, params) => gateway.rpc(method, params), runtimeId, resolution.effective, confirmed, reusedModel ? previous : undefined)
+            if (settled) return await completion
+            requirePreparing()
+            if (profileMtime !== undefined) binding.confirmedModel = { model: resolution.effective.model, provider: resolution.effective.provider, profileMtime }
+            this.store.put(owner, 'binding', key, binding)
+            this.inspector?.record(owner, c.id, { ...modelEntry, direction: 'response', data: { ...modelSnapshot, applied: true, effective: resolution.effective, reusedModel, resolveMs: resolved.resolveMs, applyMs: Date.now() - applyStarted } })
           } catch (error) {
             // Context-dependent native warnings cannot be known from the model
             // catalogue. Bring them back to the profile's existing save flow.
@@ -986,7 +1044,7 @@ export class WorkspaceRuntime extends WorkspaceScheduler {
               if (latest.revision === agent.revision) this.store.put(owner, 'agent', latest.id, { ...latest,
                 modelSettingsPendingConfirmation: { target: error.target, message: error.confirmationMessage } })
             }
-            this.inspector?.record(owner, c.id, { ...entry, direction: 'response', data: { ...snapshot, applied: false, error: error instanceof Error ? error.message : '模型设置应用失败' } })
+            this.inspector?.record(owner, c.id, { ...modelEntry, direction: 'response', data: { ...modelSnapshot, applied: false, error: error instanceof Error ? error.message : '模型设置应用失败' } })
             throw error
           }
         }

@@ -179,6 +179,8 @@ export interface WorkspaceFile {
   sender: 'user' | 'agent'
 }
 export interface WorkspaceMessage {
+  /** Transient runtime progress, separate from assistant-authored text. */
+  activity?: 'compacting'
   /** Completion version assigned once to the stable user-facing reply ID. */
   chatUnreadVersion?: number
   browserCard?: import('./managedBrowser.js').ManagedBrowserCard

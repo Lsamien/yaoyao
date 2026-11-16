@@ -21,7 +21,7 @@ function assistantOwner(message: UiMessage): string {
 }
 
 function hasVisibleMessage(message: UiMessage): boolean {
-  return Boolean(message.browserCard || message.serviceWarnings?.length || message.content.trim() || message.attachments?.length || message.error || message.status === 'failed')
+  return Boolean((message.activity && message.status === 'streaming') || message.browserCard || message.serviceWarnings?.length || message.content.trim() || message.attachments?.length || message.error || message.status === 'failed')
 }
 
 function traceStatus(messages: UiMessage[], entries: TurnTraceEntry[]): TurnTraceGroup['status'] {
