@@ -195,6 +195,7 @@ describe('application workspace HTTP contract', () => {
     store.saveMessage('first', { id: randomUUID(), conversationId: conversation.id, seq: 0, role: 'assistant', content: '保留历史回复', reasoning: '', status: 'complete', tools: [], attachments: [], createdAt: Date.now() })
     const capabilities = (await req('get', '/api/app/capabilities').expect(200)).body.features
     expect(capabilities).not.toContain('remoteAgentReferences')
+    expect(capabilities).toContain('bot-only-v1')
     expect((await req('get', `/api/app/nodes/${randomUUID()}/agents`).expect(410)).body.code).toBe('remote_agent_removed')
     expect((await req('post', '/api/app/agents/remote').send({ nodeId: randomUUID(), agentId: randomUUID() }).expect(410)).body.code).toBe('remote_agent_removed')
     expect((await req('get', `/api/app/conversations/${conversation.id}`).expect(200)).body.messages.some((message: { content: string }) => message.content === '保留历史回复')).toBe(true)
