@@ -31,7 +31,7 @@ describe('Account security panel', () => {
   it('saves the trimmed administrator username and resets its dirty state', async () => {
     const wrapper = mount(AccountSecurityPanel, { props: { active: true } })
 
-    expect(wrapper.text()).toContain('不会更改 9119 服务账号')
+    expect(wrapper.text()).toContain('仅修改当前 15300 Web 管理账号')
     expect(wrapper.emitted('dirty-change')?.at(-1)).toEqual([false])
     await fill(wrapper, 'username', '  owner-two  ')
     await fill(wrapper, 'current-password', 'current-secret')

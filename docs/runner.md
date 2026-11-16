@@ -1,15 +1,15 @@
-# Hermes 执行节点
+# 执行节点（Runner）
 
-Runner 在运行 Hermes 的电脑上主动连接夭夭服务。用于 Web 位于 Docker、另一台电脑或远程服务器时，将 Bot 会话和本轮组队工具交给 Hermes 所在电脑执行。Runner 源码、构建入口和管理页面均位于 hermes-yaoyao。
+Runner 在执行电脑上主动连接夭夭服务，负责虚拟机桌面、托管浏览器等电脑工具。Hermes 已内置在夭夭服务中，模型推理和 Bot 会话始终在服务端运行，Runner 不再连接 9119，也不需要执行电脑安装 Hermes。Runner 源码、构建入口和管理页面均位于本仓库。
 
-普通执行方式继续使用原有 Hermes。配置电脑 Worker 后，Agent 可选择隔离电脑执行，模型工具不会退回宿主。公网代理、屏幕接管和共享环境均已接入，使用流程见 `docs/local-vm.md`。Docker 部署与程序包下载见 `docs/docker-install.md`。
+配置电脑 Worker 后，Agent 可选择隔离电脑执行，模型工具不会退回宿主。公网代理、屏幕接管和共享环境均已接入，使用流程见 `docs/local-vm.md`。Docker 部署与程序包下载见 `docs/docker-install.md`。
 
 网页任务可独立启用 Runner 托管 Chromium，无需启动完整 VM，配置、接管与文件互通见 [托管浏览器](managed-browser.md)。节点默认启用环境检测；全局 Bot 工具开关仍默认关闭，首次授权使用时才安装缺失浏览器，保留现有电脑工具路径。显式 `browser.enabled:false` 会保持关闭。
 
 ## 启用
 
 1. 管理员打开设置 → Hermes 连接 → 执行节点。
-2. 选择接管的 Bot 来源、允许的 Profile、能从执行电脑访问的夭夭地址，以及 Runner 本机 Hermes 的回环地址。
+2. 选择接管的 Bot 来源、允许的 Profile，以及能从执行电脑访问的夭夭地址。「Runner 本机 Hermes 地址」是旧字段，保持默认即可。
 3. 注册后下载 `runner.json`。节点凭据只在注册响应中返回；列表和刷新不会返回凭据。
 4. 将配置放到执行电脑，执行 `chmod 600 /完整路径/runner.json`。
 5. 在项目目录执行 `npm run build`，然后执行 `npm run runner -- --config /完整路径/runner.json`。
@@ -20,7 +20,7 @@ Runner 在运行 Hermes 的电脑上主动连接夭夭服务。用于 Web 位于
 node runner.mjs --config /完整路径/runner.json
 ```
 
-macOS 完整版 App 可直接通过菜单栏“执行节点 → 导入节点配置…”导入下载的配置，无需另外安装 Node.js。App 使用系统钥匙串支持的加密存储保存配置，通过私有进程消息传入内置 Runner；凭据不进入命令行或子进程环境变量。随后每次打开 App 都会自动启动已配置的 Runner。关闭窗口保持连接，退出 App 时清理自己管理的 Runner；“断开并忘记配置”移除本机保存的配置。原始下载文件仍由用户管理。纯客户端 App 不内置 Runner；需在 Hermes 电脑运行独立 Runner，配套版本见 [版本验收](paired-release-acceptance.md)。
+macOS 完整版 App 可直接通过菜单栏“执行节点 → 导入节点配置…”导入下载的配置，无需另外安装 Node.js。App 使用系统钥匙串支持的加密存储保存配置，通过私有进程消息传入内置 Runner；凭据不进入命令行或子进程环境变量。随后每次打开 App 都会自动启动已配置的 Runner。关闭窗口保持连接，退出 App 时清理自己管理的 Runner；“断开并忘记配置”移除本机保存的配置。原始下载文件仍由用户管理。纯客户端 App 不内置 Runner；需在执行电脑运行独立 Runner，配套版本见 [版本验收](paired-release-acceptance.md)。
 
 配置文件至少包括以下字段。`token` 由注册操作生成，不需要填写模型密钥。
 
@@ -30,13 +30,12 @@ macOS 完整版 App 可直接通过菜单栏“执行节点 → 导入节点配�
   "serverURL": "https://yaoyao.example.com",
   "runnerId": "注册响应中的节点 UUID",
   "token": "注册后下载的节点凭据",
-  "hermesURL": "http://127.0.0.1:9119",
   "allowedProfiles": ["default"],
   "artifactRoots": []
 }
 ```
 
-若 Hermes 启用了账号鉴权，可在本机私有配置添加 `hermesCredentials` 对象，包含 `username` 和 `password`；它们留在执行电脑，控制面不接收 Hermes 密码。回环授权则由现有 UpstreamServiceSession 自动协商。远程明文 HTTP 必须明确设置 `allowInsecureLan: true`。
+`hermesURL` 和 `hermesCredentials` 是旧版字段：服务端已不再通过 Runner 托管 Hermes 会话，新配置可以省略（`hermesURL` 缺省为 `http://127.0.0.1:9119`，仅为兼容旧配置而保留，执行电脑上不需要有服务监听）。远程明文 HTTP 必须明确设置 `allowInsecureLan: true`。
 
 每个来源同时只允许一个启用的 Runner。已有配对 Web 来源应在目的 Web 服务内注册自己的 Runner。停用会立即关闭控制面的工具授权，执行电脑在连接恢复或轮询时收到拒绝。配置丢失时停用并重新注册；旧配置不能恢复已撤销的节点。
 
@@ -47,7 +46,7 @@ macOS 完整版 App 可直接通过菜单栏“执行节点 → 导入节点配�
 - 控制面重启、Runner 更换、断线重连都会更换连接代次；旧结果、旧实例和旧工具授权不能接管新执行。
 - 命令执行前再次向控制面核对授权和期限。账号权限变化会使旧轮次失效。一个会话被撤权只关闭自己的通道和工具。
 - 本机 SQLite 保存命令指纹和执行回执。重复命令复用回执；未完成的历史命令视为结果不确定，禁止自动重放。大响应一小时后压缩为禁止重放的记录。
-- 组队工具只在 Hermes 本机建立回环租约，远端不开放原有回环接口。模型获得的是当轮不透明工具 ID；账号、来源、会话和调用身份由服务端绑定。
+- 组队工具在服务端内置 Hermes 中建立租约，远端不开放回环接口。模型获得的是当轮不透明工具 ID；账号、来源、会话和调用身份由服务端绑定。
 - Gateway RPC 使用固定允许列表；会话操作必须属于自己的通道。HTTP 仅允许必要的只读查询。文件导出要求真实路径位于 `artifactRoots`，留空拒绝导出。
 - 停止任务须通过 `session.active_list` 确认原会话已空闲或退出；Runner 只返回当前通道拥有的会话 ID 与状态。请与控制面一起更新 Runner；旧 Runner 无法确认停止时，系统保留待清理状态并拒绝复用原执行。电脑执行停止超时也保留控制权和持久停止记录，确认停止后才释放。
 - 单个只读结果目前最多 8 MiB；大型产物的分块传输仍待实现。待传命令有数量和总字节限制。

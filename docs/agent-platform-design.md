@@ -29,7 +29,7 @@ flowchart TD
   Tasks --> Hub[Runner 网关与授权检查]
   Hub --> Runner[执行主机上的 Runner]
   Runner --> Model[Hermes 模型循环]
-  Model --> Bridge[本轮允许的工具桥]
+  Model --> Bridge[本轮允许的工具]
   Bridge --> Pool[电脑资源池与递增租约]
   Pool --> Private[独立电脑]
   Pool --> Shared[用户授权的共享电脑]

@@ -79,7 +79,7 @@ watch(() => props.active, active => { if (active) void refresh() }, { immediate:
       </button>
       <button type="button" @click="emit('navigate', 'system-connection')">
         <AppIcon name="link" :size="22" />
-        <span><strong>Hermes 连接</strong><small :class="{ success: upstreamReady }">{{ upstreamReady ? '9119 连接正常' : upstreamError || '尚未验证上游连接' }}</small></span>
+        <span><strong>Hermes 连接</strong><small :class="{ success: upstreamReady }">{{ upstreamReady ? '内置 Hermes 已就绪' : upstreamError || '尚未检查内置 Hermes' }}</small></span>
         <AppIcon class="chevron" name="chevron-left" :size="18" />
       </button>
       <button type="button" @click="emit('navigate', 'system-push')">
@@ -99,7 +99,7 @@ watch(() => props.active, active => { if (active) void refresh() }, { immediate:
       </button>
     </div>
 
-    <p class="ownership-note">15300 通过官方 API 管理 Hermes 9119；外部文件与进程不在此处控制。</p>
+    <p class="ownership-note">Hermes 已内置在夭夭服务中运行，无需单独启动 9119；外部文件与进程不在此处控制。</p>
   </section>
 </template>
 

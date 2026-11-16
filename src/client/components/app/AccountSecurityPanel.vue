@@ -198,7 +198,7 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       <label v-if="isAdmin" class="field">
         <span>管理员用户名</span>
         <input v-model="username" name="username" autocomplete="username" :disabled="busy" />
-        <small>仅修改当前 15300 Web 管理账号，不会更改 9119 服务账号。</small>
+        <small>仅修改当前 15300 Web 管理账号。</small>
       </label>
 
       <h3 class="security-section-title security-section-title--password">修改密码</h3>

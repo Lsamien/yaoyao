@@ -59,7 +59,7 @@ describe('Agent management dialog', () => {
     expect(tabs.map(tab => tab.textContent)).toEqual(['身份', '模型服务', '双流语音'])
 
     tabs[1]!.click(); await flushPromises()
-    expect(document.body.textContent).toContain('9119 Provider 与模型')
+    expect(document.body.textContent).toContain('Provider 与模型')
     expect(document.body.textContent).toContain('OpenCode Free')
     expect(document.body.textContent).toContain('custom:tingly')
     expect(document.body.textContent).toContain('只读')

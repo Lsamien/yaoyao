@@ -23,7 +23,7 @@ Bot 通过虚拟机工具执行命令或打开网页后，正常回复结束只�
 
 两种执行方式都使用 Hermes 的独立 Profile 会话。Hermes 统一管理模型、视觉路由、配置、技能和认证；Runner 负责指定 Linux 虚拟机的执行、控制权和文件传输，不复制 Profile 配置，也不启动模型 Worker。
 
-- **虚拟机模式**：默认通过 `computer_*` 在虚拟机执行。Hermes 原生 Skill 和已启用的服务工具可直接使用。需要本机命令、文件或浏览器操作时，工具桥交给 Hermes 原生审批机制；用户拒绝后不能通过另一条 Worker 路径继续。勾选“允许本机环境”后，沿用 Profile 已开放的本机能力。
+- **虚拟机模式**：默认通过 `computer_*` 在虚拟机执行。Hermes 原生 Skill 和已启用的服务工具可直接使用。需要本机命令、文件或浏览器操作时，交给 Hermes 原生审批机制；用户拒绝后不能通过另一条 Worker 路径继续。勾选“允许本机环境”后，沿用 Profile 已开放的本机能力。
 - **本机协作模式**：沿用 Profile 的本机工具、配置和上下文，同时加入虚拟机工具。本机操作与虚拟机操作采用各自路径；`computer_copy_file` 显式传递一个文件，`computer_export` 将虚拟机产物回传当前聊天。
 
 `vmExecution: worker | profile` 继续作为客户端兼容的模式字段，`worker` 在新版 Runner 中表示上述虚拟机权限策略。Bot 创建的成员、临时助手不自动继承本机协作授权。人工接管前，Runner 等待 Hermes 会话和正在执行的虚拟机工具结束；交还后继续同一个 Hermes 会话。
@@ -41,29 +41,9 @@ Bot 通过虚拟机工具执行命令或打开网页后，正常回复结束只�
 
 ### 更新配套组件
 
-管理员可在 **设置 → Hermes 连接 → 工具桥插件** 检查、安装、更新或重新安装。
+Hermes 已内置在夭夭服务中，Bot 工具由服务端直接执行，不再安装或重启 `yaoyao-bot-bridge` 工具桥插件，也没有 Hermes Dashboard（9119）需要守护或重启。原来的「设置 → Hermes 连接 → 工具桥插件」页面和 `/api/app/admin/hermes-bridge*` 管理接口已删除，`integrations/hermes-bots-bridge` 与 `scripts/install-hermes-bridge.py` 不再随包发布。
 
-- 每个 Profile 单独显示安装版本、实际加载版本和状态。缺少后台入口时，先安装或更新默认 Profile，再安装命名 Profile。
-- “安装并启用”只启用选中的工具桥及其工具集，保留其他插件、禁用项和模型配置。每次安装保留原插件与配置备份，界面可查看备份位置。
-- 检查会比较插件文件指纹与 Hermes 启动时加载的指纹；同版本修复后未重启也会显示“待重启”，不会仅凭安装文件判断就绪。
-- 安装不会自动重启 Hermes。页面中的“重启服务端 Hermes Dashboard”始终通过当前连接的 Yaoyao 服务端执行；页面显示的 `127.0.0.1:9119` 指服务端本机，手机、浏览器或桌面客户端不会在自己的电脑上执行重启。重启影响整个 Dashboard，而非单个 Profile，完成后自动检查各 Profile 的实际加载状态。
-- 支持 Yaoyao 服务端自己持有的 Dashboard 子进程，以及 macOS 服务端当前账号的 Hermes LaunchAgent（包括自定义服务名）。服务的运行 PID 必须与 9119 的唯一监听进程匹配，支持 `hermes dashboard/serve`、Python 脚本和 `python -m hermes_cli.main` 入口及 Profile 参数。
-- macOS 同账号通过终端启动的 Hermes 也可重启：检查唯一监听 PID、UID、Hermes 入口、父进程及有限的启动参数后，只向该 PID 发出 SIGTERM，确认退出和端口空闲后按原参数和工作目录启动。不会调用停止所有 Dashboard 的命令，不接管未知服务包装器或 SSH 会话后端。重启前重新核对，重启后确认新 PID 和 HTTP 健康状态；本机健康检查不继承外网代理。无需开启桌面模式或 Dashboard 自动拉起。
-- 正在执行任务、安装工具桥或已有重启操作时不可重启；重启期间暂不接受新任务，定时任务等待下一次检查。无法确认归属的外部进程、其他系统的外部服务、Docker 目录映射与远程 Hermes 会保留禁用按钮并显示原因，需在 Hermes 所在节点重启，再点击“重新检查”。正在执行任务时暂不可安装。
-- 本机安装用于当前服务可访问的本机 Hermes。Docker 可显式映射对应 Hermes 数据目录以安装工具桥，详见 [Docker 目录映射](docker-install.md#映射-hermes-目录以安装工具桥)；其他远程节点支持状态检查，需在对应节点安装。
-
-管理员 API：`GET /api/app/admin/hermes-bridge`、`POST /api/app/admin/hermes-bridge/install` 与 `POST /api/app/admin/hermes-bridge/restart`。重启接口无需参数，状态中的 `dashboard` 提供托管状态、是否可重启及原因；安装参数仅为 `profile` 和可选的 `enable`。不接受客户端指定重启目标或执行命令。
-
-需要 Runner 的 `hermes-computer-v2` 和 `workspace-memory-bind-v1` 能力，以及每个使用中的 Profile 安装工具桥 **1.2.1**，能力响应包含 `computer_runtime_version: 2`。旧插件会明确提示更新，不回退启动 Worker。
-
-插件源码位于 `integrations/hermes-bots-bridge`，并随 Runner 和桌面服务打包。使用 Hermes 的 Python 安装，例如：
-
-```sh
-~/.hermes/hermes-agent/venv/bin/python scripts/install-hermes-bridge.py \
-  --hermes-home ~/.hermes --profile default --profile server
-```
-
-安装器备份原插件和配置，只启用对应插件，保留其他配置及显式禁用项。Named Profile 需要分别指定；安装器不重启服务。部署新版 Yaoyao / Runner 并在空闲时重启 Hermes 后生效。升级运行中的服务前应结束或停止已有任务。
+更新时只需升级夭夭服务和 Runner：服务端升级后内置内核随之更新；Runner 仍需提供 `hermes-computer-v2` 能力才能使用虚拟机工具。升级运行中的服务前应结束或停止已有任务。
 
 Compose 桌面也走同一个 Hermes 会话接口；桌面数量、生命周期、网络策略及端口转发边界保持原有配置。
 
@@ -73,7 +53,7 @@ Compose 桌面也走同一个 Hermes 会话接口；桌面数量、生命周期�
 
 Hermes 主动发起的审批与澄清 RPC 会转换为 Bot 交互卡；答复使用对应请求编号回传，取消和恢复连接后的待答请求也会同步。
 
-普通聊天、Bot 聊天显示记录和 Hermes 执行会话仍分别保存。切换执行版本不删除原记录，也不重做已完成的工具调用。会话失败按 Hermes 的结构化结果展示；中断和撤权继续停止旧执行并关闭工具桥。
+Bot 聊天显示记录和 Hermes 执行会话分别保存。切换执行版本不删除原记录，也不重做已完成的工具调用。会话失败按 Hermes 的结构化结果展示；中断和撤权继续停止旧执行并收回本轮工具授权。
 
 ## 镜像与持久状态
 
@@ -123,4 +103,4 @@ iOS/Android 没有全局虚拟桌面清单、镜像设置或执行环境选择�
 
 Docker Web 使用配套 `compose.desktops.yaml` 时，桌面由 Compose 预先创建。数量固定为部署清单中的数量，全部作为已有共享桌面供 Agent 选择。页面和 API 都不提供数量修改、镜像准备或桌面增删；每个桌面独立保留工作数据。此模式不会改变 macOS 本机的动态虚拟机流程。部署步骤见 [Docker 部署](docker-install.md)。
 
-Bot 独立记忆通过工具桥的 `/bind` 授权设置。`session.create` 只使用 Hermes 公开参数；首次发言和恢复会话均先绑定独立记忆，再提交提示。工具桥只调整该会话 Agent 的记忆注入、记忆工具和后台复盘，Profile 配置及其他会话不受影响。
+Bot 独立记忆在每轮执行前由服务端绑定到内置内核会话。首次发言和恢复会话均先绑定独立记忆，再提交提示；只调整该会话 Agent 的记忆注入、记忆工具和后台复盘，Profile 配置及其他会话不受影响。
