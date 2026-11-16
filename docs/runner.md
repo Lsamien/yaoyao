@@ -9,7 +9,7 @@ Runner 在执行电脑上主动连接夭夭服务，负责虚拟机桌面、托�
 ## 启用
 
 1. 管理员打开设置 → Hermes 连接 → 执行节点。
-2. 选择接管的 Bot 来源、允许的 Profile，以及能从执行电脑访问的夭夭地址。「Runner 本机 Hermes 地址」是旧字段，保持默认即可。
+2. 选择接管的 Bot 来源、允许的 Profile，以及能从执行电脑访问的夭夭地址。
 3. 注册后下载 `runner.json`。节点凭据只在注册响应中返回；列表和刷新不会返回凭据。
 4. 将配置放到执行电脑，执行 `chmod 600 /完整路径/runner.json`。
 5. 在项目目录执行 `npm run build`，然后执行 `npm run runner -- --config /完整路径/runner.json`。
@@ -35,7 +35,7 @@ macOS 完整版 App 可直接通过菜单栏“执行节点 → 导入节点配�
 }
 ```
 
-`hermesURL` 和 `hermesCredentials` 是旧版字段：服务端已不再通过 Runner 托管 Hermes 会话，新配置可以省略（`hermesURL` 缺省为 `http://127.0.0.1:9119`，仅为兼容旧配置而保留，执行电脑上不需要有服务监听）。远程明文 HTTP 必须明确设置 `allowInsecureLan: true`。
+`hermesURL` 和 `hermesCredentials` 是旧版字段：服务端已不再通过 Runner 托管 Hermes 会话，设置页不再提供输入，下载的配置固定写入 `http://127.0.0.1:9119` 以兼容旧版 Runner，执行电脑上不需要有服务监听；手写配置可以省略。远程明文 HTTP 必须明确设置 `allowInsecureLan: true`。
 
 每个来源同时只允许一个启用的 Runner。已有配对 Web 来源应在目的 Web 服务内注册自己的 Runner。停用会立即关闭控制面的工具授权，执行电脑在连接恢复或轮询时收到拒绝。配置丢失时停用并重新注册；旧配置不能恢复已撤销的节点。
 
