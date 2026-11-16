@@ -88,6 +88,27 @@ describe.skipIf(!kernel)('Bot turns on the embedded Hermes kernel', () => {
     expect(existsSync(join(home, 'bots', agent.id, 'runtime', 'state.db'))).toBe(true)
   }, 180_000)
 
+  it('starts a new Hermes session when a migrated Bot binding points at a session that was never imported', async () => {
+    const app = await setup(() => ({ content: '收到。' }))
+    const agent = app.workspace.createAgent('first', { name: '小夭', profile: 'default' })
+    const direct = app.workspace.list<WorkspaceConversation>('first', 'conversation').find(c => c.kind === 'direct' && c.memberIds[0] === agent.id)!
+    expect((await reply(app, direct, '记住暗号：青梅')).status).toBe('complete')
+    // An upgrade without importing ~/.hermes leaves bindings pointing at sessions this server never had.
+    const key = `${direct.id}:${agent.id}`
+    const binding = app.workspace.get<any>('first', 'binding', key)
+    expect(binding?.storedId).toBeTruthy()
+    app.workspace.put('first', 'binding', key, { ...binding, storedId: 'legacy0000missing', runtimeId: 'legacy0000missing', aliases: ['legacy0000missing'] })
+    requests.length = 0
+    const message = await reply(app, direct, '暗号是什么？')
+    expect(message.status, message.error).toBe('complete')
+    expect(message.content).toContain('收到。')
+    // Recent history from the workspace transcript is replayed into the new session.
+    const prompt = JSON.stringify(requests[0].messages)
+    expect(prompt).toContain('青梅')
+    expect(prompt).toContain('暗号是什么？')
+    expect(app.workspace.list<any>('first', 'binding').some(b => b.storedId === 'legacy0000missing')).toBe(false)
+  }, 240_000)
+
   it('lets a Bot use its granted workspace tools through the embedded lease', async () => {
     const app = await setup((messages, tools) => {
       if (messages.some(m => m.role === 'tool')) return { content: '已查看成员列表。' }

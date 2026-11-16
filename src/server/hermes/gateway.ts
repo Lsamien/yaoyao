@@ -271,7 +271,7 @@ export class EmbeddedGateway {
       const name = profile ?? 'default'
       if (!PROFILE.test(name)) throw new HttpError(400, 'Profile 名称无效', 'gateway_rejected')
       const detail = await this.options.pool.call<{ status: number }>(this.profileScope(name), 'dashboard.call', { method: 'GET', path: `/api/sessions/${id}` })
-      if (detail.status !== 200) throw new HttpError(404, '会话不存在', 'gateway_rejected')
+      if (detail.status !== 200) throw new HttpError(404, '会话不存在', 'session_not_found')
       const now = Date.now()
       session = this.options.sessions.put({ id, profile: name, source: 'web', createdAt: now, updatedAt: now })
     }
