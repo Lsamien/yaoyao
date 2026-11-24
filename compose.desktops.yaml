@@ -16,12 +16,20 @@ services:
       - ALL
     ports:
       - "${HERMES_YAOYAO_BIND_ADDRESS:-127.0.0.1}:${HERMES_YAOYAO_PUBLISHED_PORT:-15300}:15300"
+      # Admin console: published on the host loopback only. Use an SSH tunnel to manage from elsewhere.
+      - "127.0.0.1:${YAOYAO_ADMIN_PUBLISHED_PORT:-15301}:15301"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       NODE_ENV: production
       HERMES_YAOYAO_HOST: 0.0.0.0
       HERMES_YAOYAO_PORT: 15300
+      # The console listens inside the container; Docker publishes it on 127.0.0.1 only, so connections
+      # arrive from the bridge gateway. Two-step verification is required on first console login.
+      YAOYAO_ADMIN_HOST: 0.0.0.0
+      YAOYAO_ADMIN_PORT: 15301
+      YAOYAO_ADMIN_ALLOW_IPS: "${YAOYAO_ADMIN_ALLOW_IPS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+      YAOYAO_ADMIN_INSECURE_HTTP: "1"
       # Permit localhost access when the published host port differs from the
       # container's fixed 15300 port; configured public host names remain opt-in.
       HERMES_YAOYAO_ALLOWED_HOSTS: "localhost,127.0.0.1,${HERMES_YAOYAO_ALLOWED_HOSTS:-}"

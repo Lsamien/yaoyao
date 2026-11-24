@@ -6,14 +6,8 @@ import CredentialVaultPanel from '@/components/app/CredentialVaultPanel.vue'
 import AccountSecurityPanel from '@/components/app/AccountSecurityPanel.vue'
 import DesktopModePanel from '@/components/app/DesktopModePanel.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
-import DuplexVoicePanel from '@/components/app/DuplexVoicePanel.vue'
-import ModelServicesPanel from '@/components/app/ModelServicesPanel.vue'
-import HermesModelSettingsPanel from '@/components/app/HermesModelSettingsPanel.vue'
 import NodePairingPanel from '@/components/app/NodePairingPanel.vue'
-import WorkspaceVoiceProviders from '@/components/workspace/WorkspaceVoiceProviders.vue'
-import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
-import SystemOverviewPanel from '@/components/app/SystemOverviewPanel.vue'
-import SystemUpdatePanel from '@/components/app/SystemUpdatePanel.vue'
+import AdminConsoleNotice from '@/components/app/AdminConsoleNotice.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import type { ProfileIdentityInput } from '@/api/profiles'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -29,13 +23,7 @@ type SettingsPage =
   | 'appearance'
   | 'chat-appearance'
   | 'desktop-mode'
-  | 'system-overview'
-  | 'system-models'
-  | 'system-users'
-  | 'system-connection'
-  | 'system-push'
-  | 'system-voice'
-  | 'system-update'
+  | 'system-console'
 
 type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'monitor' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh'
 type ThemePreference = 'light' | 'dark' | 'system'
@@ -112,16 +100,11 @@ const accountItems = computed<NavigationItem[]>(() => [
   { key: 'appearance', label: '外观', icon: 'sun' },
   ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
 ])
+// Management moved to the separate admin console; administrators get a pointer to it.
 const systemItems: NavigationItem[] = [
-  { key: 'system-overview', label: '系统概览', icon: 'panel' },
-  { key: 'system-models', label: '模型服务', icon: 'model' },
-  { key: 'system-connection', label: 'Hermes 连接', icon: 'link' },
-  { key: 'system-users', label: '用户与权限', icon: 'users' },
-  { key: 'system-push', label: '消息推送', icon: 'bell' },
-  { key: 'system-voice', label: '双流语音', icon: 'audio' },
-  { key: 'system-update', label: '更新与回滚', icon: 'refresh' },
+  { key: 'system-console', label: '管理后台', icon: 'link' },
 ]
-const SEARCH_ALIASES: Partial<Record<SettingsPage, string>> = { appearance: '聊天气泡 Grok Bot Codex 颜色', 'system-models': '模型 供应商 Provider API Key 密钥 辅助模型 OAuth 登录' }
+const SEARCH_ALIASES: Partial<Record<SettingsPage, string>> = { appearance: '聊天气泡 Grok Bot Codex 颜色', 'system-console': '系统 模型 供应商 Provider API Key 用户 权限 推送 更新 执行节点 虚拟机' }
 const matchesSearch = (item: NavigationItem) => `${item.label} ${SEARCH_ALIASES[item.key] ?? ''}`.toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
 const visibleAccounts = computed(() => accountItems.value.filter(matchesSearch))
 const visibleSystems = computed(() => systemItems.filter(matchesSearch))
@@ -145,13 +128,7 @@ const activeTitle = computed(() => ({
   appearance: '外观',
   'chat-appearance': '聊天气泡',
   'desktop-mode': '运行模式',
-  'system-overview': '系统概览',
-  'system-models': '模型服务',
-  'system-users': '用户与权限',
-  'system-connection': 'Hermes 连接',
-  'system-push': '消息推送',
-  'system-voice': '双流语音',
-  'system-update': '更新与回滚',
+  'system-console': '管理后台',
 })[activePage.value])
 const accountName = computed(() => props.pairingUserName || props.userName || '当前账号')
 const showAgentSelector = computed(() => false)
@@ -327,7 +304,7 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
                   </section>
                   <section v-if="isAdmin && visibleSystems.length">
                     <h3>管理</h3>
-                    <button v-for="item in visibleSystems" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span><em v-if="item.key === 'system-voice'">全局</em></button>
+                    <button v-for="item in visibleSystems" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
                   <section v-if="visibleAgents.length">
                     <h3>基础机器人</h3>
@@ -358,7 +335,6 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
                   @save="emit('save-identity', $event)"
                 />
                 <p v-else-if="activePage === 'agent-identity'" class="settings-empty">尚未选择机器人。</p>
-                <ModelServicesPanel v-else-if="activePage === 'agent-models' && activeProfile && isAdmin && !botMode" :key="activeProfile.name" :profile="activeProfile.name" @dirty-change="setDirty('agent-models', $event)" />
                 <CredentialVaultPanel v-else-if="activePage === 'credential-vault'" />
                 <AccountSecurityPanel
                   v-else-if="activePage === 'account-security' || activePage === 'account-profile'"
@@ -387,13 +363,7 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
                   <p class="appearance-note"><AppIcon name="info" :size="16"/>更改仅影响当前浏览器。</p>
                 </section>
                 <ChatAppearancePanel v-else-if="activePage === 'chat-appearance'" :theme="theme" />
-                <SystemOverviewPanel v-else-if="activePage === 'system-overview' && isAdmin" :active="true" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @navigate="selectPage" />
-                <HermesModelSettingsPanel v-else-if="activePage === 'system-models' && isAdmin" :profiles="profiles" @dirty-change="setDirty('system-models', $event)" />
-                <SystemManagementPanel v-else-if="activePage === 'system-users' && isAdmin" section="users" :profiles="profiles" :active="true" @dirty-change="setDirty('system-users', $event)" />
-                <SystemManagementPanel v-else-if="activePage === 'system-connection' && isAdmin" section="connection" :active="true" :profiles="profiles" :upstream-ready="upstreamReady" :upstream-error="upstreamError" @dirty-change="setDirty('system-connection', $event)" />
-                <SystemManagementPanel v-else-if="activePage === 'system-push' && isAdmin" section="push" :active="true" @dirty-change="setDirty('system-push', $event)" />
-                <section v-else-if="activePage === 'system-voice' && isAdmin"><DuplexVoicePanel @dirty-change="setDirty('system-voice', $event)" /><WorkspaceVoiceProviders /></section>
-                <SystemUpdatePanel v-else-if="activePage === 'system-update' && isAdmin" :active="true" @lock-change="updateLocked = $event" />
+                <AdminConsoleNotice v-else-if="activePage === 'system-console' && isAdmin" />
               </div>
               <footer v-if="showFixedFooter" class="settings-content__footer">
                 <button class="settings-footer__cancel" type="button" :disabled="identityBusy" @click="requestClose">取消</button>

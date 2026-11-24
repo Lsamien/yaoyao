@@ -62,7 +62,7 @@ COPY --chown=node:node --from=builder /app/build-info.json /app/runner-bundle.ta
 
 USER node
 
-EXPOSE 15300
+EXPOSE 15300 15301
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:15300/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

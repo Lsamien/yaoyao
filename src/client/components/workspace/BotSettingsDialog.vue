@@ -1,34 +1,22 @@
 <script setup lang="ts">
-import {computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import {computed, onBeforeUnmount, onMounted, ref} from 'vue'
 import {apiRequest} from '@/api/client'
 import AppIcon from '@/components/common/AppIcon.vue'
 import StandaloneDialog from '@/components/common/StandaloneDialog.vue'
 import WorkspaceKnowledgePanel from './WorkspaceKnowledgePanel.vue'
-import FileAccessPanel from '@/components/app/FileAccessPanel.vue'
-import DeviceAuthorizationPanel from '@/components/app/DeviceAuthorizationPanel.vue'
-import HostToolsPanel from '@/components/app/HostToolsPanel.vue'
-import ExecutionSettingsPanel from '@/components/app/ExecutionSettingsPanel.vue'
-import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
 import type {WorkspaceAgent, WorkspaceConversation} from '@shared/workspace'
 
-const LocalVmSettingsPanel = defineAsyncComponent(() => import('@/components/app/LocalVmSettingsPanel.vue'))
-type Page = 'projects' | 'user' | 'vm' | 'computers' | 'files' | 'memory'
+// Environment, file access, Bot memory and local VM settings moved to the admin console.
+type Page = 'projects' | 'user'
 const props = defineProps<{isAdmin?: boolean; initialPage?: Page}>()
 const emit = defineEmits<{close: []; changed: []}>()
-const adminPages = new Set<Page>(['vm','computers','files','memory'])
-const page = ref<Page>(props.initialPage && adminPages.has(props.initialPage) && !props.isAdmin ? 'projects' : props.initialPage ?? 'projects')
+const page = ref<Page>(props.initialPage ?? 'projects')
 const agents = ref<WorkspaceAgent[]>([]), conversations = ref<WorkspaceConversation[]>([])
 const loading = ref(true), error = ref(''), knowledgeEnabled = ref(false)
 let closed = false
 const pages = computed(() => [
   {id:'projects' as const, label:'项目', icon:'files' as const},
   {id:'user' as const, label:'用户记忆', icon:'users' as const},
-  ...(props.isAdmin ? [
-    {id:'computers' as const, label:'环境与授权', icon:'monitor' as const},
-    {id:'files' as const, label:'文件访问', icon:'files' as const},
-    {id:'memory' as const, label:'Bot 记忆', icon:'users' as const},
-    {id:'vm' as const, label:'本地虚拟机', icon:'monitor' as const},
-  ] : []),
 ])
 async function load() {
   loading.value = true; error.value = ''
@@ -45,7 +33,6 @@ async function load() {
   finally { if (!closed) loading.value = false }
 }
 function changed() { emit('changed'); void load() }
-watch(() => props.isAdmin, allowed => { if (!allowed && adminPages.has(page.value)) page.value = 'projects' })
 onMounted(load)
 onBeforeUnmount(() => { closed = true })
 </script>
@@ -56,11 +43,7 @@ onBeforeUnmount(() => { closed = true })
       <nav aria-label="Bot 设置分类">
         <button v-for="item in pages" :key="item.id" type="button" :aria-pressed="page === item.id" @click="page = item.id"><AppIcon :name="item.icon" :size="18" /><span>{{item.label}}</span></button>
       </nav>
-      <section v-if="page === 'vm' && isAdmin" class="bot-settings__content bot-settings__vm"><header><h3>本地虚拟机</h3><p>为 Bot 配置隔离的工作环境。</p></header><LocalVmSettingsPanel /></section>
-      <section v-else-if="page === 'computers' && isAdmin" class="bot-settings__content"><header><h3>运行环境与授权</h3><p>管理系统执行位置、共享服务授权和虚拟机网络。</p></header><DeviceAuthorizationPanel /><ExecutionSettingsPanel /><HostToolsPanel /></section>
-      <section v-else-if="page === 'files' && isAdmin" class="bot-settings__content"><header><h3>文件访问</h3><p>控制聊天里服务器文件的预览和下载。</p></header><FileAccessPanel /></section>
-      <section v-else-if="page === 'memory' && isAdmin" class="bot-settings__content"><header><h3>Bot 记忆</h3><p>管理 Bot 使用的记忆服务。</p></header><SystemManagementPanel section="memory" :active="page === 'memory'" /></section>
-      <section v-else class="bot-settings__content bot-settings__knowledge" :aria-label="page === 'projects' ? '项目设置' : '用户记忆设置'" :aria-busy="loading">
+      <section class="bot-settings__content bot-settings__knowledge" :aria-label="page === 'projects' ? '项目设置' : '用户记忆设置'" :aria-busy="loading">
         <header v-if="page === 'user'"><h3>用户记忆</h3><p>管理同一账号的 Bot 共享的长期事实。</p></header>
         <p v-if="error" role="alert">{{error}} <button type="button" @click="load">重试</button></p>
         <p v-else-if="loading && !knowledgeEnabled" role="status">正在加载…</p>

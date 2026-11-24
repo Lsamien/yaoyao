@@ -91,7 +91,8 @@ it('uses the reference Bot list header and offers no interface mode switch', asy
   expect(rail.find('.sidebar-context__heading').exists()).toBe(false)
   await rail.get('.sidebar-account-switcher__main').trigger('click')
   const accountItems = [...document.querySelectorAll<HTMLElement>('.workspace-settings-menu [role="menuitem"]')]
-  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['我的设置', '关于', '检测更新', '帮助'])
+  // Web updates are applied from the admin console; the browser menu has no update check.
+  expect(accountItems.map(item => item.textContent?.trim())).toEqual(['我的设置', '关于', '帮助'])
   expect(document.querySelector<HTMLAnchorElement>('.workspace-settings-menu a')?.href).toBe('https://yaoyao.samien.cn/')
   accountItems[0]!.click(); await wrapper.vm.$nextTick()
   expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('account-profile')
@@ -132,7 +133,7 @@ it('shows Bot tools and restores keyboard focus after closing', async () => {
   wrapper.unmount()
 })
 
-it('opens dedicated Bot settings from tools and routes the existing VM shortcut there', async () => {
+it('opens dedicated Bot settings from tools and points the VM shortcut at the admin console', async () => {
   const wrapper = await mountShell('/conversations')
   const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-tools-trigger')
   await trigger.trigger('click')
@@ -144,8 +145,8 @@ it('opens dedicated Bot settings from tools and routes the existing VM shortcut 
   expect(document.activeElement).toBe(trigger.element)
   window.dispatchEvent(new Event('yaoyao:local-vm-settings'))
   await flushPromises()
-  expect(wrapper.get('[data-testid="bot-settings-dialog"]').attributes('data-page')).toBe('vm')
-  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
+  expect(wrapper.find('[data-testid="bot-settings-dialog"]').exists()).toBe(false)
+  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('system-console')
   wrapper.unmount()
 })
 
@@ -173,21 +174,6 @@ it('navigates to the independent automation route without opening settings', asy
   wrapper.unmount()
 })
 
-
-it('checks Web updates from the Bot account menu and preserves focus through update settings', async () => {
-  const wrapper = await mountShell('/conversations')
-  const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-account-switcher__main')
-  await trigger.trigger('click')
-  ;[...document.querySelectorAll<HTMLButtonElement>('.workspace-settings-menu button')].find(b => b.textContent?.trim() === '检测更新')!.click()
-  await flushPromises()
-  expect(wrapper.find('[data-testid="update-dialog"]').exists()).toBe(true)
-  await wrapper.get('[data-testid="update-dialog"] button:nth-child(2)').trigger('click')
-  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('system-update')
-  await wrapper.get('[data-testid="close-settings"]').trigger('click')
-  await flushPromises()
-  expect(document.activeElement).toBe(trigger.element)
-  wrapper.unmount()
-})
 
 it('opens the native updater, prevents duplicate clicks and lets a failed opening retry', async () => {
   const openUpdates = vi.fn().mockRejectedValueOnce(new Error('窗口打开失败')).mockResolvedValueOnce(undefined)

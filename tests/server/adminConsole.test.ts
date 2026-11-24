@@ -168,6 +168,12 @@ describe('admin console listener', () => {
     await admin.call('get', '/api/app/admin/users').expect(200)
   })
 
+  it('accepts an allowed host name through a different published port, like the Web', async () => {
+    setupRuntime({ HERMES_YAOYAO_ALLOWED_HOSTS: 'localhost,127.0.0.1' })
+    await request(runtime!.adminApp.callback()).get('/api/app/console/session').set('Host', '127.0.0.1:25301').expect(200)
+    await request(runtime!.adminApp.callback()).get('/api/app/console/session').set('Host', '192.168.1.5:25301').expect(421)
+  })
+
   it('registers a computer with a one-time pairing code from the console', async () => {
     setupRuntime()
     const { admin } = await withAdminAndMember()

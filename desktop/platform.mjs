@@ -26,7 +26,7 @@ export function desktopMenu(template, platform = process.platform, { clientOnly 
 }
 
 function filterDesktopMenu(template, platform) {
-  const excluded = new Set(['desktop-local-vm', 'desktop-sync-notice', 'desktop-sync-retry',
+  const excluded = new Set(['desktop-local-vm', 'desktop-admin-console', 'desktop-sync-notice', 'desktop-sync-retry',
     'desktop-sync-force', 'desktop-stop-and-quit', 'desktop-host-use-local', 'desktop-host-ask'])
   const result = []
   for (const item of template) {

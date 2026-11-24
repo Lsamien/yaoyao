@@ -84,8 +84,10 @@ function consoleHostAllowed(value: string | undefined, config: ServerConfig): bo
   if (!match) return false
   const hostname = (match[1] ?? match[2] ?? '').replace(/\.$/, '')
   const port = match[3]
+  // Explicitly allowed names may arrive through a different published port (Docker), as on the Web.
+  if (config.allowedHosts.has(hostname)) return true
   if (port !== undefined && port !== String(config.admin.port)) return false
-  return config.allowedHosts.has(hostname) || isPrivateHost(hostname)
+  return isPrivateHost(hostname)
 }
 
 function stripWebCookies(header: string | undefined): string {

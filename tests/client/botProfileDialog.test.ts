@@ -64,13 +64,10 @@ it('uses the same selectable-card treatment for tone and action preference', asy
   expect(groups[1].get('.radio-row.selected').text()).toContain('直接行动')
 })
 
-it('uses the saved target Profile for model services and blocks an unsaved source switch', async () => {
-  const view = open()
-  await page('模型与 Provider').trigger('click')
-  expect(view.findComponent({ name: 'ModelServicesPanel' }).props('profile')).toBe('ops/team')
-  await view.get('select[aria-label="基础机器人"]').setValue('["local","default"]')
-  expect(view.findComponent({ name: 'ModelServicesPanel' }).exists()).toBe(false)
-  expect(view.text()).toContain('请先保存基础机器人的变更')
+it('leaves Provider management to the admin console, even for administrators', () => {
+  open()
+  expect(page('模型与 Provider')).toBeUndefined()
+  expect(page('模型设置')).toBeDefined()
 })
 
 it.each([false, true])('shows shared policy without a per-Bot override (remote=%s)', async remote => {
@@ -88,7 +85,7 @@ it.each([{ isAdmin: false }, { agent: { ...agent, nodeId: 'remote' } }, { agent:
   expect(view.findComponent({ name: 'ModelServicesPanel' }).exists()).toBe(false)
 })
 
-it('pins memory to this Bot and protects unsaved memory and Provider edits', async () => {
+it('pins memory to this Bot and protects unsaved memory and model setting edits', async () => {
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
   const view = open()
   await page('身份与头像').trigger('click')
@@ -98,16 +95,15 @@ it('pins memory to this Bot and protects unsaved memory and Provider edits', asy
   expect(memory.props()).toMatchObject({ selectedAgentId: 'target-bot', conversationId: 'target-chat', initialTab: 'agent', hideAgentControls: true })
   memory.vm.$emit('dirty-change', true)
   await view.vm.$nextTick()
-  await page('模型与 Provider').trigger('click')
+  await page('模型设置').trigger('click')
   expect(confirm).toHaveBeenCalledWith('放弃当前记忆未保存的更改？')
   expect(view.findComponent({ name: 'WorkspaceKnowledgePanel' }).exists()).toBe(true)
   memory.vm.$emit('dirty-change', false)
   await view.vm.$nextTick()
-  await page('模型与 Provider').trigger('click')
-  view.findComponent({ name: 'ModelServicesPanel' }).vm.$emit('dirty-change', true)
+  await page('模型设置').trigger('click')
+  view.findComponent({ name: 'BotModelSettingsPanel' }).vm.$emit('dirty-change', true)
   await view.vm.$nextTick()
-  expect(view.get<HTMLButtonElement>('.profile-save').element.disabled).toBe(true)
   await page('身份与头像').trigger('click')
-  expect(confirm).toHaveBeenCalledWith('放弃当前模型服务未保存的更改？')
-  expect(view.findComponent({ name: 'ModelServicesPanel' }).exists()).toBe(true)
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(view.findComponent({ name: 'BotModelSettingsPanel' }).exists()).toBe(true)
 })

@@ -34,6 +34,18 @@ async function switchMode() {
   } catch (e) { error.value = e instanceof Error ? e.message : '切换运行模式未完成，请重试。' }
   finally { busy.value = false }
 }
+const pairingCode = ref('')
+const pairing = ref(false)
+async function pairComputer() {
+  if (pairing.value || !desktop?.registerComputerWithCode) return
+  pairing.value = true; error.value = ''; notice.value = ''
+  try {
+    await desktop.registerComputerWithCode(pairingCode.value.trim())
+    pairingCode.value = ''
+    notice.value = '这台电脑已注册，服务器上的 Bot 可以在授权后使用它。'
+  } catch (e) { error.value = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '注册电脑失败，请重试。' }
+  finally { pairing.value = false }
+}
 async function changeServer() {
   busy.value = true; error.value = ''; notice.value = ''
   try { await desktop!.openRemoteLogin!() }
@@ -68,10 +80,17 @@ onMounted(load)
       </button>
       <button v-if="desktop?.openRemoteLogin" type="button" :disabled="busy || state?.switching" @click="changeServer">更换服务器…</button>
     </div>
+    <form v-if="state?.mode === 'client' && desktop?.registerComputerWithCode" class="desktop-mode-pairing" @submit.prevent="pairComputer">
+      <strong>用配对码注册这台电脑</strong>
+      <p>让服务器上的 Bot 能使用这台电脑的桌面。请管理员在管理后台「电脑与设备」生成配对码，10 分钟内在这里输入。</p>
+      <label for="desktop-pairing-code">配对码<input id="desktop-pairing-code" v-model="pairingCode" placeholder="ABCD-EFGH" autocomplete="off" spellcheck="false" :disabled="pairing" /></label>
+      <button type="submit" :disabled="pairing || pairingCode.trim().length < 8">{{ pairing ? '正在注册…' : '注册这台电脑' }}</button>
+    </form>
   </section>
 </template>
 
 <style scoped>
+.desktop-mode-pairing{display:grid;gap:8px;padding-top:16px;border-top:1px solid var(--line)}.desktop-mode-pairing p{margin:0;color:var(--text-muted);font-size:12px;line-height:1.6}.desktop-mode-pairing label{display:grid;gap:6px;font-size:13px;color:var(--text-secondary)}.desktop-mode-pairing input{height:38px;max-width:220px;padding:0 12px;border:1px solid var(--input-border-color);border-radius:9px;background:var(--surface);color:var(--text-primary);font:600 15px var(--font-code);letter-spacing:.1em;text-transform:uppercase}.desktop-mode-pairing button{justify-self:start}
 .desktop-mode-panel{display:grid;gap:20px;max-width:640px;color:var(--text-primary)}
 .mode-status{display:grid;gap:6px;padding:16px;border-radius:12px;background:var(--surface-soft)}
 .mode-status span{color:var(--text-secondary);font-size:13px;overflow-wrap:anywhere}

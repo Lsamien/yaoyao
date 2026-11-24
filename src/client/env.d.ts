@@ -11,6 +11,10 @@ interface ImportMeta {
 
 interface Window {
   yaoyaoDesktop?: {
+    /** Complete edition: opens the local admin console in an app window. */
+    openAdminConsole?: () => Promise<void>
+    /** Client edition: registers this computer with a pairing code from the admin console. */
+    registerComputerWithCode?: (code: string) => Promise<{ registered: boolean; hostId?: string }>
     unreadState?(accountId: string | null): Promise<void>
     openLogin?(): Promise<unknown>
     forgetLogin?(): Promise<unknown>

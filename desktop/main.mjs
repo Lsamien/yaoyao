@@ -12,7 +12,7 @@ import { synchronizeLocalService, stopLocalService, migrateLocalData } from './s
 import { resolveDataHome } from './data-home.mjs'
 import { DesktopEnvironmentHost, DesktopHostCore } from './environment-host.mjs'
 import { DesktopHostManager } from './host-manager.mjs'
-import { remoteRegistration, remoteSession, enrollDesktopHost, inspectServer, persistRemoteSession, sessionCookieDetails } from './remote-login.mjs'
+import { remoteRegistration, remoteSession, enrollDesktopHost, enrollDesktopHostWithCode, inspectServer, persistRemoteSession, sessionCookieDetails, PAIRING_REQUIRED } from './remote-login.mjs'
 import { authorizeCurrentComputer } from './computer-authorization.mjs'
 import { DesktopLoginSessions } from './login-sessions.mjs'
 import { DesktopOnboarding } from './onboarding.mjs'
@@ -145,6 +145,11 @@ else {
     window.show(); window.focus()
     if (serverModeActive && manager) void manager.reconnect().then(() => stateChanged(manager.state)).catch(error => log(error.message))
   }
+  /** Complete edition: the local admin console listens next to the Web, on loopback only. */
+  function openAdminConsole() {
+    if (!platform.server || manager?.state.phase !== 'ready') { void dialog.showMessageBox({ type: 'info', message: '管理后台随本机服务运行', detail: '请先切换到服务器模式并等待服务就绪。连接远程服务器时，请在服务器本机打开管理后台。' }); return }
+    safeExternal(`http://127.0.0.1:${port + 1}/`)
+  }
   function safeExternal(url) {
     try { const parsed = new URL(url); if (['https:', 'http:', 'mailto:'].includes(parsed.protocol)) void shell.openExternal(url) }
     catch { /* No arbitrary file, shell or custom URL dispatch. */ }
@@ -209,8 +214,8 @@ else {
     if (closing || quitting || remoteMode) return
     const serviceStatus=Menu.getApplicationMenu()?.getMenuItemById('desktop-service-status')
     if(serviceStatus)serviceStatus.label=state.phase==='ready'?'后台服务运行中':state.message
-    const localVmMenu=Menu.getApplicationMenu()?.getMenuItemById('desktop-local-vm')
-    if(localVmMenu)localVmMenu.enabled=state.phase==='ready'
+    const adminConsoleMenu=Menu.getApplicationMenu()?.getMenuItemById('desktop-admin-console')
+    if(adminConsoleMenu)adminConsoleMenu.enabled=state.phase==='ready'
     const notice = Menu.getApplicationMenu()?.getMenuItemById('desktop-sync-notice')
     if (notice) notice.visible = Boolean(state.updateNotice)
     const retrySync = Menu.getApplicationMenu()?.getMenuItemById('desktop-sync-retry')
@@ -390,7 +395,7 @@ else {
         const env = { ...process.env, NODE_ENV: 'production', NODE_USE_ENV_PROXY: '0',
           PATH: [join(homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || '/usr/bin:/bin'].join(':'),
           HERMES_YAOYAO_DESKTOP: '1', HERMES_YAOYAO_HOME: home, HERMES_YAOYAO_HOST: '127.0.0.1',
-          HERMES_YAOYAO_PORT: String(port), HERMES_YAOYAO_STATIC_DIR: join(root, 'ui'),
+          HERMES_YAOYAO_PORT: String(port), YAOYAO_ADMIN_HOST: '127.0.0.1', YAOYAO_ADMIN_PORT: String(port + 1), HERMES_YAOYAO_STATIC_DIR: join(root, 'ui'),
           HERMES_YAOYAO_DEFER_HERMES: '1', ...kernelEnvironment() }
         delete env.ELECTRON_RUN_AS_NODE
         delete env.HERMES_YAOYAO_TLS_CERT; delete env.HERMES_YAOYAO_TLS_KEY
@@ -435,7 +440,13 @@ else {
     async function authorizeComputer(server,session){
       const previous=await hostManager.read().catch(()=>undefined)
       const previousHostId=previous&&new URL(previous.serverURL).origin===new URL(server).origin?previous.hostId:undefined
-      const registration=await enrollDesktopHost(session,{name:hostname(),installId:await hostManager.installIdentity(),previousHostId},authFetch)
+      let registration
+      try{registration=await enrollDesktopHost(session,{name:hostname(),installId:await hostManager.installIdentity(),previousHostId},authFetch)}
+      catch(error){
+        // Newer servers register computers with a pairing code from the admin console; keep a computer that is already registered.
+        if(error?.code===PAIRING_REQUIRED&&previousHostId)return {host:{id:previousHostId}}
+        throw error
+      }
       await hostManager.adopt({protocol:1,serverURL:server,hostId:registration.host.id,token:registration.token,...(server.startsWith('http://')?{allowInsecureLan:true}:{})})
       return registration
     }
@@ -471,6 +482,17 @@ else {
       const cookies = await electronSession.defaultSession.cookies.get({ url: origin })
       if (!isCurrent()) throw new Error('当前连接已改变，请重新打开 Bot 设置')
       return authorizeCurrentComputer({ scope, core, origin, cookies, fetchImpl: authFetch, isCurrent })
+    })
+    ipcMain.handle('desktop:open-admin-console',event=>{requireModePage(event);openAdminConsole()})
+    ipcMain.handle('desktop:computer-pair',async(event,code)=>{
+      requireModePage(event)
+      if(!remoteMode||!remoteURL)throw new Error('请先在客户端模式下登录服务器')
+      const previous=await hostManager.read().catch(()=>undefined)
+      const previousHostId=previous&&new URL(previous.serverURL).origin===new URL(remoteURL).origin?previous.hostId:undefined
+      const registration=await enrollDesktopHostWithCode(remoteURL,String(code??''),{name:hostname(),installId:await hostManager.installIdentity(),previousHostId},authFetch)
+      await hostManager.adopt({protocol:1,serverURL:remoteURL,hostId:registration.host.id,token:registration.token,...(remoteURL.startsWith('http://')?{allowInsecureLan:true}:{})})
+      await hostManager.start().catch(error=>hostManager.publish(error.message))
+      return {registered:true,hostId:registration.host.id}
     })
     ipcMain.handle('desktop:computer-authorize',async(event,csrfToken)=>{
       requireModePage(event)
@@ -645,7 +667,7 @@ else {
       { label: '夭夭', submenu: [{ role: 'about', label: '关于夭夭' }, { type: 'separator' },
         { id:'desktop-service-status',label:'正在连接后台服务…',enabled:false },
         { label: '显示窗口', click: show }, { label: '在浏览器中打开', click: () => { const url = serviceURL(); if (url) safeExternal(url) } },
-        { id:'desktop-local-vm',label:'本地虚拟机设置…',enabled:false,click:()=>{if(manager.state.phase==='ready'){show();void window.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('yaoyao:local-vm-settings'))")}} },
+        { id:'desktop-admin-console',label:'打开管理后台…',click:()=>openAdminConsole() },
         { label: '查看服务日志', click: () => shell.showItemInFolder(logFile) },
         { id:'desktop-sync-notice', label:'Web 同步待完成：服务忙碌', enabled:false, visible:false },
         { id:'desktop-sync-retry', label:'重试同步本机 Web…', enabled:false,
@@ -675,6 +697,7 @@ else {
         {id:'desktop-host-ask',label:'启动时询问运行模式',type:'checkbox',checked:preferences.value.startupChoice==='ask',
           click:item=>{void preferences.setStartupChoice(item.checked?'ask':remoteMode?'remote':'local').catch(async error=>{item.checked=preferences.value.startupChoice==='ask';await appDialog({type:'error',message:'无法保存启动偏好',detail:error.message})})}}]},
       {label:'电脑',submenu:[{id:'desktop-host-status',label:'未配置电脑',enabled:false},{type:'separator'},
+        {id:'desktop-host-pair',label:'用配对码注册这台电脑…',click:()=>{show();void window.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('yaoyao:computer-pairing'))")}},
         {id:'desktop-host-authorize',label:'重新授权…',click:()=>{void openRemoteLogin().catch(error=>log(error.message))}},
         {id:'desktop-host-import',label:'导入电脑配置…',click:importDesktopHost},
         {id:'desktop-host-reconnect',label:'重新连接',click:()=>hostAction(()=>hostManager.start())},

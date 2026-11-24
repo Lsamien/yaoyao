@@ -160,7 +160,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
      <p>多个机器人共用同一台 Grok Bot 云端虚拟机、工作文件和浏览器登录。基础机器人和聊天记录保持独立。</p>
      <button v-if="cloud?.configured" class="primary" :disabled="busy" @click="openDesktop('cloud')">{{cloud?.mode==='human'?'打开控制中的桌面':'接管云虚拟机'}}</button>
      <button @click="connectionSettings=!connectionSettings">{{cloud?.configured?'云端连接设置':'连接 Grok Bot'}}</button>
-     <p v-if="!isAdmin&&!cloud?.configured" class="hint">请由管理员为当前账号配置 Grok Bot 连接。</p>
+     <p v-if="!cloud?.configured" class="hint">{{isAdmin?'请在管理后台「电脑与设备」中连接 Grok Bot。':'请由管理员为当前账号配置 Grok Bot 连接。'}}</p>
     </template>
     <template v-if="showVm&&state">
      <strong>本地虚拟机</strong>
@@ -175,7 +175,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
       <label>虚拟机镜像<select :value="state.imageKey??''" :disabled="busy||state.inUse||state.container!=='missing'" @change="run(()=>apiRequest(base()+'/image',{method:'PUT',body:{imageKey:($event.target as HTMLSelectElement).value}}))"><option v-if="!state.imageKey" value="" disabled>{{state.image?'当前保留的镜像':'请选择已准备的镜像'}}</option><option v-for="image in state.images" :key="image.key" :value="image.key" :disabled="!image.ready">{{image.name}}{{image.ready?'':' · 未准备'}}</option></select></label>
       <p class="hint">{{state.mode==='shared'?'同一共享桌面只能使用一个镜像，选择会对所有共享成员生效。':'此桌面的镜像、文件和浏览器资料与其他独立桌面分开。'}}{{state.container!=='missing'?'切换镜像前请先移除实例。':''}}</p>
      </template>
-     <button v-if="!state.fixedCapacity&&!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">设置本地虚拟机</button>
+     <p v-if="!state.fixedCapacity&&!state.image" class="hint">{{isAdmin?'本地虚拟机尚未准备镜像，请在管理后台「本地虚拟机」中准备。':'本地虚拟机尚未准备，请联系管理员。'}}</p>
      <button v-else-if="!state.fixedCapacity&&state.container==='missing'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('create')">创建 {{agent.name}} 的虚拟机</button>
      <button v-else-if="!state.fixedCapacity&&state.container==='stopped'&&!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动虚拟机</button>
      <template v-else-if="state.container==='running'">
@@ -185,11 +185,11 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
      </template>
      <div v-if="!state.fixedCapacity&&state.container!=='missing'&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse" @click="action('stop')">停止虚拟机</button><button :disabled="busy||state.inUse" @click="action('recreate')">重建虚拟机</button><button :disabled="busy||state.inUse" @click="action('remove')">移除实例</button></div>
      <p class="hint">{{state.fixedCapacity?'桌面由 Compose 创建，数量固定。这里只连接已有共享桌面；工作目录为 /home/cua/workspace。':`重建会保留工作文件、软件配置和登录资料。${vmIdleStopLabel(state.idleStopMinutes)}，可在设置中修改。`}}</p>
-     <button v-if="isAdmin" class="settings-link" @click="emit('settings')"><AppIcon name="settings" :size="14"/>本地虚拟机设置</button>
     </template>
     </div>
     <button v-if="!showCloud" class="settings-link" @click="connectionSettings=!connectionSettings"><AppIcon name="globe" :size="14"/>Grok Bot 云端连接</button>
-    <GrokAuthPanel v-if="connectionSettings" :is-admin="isAdmin" @changed="emit('changed');refresh()"/>
+    <!-- Signing in to Grok Bot is done in the admin console; here it only shows status. -->
+    <GrokAuthPanel v-if="connectionSettings" :is-admin="false" @changed="emit('changed');refresh()"/>
    </template>
   </div>
  </aside>
