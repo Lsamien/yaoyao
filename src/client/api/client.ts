@@ -16,6 +16,8 @@ export class ApiError extends Error {
 }
 
 let csrfToken = ''
+/** Where to renew the CSRF token: the Web bootstrap, or the admin console's session endpoint. */
+let csrfRefreshPath = '/api/app/bootstrap?csrfOnly=1'
 let csrfAccountId: string | null | undefined
 let securityGeneration = 0
 let csrfRefresh: { generation: number; promise: Promise<void> } | undefined
@@ -38,6 +40,10 @@ export function setApiCsrfToken(token?: string | null, accountId?: string | null
   securityChannel?.postMessage(csrfToken)
 }
 
+export function setCsrfRefreshPath(path: string): void {
+  csrfRefreshPath = path
+}
+
 export function clearApiSecurityContext(): void {
   securityGeneration += 1
   csrfToken = ''
@@ -55,7 +61,7 @@ function refreshCsrfToken(rejectedToken: string): Promise<void> {
   if (csrfRefresh?.generation === generation) return csrfRefresh.promise
   const renew = async () => {
     requireSecurityGeneration(generation)
-    const payload = await apiRequest<unknown>('/api/app/bootstrap?csrfOnly=1', {
+    const payload = await apiRequest<unknown>(csrfRefreshPath, {
       csrf: false, notifyUnauthorized: false, timeoutMs: 10_000,
     })
     requireSecurityGeneration(generation)

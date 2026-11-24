@@ -168,6 +168,24 @@ describe('admin console listener', () => {
     await admin.call('get', '/api/app/admin/users').expect(200)
   })
 
+  it('registers a computer with a one-time pairing code from the console', async () => {
+    setupRuntime()
+    const { admin } = await withAdminAndMember()
+    const created = await admin.call('post', '/api/app/admin/desktop-hosts/pairing-codes').send({}).expect(201)
+    expect(created.body.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+    const machine = () => request(runtime!.app.callback()).post('/api/desktop-host/v1/enroll').set('Host', web)
+    await machine().set('Origin', `http://${web}`).send({ code: created.body.code, name: 'Studio Mac' }).expect(403)
+    const enrolled = await machine().send({ code: created.body.code.toLowerCase(), name: 'Studio Mac' }).expect(201)
+    expect(enrolled.body.token).toEqual(expect.any(String))
+    expect(enrolled.body.host).toMatchObject({ name: 'Studio Mac', enabled: true })
+    await machine().send({ code: created.body.code, name: 'Second Mac' }).expect(403)
+    for (let i = 0; i < 9; i++) await machine().send({ code: 'WRONG-CODE', name: 'x' }).expect(403)
+    await machine().send({ code: 'WRONG-CODE', name: 'x' }).expect(429)
+    // Creating a code is a high-risk write: it needs a recent password confirmation.
+    clock += 11 * 60_000
+    await admin.call('post', '/api/app/admin/desktop-hosts/pairing-codes').send({}).expect(428)
+  })
+
   it('exports the audit log as CSV with formulas neutralised', () => {
     const csv = auditCsv([{ id: 1, at: 0, actor: '=cmd', ip: '127.0.0.1', module: '用户与权限', action: 'POST /x', target: '/x', outcome: 'ok', status: 201, detail: 'a, "b"' }])
     expect(csv).toContain(`"'=cmd"`)
@@ -204,6 +222,9 @@ describe('admin console configuration', () => {
     expect(isManagementRoute('GET', '/api/app/grok-cloud/auth')).toBe(false)
     expect(isManagementRoute('POST', '/api/app/grok-cloud/auth/start')).toBe(true)
     expect(isManagementRoute('GET', '/api/app/nodes/abc/agents')).toBe(false)
+    expect(isManagementRoute('GET', '/api/app/tts/settings')).toBe(false)
+    expect(isManagementRoute('PUT', '/api/app/tts/settings/openai')).toBe(true)
+    expect(isManagementRoute('DELETE', '/api/app/stt/settings/openai/secret/key')).toBe(true)
     expect(needsReauthentication('PUT', '/api/app/admin/hermes/credentials')).toBe(true)
     expect(needsReauthentication('POST', '/api/app/admin/model-services/validate')).toBe(false)
     expect(needsReauthentication('GET', '/api/app/system/update/status')).toBe(false)

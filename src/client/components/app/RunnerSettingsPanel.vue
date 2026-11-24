@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { webOrigin } from '@/utils/webOrigin'
 import { onMounted, ref } from 'vue'
 import { apiRequest } from '@/api/client'
 import { UNCONFIGURED_COMPUTER_IMAGE } from '@shared/runner'
@@ -12,7 +13,7 @@ const busy = ref(false), error = ref(''), notice = ref('')
 const name = ref(''), source = ref('local'), profiles = ref('default')
 // Hermes is embedded in the server; runner.json keeps the legacy field only for older Runners.
 const LEGACY_RUNNER_HERMES_URL = 'http://127.0.0.1:9119'
-const serverURL = ref(window.location.origin)
+const serverURL = ref(webOrigin())
 const computerNetwork=ref<'none'|'public-proxy'>('public-proxy')
 const managedBrowser=ref(true)
 const computers=ref(!!props.computerSetup),computerRuntime=ref<'docker'|'podman'>('docker'),computerImage=ref(''),computerPython=ref(''),hermesSource=ref(''),hermesHome=ref('')

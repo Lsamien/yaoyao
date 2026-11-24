@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { webOrigin } from '@/utils/webOrigin'
 import { onMounted, ref } from 'vue'
 import { apiRequest } from '@/api/client'
 import type { DesktopHostConfiguration, DesktopHostSummary } from '@shared/desktopHost'
@@ -6,7 +7,7 @@ import type { DesktopHostConfiguration, DesktopHostSummary } from '@shared/deskt
 const hosts = ref<DesktopHostSummary[]>([])
 const busy = ref(false), error = ref(''), notice = ref('')
 const name = ref('')
-const serverURL = ref(window.location.origin)
+const serverURL = ref(webOrigin())
 const insecure = ref(false)
 const configuration = ref<DesktopHostConfiguration>()
 

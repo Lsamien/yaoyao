@@ -25,6 +25,9 @@ export class DesktopHostHub {
   /** Bound to DesktopEnvironments.dropHost so revocation fences live commands. */
   drop: (id: string) => void = () => {}
   private online = new Map<string, { seen: number; name: string; platform: string }>()
+  /** One-time codes from the admin console; a computer redeems one instead of an admin login. */
+  private pairingCodes = new Map<string, number>()
+  private pairingFailures = new Map<string, number[]>()
   constructor(readonly store: WorkspaceStore, readonly auth: LocalAuthStore) {}
   records(): DesktopHostRecord[] { return this.store.list('_system', 'desktop-host') }
   enroll(value: unknown) {
@@ -72,12 +75,53 @@ export class DesktopHostHub {
     const router = new Router()
     router.get('/api/app/admin/desktop-hosts', ctx => { this.auth.requireAdmin(ctx); ctx.set('Cache-Control', 'no-store'); const names = readComputerNames(this.store.home); ctx.body = { protocol: DESKTOP_HOST_PROTOCOL, localName: names.local || '', hosts: this.records().map(record => this.summary(record)) } })
     router.put('/api/app/admin/desktop-hosts/:id/name', ctx => { this.auth.requireAdmin(ctx); const id = ctx.params.id; if (id !== 'local' && !this.records().some(record => record.id === id && record.enabled)) throw new HttpError(404, '这台电脑不存在', 'desktop_host_unknown'); const name = typeof (ctx.request as any).body?.name === 'string' ? (ctx.request as any).body.name : ''; ctx.body = { id, name: saveComputerName(this.store.home, id, name)[id] || '' } })
+    router.post('/api/app/admin/desktop-hosts/pairing-codes', ctx => { this.auth.requireAdmin(ctx); ctx.status = 201; ctx.body = this.createPairingCode() })
     router.post('/api/app/admin/desktop-hosts', ctx => { this.auth.requireAdmin(ctx); ctx.body = this.enroll((ctx.request as any).body); ctx.status = 201 })
     router.delete('/api/app/admin/desktop-hosts/:id', ctx => { this.auth.requireAdmin(ctx); this.remove(ctx.params.id); ctx.body = { ok: true } })
     return router
   }
+  /** 8 characters without look-alikes (0/O, 1/I/L), shown as XXXX-XXXX, valid 10 minutes, single use. */
+  createPairingCode(now = Date.now()): { code: string; expiresAt: number } {
+    for (const [code, expiresAt] of this.pairingCodes) if (expiresAt <= now) this.pairingCodes.delete(code)
+    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+    const bytes = randomBytes(8)
+    const raw = [...bytes].map(byte => alphabet[byte % alphabet.length]).join('')
+    const expiresAt = now + 10 * 60_000
+    this.pairingCodes.set(raw, expiresAt)
+    return { code: `${raw.slice(0, 4)}-${raw.slice(4)}`, expiresAt }
+  }
+
+  /** Redeems a console pairing code for a computer token. Ten failures per address per ten minutes. */
+  enrollWithCode(ip: string, value: unknown, now = Date.now()) {
+    const recent = (this.pairingFailures.get(ip) ?? []).filter(at => now - at < 10 * 60_000)
+    if (recent.length >= 10) throw new HttpError(429, '配对码尝试次数过多，请 10 分钟后再试。', 'desktop_pairing_locked')
+    const input = parse(enrollInput.extend({ code: z.string().trim().min(8).max(20) }).strict(), value)
+    const code = input.code.toUpperCase().replace(/[^A-Z0-9]/g, '')
+    const expiresAt = this.pairingCodes.get(code)
+    if (!expiresAt || expiresAt <= now) {
+      this.pairingFailures.set(ip, [...recent, now])
+      throw new HttpError(403, '配对码无效或已过期，请在管理后台重新生成。', 'desktop_pairing_invalid')
+    }
+    this.pairingCodes.delete(code)
+    const { code: _code, ...enrollment } = input
+    return this.enroll(enrollment)
+  }
+
   middleware(): Koa.Middleware {
     return async (ctx, next) => {
+      if (ctx.path === '/api/desktop-host/v1/enroll') {
+        if (ctx.get('origin')) throw new HttpError(403, '电脑授权无效', 'desktop_host_unauthorized')
+        if (ctx.method !== 'POST') throw new HttpError(405, '仅允许 POST', 'method_not_allowed')
+        let bytes = 0
+        const chunks: Buffer[] = []
+        for await (const chunk of ctx.req) { bytes += chunk.length; if (bytes > 16 * 1024) throw new HttpError(413, '请求过大', 'desktop_limit'); chunks.push(Buffer.from(chunk)) }
+        let json: unknown
+        try { json = JSON.parse(Buffer.concat(chunks).toString() || '{}') } catch { throw new HttpError(400, '请求格式无效', 'desktop_invalid') }
+        ctx.set('Cache-Control', 'no-store')
+        ctx.status = 201
+        ctx.body = this.enrollWithCode(ctx.ip, json)
+        return
+      }
       const match = /^\/api\/desktop-host\/v1\/([0-9a-f-]{36})\/exchange$/.exec(ctx.path)
       if (!match) return next()
       const record = this.store.get<DesktopHostRecord>('_system', 'desktop-host', match[1]!)

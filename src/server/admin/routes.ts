@@ -15,6 +15,8 @@ export function isManagementRoute(method: string, path: string): boolean {
   if (path === '/api/app/desktop-environment' || path.startsWith('/api/app/desktop-environment/')) return true
   if (/^\/api\/app\/agents\/[^/]+\/desktop-environment\/authorize$/.test(path)) return true
   if (path === '/api/app/voice/probe') return true
+  // Speech providers: everyone reads the active provider, only the console changes it.
+  if (!READ.has(verb) && /^\/api\/app\/(?:tts|stt)\/settings(?:\/|$)/.test(path)) return true
   // Paired child nodes: listing and editing are management; a Bot still reads a node's agents.
   if (path === '/api/app/nodes' || /^\/api\/app\/nodes\/[^/]+$/.test(path)) return true
   // Shared settings: everyone reads them, only the console writes them.
@@ -34,6 +36,9 @@ export function isConsoleSupportRoute(method: string, path: string): boolean {
     || path === '/api/app/settings/file-access'
     || path === '/api/app/settings/host-tools'
     || path === '/api/app/push/v1/capabilities'
+    || path === '/api/app/tts/settings'
+    || path === '/api/app/stt/settings'
+    || path === '/api/app/voice/providers-info'
 }
 
 /** Console session endpoints, defined by the admin console itself. */
@@ -50,7 +55,7 @@ export function auditModule(path: string): string {
     [/^\/api\/app\/admin\/local-vm/, '本地虚拟机'],
     [/^\/api\/app\/admin\/openviking/, '记忆服务'],
     [/^\/api\/app\/system\/push/, '消息推送'],
-    [/^\/api\/app\/admin\/duplex-voice|^\/api\/app\/voice/, '语音'],
+    [/^\/api\/app\/admin\/duplex-voice|^\/api\/app\/voice|^\/api\/app\/(?:tts|stt)\//, '语音'],
     [/^\/api\/app\/system\/allowed-hosts|^\/api\/app\/server-identity|^\/api\/app\/nodes/, '网络与安全'],
     [/^\/api\/app\/system\/update/, '更新与回滚'],
   ]

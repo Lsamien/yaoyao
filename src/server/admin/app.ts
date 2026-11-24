@@ -190,9 +190,12 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
   const twoStepRequired = () => config.admin.external
   const sessionView = (ctx: Koa.Context, identity?: ConsoleIdentity) => ({
     csrfToken: csrf.issue(ctx),
+    // Same shape the Web's CSRF refresh expects, so the shared API client can renew tokens here.
+    userId: identity?.user.id ?? null,
     version: deps.version,
     setupRequired: auth.setupRequired,
     external: config.admin.external,
+    webPort: config.port,
     twoStepRequired: twoStepRequired(),
     ...(identity ? {
       user: { id: identity.user.id, username: identity.user.username, avatar: identity.user.avatar, mustChangePassword: identity.user.mustChangePassword },
