@@ -44,6 +44,8 @@ services:
       HERMES_YAOYAO_APNS_TEAM_ID: "${HERMES_YAOYAO_APNS_TEAM_ID:-}"
       HERMES_YAOYAO_APNS_TOPIC: "${HERMES_YAOYAO_APNS_TOPIC:-}"
     volumes:
+      # The default /home/node/Agents workspace must remain writable and persistent.
+      - yaoyao-home:/home/node
       - yaoyao-data:/home/node/.yaoyao
       - desktop-1-ipc:/run/yaoyao-desktops/desktop-1:ro
       - desktop-1-network-ipc:/run/yaoyao-networks/desktop-1:ro
@@ -148,6 +150,7 @@ services:
       - desktop-2-network-ipc:/run/yaoyao-network
 
 volumes:
+  yaoyao-home:
   yaoyao-data:
 
   desktop-1-workspace:

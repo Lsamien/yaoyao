@@ -42,6 +42,8 @@ cp docker.env.example docker.env
 
 内置 Hermes 的会话、Profile、模型配置和凭据都保存在 `yaoyao-data` 数据卷的 `hermes/` 目录；首次登录后在管理后台（`http://127.0.0.1:15301`）的「模型服务」中配置模型。
 
+Compose 同时将 `yaoyao-home` 数据卷挂载到 `/home/node`，使默认工作目录 `/home/node/Agents` 在只读容器中可写，并在重建容器后保留文件。三个仓库提供的 Compose 部署文件均包含此配置；自定义部署也需要为该目录提供持久化可写挂载，且容器内 `node` 用户（UID 1000）须有读写权限。
+
 使用远程镜像时，在 `docker.env` 设置上述镜像标签后执行：
 
 ```sh
@@ -59,7 +61,7 @@ docker compose --env-file docker.env up -d --build
 docker compose --env-file docker.env ps
 ```
 
-默认打开 `http://127.0.0.1:15300`。局域网设备使用宿主机 IP 和发布端口访问。首次打开页面创建管理员账号，再到系统设置配置 Hermes 连接凭据。通过域名提供公网访问时，在反向代理上配置 HTTPS，并将域名加入允许列表。
+默认打开 `http://127.0.0.1:15300`。局域网设备使用宿主机 IP 和发布端口访问。首次打开页面创建管理员账号，再到管理后台（宿主机 `http://127.0.0.1:15301`）的「模型服务」配置模型。通过域名提供公网访问时，在反向代理上配置 HTTPS，并将域名加入允许列表。
 
 ## 导入原有 Hermes 数据
 
@@ -87,6 +89,7 @@ docker compose --env-file docker.env -f compose.yaml -f compose.hermes-import.ya
 ```sh
 curl --fail http://127.0.0.1:15300/healthz
 curl --fail http://127.0.0.1:15300/readyz
+docker compose --env-file docker.env exec web node -e "const fs=require('fs'); fs.mkdirSync('/home/node/Agents',{recursive:true}); fs.accessSync('/home/node/Agents',fs.constants.W_OK)"
 docker compose --env-file docker.env logs --tail=100 web
 ```
 
@@ -235,18 +238,19 @@ node yaoyao-runner/runner.mjs --config /完整路径/runner.json
 
 ## 数据与备份
 
-Compose 使用 `yaoyao-data` 命名卷，挂载到 `/home/node/.yaoyao`。账号、SQLite 数据库、聊天缓存、文件及密钥随数据卷持久保存。固定桌面部署还必须备份每台桌面的 `desktop-*-workspace` 卷；`desktop-*-ipc` 卷只是连接通道。
+Compose 使用 `yaoyao-data` 命名卷，挂载到 `/home/node/.yaoyao`。账号、SQLite 数据库、聊天缓存、文件及密钥随数据卷持久保存。`yaoyao-home` 卷保存 `/home/node` 下的工作文件，其中 `/home/node/Agents` 是默认工作目录；备份时两个卷都要保存。固定桌面部署还必须备份每台桌面的 `desktop-*-workspace` 卷；`desktop-*-ipc` 卷只是连接通道。
 
 备份时先停止 Web，然后复制完整数据目录，再启动服务：
 
 ```sh
-mkdir -p backups
+mkdir -p backups/data backups/home
 docker compose --env-file docker.env stop web
-docker compose --env-file docker.env cp web:/home/node/.yaoyao/. ./backups/
+docker compose --env-file docker.env cp web:/home/node/.yaoyao/. ./backups/data/
+docker compose --env-file docker.env cp web:/home/node/. ./backups/home/
 docker compose --env-file docker.env start web
 ```
 
-为每次备份使用独立目录，并保留文件权限。恢复时将完整备份放回数据卷，确认容器内 `node` 用户可以读写后再启动服务。
+`home` 备份中包含挂载的 `.yaoyao` 数据，与 `data` 备份重复；恢复时分别将 `data` 放回 `yaoyao-data`，将 `home` 中除 `.yaoyao` 外的内容放回 `yaoyao-home`。为每次备份使用独立目录，并保留文件权限；确认容器内 `node` 用户可以读写后再启动服务。
 
 ## 升级与停止
 

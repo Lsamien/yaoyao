@@ -99,7 +99,7 @@ docker compose --env-file docker.env config --quiet
 docker compose --env-file docker.env up -d --build
 ```
 
-默认访问 `http://127.0.0.1:15300`。应用数据保存在 `yaoyao-data` 命名卷，容器内路径为 `/home/node/.yaoyao`。首次打开页面创建管理员账号，并在管理后台（`http://127.0.0.1:15301`）的「模型服务」中配置模型。
+默认访问 `http://127.0.0.1:15300`。应用数据保存在 `yaoyao-data` 命名卷，容器内路径为 `/home/node/.yaoyao`；默认工作目录 `/home/node/Agents` 保存在 `yaoyao-home` 命名卷。首次打开页面创建管理员账号，并在管理后台（`http://127.0.0.1:15301`）的「模型服务」中配置模型。
 
 宿主机连接、局域网访问、验证及升级步骤见 [Docker 部署说明](docs/docker-install.md)。
 
