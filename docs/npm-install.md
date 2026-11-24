@@ -23,7 +23,7 @@ yaoyao service install
 - **macOS**：注册 LaunchAgent（`com.samien.hermes-yaoyao`）并立即启动，开机自启。
 - **Linux**：需要 systemd 支持（尚未提供，参见下文路线）。
 
-安装后访问 `http://127.0.0.1:15300`，首次打开自行创建管理员账号。
+安装后访问 `http://127.0.0.1:15300`，首次打开自行创建管理员账号。管理与系统设置在服务器本机的管理后台 `http://127.0.0.1:15301` 中完成（`yaoyao admin` 显示地址），只允许管理员登录，详见 [管理后台](admin-console.md)。
 
 其他命令：
 
@@ -44,6 +44,8 @@ yaoyao --version          # 查看已安装的 npm 包版本
 | --- | --- | --- |
 | `YAOYAO_HOME` | 数据目录 | `~/.yaoyao` |
 | `HERMES_YAOYAO_PORT` | Web 端口 | `15300` |
+| `YAOYAO_ADMIN_PORT` | 管理后台端口，`off` 关闭 | `15301` |
+| `YAOYAO_ADMIN_HOST` | 管理后台监听地址；非回环地址需同时设置 `YAOYAO_ADMIN_ALLOW_IPS` 与 TLS | `127.0.0.1` |
 | `YAOYAO_KERNEL_VENV` | 内置 Hermes 内核的 Python 虚拟环境目录 | 安装目录下的 `.venv` |
 | `YAOYAO_IMPORT_HERMES_HOME` | 首次启动只读导入的原 Hermes 数据目录 | `~/.hermes` |
 
@@ -51,7 +53,7 @@ LaunchAgent 安装时的环境会写入 plist；修改环境变量配置后，�
 
 ## 从界面升级
 
-macOS 通过 `yaoyao service install` 注册的独立服务可进入「我的设置 → 更新与回滚」升级：
+macOS 通过 `yaoyao service install` 注册的独立服务可在管理后台「更新与回滚」升级：
 
 1. 检查 npm 仓库的新版本，点击「下载更新」。
 2. 安装包通过 SHA-512 校验后暂存；当前服务继续运行。

@@ -62,7 +62,7 @@ function go(id: PageId) {
 const onHash = () => { const id = location.hash.slice(1); if (isPage(id)) page.value = id }
 watch(page, () => emit('refresh'))
 
-const minutesLeft = computed(() => Math.max(0, Math.ceil(((props.session.expiresAt ?? 0) - now.value) / 60_000)))
+const minutesLeft = computed(() => Math.max(0, Math.floor(((props.session.expiresAt ?? 0) - now.value) / 60_000)))
 const sudoActive = computed(() => (props.session.sudoUntil ?? 0) > now.value)
 
 const reauthOpen = ref(false)

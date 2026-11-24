@@ -40,7 +40,7 @@ cp docker.env.example docker.env
 | `HERMES_YAOYAO_PUBLISHED_PORT` | 宿主机 Web 端口，默认 `15300` |
 | `HERMES_YAOYAO_ALLOWED_HOSTS` | 使用域名访问时填写对应域名，多个值用英文逗号分隔 |
 
-内置 Hermes 的会话、Profile、模型配置和凭据都保存在 `yaoyao-data` 数据卷的 `hermes/` 目录；首次登录后在“我的设置 → 管理 → 模型服务”中配置模型。
+内置 Hermes 的会话、Profile、模型配置和凭据都保存在 `yaoyao-data` 数据卷的 `hermes/` 目录；首次登录后在管理后台（`http://127.0.0.1:15301`）的「模型服务」中配置模型。
 
 使用远程镜像时，在 `docker.env` 设置上述镜像标签后执行：
 
@@ -75,6 +75,10 @@ docker compose --env-file docker.env -f compose.yaml -f compose.hermes-import.ya
 - 只在 `yaoyao-data` 中的 `hermes/` 为空时导入一次；重复启动不会覆盖已有数据。导入失败时内置 Hermes 从空数据启动，原因写入日志和数据目录中的 `hermes-import-error.json`。
 - 导入完成后可移除 `compose.hermes-import.yaml` 和挂载。
 - `compose.hermes-import.yaml` 也可与 `compose.desktops.yaml`、`compose.desktops.cursor.yaml` 组合使用。
+
+## 管理后台
+
+管理后台只发布在宿主机的 `127.0.0.1:15301`（可用 `YAOYAO_ADMIN_PUBLISHED_PORT` 改宿主机端口），只允许管理员登录。容器内的后台按“可远程访问”处理：启用来源白名单（Docker 私有网段），首次登录必须绑定验证器 App。从其他电脑管理时用 SSH 隧道转发宿主机的 15301 端口。详见 [管理后台](admin-console.md)。
 
 ## 验证
 

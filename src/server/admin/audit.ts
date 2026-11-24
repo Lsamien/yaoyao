@@ -32,7 +32,11 @@ export class AdminAudit {
         status INTEGER NOT NULL, detail TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS audit_at ON audit(at);`)
     this.prune()
+    // Long-running services keep the 180-day window without a restart.
+    this.#timer = setInterval(() => { try { this.prune() } catch { /* Retried next day. */ } }, 86_400_000)
+    this.#timer.unref?.()
   }
+  #timer?: ReturnType<typeof setInterval>
 
   record(entry: AuditInput): void {
     this.#db.prepare('INSERT INTO audit(at,actor,ip,module,action,target,outcome,status,detail) VALUES(?,?,?,?,?,?,?,?,?)').run(
@@ -61,7 +65,10 @@ export class AdminAudit {
     this.#db.prepare('DELETE FROM audit WHERE at < ?').run(now - this.retentionDays * 86_400_000)
   }
 
-  close(): void { if (this.#db.isOpen) this.#db.close() }
+  close(): void {
+    if (this.#timer) clearInterval(this.#timer)
+    if (this.#db.isOpen) this.#db.close()
+  }
 }
 
 /** Fields whose values are secrets. `value` carries a key's content when an environment variable is set. */
