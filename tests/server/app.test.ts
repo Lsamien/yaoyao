@@ -7,6 +7,7 @@ import { createApplication as createUnauthenticatedApplication, type Application
 import type { ServerConfig } from '../../src/server/config.js'
 import { createAuthenticatedApplication as createApplication, createUserAuthenticatedApplication } from './authenticatedApplication.js'
 import { saveFileAccess } from '../../src/server/fileAccess.js'
+import { consoleClient } from './consoleClient.js'
 
 interface RecordedRequest {
   path: string
@@ -381,13 +382,18 @@ it.each([true,false])('enforces administrator access for transfer settings and s
   const runtime=(admin?createApplication:createUserAuthenticatedApplication)({config:makeConfig(),fetchImpl:fakeGateway([])});runtimes.push(runtime)
   const callback=runtime.app.callback(),bootstrap=await request(callback).get('/api/app/bootstrap?csrfOnly=1').set('Host','127.0.0.1:15300').expect(200)
   const mutation=(path:string,method:'post'|'put',body:unknown)=>request(callback)[method](path).set('Host','127.0.0.1:15300').set('Origin','http://127.0.0.1:15300').set('Cookie',cookieHeader(bootstrap)).set('X-CSRF-Token',bootstrap.body.csrfToken).send(body as any)
-  await request(callback).get('/api/app/admin/openviking/session-sync').set('Host','127.0.0.1:15300').expect(admin?200:403)
-  await mutation('/api/app/admin/openviking/session-sync/retry','post',{}).expect(admin?200:403)
-  await mutation('/api/app/settings/host-tools','put',{fileTransferMaxMiB:100}).expect(admin?200:403)
+  // The Web no longer carries these settings for anyone; the console requires an admin session.
+  await request(callback).get('/api/app/admin/openviking/session-sync').set('Host','127.0.0.1:15300').expect(410)
+  await mutation('/api/app/admin/openviking/session-sync/retry','post',{}).expect(410)
+  await mutation('/api/app/settings/host-tools','put',{fileTransferMaxMiB:100}).expect(410)
+  const console=await consoleClient(runtime)
+  await console.call('get','/api/app/admin/openviking/session-sync').expect(admin?200:401)
+  await console.call('post','/api/app/admin/openviking/session-sync/retry').send({}).expect(admin?200:401)
+  await console.call('put','/api/app/settings/host-tools').send({fileTransferMaxMiB:100}).expect(admin?200:401)
   if(admin){
-    await mutation('/api/app/settings/host-tools','put',{cloud:false}).expect(200)
+    await console.call('put','/api/app/settings/host-tools').send({cloud:false}).expect(200)
     const saved=await request(callback).get('/api/app/settings/host-tools').set('Host','127.0.0.1:15300').expect(200)
     expect(saved.body.fileTransferMaxMiB).toBe(100)
-    await mutation('/api/app/settings/host-tools','put',{fileTransferMaxMiB:101}).expect(400)
+    await console.call('put','/api/app/settings/host-tools').send({fileTransferMaxMiB:101}).expect(400)
   }
 })

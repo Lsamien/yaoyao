@@ -65,6 +65,12 @@ import {LocalVmService} from './localVm.js'
 import {SharedComputers} from './sharedComputers.js'
 import {ComputerControlService} from './computerControls.js'
 import { RunnerHub } from './runnerHub.js'
+import { AdminAudit } from './admin/audit.js'
+import { CONSOLE_CSRF_COOKIE, createConsoleApp } from './admin/app.js'
+import { isManagementRoute } from './admin/routes.js'
+import { AdminSessionStore, AdminTwoStepStore } from './admin/sessions.js'
+import { kernelPaths, requireKernel } from './hermes/paths.js'
+import { readReleaseManifest } from './releases.js'
 
 export interface ApplicationOptions {
   deferBackground?: boolean
@@ -86,9 +92,18 @@ export interface ApplicationOptions {
   fcmConfiguration?: FCMConfigurationManager
   openVikingConfiguration?: OpenVikingConfigurationManager
   allowedHostsConfiguration?: AllowedHostsConfigurationManager
+  adminSessions?: AdminSessionStore
+  adminTwoStep?: AdminTwoStepStore
+  adminCsrfSecret?: Buffer
 }
 
 export interface ApplicationRuntime {
+  /** Admin console (separate listener): management and system settings only. */
+  adminApp: Koa
+  adminSessions: AdminSessionStore
+  adminTwoStep: AdminTwoStepStore
+  adminAudit: AdminAudit
+  adminCsrf: CsrfProtection
   credentialVault: CredentialVaultCoordinator
   runners: RunnerHub
   workspace: WorkspaceStore
@@ -126,9 +141,9 @@ function isMutation(method: string): boolean {
   return !['GET', 'HEAD', 'OPTIONS'].includes(method)
 }
 
-function persistentCsrfSecret(home: string, override?: Buffer): Buffer {
+function persistentCsrfSecret(home: string, override?: Buffer, file = 'csrf-secret.bin'): Buffer {
   if (override) return override
-  const path = join(home, 'csrf-secret.bin')
+  const path = join(home, file)
   try {
     const secret = readFileSync(path)
     if (secret.byteLength === 32) return secret
@@ -151,6 +166,8 @@ function persistentCsrfSecret(home: string, override?: Buffer): Buffer {
 
 export function createApplication(options: ApplicationOptions = {}): ApplicationRuntime {
   const config = options.config ?? loadServerConfig()
+  // Test configs predate the console; they get the default local listener.
+  config.admin ??= { enabled: true, host: '127.0.0.1', port: config.port === 15301 ? 15302 : 15301, allowIps: [], insecureHttp: false, external: false }
   const runtimeAllowedHosts = new Set(config.allowedHosts)
   config.allowedHosts = runtimeAllowedHosts
   const app = new Koa()
@@ -329,6 +346,12 @@ export function createApplication(options: ApplicationOptions = {}): Application
     }
     await next()
   })
+  // Management moved to the admin console; the Web keeps no management routes.
+  app.use(async (ctx, next) => {
+    if (isManagementRoute(ctx.method, ctx.path))
+      throw new HttpError(410, '该设置已移到管理后台，请在服务器本机打开管理后台操作。', 'moved_to_admin_console')
+    await next()
+  })
   app.use(async (ctx, next) => {
     if (ctx.path.startsWith('/api/app/') && isMutation(ctx.method)) {
       const secure = ctx.secure || Boolean(config.tlsCert)
@@ -421,15 +444,15 @@ export function createApplication(options: ApplicationOptions = {}): Application
     if(['/api/app/logout','/auth/logout'].includes(ctx.path)&&ctx.method==='POST'&&user)await credentialVault.logout(user.id,cookie)
     await next()
   })
-  for(const router of [credentialVault.router(),executionSettings.router(),managedBrowsers.router(),desktopEnvironments.router(),grokCloud.authorization.router(),grokCloud.router(),workspaceInspector.router(),workspaceRoutines.router(),workspacePlugins.router()]){app.use(router.routes());app.use(router.allowedMethods())}
-  const sharedComputerRouter=sharedComputers.router();app.use(sharedComputerRouter.routes());app.use(sharedComputerRouter.allowedMethods())
-  const localVmRouter=localVm.router();app.use(localVmRouter.routes());app.use(localVmRouter.allowedMethods())
-  const computerRouter=computerControls.router();app.use(computerRouter.routes());app.use(computerRouter.allowedMethods())
+  // Route handlers are shared by the Web and the admin console; each listener gates which ones it exposes.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const routes: Koa.Middleware<any, any>[] = []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mount = (router: { routes(): Koa.Middleware<any, any>; allowedMethods(options?: any): Koa.Middleware<any, any> }, options?: object) => { routes.push(router.routes(), router.allowedMethods(options)) }
+  for (const router of [credentialVault.router(), executionSettings.router(), managedBrowsers.router(), desktopEnvironments.router(), grokCloud.authorization.router(), grokCloud.router(), workspaceInspector.router(), workspaceRoutines.router(), workspacePlugins.router(), sharedComputers.router(), localVm.router(), computerControls.router()]) mount(router)
   const applicationRouter = workspaceRouter(workspace, workspaceRuntime, workspaceNodes, workspaceAssets, uploads, auth, push, csrf)
-  app.use(runners.adminRouter().routes())
-  app.use(desktopHosts.adminRouter().routes())
-  app.use(applicationRouter.routes())
-  app.use(async (ctx, next) => {
+  routes.push(runners.adminRouter().routes(), desktopHosts.adminRouter().routes(), applicationRouter.routes())
+  routes.push(async (ctx, next) => {
     if (ctx.path.includes('/plugins/yaoyao') || ctx.path.startsWith('/api/app/groups')) throw new HttpError(410, '请使用新版聊天接口', 'retired_plugin_api')
     await next()
   })
@@ -457,8 +480,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
     openVikingSessionSync,
     allowedHostsConfiguration,
   })
-  app.use(router.routes())
-  app.use(router.allowedMethods({ throw: false }))
+  mount(router, { throw: false })
+  for (const middleware of routes) app.use(middleware)
   app.use(async (ctx, next) => {
     if (ctx.path === '/api' || ctx.path.startsWith('/api/') || ctx.path.startsWith('/ws/')) {
       ctx.status = 404
@@ -469,7 +492,50 @@ export function createApplication(options: ApplicationOptions = {}): Application
     await next()
   })
 
+  const adminSessions = options.adminSessions ?? new AdminSessionStore(config.home, auth, Boolean(config.tlsCert))
+  const adminTwoStep = options.adminTwoStep ?? new AdminTwoStepStore(config.home)
+  const adminAudit = new AdminAudit(config.home)
+  const adminCsrf = new CsrfProtection(persistentCsrfSecret(config.home, options.adminCsrfSecret, 'admin-csrf-secret.bin'), Boolean(config.tlsCert), CONSOLE_CSRF_COOKIE)
+  let version = 'unknown'
+  try { version = readReleaseManifest(join(process.cwd(), 'release.json')).releaseVersion } catch { /* Source checkouts without a manifest. */ }
+  const adminApp = createConsoleApp({
+    config, auth, sessions: adminSessions, twoStep: adminTwoStep, audit: adminAudit, csrf: adminCsrf, routes, version,
+    readScope: (user, next) => upstream.withReadScope(`user:${user.id}:${auth.pushAuthorizationVersion(user.id)}`, false, next),
+    profiles: async () => {
+      const response = await upstreamSession.request('/api/profiles')
+      const parsed = JSON.parse(response.body.toString('utf8') || '{}') as { profiles?: Array<{ name?: unknown; display_name?: unknown; is_default?: unknown }> } | Array<{ name?: unknown }>
+      const rows = Array.isArray(parsed) ? parsed : parsed.profiles ?? []
+      return rows.flatMap(row => typeof row.name === 'string' && row.name ? [{ name: row.name, label: typeof (row as { display_name?: unknown }).display_name === 'string' && (row as { display_name: string }).display_name || row.name, isDefault: row.name === 'default' || (row as { is_default?: unknown }).is_default === true }] : [])
+    },
+    overview: async admin => {
+      let kernel: { ready: boolean; error?: string } = { ready: true }
+      try { const paths = kernelPaths(); requireKernel(paths, paths.worker) } catch (cause) { kernel = { ready: false, error: cause instanceof Error ? cause.message : '内置 Hermes 内核不可用' } }
+      const users = auth.list(admin)
+      const runnerRows = runners.records().map(record => runners.summary(record))
+      const hostRows = desktopHosts.records().filter(record => record.enabled).map(record => desktopHosts.summary(record))
+      const pushStatus = push.status()
+      let update: { current: string; updateAvailable: boolean; latest?: string } | undefined
+      try { const status = updates.status(); update = { current: status.current.releaseVersion, updateAvailable: status.updateAvailable, ...(status.latest ? { latest: status.latest.releaseVersion } : {}) } } catch { /* Update status is optional. */ }
+      return {
+        version,
+        kernel: { ...kernel, version: '0.23.0' },
+        users: { total: users.length, admins: users.filter(user => user.role === 'admin').length, pending: users.filter(user => user.registrationStatus === 'pending').map(user => ({ id: user.id, username: user.username, createdAt: user.createdAt })), disabled: users.filter(user => !user.enabled).length },
+        runners: { total: runnerRows.filter(row => row.enabled).length, online: runnerRows.filter(row => row.enabled && row.online).length },
+        desktopHosts: { total: hostRows.length, online: hostRows.filter(row => row.online).length, offline: hostRows.filter(row => !row.online).map(row => ({ id: row.id, name: row.displayName || row.name, lastSeen: row.lastSeen })) },
+        push: { configured: pushStatus.configured, healthy: pushStatus.healthy, registrations: pushStatus.registrationCount },
+        ...(update ? { update } : {}),
+        web: { host: config.host, port: config.port },
+        console: { host: config.admin.host, port: config.admin.port, external: config.admin.external },
+      }
+    },
+  })
+
   return {
+    adminApp,
+    adminSessions,
+    adminTwoStep,
+    adminAudit,
+    adminCsrf,
     credentialVault,
     runners,
     localVm,
@@ -501,6 +567,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
     allowedHostsConfiguration,
     startBackground,
     close: () => {
+      adminAudit.close()
       credentialVault.close()
       closed = true
       openVikingSessionSync.close()
@@ -527,6 +594,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
 
 export interface NodeServerRuntime {
   server: HttpServer
+  /** Admin console listener; undefined when YAOYAO_ADMIN_PORT=off. */
+  adminServer?: HttpServer
   startBackground(): void
   close(closeConnections?: boolean): Promise<void>
 }
@@ -539,6 +608,9 @@ export function createNodeServer(runtime: ApplicationRuntime, options: { deferBa
         key: readFileSync(config.tlsKey),
       }, runtime.app.callback())
     : createHttpServer(runtime.app.callback())
+  const adminServer: HttpServer | undefined = !config.admin.enabled ? undefined : config.tlsCert && config.tlsKey
+    ? createHttpsServer({ cert: readFileSync(config.tlsCert), key: readFileSync(config.tlsKey) }, runtime.adminApp.callback())
+    : createHttpServer(runtime.adminApp.callback())
   let backgroundStarted = false, localVmStarted = false, closed = false
   const startLocalVm = () => {
     if (!backgroundStarted || localVmStarted || closed) return
@@ -560,13 +632,20 @@ export function createNodeServer(runtime: ApplicationRuntime, options: { deferBa
   server.once('listening', startLocalVm)
   if (!options.deferBackground) startBackground()
   const removeWebSockets = rejectWebSocketUpgrades(server, config.production)
+  const removeAdminWebSockets = adminServer ? rejectWebSocketUpgrades(adminServer, config.production) : () => undefined
   return {
     server,
+    ...(adminServer ? { adminServer } : {}),
     startBackground,
     close: async (closeConnections = false) => {
       closed = true
       await runtime.localVm.close()
       removeWebSockets()
+      removeAdminWebSockets()
+      if (adminServer?.listening) {
+        if (closeConnections) adminServer.closeAllConnections()
+        await new Promise<void>(resolve => adminServer.close(() => resolve()))
+      }
       if (closeConnections) server.closeAllConnections()
       await new Promise<void>((resolve, reject) => {
         if (!server.listening) {

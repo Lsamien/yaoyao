@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { AdminSessionStore, type ConsoleIdentity } from '../../src/server/admin/sessions.js'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +19,7 @@ import { SharedComputers, type SharedComputer } from '../../src/server/sharedCom
 import type { WorkspaceAgent, WorkspaceConversation } from '../../src/shared/workspace'
 
 let home: string, runtime: ApplicationRuntime, cookie: string, csrf: string, upstream: string[], bridgeReady: boolean
+let consoleCookie: string, consoleCsrf: string
 const first: LocalUser = {
   id: 'first',
   username: 'first',
@@ -26,6 +28,17 @@ const first: LocalUser = {
   mustChangePassword: false,
   createdAt: 1,
   updatedAt: 1,
+}
+/** Console requests are signed in as the user named by x-test-user, like the Web requests here. */
+class TestConsoleSessions extends AdminSessionStore {
+  override current(ctx: Koa.Context): ConsoleIdentity {
+    return { user: { ...first, id: ctx.get('x-test-user') || 'first' }, session: { tokenHash: 'test', userID: 'first', authVersion: 1, createdAt: Date.now(), lastSeenAt: Date.now(), sudoUntil: Number.MAX_SAFE_INTEGER, stage: 'full', ip: '127.0.0.1' } }
+  }
+}
+function adminReq(method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, user = 'first') {
+  const host = `127.0.0.1:${runtime.config.admin.port}`
+  return request(runtime.adminApp.callback())[method](path)
+    .set('Host', host).set('Origin', `http://${host}`).set('Cookie', consoleCookie).set('X-CSRF-Token', consoleCsrf).set('x-test-user', user)
 }
 class TestAuth extends LocalAuthStore {
   override current(ctx: Koa.Context) {
@@ -91,6 +104,7 @@ beforeEach(async () => {
   runtime = createApplication({
     config,
     auth: new TestAuth(home, false),
+    adminSessions: new TestConsoleSessions(home, new TestAuth(home, false)),
     fetchImpl: (async (input) => {
       const path = new URL(String(input)).pathname
       upstream.push(path)
@@ -120,6 +134,9 @@ beforeEach(async () => {
     .expect(200)
   cookie = (b.headers['set-cookie'] as unknown as string[]).map((v) => v.split(';')[0]).join('; ')
   csrf = b.body.csrfToken
+  const consoleSession = await request(runtime.adminApp.callback()).get('/api/app/console/session').set('Host', `127.0.0.1:${runtime.config.admin.port}`).expect(200)
+  consoleCookie = (consoleSession.headers['set-cookie'] as unknown as string[]).map((v) => v.split(';')[0]).join('; ')
+  consoleCsrf = consoleSession.body.csrfToken
 })
 afterEach(() => {
   runtime.close()
@@ -536,15 +553,15 @@ describe('application workspace HTTP contract', () => {
   it('accepts only child pairing, hides credentials, and scopes address edits to the owner', async () => {
     const code = new URL('yaoyao://pair')
     for (const [key,value] of Object.entries({v:'1',url:'http://child.test:15300',node:'11111111-1111-4111-8111-111111111111',id:'33333333-3333-4333-8333-333333333333',fingerprint:'f'.repeat(64),secret:'s'.repeat(64)})) code.searchParams.set(key,value)
-    await req('post','/api/app/nodes').send({name:'legacy',url:'http://child.test:9119',username:'user',password:'password'}).expect(400)
-    await req('post','/api/app/nodes').send({name:'child',qrPayload:code.href.replace('://pair','://login')}).expect(400)
-    await req('post','/api/app/nodes').send({name:'child',qrPayload:code.href}).expect(201)
-    const listing=await req('get','/api/app/nodes').expect(200), node=listing.body.nodes[0]
+    await adminReq('post','/api/app/nodes').send({name:'legacy',url:'http://child.test:9119',username:'user',password:'password'}).expect(400)
+    await adminReq('post','/api/app/nodes').send({name:'child',qrPayload:code.href.replace('://pair','://login')}).expect(400)
+    await adminReq('post','/api/app/nodes').send({name:'child',qrPayload:code.href}).expect(201)
+    const listing=await adminReq('get','/api/app/nodes').expect(200), node=listing.body.nodes[0]
     expect(node.transport).toBe('paired-web'); expect(JSON.stringify(listing.body)).not.toContain('delegated-token'); expect(node.secret).toBeUndefined()
-    expect((await req('get','/api/app/nodes','second').expect(200)).body.nodes).toEqual([])
-    await req('patch',`/api/app/nodes/${node.id}`,'second').send({name:'other',url:'http://new-ip.test:15300'}).expect(404)
-    await req('patch',`/api/app/nodes/${node.id}`).send({name:'new name',url:'http://new-ip.test:15300'}).expect(200)
-    const updated=(await req('get','/api/app/nodes').expect(200)).body.nodes[0]
+    expect((await adminReq('get','/api/app/nodes','second').expect(200)).body.nodes).toEqual([])
+    await adminReq('patch',`/api/app/nodes/${node.id}`,'second').send({name:'other',url:'http://new-ip.test:15300'}).expect(404)
+    await adminReq('patch',`/api/app/nodes/${node.id}`).send({name:'new name',url:'http://new-ip.test:15300'}).expect(200)
+    const updated=(await adminReq('get','/api/app/nodes').expect(200)).body.nodes[0]
     expect(updated.id).toBe(node.id); expect(updated.url).toBe('http://new-ip.test:15300/')
     const sources=(await req('get','/api/app/agents/sources').expect(200)).body.sources
     // Pairing still manages the node; retired remote Profiles are not Bot sources.
@@ -579,7 +596,8 @@ describe('application workspace HTTP contract', () => {
     expect(capabilities).not.toContain('immutableGroups')
     await req('get', '/api/app/files').expect(200)
     await req('get', '/api/app/voice/runtime').expect(200)
-    await req('get', '/api/app/system/update/status').expect(200)
+    await req('get', '/api/app/system/update/status').expect(410)
+    await adminReq('get', '/api/app/system/update/status').expect(200)
     await req('post', '/api/app/plugins/yaoyao/reconcile').send({}).expect(410)
     await req('get', '/api/plugins/yaoyao/v1/capabilities').expect(410)
     expect(upstream.some((p) => p.includes('/plugins/'))).toBe(false)
@@ -735,7 +753,7 @@ describe('application workspace HTTP contract', () => {
     expect(runtime.workspace.require<StoredWorkspaceFile>('first', 'file', file.id).name).toBe(corrupted)
   })
   it('persists encrypted voice credentials while giving each user their own selected voice', async () => {
-    await req('put', '/api/app/admin/duplex-voice')
+    await adminReq('put', '/api/app/admin/duplex-voice')
       .send({
         apiKey: 'private-test-key',
         voices: [
@@ -745,7 +763,7 @@ describe('application workspace HTTP contract', () => {
         currentVoiceId: 'a',
       })
       .expect(200)
-    const publicResponse = await req('get', '/api/app/admin/duplex-voice').expect(200)
+    const publicResponse = await adminReq('get', '/api/app/admin/duplex-voice').expect(200)
     expect(publicResponse.body.hasApiKey).toBe(true)
     expect(publicResponse.body.apiKey).toBeUndefined()
     await req('put', '/api/app/voice/current-voice', 'second')

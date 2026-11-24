@@ -9,9 +9,11 @@ import { createApplication, type ApplicationRuntime } from '../../src/server/app
 import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore } from '../../src/server/localAuth'
 import type { Work } from '../../src/server/workspaceScheduler'
+import { consoleClient } from './consoleClient'
 
 let runtime: ApplicationRuntime, home: string, admin: ReturnType<typeof request.agent>, child: ReturnType<typeof request.agent>
 let adminCSRF: string, childCSRF: string, childID: string, upstreamPaths: string[]
+let console: Awaited<ReturnType<typeof consoleClient>>
 const host = '127.0.0.1:15300'
 function call(client: ReturnType<typeof request.agent>, method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, csrf = '') {
   return client[method](path).set('Host', host).set('Origin', `http://${host}`).set('X-CSRF-Token', csrf)
@@ -36,7 +38,8 @@ beforeEach(async () => {
   const boot = await call(admin, 'get', '/api/app/bootstrap').expect(200)
   const setup = await call(admin, 'post', '/api/app/setup', boot.body.csrfToken).send({ username: 'owner', password: 'owner-password' }).expect(200)
   adminCSRF = setup.body.csrfToken
-  const created = await call(admin, 'post', '/api/app/admin/users', adminCSRF).send({ username: 'child', password: 'temporary-password', assignedProfiles: ['allowed'] }).expect(201)
+  console = await consoleClient(runtime, { username: 'owner', password: 'owner-password' })
+  const created = await console.call('post', '/api/app/admin/users').send({ username: 'child', password: 'temporary-password', assignedProfiles: ['allowed'] }).expect(201)
   childID = created.body.id
   await signInChild('temporary-password')
   const changed = await call(child, 'put', '/api/app/account/credentials', childCSRF).send({ currentPassword: 'temporary-password', newPassword: 'child-password' }).expect(200)
@@ -82,7 +85,7 @@ describe('subaccount Bot-only security boundary with real login sessions', () =>
         requestId: randomUUID(), name: '越权助手', ...source,
       })).rejects.toMatchObject({ status: 403, code: 'agent_source_forbidden' })
     }
-    await call(admin, 'patch', `/api/app/admin/users/${childID}`, adminCSRF).send({ assignedProfiles: [] }).expect(200)
+    await console.call('patch', `/api/app/admin/users/${childID}`).send({ assignedProfiles: [] }).expect(200)
     await expect(tools.call(childID, work.id, 'workspace_create_agent', {
       requestId: randomUUID(), name: '撤权后助手', profile: 'allowed',
     })).rejects.toMatchObject({ status: 403 })
@@ -106,12 +109,21 @@ describe('subaccount Bot-only security boundary with real login sessions', () =>
 
   it('denies native REST, realtime, relay, settings secrets and administration before any upstream request', async () => {
     upstreamPaths.length = 0
-    for (const path of ['/Users/test/.hermes/cache/private.png', '/Users/test/.hermes/profiles/private/images/private.png', '/Users/test/Agents/private.txt', '/attachments/private.txt', '/api/sessions', '/api/profiles/sessions', '/api/profile-identities', '/api/files/download?path=/tmp/private', '/api/realtime/capabilities', '/api/app/hermes-bot/local/api/profiles', '/api/app/admin/users', '/api/app/system/push-config', '/api/app/voice/runtime', '/api/app/tts/settings', '/api/app/models', '/api/app/nodes', '/api/app/session-context/test']) {
+    for (const path of ['/Users/test/.hermes/cache/private.png', '/Users/test/.hermes/profiles/private/images/private.png', '/Users/test/Agents/private.txt', '/attachments/private.txt', '/api/sessions', '/api/profiles/sessions', '/api/profile-identities', '/api/files/download?path=/tmp/private', '/api/realtime/capabilities', '/api/app/hermes-bot/local/api/profiles', '/api/app/voice/runtime', '/api/app/tts/settings', '/api/app/models', '/api/app/session-context/test']) {
       await call(child, 'get', path).expect(403)
     }
-    for (const path of ['/api/realtime/channels', '/api/app/nodes', '/api/app/agents/remote', '/api/app/agents/remote/', '/api/app/pairings', '/api/app/admin/users']) {
+    for (const path of ['/api/realtime/channels', '/api/app/agents/remote', '/api/app/agents/remote/', '/api/app/pairings']) {
       await call(child, 'post', path, childCSRF).send({ channel: 'chat' }).expect(403)
     }
+    // Management routes no longer exist on the Web for anyone, administrators included.
+    for (const path of ['/api/app/admin/users', '/api/app/system/push-config', '/api/app/nodes']) {
+      await call(child, 'get', path).expect(410)
+      await call(admin, 'get', path).expect(410)
+    }
+    // A sub-account cannot sign in to the console either.
+    const denied = await consoleClient(runtime).then(c => c.call('post', '/api/app/console/login').send({ username: 'child', password: 'child-password' }))
+    expect(denied.status).toBe(403)
+    expect(denied.body.code).toBe('admin_console_admin_only')
     expect(upstreamPaths).toEqual([])
   })
 
@@ -132,7 +144,7 @@ describe('subaccount Bot-only security boundary with real login sessions', () =>
     const c = (await call(child, 'get', '/api/app/conversations')).body.conversations[0]
     await call(child, 'post', `/api/app/conversations/${c.id}/messages`, childCSRF).send({ requestId: randomUUID(), content: 'allowed' }).expect(202)
     const stop = vi.spyOn(runtime.workspaceRuntime, 'stopConversation')
-    await call(admin, 'patch', `/api/app/admin/users/${childID}`, adminCSRF).send({ assignedProfiles: [] }).expect(200)
+    await console.call('patch', `/api/app/admin/users/${childID}`).send({ assignedProfiles: [] }).expect(200)
     expect(stop).toHaveBeenCalledWith(childID, c.id)
     await call(child, 'get', '/api/app/agents').expect(401)
     await signInChild()

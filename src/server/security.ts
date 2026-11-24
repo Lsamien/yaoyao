@@ -92,10 +92,12 @@ export function appendSetCookies(ctx: Koa.Context, values: readonly string[]): v
 export class CsrfProtection {
   readonly #secret: Buffer
   readonly #secure: boolean
+  readonly #cookie: string
 
-  constructor(secret: Buffer = randomBytes(32), secure = false) {
+  constructor(secret: Buffer = randomBytes(32), secure = false, cookieName = CSRF_COOKIE) {
     this.#secret = secret
     this.#secure = secure
+    this.#cookie = cookieName
   }
 
   issue(ctx: Koa.Context, rotate = false): string {
@@ -106,7 +108,7 @@ export class CsrfProtection {
     }
     const token = randomBytes(24).toString('base64url')
     const signed = `${token}.${this.#sign(token)}`
-    appendSetCookies(ctx, [serialize(CSRF_COOKIE, signed, {
+    appendSetCookies(ctx, [serialize(this.#cookie, signed, {
       httpOnly: true,
       secure: this.#secure,
       sameSite: 'strict',
@@ -125,7 +127,7 @@ export class CsrfProtection {
 
   #read(cookieHeader: string | undefined): string | undefined {
     if (!cookieHeader) return undefined
-    const signed = parse(cookieHeader)[CSRF_COOKIE]
+    const signed = parse(cookieHeader)[this.#cookie]
     if (!signed) return undefined
     const separator = signed.lastIndexOf('.')
     if (separator <= 0) return undefined

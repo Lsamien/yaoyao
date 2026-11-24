@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { WorkspaceStore } from '../../src/server/workspaceStore.js'
 import { readServerIdentity, updateServerIdentity } from '../../src/server/serverIdentity.js'
 import { createAuthenticatedApplication, createUserAuthenticatedApplication } from './authenticatedApplication.js'
+import { consoleClient } from './consoleClient.js'
 import type { ServerConfig } from '../../src/server/config.js'
 
 const homes: string[] = []
@@ -45,11 +46,12 @@ describe('server identity',()=>{
     const admin=createAuthenticatedApplication({config,fetchImpl:fetchImpl as typeof fetch});close.push(()=>admin.close())
     const agent=request.agent(admin.app.callback())
     const bootstrap=await agent.get('/api/app/bootstrap').set('Host','127.0.0.1:15300').expect(200)
-    const saved=await agent.put('/api/app/server-identity').set('Host','127.0.0.1:15300').set('Origin','http://127.0.0.1:15300').set('X-CSRF-Token',bootstrap.body.csrfToken).send({name:'共享服务器',expectedRevision:0}).expect(200)
+    expect(bootstrap.body.csrfToken).toBeTruthy()
+    const saved=await (await consoleClient(admin)).call('put','/api/app/server-identity').send({name:'共享服务器',expectedRevision:0}).expect(200)
     expect((await agent.get('/api/app/events?after=0').set('Host','127.0.0.1:15300').expect(200)).body.serverIdentity).toEqual(saved.body)
     const member=createUserAuthenticatedApplication({config,fetchImpl:fetchImpl as typeof fetch});close.push(()=>member.close())
     const reader=request.agent(member.app.callback()),token=(await reader.get('/api/app/bootstrap').set('Host','127.0.0.1:15300')).body.csrfToken
     expect((await reader.get('/api/app/server-identity').set('Host','127.0.0.1:15300').expect(200)).body).toEqual(saved.body)
-    await reader.put('/api/app/server-identity').set('Host','127.0.0.1:15300').set('Origin','http://127.0.0.1:15300').set('X-CSRF-Token',token).send({name:'无权限'}).expect(403)
+    await reader.put('/api/app/server-identity').set('Host','127.0.0.1:15300').set('Origin','http://127.0.0.1:15300').set('X-CSRF-Token',token).send({name:'无权限'}).expect(410)
   })
 })

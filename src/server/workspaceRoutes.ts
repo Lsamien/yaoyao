@@ -93,6 +93,8 @@ export function workspaceRouter(
         'events', 'workspace-stream-v1',
         // Ordinary chat, history and the realtime relay were removed; mobile hides its chat mode.
         'bot-only-v1',
+        // Management and system settings live on the separate admin console listener.
+        'admin-console-v1',
         ...(store.messagePatchesEnabled ? [WORKSPACE_PATCH_CAPABILITY] : []),
       ],
     }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createApplication, type ApplicationRuntime } from '../../src/server/app.js'
 import type { Server } from 'node:http'
 import type { ServerConfig } from '../../src/server/config.js'
+import { consoleClient } from './consoleClient.js'
 
 const roots: string[] = []
 const runtimes: ApplicationRuntime[] = []
@@ -165,8 +166,9 @@ describe('15300 local authentication routes', () => {
     const ready = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
     expect(ready.body).toMatchObject({ upstreamReady: true, serverKind: 'yaoyao-web' })
     expect(ready.body.profiles).toHaveLength(1)
-    const connection = await agent.get('/api/app/admin/upstream-connection')
-      .set('Host', '127.0.0.1:15300').expect(200)
+    await agent.get('/api/app/admin/upstream-connection').set('Host', '127.0.0.1:15300').expect(410)
+    const admin = await consoleClient(runtime, { username: 'owner', password: 'new-password' })
+    const connection = await admin.call('get', '/api/app/admin/upstream-connection').expect(200)
     expect(connection.body).toMatchObject({
       endpoint: 'embedded',
       authMode: 'embedded',
@@ -175,11 +177,9 @@ describe('15300 local authentication routes', () => {
     })
     expect(connection.body.lastVerifiedAt).toEqual(expect.any(Number))
 
-    await agent.post('/api/app/admin/users')
-      .set('Host', '127.0.0.1:15300').set('Origin', 'http://127.0.0.1:15300')
-      .set('X-CSRF-Token', ready.body.csrfToken)
+    await admin.call('post', '/api/app/admin/users')
       .send({ username: 'member', password: 'temporary-password' }).expect(201)
-    const users = await agent.get('/api/app/admin/users').set('Host', '127.0.0.1:15300').expect(200)
+    const users = await admin.call('get', '/api/app/admin/users').expect(200)
     expect(users.body.items.map((user: { username: string }) => user.username)).toEqual(['owner', 'member'])
     expect(cookies(setup)).not.toContain('admin')
 

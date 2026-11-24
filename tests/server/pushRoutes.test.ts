@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import request from 'supertest'
+import { consoleClient } from './consoleClient.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ApplicationRuntime } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
@@ -62,9 +63,10 @@ describe('iOS push routes', () => {
     runtimes.push(runtime)
     const agent = request.agent(runtime.app.callback())
     const bootstrap = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
-    const mutation = () => agent.put('/api/app/system/push-config/fcm')
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
+    const admin = await consoleClient(runtime)
+    const mutation = () => admin.agent.put('/api/app/system/push-config/fcm')
+      .set('Host', admin.host)
+      .set('Origin', admin.origin)
       .send({
         serviceAccountFile,
         projectId: 'yaoyao-test-project',
@@ -72,7 +74,7 @@ describe('iOS push routes', () => {
       })
 
     await mutation().expect(403)
-    const saved = await mutation().set('X-CSRF-Token', bootstrap.body.csrfToken).expect(200)
+    const saved = await mutation().set('X-CSRF-Token', admin.csrf()).expect(200)
     expect(saved.body).toMatchObject({
       configured: false,
       providers: {
@@ -144,9 +146,10 @@ describe('iOS push routes', () => {
     runtimes.push(runtime)
     const agent = request.agent(runtime.app.callback())
     const bootstrap = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
-    const mutation = () => agent.put('/api/app/system/push-config')
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
+    const admin = await consoleClient(runtime)
+    const mutation = () => admin.agent.put('/api/app/system/push-config')
+      .set('Host', admin.host)
+      .set('Origin', admin.origin)
       .send({
         keyFile,
         keyId: 'KEY1234567',
@@ -156,7 +159,7 @@ describe('iOS push routes', () => {
       })
 
     await mutation().expect(403)
-    const saved = await mutation().set('X-CSRF-Token', bootstrap.body.csrfToken).expect(200)
+    const saved = await mutation().set('X-CSRF-Token', admin.csrf()).expect(200)
     expect(saved.body).toMatchObject({
       configured: true,
       healthy: true,
@@ -167,8 +170,7 @@ describe('iOS push routes', () => {
       warnings: [{ code: 'apns_key_permissions', actualMode: '0644', recommendedMode: '0600' }],
     })
     expect(statSync(apnsConfigurationPath(home)).mode & 0o777).toBe(0o600)
-    await agent.get('/api/app/system/push-status')
-      .set('Host', '127.0.0.1:15300')
+    await admin.call('get', '/api/app/system/push-status')
       .expect(200, /"source":"file"/)
   })
 
@@ -205,10 +207,8 @@ describe('iOS push routes', () => {
     const agent = request.agent(runtime.app.callback())
     const bootstrap = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
 
-    const response = await agent.put('/api/app/system/push-config')
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
-      .set('X-CSRF-Token', bootstrap.body.csrfToken)
+    const admin = await consoleClient(runtime)
+    const response = await admin.call('put', '/api/app/system/push-config')
       .send({
         keyFile, keyId: 'KEY1234567', teamId: 'TEAM123456', topic: 'cn.samien.yaoyao.hermes',
         environments: ['development'],
@@ -280,7 +280,7 @@ describe('iOS push routes', () => {
     await host(agent.post(`/api/push/v1/installations/${installationID}/accounts/${accountID}/badge-reset`))
       .send({})
       .expect(200, { badge: 0 })
-    const status = await host(agent.get('/api/app/system/push-status')).expect(200)
+    const status = await (await consoleClient(runtime)).call('get', '/api/app/system/push-status').expect(200)
     expect(status.body).toMatchObject({ configured: true, healthy: true, registrationCount: 1, topic: 'cn.samien.yaoyao.hermes' })
 
     await host(agent.delete(`/api/push/v1/installations/${installationID}/accounts/${accountID}`))

@@ -6,6 +6,7 @@ import {
 } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
 import { LocalAuthStore, type LocalUser } from '../../src/server/localAuth.js'
+import { AdminSessionStore, type ConsoleIdentity } from '../../src/server/admin/sessions.js'
 
 const TEST_ADMIN: LocalUser = {
   id: 'test-admin',
@@ -39,12 +40,21 @@ class UserAuthenticatedTestStore extends LocalAuthStore {
   override require(_ctx: Koa.Context, _allowPasswordChange = false): LocalUser { return TEST_USER }
 }
 
+/** Every console request is already signed in as the test admin. */
+class AuthenticatedConsoleSessions extends AdminSessionStore {
+  override current(): ConsoleIdentity {
+    return { user: TEST_ADMIN, session: { tokenHash: 'test', userID: TEST_ADMIN.id, authVersion: 1, createdAt: Date.now(), lastSeenAt: Date.now(), sudoUntil: Number.MAX_SAFE_INTEGER, stage: 'full', ip: '127.0.0.1' } }
+  }
+}
+
 export function createAuthenticatedApplication(
   options: ApplicationOptions & { config: ServerConfig },
 ): ApplicationRuntime {
+  const auth = new AuthenticatedTestStore(options.config.home, Boolean(options.config.tlsCert))
   return createApplication({
     ...options,
-    auth: new AuthenticatedTestStore(options.config.home, Boolean(options.config.tlsCert)),
+    auth,
+    adminSessions: new AuthenticatedConsoleSessions(options.config.home, auth),
   })
 }
 
