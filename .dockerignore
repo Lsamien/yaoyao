@@ -12,6 +12,8 @@
 !tsconfig.client.json
 !tsconfig.client.build.json
 !tsconfig.server.json
+!vite.admin.config.ts
+!admin.html
 !vite.config.ts
 !index.html
 !public/

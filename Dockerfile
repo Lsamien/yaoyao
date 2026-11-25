@@ -10,8 +10,8 @@ COPY scripts ./scripts
 COPY bin ./bin
 RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
 
-COPY tsconfig.json tsconfig.client.json tsconfig.client.build.json tsconfig.server.json vite.config.ts ./
-COPY index.html ./
+COPY tsconfig.json tsconfig.client.json tsconfig.client.build.json tsconfig.server.json vite.config.ts vite.admin.config.ts ./
+COPY index.html admin.html ./
 COPY public ./public
 COPY deploy ./deploy
 COPY third-party ./third-party
