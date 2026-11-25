@@ -40,7 +40,7 @@ const left = () => pairing.value ? Math.max(0, Math.ceil((pairing.value.expiresA
     <section><h2>远程电脑</h2><DesktopHostSettingsPanel /></section>
     <section><DeviceAuthorizationPanel /></section>
     <section><h2>执行节点</h2><RunnerSettingsPanel /></section>
-    <section><h2>Grok 云电脑授权</h2><GrokAuthPanel :is-admin="true" /></section>
+    <section><h2>Grok 云电脑授权</h2><GrokAuthPanel manage /></section>
   </div>
 </template>
 

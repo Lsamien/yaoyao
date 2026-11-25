@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
-import AgentIdentityDialog from '@/components/app/AgentIdentityDialog.vue'
+import AgentIdentityDialog from './fixtures/AgentManagementHarness.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
 import ModelServicesPanel from '@/components/app/ModelServicesPanel.vue'
 import { deleteModelService, listModelServices, saveDuplexVoiceSettings, saveLegacyModelService, saveModelService, saveProfileDefaultModel, validateModelService } from '@/api/agentManagement'

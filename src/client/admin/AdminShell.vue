@@ -26,7 +26,7 @@ const groups: Array<{ label: string; items: NavItem[] }> = [
     { id: 'network', label: '网络与安全', hint: '服务器名称、访问地址、后台访问' },
     { id: 'update', label: '更新与回滚', hint: '检查、更新、回滚' },
     { id: 'audit', label: '审计日志', hint: '登录与所有修改记录' },
-    { id: 'account', label: '我的账号', hint: '密码与二次验证' },
+    { id: 'account', label: '我的账号', hint: '用户名与密码' },
   ] },
 ]
 const items = groups.flatMap(group => group.items)

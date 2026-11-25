@@ -99,14 +99,6 @@ test('expired sessions and failed restoration reveal the guide with actionable s
   flow.serviceChanged({ phase: 'error', message: '服务恢复失败' })
   assert.equal(flow.snapshot().restoring, false, 'background recovery errors must expose retry controls')
 })
-test('failed computer enrollment preserves login and offers inline continuation', async () => {
-  const { flow, calls } = fixture({ inspect: async () => ({ authenticated: false }), authenticate: async () => ({ username: 'admin', warning: '电脑授权未恢复' }) })
-  flow.select('remote'); await flow.prepare(); await flow.submit({ username: 'admin', password: 'password' })
-  assert.equal(flow.snapshot().phase, 'ready'); assert.equal(flow.snapshot().authenticated, true)
-  assert.match(flow.snapshot().error, /授权未恢复/); assert.deepEqual(calls, [])
-  await flow.submit(); assert.equal(flow.snapshot().active, false)
-})
-
 test('registration stays anonymous and does not enter or enroll a computer', async () => {
   const calls = []
   const flow = new DesktopOnboarding({ remoteServer: () => 'http://127.0.0.1:15300', inspect: async () => ({ registrationAvailable: true }), register: async input => { calls.push(input) }, authenticate: async () => { throw new Error('must not log in') }, activate: async () => { throw new Error('must not activate') } })

@@ -32,7 +32,7 @@ const first: LocalUser = {
 /** Console requests are signed in as the user named by x-test-user, like the Web requests here. */
 class TestConsoleSessions extends AdminSessionStore {
   override current(ctx: Koa.Context): ConsoleIdentity {
-    return { user: { ...first, id: ctx.get('x-test-user') || 'first' }, session: { tokenHash: 'test', userID: 'first', authVersion: 1, createdAt: Date.now(), lastSeenAt: Date.now(), sudoUntil: Number.MAX_SAFE_INTEGER, stage: 'full', ip: '127.0.0.1' } }
+    return { user: { ...first, id: ctx.get('x-test-user') || 'first' }, session: { tokenHash: 'test', userID: 'first', authVersion: 1, createdAt: Date.now(), lastSeenAt: Date.now(), sudoUntil: Number.MAX_SAFE_INTEGER, ip: '127.0.0.1' } }
   }
 }
 function adminReq(method: 'get' | 'post' | 'put' | 'patch' | 'delete', path: string, user = 'first') {

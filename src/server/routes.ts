@@ -778,8 +778,8 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const currentPassword = typeof request.currentPassword === 'string' ? request.currentPassword : ''
     const newPassword = typeof request.newPassword === 'string' ? request.newPassword : ''
-    const username = typeof request.username === 'string' ? request.username : undefined
-    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword, username)
+    // Usernames are not changed from the Web; administrators rename themselves in the admin console.
+    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword)
     json(ctx, 200, { user, must_change_password: false, server_kind: 'yaoyao-web' })
   })
   router.post('/api/app/account-pairings', (ctx) => {
@@ -949,8 +949,8 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const currentPassword = typeof request.currentPassword === 'string' ? request.currentPassword : ''
     const newPassword = typeof request.newPassword === 'string' ? request.newPassword : ''
-    const username = typeof request.username === 'string' ? request.username : undefined
-    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword, username)
+    // Usernames are not changed from the Web; administrators rename themselves in the admin console.
+    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword)
     json(ctx, 200, { user, mustChangePassword: false, csrfToken: dependencies.csrf.issue(ctx, true) })
   })
   router.put('/api/app/account/avatar', (ctx) => {

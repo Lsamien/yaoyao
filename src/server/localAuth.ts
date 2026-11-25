@@ -202,6 +202,23 @@ export class LocalAuthStore {
     return { user: publicUser(user), authVersion: user.authVersion }
   }
 
+  /** Console username change for the signed-in admin; existing sessions stay valid. */
+  rename(userID: string, currentPassword: string, newUsername: string): LocalUser {
+    const user = this.#users.find(candidate => candidate.id === userID)
+    if (!user) throw new HttpError(401, '请重新登录', 'authentication_required')
+    if (!this.#passwordMatches(user, currentPassword)) throw new HttpError(401, '当前密码错误', 'invalid_current_password')
+    const username = canonicalUsername(newUsername)
+    const normalized = username.toLocaleLowerCase('en-US')
+    if (this.#users.some(candidate => candidate.id !== user.id && candidate.normalizedUsername === normalized)) {
+      throw new HttpError(409, '用户名已存在', 'username_exists')
+    }
+    user.username = username
+    user.normalizedUsername = normalized
+    user.updatedAt = Date.now()
+    this.#saveUsers()
+    return publicUser(user)
+  }
+
   /** Called only behind the native service capability, never from public auth routes. */
   localDesktopSession(ctx: Koa.Context): LocalUser {
     let admin = this.#users.find(user => user.role === 'admin' && user.enabled)
@@ -415,20 +432,13 @@ export class LocalAuthStore {
     ctx: Koa.Context,
     currentPassword: string,
     newPassword: string,
-    newUsername?: string,
   ): LocalUser {
     const current = this.require(ctx, true)
     const user = this.#users.find(candidate => candidate.id === current.id)!
     if (!current.localDesktop && !this.#passwordMatches(user, currentPassword)) {
       throw new HttpError(401, '当前密码错误', 'invalid_current_password')
     }
-    const username = newUsername === undefined ? user.username : canonicalUsername(newUsername)
-    const normalized = username.toLocaleLowerCase('en-US')
-    if (this.#users.some(candidate => candidate.id !== user.id && candidate.normalizedUsername === normalized)) {
-      throw new HttpError(409, '用户名已存在', 'username_exists')
-    }
-    user.username = username
-    user.normalizedUsername = normalized
+    const username = user.username
     this.#setPassword(user, validatePassword(newPassword), false)
     user.mustChangePassword = false
     user.updatedAt = Date.now()

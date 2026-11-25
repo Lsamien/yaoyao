@@ -4,14 +4,13 @@ import BrandMark from '@/components/common/BrandMark.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
-const username = ref(auth.user?.username || '')
 const currentPassword = ref('')
 const newPassword = ref('')
 const confirmation = ref('')
 const busy = ref(false)
 const error = ref('')
 const canSubmit = computed(() => currentPassword.value && newPassword.value.length >= 8
-  && newPassword.value === confirmation.value && username.value.trim())
+  && newPassword.value === confirmation.value)
 
 async function submit() {
   if (!canSubmit.value) return
@@ -21,7 +20,6 @@ async function submit() {
     await auth.changeCredentials({
       currentPassword: currentPassword.value,
       newPassword: newPassword.value,
-      username: auth.user?.role === 'admin' ? username.value.trim() : undefined,
     })
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '修改密码失败'
@@ -37,7 +35,6 @@ async function submit() {
       <BrandMark :size="68" />
       <div><h1>先修改初始密码</h1><p>默认密码或管理员重置的临时密码不能继续用于工作区。</p></div>
       <form @submit.prevent="submit">
-        <label v-if="auth.user?.role === 'admin'"><span>管理员用户名</span><input v-model="username" autocomplete="username" /></label>
         <label><span>当前密码</span><input v-model="currentPassword" type="password" autocomplete="current-password" /></label>
         <label><span>新密码</span><input v-model="newPassword" type="password" autocomplete="new-password" placeholder="至少 8 个字符" /></label>
         <label><span>确认新密码</span><input v-model="confirmation" type="password" autocomplete="new-password" /></label>

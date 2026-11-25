@@ -38,7 +38,7 @@ export interface AdminConsoleConfig {
   allowIps: string[]
   /** Explicit opt-out of TLS for a non-loopback listener (Docker port published on 127.0.0.1 only). */
   insecureHttp: boolean
-  /** Listener is reachable from other machines: two-step verification becomes mandatory. */
+  /** Listener is reachable from other machines: an IP allowlist and TLS (or loopback-only publishing) are required. */
   external: boolean
 }
 

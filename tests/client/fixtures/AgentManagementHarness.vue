@@ -1,11 +1,12 @@
+<!-- Test harness: the identity panel plus the model and voice panels the admin console uses. Not shipped. -->
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import type { Profile } from '@shared/types'
 import AppIcon from '@/components/common/AppIcon.vue'
-import AgentIdentityPanel from './AgentIdentityPanel.vue'
+import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
 import type { ProfileIdentityInput } from '@/api/profiles'
-import ModelServicesPanel from './ModelServicesPanel.vue'
-import DuplexVoicePanel from './DuplexVoicePanel.vue'
+import ModelServicesPanel from '@/components/app/ModelServicesPanel.vue'
+import DuplexVoicePanel from '@/components/app/DuplexVoicePanel.vue'
 
 const props = defineProps<{ open: boolean; profile?: Profile; busy?: boolean; error?: string; isAdmin?: boolean }>()
 const emit = defineEmits<{ close: []; save: [input: ProfileIdentityInput] }>()

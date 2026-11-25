@@ -44,7 +44,6 @@ function mountSettings(overrides: Record<string, unknown> = {}) {
       profiles,
       userName: '管理员',
       pairingUserName: 'owner',
-      isAdmin: true,
       ...overrides,
     } as never,
     global: { stubs: childStubs },
@@ -88,7 +87,7 @@ describe('Settings center dialog', () => {
       switchMode,
       openRemoteLogin: vi.fn(async () => {}),
     } })
-    const wrapper = mountSettings({ isAdmin: false, botMode: true, initialPage: 'desktop-mode' })
+    const wrapper = mountSettings({ botMode: true, initialPage: 'desktop-mode' })
     await flushPromises()
     expect(navigationButton(wrapper, '运行模式').attributes('aria-current')).toBe('page')
     expect(wrapper.text()).toContain('当前：客户端模式')
@@ -123,7 +122,7 @@ describe('Settings center dialog', () => {
   })
   it.each(['agent-identity', 'agent-models'])('keeps %s and the Profile selector out of Bot-mode personal settings', initialPage => {
     const wrapper = mountSettings({ botMode: true, initialPage })
-    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual(['个人', '管理'])
+    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual(['个人'])
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
     expect(wrapper.find('[data-testid="agent-identity"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="model-services"]').exists()).toBe(false)
@@ -137,7 +136,9 @@ describe('Settings center dialog', () => {
     await wrapper.findAll('[role="radio"]').find(button=>button.text()==='深色')!.trigger('click')
     expect(wrapper.emitted('set-theme')).toEqual([['dark']])
     await wrapper.get('input[aria-label="搜索设置"]').setValue('模型')
-    expect(wrapper.findAll('.settings-sidebar nav button').map(button=>button.text())).toEqual(['管理后台'])
+    expect(wrapper.findAll('.settings-sidebar nav button')).toHaveLength(0)
+    await wrapper.get('input[aria-label="搜索设置"]').setValue('手机')
+    expect(wrapper.findAll('.settings-sidebar nav button').map(button=>button.text())).toEqual(['手机登录'])
     wrapper.unmount()
   })
   it.each([false, true])('keeps independent tools and About outside settings (Bot mode=%s)', botMode => {
@@ -148,41 +149,20 @@ describe('Settings center dialog', () => {
     expect(wrapper.find('.bot-about').exists()).toBe(false)
     wrapper.unmount()
   })
-  it('groups administrator pages and routes account, voice, and system content to the right scope', async () => {
-    const wrapper = mountSettings()
+  it('has no management section for any account; phone login is a personal page', async () => {
+    const wrapper = mountSettings({ initialPage: 'system-console' })
+    const navigation = wrapper.get('.settings-sidebar nav')
 
-    // Bot mode only: base Profile identity and models live in each Bot's profile.
-    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual([
-      '个人',
-      '管理',
-    ])
-    expect(wrapper.get('.settings-sidebar nav').text()).not.toContain('模型与 Provider')
-    expect(wrapper.get('.settings-sidebar nav').text()).not.toContain('身份与头像')
+    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['个人'])
+    for (const label of ['管理后台', '模型与 Provider', '身份与头像', '系统概览', '模型服务', '用户与权限', '消息推送', '双流语音', '更新与回滚'])
+      expect(navigation.text()).not.toContain(label)
+    expect(navigation.text()).toContain('手机登录')
+    expect(wrapper.get('.settings-content__header').text()).toContain('账号资料')
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
     expect(wrapper.get('.settings-content__header').text()).toContain('当前账号：owner')
-
-    // Management moved to the separate admin console; the Web only points there.
-    const consoleButton = navigationButton(wrapper, '管理后台')
-    expect(consoleButton.element.closest('section')?.textContent).toContain('管理')
-    await consoleButton.trigger('click')
-    expect(wrapper.get('.admin-console-notice').text()).toContain('系统设置已移到管理后台')
-    expect(wrapper.get('.admin-console-notice').text()).toContain('127.0.0.1:15301')
-    for (const label of ['系统概览', '模型服务', '用户与权限', '消息推送', '双流语音', '更新与回滚']) expect(wrapper.get('.settings-sidebar nav').text()).not.toContain(label)
-  })
-
-  it('hides the admin console pointer from non-admin users', () => {
-    const wrapper = mountSettings({ isAdmin: false, initialPage: 'system-console' })
-    const navigation = wrapper.get('.settings-sidebar nav')
-
-    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['个人'])
-    expect(navigation.text()).not.toContain('模型与 Provider')
-    expect(navigation.text()).not.toContain('系统概览')
-    expect(navigation.text()).not.toContain('双流语音')
-    expect(navigation.text()).not.toContain('管理后台')
-    expect(wrapper.find('.admin-console-notice').exists()).toBe(false)
-    expect(wrapper.get('.settings-content__header').text()).toContain('账号资料')
+    expect(wrapper.get('.settings-content__header').text()).not.toContain('管理员')
   })
 
   it('asks before discarding an edited page and keeps the current page when declined', async () => {
