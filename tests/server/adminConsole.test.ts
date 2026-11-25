@@ -11,7 +11,6 @@ import { AdminSessionStore } from '../../src/server/admin/sessions.js'
 import { ipAllowed, needsReauthentication } from '../../src/server/admin/app.js'
 import { isManagementRoute } from '../../src/server/admin/routes.js'
 import { auditCsv, auditDetail } from '../../src/server/admin/audit.js'
-import { totpCode, verifyTotp } from '../../src/server/admin/totp.js'
 import { consoleClient } from './consoleClient.js'
 
 const web = '127.0.0.1:15300'
@@ -126,37 +125,26 @@ describe('admin console listener', () => {
     await admin.call('get', '/api/app/admin/users').expect(401)
   })
 
-  it('sets up two-step verification, then requires a fresh code at login', async () => {
-    setupRuntime()
-    const { admin } = await withAdminAndMember()
-    const begun = await admin.call('post', '/api/app/console/two-step/begin').send({}).expect(200)
-    expect(begun.body.otpauth).toMatch(/^otpauth:\/\/totp\//)
-    await admin.call('post', '/api/app/console/two-step/confirm').send({ code: '000000' }).expect(400)
-    const code = totpCode(begun.body.secret, Math.floor(clock / 30_000))
-    const confirmed = await admin.call('post', '/api/app/console/two-step/confirm').send({ code }).expect(200)
-    expect(confirmed.body.recoveryCodes).toHaveLength(10)
-    expect(readFileSync(join(home, 'admin-security.json'), 'utf8')).not.toContain(confirmed.body.recoveryCodes[0])
-    const next = await consoleClient(runtime!)
-    const missing = await next.call('post', '/api/app/console/login').send({ username: 'owner', password: 'owner-password' }).expect(401)
-    expect(missing.body.code).toBe('admin_two_step_code_required')
-    // A code that was already used is refused; a recovery code works once.
-    await next.call('post', '/api/app/console/login').send({ username: 'owner', password: 'owner-password', code }).expect(401)
-    await next.call('post', '/api/app/console/login').send({ username: 'owner', password: 'owner-password', code: confirmed.body.recoveryCodes[0] }).expect(200)
-    const again = await consoleClient(runtime!)
-    await again.call('post', '/api/app/console/login').send({ username: 'owner', password: 'owner-password', code: confirmed.body.recoveryCodes[0] }).expect(401)
-  })
-
-  it('makes two-step verification mandatory when the console is reachable from other machines', async () => {
+  it('signs in with password only, also when the console is reachable from other machines', async () => {
     setupRuntime({ YAOYAO_ADMIN_HOST: '0.0.0.0', YAOYAO_ADMIN_ALLOW_IPS: '172.16.0.0/12', YAOYAO_ADMIN_INSECURE_HTTP: '1' })
     const owner = await webAgent()
     await owner.call('post', '/api/app/setup').send({ username: 'owner', password: 'owner-password' }).expect(200)
     const admin = await consoleClient(runtime!, { username: 'owner', password: 'owner-password' })
-    expect(admin.login!.body).toMatchObject({ stage: 'enroll', twoStepRequired: true })
-    await admin.call('get', '/api/app/admin/users').expect(403)
-    const begun = await admin.call('post', '/api/app/console/two-step/begin').send({}).expect(200)
-    await admin.call('post', '/api/app/console/two-step/confirm').send({ code: totpCode(begun.body.secret, Math.floor(clock / 30_000)) }).expect(200)
+    expect(admin.login!.body).toMatchObject({ external: true, user: { username: 'owner' } })
+    expect(admin.login!.body).not.toHaveProperty('stage')
     await admin.call('get', '/api/app/admin/users').expect(200)
-    await admin.call('delete', '/api/app/console/two-step').expect(409)
+    await admin.call('post', '/api/app/console/two-step/begin').send({}).expect(404)
+  })
+
+  it('renames the admin in the console after confirming the password', async () => {
+    setupRuntime()
+    const { admin } = await withAdminAndMember()
+    await admin.call('post', '/api/app/console/username').send({ username: 'boss', currentPassword: 'wrong' }).expect(401)
+    await admin.call('post', '/api/app/console/username').send({ username: 'member', currentPassword: 'owner-password' }).expect(409)
+    const renamed = await admin.call('post', '/api/app/console/username').send({ username: 'boss', currentPassword: 'owner-password' }).expect(200)
+    expect(renamed.body.user.username).toBe('boss')
+    expect((await admin.call('get', '/api/app/console/session').expect(200)).body.user.username).toBe('boss')
+    await consoleClient(runtime!, { username: 'boss', password: 'owner-password' })
   })
 
   it('changes the console password and signs the admin out of the Web', async () => {
@@ -234,6 +222,5 @@ describe('admin console configuration', () => {
     expect(needsReauthentication('PUT', '/api/app/admin/hermes/credentials')).toBe(true)
     expect(needsReauthentication('POST', '/api/app/admin/model-services/validate')).toBe(false)
     expect(needsReauthentication('GET', '/api/app/system/update/status')).toBe(false)
-    expect(verifyTotp('JBSWY3DPEHPK3PXP', totpCode('JBSWY3DPEHPK3PXP', 100), 100 * 30_000)).toBe(100)
   })
 })

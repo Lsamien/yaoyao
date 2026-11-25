@@ -3,7 +3,6 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { onApiUnauthorized } from '@/api/client'
 import { loadSession, login, logout, type ConsoleSession } from './api'
 import AdminShell from './AdminShell.vue'
-import TwoStepSetup from './TwoStepSetup.vue'
 import PasswordForm from './PasswordForm.vue'
 
 const session = ref<ConsoleSession>()
@@ -11,8 +10,6 @@ const loading = ref(true)
 const loadError = ref('')
 const username = ref('')
 const password = ref('')
-const code = ref('')
-const needsCode = ref(false)
 const busy = ref(false)
 const error = ref('')
 
@@ -27,12 +24,10 @@ async function submit() {
   if (busy.value) return
   busy.value = true; error.value = ''
   try {
-    session.value = await login(username.value.trim(), password.value, needsCode.value ? code.value.trim() : undefined)
-    password.value = ''; code.value = ''; needsCode.value = false
+    session.value = await login(username.value.trim(), password.value)
+    password.value = ''
   } catch (cause) {
-    const failure = cause as { code?: string; message?: string }
-    if (failure.code === 'admin_two_step_code_required') { needsCode.value = true; error.value = '' }
-    else error.value = failure.message || '登录失败'
+    error.value = cause instanceof Error && cause.message ? cause.message : '登录失败'
   } finally { busy.value = false }
 }
 
@@ -65,20 +60,10 @@ onBeforeUnmount(() => stop?.())
         <p v-if="session?.setupRequired" class="notice">尚未创建管理员。请先在夭夭 Web 首次打开时创建管理员账号。</p>
         <label for="console-username">账号<input id="console-username" v-model="username" name="username" autocomplete="username" required :disabled="busy" /></label>
         <label for="console-password">密码<input id="console-password" v-model="password" name="password" type="password" autocomplete="current-password" required :disabled="busy" /></label>
-        <label v-if="needsCode" for="console-code">验证码<input id="console-code" v-model="code" name="one-time-code" inputmode="numeric" autocomplete="one-time-code" placeholder="验证器 App 上的 6 位数字，或恢复码" required :disabled="busy" /></label>
         <p v-if="error" class="error" role="alert">{{ error }}</p>
         <button class="solid-button" :disabled="busy || !username.trim() || !password">{{ busy ? '正在登录…' : '登录' }}</button>
         <p class="hint">连续失败 5 次将锁定 15 分钟，所有登录尝试都会记入审计日志。使用 App 内置服务且从未设置过密码时，请先在夭夭「我的设置 → 登录与安全」中设置密码。</p>
       </form>
-    </div>
-
-    <div v-else-if="session.stage === 'enroll'" class="center">
-      <div class="card wide">
-        <h1>设置二次验证</h1>
-        <p class="muted">管理后台允许从其他电脑访问，登录必须使用验证器 App 的验证码。设置完成后才能使用后台。</p>
-        <TwoStepSetup @done="refresh" />
-        <button class="text-button" type="button" @click="signOut">退出登录</button>
-      </div>
     </div>
 
     <div v-else-if="session.user.mustChangePassword" class="center">
@@ -99,7 +84,6 @@ onBeforeUnmount(() => stop?.())
 .center { min-height: 100%; display: grid; place-items: center; padding: 32px max(16px, env(safe-area-inset-left, 0px)); }
 .login-ground { background: radial-gradient(circle at 25% 15%, var(--surface-soft), var(--canvas) 60%); }
 .card { width: min(400px, 100%); display: grid; gap: 14px; padding: 28px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-raised); box-shadow: var(--shadow-float); }
-.card.wide { width: min(520px, 100%); }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; }
 .mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #4cc5a6, #1f8f76); }
 h1 { margin: 0; font-size: 21px; }

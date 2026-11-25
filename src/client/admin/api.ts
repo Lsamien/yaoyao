@@ -2,8 +2,6 @@ import { apiRequest, setApiCsrfToken } from '@/api/client'
 import { setWebOrigin } from '@/utils/webOrigin'
 import type { Profile } from '@shared/types'
 
-export interface TwoStepStatus { enabled: boolean; enabledAt?: number; recoveryCodesLeft: number }
-
 export interface ConsoleSession {
   csrfToken: string
   userId: string | null
@@ -11,12 +9,9 @@ export interface ConsoleSession {
   setupRequired: boolean
   external: boolean
   webPort: number
-  twoStepRequired: boolean
   user?: { id: string; username: string; avatar?: string; mustChangePassword: boolean }
-  stage?: 'full' | 'enroll'
   expiresAt?: number
   sudoUntil?: number
-  twoStep?: TwoStepStatus
 }
 
 export interface AuditEntry {
@@ -58,8 +53,8 @@ export async function loadSession(): Promise<ConsoleSession> {
   return accept(await apiRequest<ConsoleSession>(`${base}/session`, { notifyUnauthorized: false }))
 }
 
-export async function login(username: string, password: string, code?: string): Promise<ConsoleSession> {
-  return accept(await apiRequest<ConsoleSession>(`${base}/login`, { method: 'POST', body: { username, password, ...(code ? { code } : {}) }, notifyUnauthorized: false }))
+export async function login(username: string, password: string): Promise<ConsoleSession> {
+  return accept(await apiRequest<ConsoleSession>(`${base}/login`, { method: 'POST', body: { username, password }, notifyUnauthorized: false }))
 }
 
 export async function logout(): Promise<void> {
@@ -74,16 +69,8 @@ export async function changePassword(currentPassword: string, newPassword: strin
   await apiRequest(`${base}/password`, { method: 'POST', body: { currentPassword, newPassword } })
 }
 
-export async function beginTwoStep(): Promise<{ secret: string; otpauth: string }> {
-  return apiRequest(`${base}/two-step/begin`, { method: 'POST', body: {} })
-}
-
-export async function confirmTwoStep(code: string): Promise<{ recoveryCodes: string[]; twoStep: TwoStepStatus }> {
-  return apiRequest(`${base}/two-step/confirm`, { method: 'POST', body: { code } })
-}
-
-export async function disableTwoStep(): Promise<TwoStepStatus> {
-  return (await apiRequest<{ twoStep: TwoStepStatus }>(`${base}/two-step`, { method: 'DELETE', body: {} })).twoStep
+export async function changeUsername(username: string, currentPassword: string): Promise<void> {
+  await apiRequest(`${base}/username`, { method: 'POST', body: { username, currentPassword } })
 }
 
 export async function overview(): Promise<ConsoleOverview> {

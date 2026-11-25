@@ -132,7 +132,8 @@ describe('subaccount registration and approval through real middleware', () => {
     expect(events.body.events.some((e: any) => e.type === 'project.changed')).toBe(true)
     const caps = (await call(child, 'get', '/api/app/capabilities')).body.features
     for (const feature of ['voice', 'context', 'nodes']) expect(caps).not.toContain(feature)
-    expect((await call(admin, 'get', '/api/app/capabilities')).body.features).toEqual(expect.arrayContaining(['voice', 'context', 'nodes']))
+    // Administrators get the same Web capabilities: management lives in the admin console.
+    expect((await call(admin, 'get', '/api/app/capabilities')).body.features).toEqual(caps)
     const server = createServer(runtime.app.callback())
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address() as { port: number }

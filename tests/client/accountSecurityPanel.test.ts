@@ -1,6 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import AccountSecurityDialog from '@/components/app/AccountSecurityDialog.vue'
 import AccountSecurityPanel from '@/components/app/AccountSecurityPanel.vue'
 
 const auth = vi.hoisted(() => ({
@@ -28,12 +27,11 @@ afterEach(() => {
 })
 
 describe('Account security panel', () => {
-  it('saves the trimmed administrator username and resets its dirty state', async () => {
+  it('changes only the password, also for an administrator, and resets its dirty state', async () => {
     const wrapper = mount(AccountSecurityPanel, { props: { active: true } })
 
-    expect(wrapper.text()).toContain('仅修改当前 15300 Web 管理账号')
+    expect(wrapper.find('input[name="username"]').exists()).toBe(false)
     expect(wrapper.emitted('dirty-change')?.at(-1)).toEqual([false])
-    await fill(wrapper, 'username', '  owner-two  ')
     await fill(wrapper, 'current-password', 'current-secret')
     await fill(wrapper, 'new-password', 'new-secret-123')
     await fill(wrapper, 'password-confirmation', 'new-secret-123')
@@ -46,15 +44,14 @@ describe('Account security panel', () => {
     expect(auth.changeCredentials).toHaveBeenCalledWith({
       currentPassword: 'current-secret',
       newPassword: 'new-secret-123',
-      username: 'owner-two',
     })
     expect(wrapper.emitted('saved')).toHaveLength(1)
     expect(wrapper.emitted('dirty-change')?.at(-1)).toEqual([false])
     expect(wrapper.get<HTMLInputElement>('input[name="current-password"]').element.value).toBe('')
-    expect(wrapper.text()).toContain('账号与密码已更新')
+    expect(wrapper.text()).toContain('密码已更新')
   })
 
-  it('does not expose or submit an administrator username for a regular user', async () => {
+  it('does not expose or submit a username for a regular user', async () => {
     auth.user = { id: 'user-1', username: 'member', role: 'user' }
     const wrapper = mount(AccountSecurityPanel, { props: { active: true } })
 
@@ -93,20 +90,5 @@ describe('Account security panel', () => {
     await flushPromises()
     expect(auth.updateAccountAvatar).toHaveBeenCalledWith(null)
     expect(wrapper.get('.account-initial-avatar').text()).toBe('O')
-  })
-
-  it('keeps the legacy dialog wrapper operational', async () => {
-    const wrapper = mount(AccountSecurityDialog, {
-      attachTo: document.body,
-      props: { open: true },
-    })
-
-    expect(document.querySelector('[role="dialog"][aria-label="账号安全"]')).not.toBeNull()
-    document.querySelector<HTMLButtonElement>('.logout-button')!.click()
-    await flushPromises()
-
-    expect(auth.logout).toHaveBeenCalledOnce()
-    expect(wrapper.emitted('close')).toHaveLength(1)
-    wrapper.unmount()
   })
 })

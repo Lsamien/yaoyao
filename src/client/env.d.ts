@@ -25,7 +25,6 @@ interface Window {
     modeState?(): Promise<{ mode: 'client' | 'server'; serverURL: string; switching: boolean; platform?: string; supportedModes?: ('client' | 'server')[] }>
     switchMode?(mode: 'client' | 'server'): Promise<{ ok: boolean; error?: string; pendingLogin?: boolean }>
     openRemoteLogin?(): Promise<void>
-    authorizeComputer?(csrfToken: string): Promise<{ registered: boolean; hostId?: string }>
     authorizeCurrentDevice?(scope: 'screen' | 'full'): Promise<{ ok: boolean }>
     deviceHost?(): Promise<{ deviceHost: string | null }>
     openComputer(id: string, target?: { backend?: import('@shared/managedBrowser').ComputerBackend; host?: string }): Promise<boolean>

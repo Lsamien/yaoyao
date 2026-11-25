@@ -81,7 +81,6 @@ export async function fetchCurrentUser(): Promise<CurrentUser | undefined> {
 export async function changeCredentials(input: {
   currentPassword: string
   newPassword: string
-  username?: string
 }): Promise<CurrentUser> {
   const payload = record(unwrapData(await apiRequest<unknown>('/api/app/account/credentials', {
     method: 'PUT', body: input as unknown as JsonValue, notifyUnauthorized: false,

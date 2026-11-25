@@ -88,8 +88,6 @@ export function workspaceRouter(
         'agentTeamManagement',
         'computerControl','sharedComputers','computerManagement',
         'files',
-        ...(auth.require(ctx).role === 'admin' ? ['voice', 'context'] : []),
-        ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'editableNodeAddress'] : []),
         'events', 'workspace-stream-v1',
         // Ordinary chat, history and the realtime relay were removed; mobile hides its chat mode.
         'bot-only-v1',
@@ -107,11 +105,11 @@ export function workspaceRouter(
     ctx.body = { agents: agents.map(agent=>store.agentSummary(agent)) }
   })
   router.get('/api/app/nodes/:id/agents', async ctx => {
-    auth.requireAdmin(ctx)
+    auth.require(ctx)
     throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
   })
   router.post('/api/app/agents/remote', async ctx => {
-    auth.requireAdmin(ctx)
+    auth.require(ctx)
     throw new HttpError(410, '远程机器人已停用', 'remote_agent_removed')
   })
   router.post('/api/app/agents', async (ctx) => {

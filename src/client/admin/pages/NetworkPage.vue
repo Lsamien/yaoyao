@@ -42,7 +42,7 @@ onMounted(async () => {
       <h2>访问方式</h2>
       <dl class="facts">
         <div><dt>夭夭 Web</dt><dd><code>{{ status.web.host }}:{{ status.web.port }}</code></dd></div>
-        <div><dt>管理后台</dt><dd><code>{{ status.console.host }}:{{ status.console.port }}</code> · {{ status.console.external ? '允许远程访问（已启用白名单与二次验证）' : '仅本机' }}</dd></div>
+        <div><dt>管理后台</dt><dd><code>{{ status.console.host }}:{{ status.console.port }}</code> · {{ status.console.external ? '允许远程访问（已启用白名单）' : '仅本机' }}</dd></div>
       </dl>
       <p class="hint">管理后台的监听地址、端口和访问白名单由服务器环境变量 <code>YAOYAO_ADMIN_HOST</code>、<code>YAOYAO_ADMIN_PORT</code>、<code>YAOYAO_ADMIN_ALLOW_IPS</code> 决定，修改后需重启服务。从其他电脑管理时，推荐使用 SSH 隧道：<code>ssh -L {{ status.console.port }}:127.0.0.1:{{ status.console.port }} 服务器</code>。</p>
     </section>

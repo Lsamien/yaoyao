@@ -49,29 +49,14 @@ beforeEach(() => {
   Object.defineProperty(window, 'yaoyaoDesktop', { configurable: true, value: { authorizeComputer: mocks.authorizeComputer, forgetLogin: mocks.forgetLogin } })
 })
 
-it('re-authorizes the computer only after an explicit administrator login', async () => {
-  mocks.login.mockResolvedValue(response('admin'))
-  mocks.authorizeComputer.mockResolvedValue({ registered: true, hostId: 'host-1' })
-  const auth = useAuthStore()
-  await auth.login({ username: 'admin', password: 'secret' })
-  expect(mocks.authorizeComputer).toHaveBeenCalledWith('fresh-csrf')
-  expect(auth.status).toBe('authenticated')
-})
-
-it('does not grant computer control to a non-administrator login', async () => {
-  mocks.login.mockResolvedValue(response('user'))
-  const auth = useAuthStore()
-  await auth.login({ username: 'member', password: 'secret' })
+it('never registers the computer from a login, also for an administrator', async () => {
+  for (const role of ['admin', 'user'] as const) {
+    mocks.login.mockResolvedValue(response(role))
+    const auth = useAuthStore()
+    await auth.login({ username: role, password: 'secret' })
+    expect(auth.status).toBe('authenticated')
+  }
   expect(mocks.authorizeComputer).not.toHaveBeenCalled()
-  expect(auth.status).toBe('authenticated')
-})
-
-it('keeps the administrator signed in when computer authorization fails', async () => {
-  mocks.login.mockResolvedValue(response('admin'))
-  mocks.authorizeComputer.mockRejectedValue(new Error('computer offline'))
-  const auth = useAuthStore()
-  await expect(auth.login({ username: 'admin', password: 'secret' })).resolves.toBeUndefined()
-  expect(auth.status).toBe('authenticated')
 })
 
 it('forgets native authorization on explicit logout even when the server is offline', async () => {

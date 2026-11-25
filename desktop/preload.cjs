@@ -21,7 +21,6 @@ contextBridge.exposeInMainWorld('yaoyaoDesktop', Object.freeze({
   modeState: () => ipcRenderer.invoke('desktop:mode-state'),
   switchMode: mode => ipcRenderer.invoke('desktop:mode-switch', mode),
   openRemoteLogin: () => ipcRenderer.invoke('desktop:remote-login'),
-  authorizeComputer: csrfToken => ipcRenderer.invoke('desktop:computer-authorize', csrfToken),
   registerComputerWithCode: code => ipcRenderer.invoke('desktop:computer-pair', code),
   openAdminConsole: () => ipcRenderer.invoke('desktop:open-admin-console'),
   authorizeCurrentDevice: scope => ipcRenderer.invoke('desktop:device-authorize', scope),

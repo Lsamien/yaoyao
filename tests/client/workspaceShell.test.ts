@@ -133,7 +133,7 @@ it('shows Bot tools and restores keyboard focus after closing', async () => {
   wrapper.unmount()
 })
 
-it('opens dedicated Bot settings from tools and points the VM shortcut at the admin console', async () => {
+it('opens dedicated Bot settings from tools and has no management shortcut', async () => {
   const wrapper = await mountShell('/conversations')
   const trigger = wrapper.get<HTMLButtonElement>('.desktop-sidebar .sidebar-tools-trigger')
   await trigger.trigger('click')
@@ -145,8 +145,7 @@ it('opens dedicated Bot settings from tools and points the VM shortcut at the ad
   expect(document.activeElement).toBe(trigger.element)
   window.dispatchEvent(new Event('yaoyao:local-vm-settings'))
   await flushPromises()
-  expect(wrapper.find('[data-testid="bot-settings-dialog"]').exists()).toBe(false)
-  expect(wrapper.get('[data-testid="settings-center"]').attributes('data-page')).toBe('system-console')
+  expect(wrapper.find('[data-testid="settings-center"]').exists()).toBe(false)
   wrapper.unmount()
 })
 
@@ -208,7 +207,6 @@ it('keeps desktop downloads and restart beside the bell', async () => {
   window.yaoyaoDesktop = { updateState: vi.fn(async () => state), updateAction, openUpdates, openComputer: vi.fn(), computerClosed: vi.fn(), onComputerClose: vi.fn() }
   const wrapper = await mountShell('/conversations')
   try {
-    await wrapper.setProps({ isAdmin: false })
     await flushPromises()
     const entry = () => wrapper.get('.desktop-sidebar .desktop-update-entry')
     expect(entry().text()).toBe('可更新')
@@ -270,9 +268,8 @@ it('hides the toolbar update icon when no update exists, including manual checks
   } finally { wrapper.unmount(); vi.useRealTimers() }
 })
 
-it('does not expose server update controls to a non-admin browser account', async () => {
+it('does not expose server update controls in the Web', async () => {
   const wrapper = await mountShell('/conversations')
-  await wrapper.setProps({ isAdmin: false })
   await wrapper.get('.desktop-sidebar .sidebar-account-switcher__main').trigger('click')
   expect(document.querySelector('.workspace-settings-menu')?.textContent).not.toContain('检测更新')
   wrapper.unmount()

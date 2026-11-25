@@ -2,7 +2,7 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {randomUUID,randomBytes} from 'node:crypto'
-import {remoteSession,enrollDesktopHost,normalizeServerURL,inspectServer,persistRemoteSession} from './remote-login.mjs'
+import {remoteSession,normalizeServerURL,inspectServer,persistRemoteSession} from './remote-login.mjs'
 
 test('server inspection requests local login metadata without binding Hermes', async () => {
   const calls = []
@@ -41,10 +41,6 @@ async function fakeServer(){
         res.setHeader('set-cookie',[`session=${session}; Path=/; HttpOnly`,`csrf=${csrf}.sig; Path=/; HttpOnly`])
         return json({user:{id:randomUUID(),username:'admin',role:'admin'},csrfToken:csrf+'-rotated'})
       }
-      if(req.url==='/api/app/admin/desktop-hosts'&&req.method==='POST'){
-        if(req.headers['x-csrf-token']!==csrf+'-rotated'||!String(req.headers.cookie).includes(`session=${session}`)){res.statusCode=403;return json({error:'session'})}
-        return json({host:{id:hostId,name:JSON.parse(body||'{}').name,enabled:true},token})
-      }
       res.statusCode=404;json({error:'not found'})
     })
   })
@@ -52,25 +48,19 @@ async function fakeServer(){
   return {server,url:`http://127.0.0.1:${server.address().port}`,requests,csrf,session,token,hostId}
 }
 
-test('logs in with username and password and enrolls this Mac as a computer',async()=>{
+test('logs in with username and password without registering this Mac',async()=>{
   const fake=await fakeServer()
   try{
     const auth=await remoteSession(fake.url,{username:'admin',password:'pass'})
     assert.equal(auth.user.role,'admin')
     assert.equal(auth.origin,fake.url)
     assert.ok(auth.cookies.some(([name])=>name==='session'))
-    const installId='22222222-2222-4222-8222-222222222222',previousHostId='33333333-3333-4333-8333-333333333333'
-    const enrollment=await enrollDesktopHost(auth,{name:'书房 iMac',installId,previousHostId})
-    assert.equal(enrollment.host.id,fake.hostId)
-    assert.equal(enrollment.token,fake.token)
-    const [bootstrap,login,enroll]=fake.requests
+    const [bootstrap,login,...rest]=fake.requests
     assert.equal(bootstrap.url,'/api/app/bootstrap')
     assert.equal(login.origin,fake.url)
     assert.equal(login.csrf,fake.csrf)
     assert.equal(JSON.parse(login.body).desktop,true)
-    assert.equal(enroll.csrf,fake.csrf+'-rotated')
-    assert.ok(enroll.cookie.includes(`session=${fake.session}`))
-    assert.deepEqual(JSON.parse(enroll.body),{name:'书房 iMac',installId,previousHostId})
+    assert.deepEqual(rest,[])
   }finally{
     fake.server.close();fake.server.closeAllConnections?.()
   }
@@ -94,13 +84,11 @@ test('existing desktop sessions upgrade with CSRF and retain only server-issued 
   await assert.rejects(() => persistRemoteSession('https://server.test', info, cookies, async () => new Response(null,{status:401})),/重新登录/)
 })
 
-test('wrong credentials and non-admin accounts surface clear errors',async()=>{
+test('wrong credentials surface clear errors',async()=>{
   const fake=await fakeServer()
   try{
     await assert.rejects(()=>remoteSession(fake.url,{username:'admin',password:'wrong'}),/用户名或密码不正确/)
     await assert.rejects(()=>remoteSession(fake.url,{username:'',password:'pass'}),/用户名和密码/)
-    const auth={origin:fake.url,csrfToken:'stale',cookies:[['session','x']]}
-    await assert.rejects(()=>enrollDesktopHost(auth,{name:'x'}),/管理员账号|注册电脑失败/)
   }finally{
     fake.server.close();fake.server.closeAllConnections?.()
   }

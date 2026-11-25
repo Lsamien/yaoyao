@@ -14,7 +14,7 @@ import type { LocalAuthStore, LocalUser } from '../localAuth.js'
 import { applySecurityHeaders, CsrfProtection, CSRF_COOKIE, isExactOrigin } from '../security.js'
 import { AdminAudit, auditCsv, auditDetail } from './audit.js'
 import { auditModule, CONSOLE_PREFIX, isConsoleSupportRoute, isManagementRoute } from './routes.js'
-import { AdminSessionStore, AdminTwoStepStore, type ConsoleIdentity } from './sessions.js'
+import { AdminSessionStore, type ConsoleIdentity } from './sessions.js'
 import { LoginThrottle } from './throttle.js'
 
 /** Web cookies the console must neither read nor write (cookies are shared across ports on one host). */
@@ -25,7 +25,6 @@ export interface ConsoleDependencies {
   config: ServerConfig
   auth: LocalAuthStore
   sessions: AdminSessionStore
-  twoStep: AdminTwoStepStore
   audit: AdminAudit
   csrf: CsrfProtection
   throttle?: LoginThrottle
@@ -96,7 +95,7 @@ function stripWebCookies(header: string | undefined): string {
 }
 
 export function createConsoleApp(deps: ConsoleDependencies): Koa {
-  const { config, auth, sessions, twoStep, audit, csrf } = deps
+  const { config, auth, sessions, audit, csrf } = deps
   const throttle = deps.throttle ?? new LoginThrottle()
   const tls = Boolean(config.tlsCert)
   const app = new Koa()
@@ -137,8 +136,8 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
   const isApi = (path: string) => path === '/api' || path.startsWith('/api/')
   const anonymous = (method: string, path: string) =>
     (method === 'GET' && path === `${CONSOLE_PREFIX}/session`) || (method === 'POST' && path === `${CONSOLE_PREFIX}/login`)
-  const enrollmentAllowed = (path: string) =>
-    path === `${CONSOLE_PREFIX}/session` || path === `${CONSOLE_PREFIX}/logout` || path.startsWith(`${CONSOLE_PREFIX}/two-step`)
+  const passwordChangeAllowed = (path: string) =>
+    path === `${CONSOLE_PREFIX}/session` || path === `${CONSOLE_PREFIX}/logout` || path === `${CONSOLE_PREFIX}/password`
 
   // Every write on the console is recorded, successful or not.
   app.use(async (ctx, next) => {
@@ -175,9 +174,7 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
     if (anonymous(ctx.method, ctx.path)) return next()
     const identity = sessions.require(ctx)
     ctx.state.consoleIdentity = identity
-    if (identity.session.stage === 'enroll' && !enrollmentAllowed(ctx.path))
-      throw new HttpError(403, '请先完成二次验证设置', 'admin_two_step_required')
-    if (identity.user.mustChangePassword && !enrollmentAllowed(ctx.path) && ctx.path !== `${CONSOLE_PREFIX}/password`)
+    if (identity.user.mustChangePassword && !passwordChangeAllowed(ctx.path))
       throw new HttpError(428, '请先修改初始密码', 'password_change_required')
     if (needsReauthentication(ctx.method, ctx.path) && identity.session.sudoUntil < sessions.now())
       throw new HttpError(428, '此操作需要再次输入管理员密码', 'admin_reauth_required')
@@ -189,7 +186,6 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
 
   const router = new Router({ prefix: CONSOLE_PREFIX })
   const body = (ctx: Koa.Context) => (ctx.request as Koa.Request & { body?: unknown }).body
-  const twoStepRequired = () => config.admin.external
   const sessionView = (ctx: Koa.Context, identity?: ConsoleIdentity) => ({
     csrfToken: csrf.issue(ctx),
     // Same shape the Web's CSRF refresh expects, so the shared API client can renew tokens here.
@@ -198,22 +194,19 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
     setupRequired: auth.setupRequired,
     external: config.admin.external,
     webPort: config.port,
-    twoStepRequired: twoStepRequired(),
     ...(identity ? {
       user: { id: identity.user.id, username: identity.user.username, avatar: identity.user.avatar, mustChangePassword: identity.user.mustChangePassword },
-      stage: identity.session.stage,
       expiresAt: sessions.expiresAt(identity.session),
       sudoUntil: identity.session.sudoUntil,
-      twoStep: twoStep.status(identity.user.id),
     } : {}),
   })
 
   router.get('/session', ctx => { ctx.body = sessionView(ctx, sessions.current(ctx)) })
 
   router.post('/login', ctx => {
-    const input = z.object({ username: z.string().min(1).max(200), password: z.string().min(1).max(1000), code: z.string().max(40).optional() }).safeParse(body(ctx))
+    const input = z.object({ username: z.string().min(1).max(200), password: z.string().min(1).max(1000) }).safeParse(body(ctx))
     if (!input.success) throw new HttpError(400, '请填写账号和密码', 'invalid_login')
-    const { username, password, code } = input.data
+    const { username, password } = input.data
     throttle.assertAllowed(ctx.ip, username)
     const deny = (actor: string, reason: string, error: HttpError) => {
       const locked = throttle.fail(ctx.ip, username)
@@ -224,14 +217,9 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
     try { verified = auth.verifyCredentials(username, password) }
     catch (error) { return deny(username, '账号或密码错误', error instanceof HttpError ? error : new HttpError(401, '用户名或密码错误', 'login_failed')) }
     if (verified.user.role !== 'admin') return deny(verified.user.username, '非管理员', new HttpError(403, '此后台只允许管理员登录，普通账号请使用夭夭 Web。', 'admin_console_admin_only'))
-    let stage: 'full' | 'enroll' = 'full'
-    if (twoStep.enabled(verified.user.id)) {
-      if (!code) throw new HttpError(401, '请输入验证器 App 上的 6 位验证码', 'admin_two_step_code_required')
-      if (!twoStep.verify(verified.user.id, code)) return deny(verified.user.username, '二次验证码错误', new HttpError(401, '验证码不正确或已使用', 'admin_two_step_invalid'))
-    } else if (twoStepRequired()) stage = 'enroll'
     throttle.succeed(ctx.ip, username)
-    const identity = sessions.issue(ctx, verified.user, verified.authVersion, stage)
-    audit.record({ actor: verified.user.username, ip: ctx.ip, module: '后台登录', action: '登录', target: CONSOLE_PREFIX + '/login', outcome: 'ok', status: 200, detail: stage === 'enroll' ? '需先设置二次验证' : '' })
+    const identity = sessions.issue(ctx, verified.user, verified.authVersion)
+    audit.record({ actor: verified.user.username, ip: ctx.ip, module: '后台登录', action: '登录', target: CONSOLE_PREFIX + '/login', outcome: 'ok', status: 200, detail: '' })
     ctx.body = sessionView(ctx, identity)
   })
 
@@ -250,29 +238,16 @@ export function createConsoleApp(deps: ConsoleDependencies): Koa {
     if (!input.success) throw new HttpError(400, '请填写当前密码和新密码', 'invalid_password_change')
     const changed = auth.changePassword(identity.user.id, input.data.currentPassword, input.data.newPassword)
     sessions.revokeUser(identity.user.id)
-    sessions.issue(ctx, changed.user, changed.authVersion, identity.session.stage)
+    sessions.issue(ctx, changed.user, changed.authVersion)
     ctx.body = { ok: true }
   })
 
-  router.post('/two-step/begin', ctx => {
+  router.post('/username', ctx => {
     const identity = ctx.state.consoleIdentity as ConsoleIdentity
-    if (twoStep.enabled(identity.user.id) && identity.session.sudoUntil < sessions.now()) throw new HttpError(428, '此操作需要再次输入管理员密码', 'admin_reauth_required')
-    ctx.body = twoStep.begin(identity.user.id, identity.user.username)
-  })
-  router.post('/two-step/confirm', ctx => {
-    const identity = ctx.state.consoleIdentity as ConsoleIdentity
-    const input = z.object({ code: z.string().min(6).max(12) }).safeParse(body(ctx))
-    if (!input.success) throw new HttpError(400, '请输入 6 位验证码', 'admin_two_step_invalid')
-    const recoveryCodes = twoStep.confirm(identity.user.id, input.data.code)
-    if (identity.session.stage === 'enroll') sessions.complete(ctx)
-    ctx.body = { recoveryCodes, twoStep: twoStep.status(identity.user.id) }
-  })
-  router.delete('/two-step', ctx => {
-    const identity = ctx.state.consoleIdentity as ConsoleIdentity
-    if (twoStepRequired()) throw new HttpError(409, '管理后台允许远程访问时，二次验证不能关闭。', 'admin_two_step_mandatory')
-    if (identity.session.sudoUntil < sessions.now()) throw new HttpError(428, '此操作需要再次输入管理员密码', 'admin_reauth_required')
-    twoStep.disable(identity.user.id)
-    ctx.body = { twoStep: twoStep.status(identity.user.id) }
+    const input = z.object({ currentPassword: z.string().min(1).max(1000), username: z.string().min(1).max(200) }).safeParse(body(ctx))
+    if (!input.success) throw new HttpError(400, '请填写新用户名和当前密码', 'invalid_username_change')
+    const user = auth.rename(identity.user.id, input.data.currentPassword, input.data.username)
+    ctx.body = { user: { id: user.id, username: user.username } }
   })
 
   router.get('/overview', async ctx => {

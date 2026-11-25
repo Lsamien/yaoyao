@@ -43,7 +43,7 @@ class UserAuthenticatedTestStore extends LocalAuthStore {
 /** Every console request is already signed in as the test admin. */
 class AuthenticatedConsoleSessions extends AdminSessionStore {
   override current(): ConsoleIdentity {
-    return { user: TEST_ADMIN, session: { tokenHash: 'test', userID: TEST_ADMIN.id, authVersion: 1, createdAt: Date.now(), lastSeenAt: Date.now(), sudoUntil: Number.MAX_SAFE_INTEGER, stage: 'full', ip: '127.0.0.1' } }
+    return { user: TEST_ADMIN, session: { tokenHash: 'test', userID: TEST_ADMIN.id, authVersion: 1, createdAt: Date.now(), lastSeenAt: Date.now(), sudoUntil: Number.MAX_SAFE_INTEGER, ip: '127.0.0.1' } }
   }
 }
 

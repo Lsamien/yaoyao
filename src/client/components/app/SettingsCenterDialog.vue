@@ -7,7 +7,6 @@ import AccountSecurityPanel from '@/components/app/AccountSecurityPanel.vue'
 import DesktopModePanel from '@/components/app/DesktopModePanel.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
 import NodePairingPanel from '@/components/app/NodePairingPanel.vue'
-import AdminConsoleNotice from '@/components/app/AdminConsoleNotice.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import type { ProfileIdentityInput } from '@/api/profiles'
 import AppIcon from '@/components/common/AppIcon.vue'
@@ -23,7 +22,6 @@ type SettingsPage =
   | 'appearance'
   | 'chat-appearance'
   | 'desktop-mode'
-  | 'system-console'
 
 type SettingsIcon = 'users' | 'model' | 'settings' | 'panel' | 'monitor' | 'sun' | 'link' | 'bell' | 'audio' | 'refresh'
 type ThemePreference = 'light' | 'dark' | 'system'
@@ -46,7 +44,6 @@ const props = withDefaults(defineProps<{
   theme?: 'light' | 'dark'
   themePreference?: ThemePreference
   insecureTransport?: boolean
-  isAdmin?: boolean
   upstreamReady?: boolean
   upstreamError?: string
   identityBusy?: boolean
@@ -62,7 +59,6 @@ const props = withDefaults(defineProps<{
   theme: 'light',
   themePreference: 'system',
   insecureTransport: false,
-  isAdmin: false,
   upstreamReady: false,
   upstreamError: '',
   identityBusy: false,
@@ -98,23 +94,17 @@ const accountItems = computed<NavigationItem[]>(() => [
   { key:'credential-vault',label:'密码管理',icon:'settings' },
   ...(desktopModesAvailable ? [{ key: 'desktop-mode', label: '运行模式', icon: 'monitor' } satisfies NavigationItem] : []),
   { key: 'appearance', label: '外观', icon: 'sun' },
-  ...(props.isAdmin ? [{ key: 'account-mobile', label: '手机登录', icon: 'panel' } satisfies NavigationItem] : []),
+  { key: 'account-mobile', label: '手机登录', icon: 'panel' },
 ])
-// Management moved to the separate admin console; administrators get a pointer to it.
-const systemItems: NavigationItem[] = [
-  { key: 'system-console', label: '管理后台', icon: 'link' },
-]
-const SEARCH_ALIASES: Partial<Record<SettingsPage, string>> = { appearance: '聊天气泡 Grok Bot Codex 颜色', 'system-console': '系统 模型 供应商 Provider API Key 用户 权限 推送 更新 执行节点 虚拟机' }
+const SEARCH_ALIASES: Partial<Record<SettingsPage, string>> = { appearance: '聊天气泡 Grok Bot Codex 颜色' }
 const matchesSearch = (item: NavigationItem) => `${item.label} ${SEARCH_ALIASES[item.key] ?? ''}`.toLocaleLowerCase().includes(settingsQuery.value.trim().toLocaleLowerCase())
 const visibleAccounts = computed(() => accountItems.value.filter(matchesSearch))
-const visibleSystems = computed(() => systemItems.filter(matchesSearch))
 const visibleAgents = computed(() => agentItems.value.filter(matchesSearch))
 
 const allAllowedPages = computed(() => new Set<SettingsPage>([
   'chat-appearance',
   ...agentItems.value.map(item => item.key),
   ...accountItems.value.map(item => item.key),
-  ...(props.isAdmin ? systemItems.map(item => item.key) : []),
 ]))
 const activeDirty = computed(() => Boolean(dirtyPages[activePage.value]))
 const showFixedFooter = computed(() => activePage.value === 'agent-identity' || activePage.value === 'account-security')
@@ -128,14 +118,13 @@ const activeTitle = computed(() => ({
   appearance: '外观',
   'chat-appearance': '聊天气泡',
   'desktop-mode': '运行模式',
-  'system-console': '管理后台',
 })[activePage.value])
 const accountName = computed(() => props.pairingUserName || props.userName || '当前账号')
 const showAgentSelector = computed(() => false)
 const activeScope = computed(() => {
   if (activePage.value.startsWith('agent-')) return `正在设置：${profileTitle(props.activeProfile)} / ${props.activeProfile?.name || '未选择'}`
   if (activePage.value === 'account-profile') return '管理你的账号头像与服务器名称。'
-  if (activePage.value.startsWith('account-') || activePage.value === 'credential-vault') return `当前账号：${accountName.value}${props.isAdmin ? ' · 管理员' : ''}`
+  if (activePage.value.startsWith('account-') || activePage.value === 'credential-vault') return `当前账号：${accountName.value}`
   if (activePage.value === 'chat-appearance') return '预设与颜色 · 自动保存到当前设备'
   if (activePage.value === 'appearance') return '选择当前浏览器的显示方式。'
   if (activePage.value === 'desktop-mode') return '选择这台电脑作为服务器或客户端。'
@@ -242,7 +231,7 @@ function trapFocus(event: KeyboardEvent) {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
 }
 
-watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as const, ([open, initialPage]) => {
+watch(() => [props.open, props.initialPage, props.botMode] as const, ([open, initialPage]) => {
   if (!open) {
     profileMenuOpen.value = false
     updateLocked.value = false
@@ -302,15 +291,11 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
                     <h3>个人</h3>
                     <button v-for="item in visibleAccounts" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
-                  <section v-if="isAdmin && visibleSystems.length">
-                    <h3>管理</h3>
-                    <button v-for="item in visibleSystems" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
-                  </section>
                   <section v-if="visibleAgents.length">
                     <h3>基础机器人</h3>
                     <button v-for="item in visibleAgents" :key="item.key" type="button" :class="{ active: (activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) }" :aria-current="(activePage === item.key || (item.key === 'appearance' && activePage === 'chat-appearance')) ? 'page' : undefined" @click="selectPage(item.key)"><AppIcon :name="item.icon" :size="18" /><span>{{ item.label }}</span></button>
                   </section>
-                  <p v-if="!visibleAccounts.length && (!isAdmin || !visibleSystems.length) && !visibleAgents.length" class="settings-search-empty">没有匹配的设置</p>
+                  <p v-if="!visibleAccounts.length && !visibleAgents.length" class="settings-search-empty">没有匹配的设置</p>
                 </nav>
               </div>
             </aside>
@@ -363,7 +348,6 @@ watch(() => [props.open, props.initialPage, props.botMode, props.isAdmin] as con
                   <p class="appearance-note"><AppIcon name="info" :size="16"/>更改仅影响当前浏览器。</p>
                 </section>
                 <ChatAppearancePanel v-else-if="activePage === 'chat-appearance'" :theme="theme" />
-                <AdminConsoleNotice v-else-if="activePage === 'system-console' && isAdmin" />
               </div>
               <footer v-if="showFixedFooter" class="settings-content__footer">
                 <button class="settings-footer__cancel" type="button" :disabled="identityBusy" @click="requestClose">取消</button>

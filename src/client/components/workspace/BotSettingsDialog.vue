@@ -8,7 +8,7 @@ import type {WorkspaceAgent, WorkspaceConversation} from '@shared/workspace'
 
 // Environment, file access, Bot memory and local VM settings moved to the admin console.
 type Page = 'projects' | 'user'
-const props = defineProps<{isAdmin?: boolean; initialPage?: Page}>()
+const props = defineProps<{initialPage?: Page}>()
 const emit = defineEmits<{close: []; changed: []}>()
 const page = ref<Page>(props.initialPage ?? 'projects')
 const agents = ref<WorkspaceAgent[]>([]), conversations = ref<WorkspaceConversation[]>([])

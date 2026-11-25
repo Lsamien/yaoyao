@@ -80,7 +80,7 @@ docker compose --env-file docker.env -f compose.yaml -f compose.hermes-import.ya
 
 ## 管理后台
 
-管理后台只发布在宿主机的 `127.0.0.1:15301`（可用 `YAOYAO_ADMIN_PUBLISHED_PORT` 改宿主机端口），只允许管理员登录。容器内的后台按“可远程访问”处理：启用来源白名单（Docker 私有网段），首次登录必须绑定验证器 App。从其他电脑管理时用 SSH 隧道转发宿主机的 15301 端口。详见 [管理后台](admin-console.md)。
+管理后台只发布在宿主机的 `127.0.0.1:15301`（可用 `YAOYAO_ADMIN_PUBLISHED_PORT` 改宿主机端口），只允许管理员登录。容器内的后台按“可远程访问”处理，启用来源白名单（Docker 私有网段）；用管理员账号和密码直接登录。从其他电脑管理时用 SSH 隧道转发宿主机的 15301 端口。详见 [管理后台](admin-console.md)。
 
 ## 验证
 

@@ -85,12 +85,6 @@ export const useAuthStore = defineStore('auth', () => {
 
   onApiUnauthorized(expire)
 
-  async function authorizeComputerAfterExplicitLogin(response: BootstrapResponse): Promise<void> {
-    if (response.user?.role !== 'admin' || !window.yaoyaoDesktop?.authorizeComputer) return
-    try { await window.yaoyaoDesktop.authorizeComputer(response.csrfToken) }
-    catch { /* Account login still succeeds; the desktop process presents the recovery error. */ }
-  }
-
   async function bootstrap(): Promise<void> {
     status.value = 'checking'
     error.value = undefined
@@ -109,7 +103,6 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = undefined
     try {
       const response = await authApi.login(input)
-      await authorizeComputerAfterExplicitLogin(response)
       publish(response)
     }
     catch (cause) {
@@ -124,7 +117,6 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = undefined
     try {
       const response = await authApi.setup(input)
-      await authorizeComputerAfterExplicitLogin(response)
       publish(response)
     }
     catch (cause) {
@@ -173,7 +165,7 @@ export const useAuthStore = defineStore('auth', () => {
     }))
   }
 
-  async function changeCredentials(input: { currentPassword: string; newPassword: string; username?: string }): Promise<void> {
+  async function changeCredentials(input: { currentPassword: string; newPassword: string }): Promise<void> {
     const localDesktop = user.value?.localDesktop
     user.value = await authApi.changeCredentials(input)
     if (window.yaoyaoDesktop && !localDesktop) await window.yaoyaoDesktop.forgetLogin?.()

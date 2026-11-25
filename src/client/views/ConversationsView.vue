@@ -634,10 +634,6 @@ async function openDialog(kind: NonNullable<typeof dialog.value>, conversation =
       Object.assign(form, a)
       form.description ??= ''; form.job ??= ''; form.antiJobs ??= []; form.voice ??= ''; form.voiceCustom ??= ''; form.actBias ??= ''
       form.source=JSON.stringify([a.nodeId,a.profile])
-      if(a.remoteAgentId){
-        const remote=(await apiRequest<{agents:Agent[]}>(`/api/app/nodes/${a.nodeId}/agents`)).agents.find(candidate=>candidate.id===a.remoteAgentId)
-        if(remote)Object.assign(form,remote)
-      }
       form.approvalPolicy = a.approvalPolicy ?? 'ask'
       editingId.value = a.id
     }
@@ -971,7 +967,6 @@ onBeforeUnmount(() => {
     :user-avatar="auth.user?.avatar"
     :profiles="auth.profiles"
     :active-profile="auth.activeProfile"
-    :is-admin="auth.user?.role === 'admin'"
     :upstream-ready="auth.upstreamReady"
     :upstream-error="auth.upstreamError"
     :theme="theme.resolvedTheme"
@@ -1051,7 +1046,7 @@ onBeforeUnmount(() => {
         </template>
       </ComposerShell>
     </section>
-    <WorkspaceBotPanel v-if="dockView&&active" :conversation-id="active.id" :task-id="activeTask?.id" :mode="dockView" :active="!twoDesktops" :agents="computerCandidates" :is-admin="auth.user?.role === 'admin'" @close="dockView=undefined" @changed="refresh()" @settings="shell?.openLocalVm()" @desktop="openComputer" @workspace="desktopAgent=$event;twoDesktops=true" />
+    <WorkspaceBotPanel v-if="dockView&&active" :conversation-id="active.id" :task-id="activeTask?.id" :mode="dockView" :active="!twoDesktops" :agents="computerCandidates" @close="dockView=undefined" @changed="refresh()" @desktop="openComputer" @workspace="desktopAgent=$event;twoDesktops=true" />
     </div>
     <ComputerPanel ref="desktopViewer" v-if="computerOpen&&desktopAgent" :agents="[desktopAgent]" :backend="desktopBackend" :host="desktopHost" auto-take @changed="load()" @close="computerOpen=false" />
     <LocalVmWorkspace ref="vmWorkspace" v-if="twoDesktops&&desktopAgent" :agents="agents.filter(a=>a.execution==='computer'&&!a.archived&&!a.computerEnvironmentId)" :primary="desktopAgent.id" @close="twoDesktops=false" />
@@ -1069,7 +1064,7 @@ onBeforeUnmount(() => {
     <Teleport to="body"><div v-if="lifecycleError" class="lifecycle-error" role="alert"><span>{{ lifecycleError }}</span><button type="button" aria-label="关闭聊天操作提示" @click="lifecycleError = ''"><AppIcon name="close" :size="16" /></button></div></Teleport>
     <PreviewModal v-if="preview" :item="preview" :items="media" @close="preview = null" />
     <ImagePreviewLightbox v-model="mediaIndex" :images="lightboxMedia" />
-    <BotProfileDialog v-if="dialog === 'editAgent' && editingBot" :key="editingBot.id" :agent="editingBot" :draft="form" :sources="sources" :profiles="auth.profiles" :agents="agents" :conversations="conversations" :conversation-id="editingConversationId" :is-admin="auth.user?.role === 'admin'" :knowledge-enabled="knowledgeEnabled" :busy="busy" :error="error" @close="closeDialog" @save="saveBotProfile" @changed="knowledgeChanged" />
+    <BotProfileDialog v-if="dialog === 'editAgent' && editingBot" :key="editingBot.id" :agent="editingBot" :draft="form" :sources="sources" :profiles="auth.profiles" :agents="agents" :conversations="conversations" :conversation-id="editingConversationId" :knowledge-enabled="knowledgeEnabled" :busy="busy" :error="error" @close="closeDialog" @save="saveBotProfile" @changed="knowledgeChanged" />
     <Teleport to="body"><dialog v-if="dialog && dialog !== 'editAgent'" ref="dialogElement" class="editor" aria-labelledby="conversation-editor-title" @cancel.prevent="closeDialog">
       <form @submit.prevent="save">
         <header>

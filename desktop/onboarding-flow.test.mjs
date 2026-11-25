@@ -174,11 +174,9 @@ test('first launch, failed connection and remote login all stay in the only main
     await reopened.locator('#username').fill('user')
     await reopened.locator('#password').fill('correct-password')
     await reopened.locator('#submit').click()
-    await expect(reopened.locator('#login-error')).toContainText('账号已登录，但电脑授权未恢复')
-    assert.equal(enrollmentCount, 1, 'computer authorization also uses the reachable Chromium transport')
-    assert.equal((await reopened.evaluate(() => window.yaoyaoDesktop.status())).authenticated, true)
-    await reopened.locator('#submit').click()
+    // Administrators sign in like everyone else: the computer is never registered from a login.
     await reopened.waitForURL(url + '/**')
+    assert.equal(enrollmentCount, 0, 'logging in never registers this computer')
   } finally {
     await app?.close().catch(() => {})
     await new Promise(done => { server.close(done); server.closeAllConnections() })

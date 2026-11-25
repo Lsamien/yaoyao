@@ -12,7 +12,7 @@ import { synchronizeLocalService, stopLocalService, migrateLocalData } from './s
 import { resolveDataHome } from './data-home.mjs'
 import { DesktopEnvironmentHost, DesktopHostCore } from './environment-host.mjs'
 import { DesktopHostManager } from './host-manager.mjs'
-import { remoteRegistration, remoteSession, enrollDesktopHost, enrollDesktopHostWithCode, inspectServer, persistRemoteSession, sessionCookieDetails, PAIRING_REQUIRED } from './remote-login.mjs'
+import { remoteRegistration, remoteSession, enrollDesktopHostWithCode, inspectServer, persistRemoteSession, sessionCookieDetails } from './remote-login.mjs'
 import { authorizeCurrentComputer } from './computer-authorization.mjs'
 import { DesktopLoginSessions } from './login-sessions.mjs'
 import { DesktopOnboarding } from './onboarding.mjs'
@@ -436,20 +436,6 @@ else {
     })
     async function hostAction(action){try{await action()}catch(error){await dialog.showMessageBox(window,{type:'error',message:'电脑操作未完成',detail:error.message})}}
     const appDialog = options => window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
-    let authorizedOnboardingServer = ''
-    async function authorizeComputer(server,session){
-      const previous=await hostManager.read().catch(()=>undefined)
-      const previousHostId=previous&&new URL(previous.serverURL).origin===new URL(server).origin?previous.hostId:undefined
-      let registration
-      try{registration=await enrollDesktopHost(session,{name:hostname(),installId:await hostManager.installIdentity(),previousHostId},authFetch)}
-      catch(error){
-        // Newer servers register computers with a pairing code from the admin console; keep a computer that is already registered.
-        if(error?.code===PAIRING_REQUIRED&&previousHostId)return {host:{id:previousHostId}}
-        throw error
-      }
-      await hostManager.adopt({protocol:1,serverURL:server,hostId:registration.host.id,token:registration.token,...(server.startsWith('http://')?{allowInsecureLan:true}:{})})
-      return registration
-    }
     function requireModePage(event){
       let trusted=false
       try{trusted=event.sender===window?.webContents&&event.senderFrame===window.webContents.mainFrame
@@ -494,27 +480,6 @@ else {
       await hostManager.start().catch(error=>hostManager.publish(error.message))
       return {registered:true,hostId:registration.host.id}
     })
-    ipcMain.handle('desktop:computer-authorize',async(event,csrfToken)=>{
-      requireModePage(event)
-      if(!remoteMode||!remoteURL)return {registered:false}
-      try{
-        const token=String(csrfToken??'').trim()
-        if(!token)throw new Error('登录状态缺少安全令牌，请重新登录')
-        const cookies=await electronSession.defaultSession.cookies.get({url:remoteURL})
-        const registration=await authorizeComputer(remoteURL,{origin:remoteURL,csrfToken:token,cookies:cookies.map(cookie=>[cookie.name,cookie.value])})
-        return {registered:true,hostId:registration.host.id}
-      }catch(error){
-        const message=error instanceof Error?error.message:'电脑授权恢复失败'
-        hostManager.publish(`电脑授权未恢复：${message}`)
-        return {registered:false}
-      }
-    })
-    async function importDesktopHost(){
-      const selection=window&&!window.isDestroyed()
-        ?await dialog.showOpenDialog(window,{title:'导入电脑配置',properties:['openFile'],filters:[{name:'电脑配置',extensions:['json']}]})
-        :await dialog.showOpenDialog({title:'导入电脑配置',properties:['openFile'],filters:[{name:'电脑配置',extensions:['json']}]})
-      if(!selection.canceled&&selection.filePaths[0]&&!closing)await hostAction(()=>hostManager.importFile(selection.filePaths[0]))
-    }
     if (!preferences.value.remoteServer) {
       const enrolled = await hostManager.read().catch(() => undefined)
       if (enrolled?.serverURL) await preferences.setRemoteServer(enrolled.serverURL)
@@ -540,21 +505,13 @@ else {
       },
       register: ({ serverURL, username, password }) => remoteRegistration(serverURL, { username, password }, authFetch),
       authenticate: async ({ mode, serverURL, setup, username, password }) => {
-        authorizedOnboardingServer = ''
         const auth = await remoteSession(serverURL, { setup, username, password }, authFetch)
         if (mode === 'remote') await loginSessions.save(serverURL, auth.cookieDetails)
         await installSessionCookies(serverURL, auth.cookieDetails)
-        let warning
-        if (mode === 'remote' && auth.user.role === 'admin') {
-          try { await authorizeComputer(serverURL, auth); authorizedOnboardingServer = serverURL }
-          catch (error) { warning = `账号已登录，但电脑授权未恢复：${error.message}。可先进入夭夭，稍后在“电脑”菜单重新授权。` }
-        }
-        return { username: auth.user.username, warning }
+        return { username: auth.user.username }
       },
       activate: async ({ mode, serverURL, remember }) => {
         if (closing || quitting) throw new Error('App 正在退出')
-        const alreadyAuthorized = authorizedOnboardingServer === serverURL
-        authorizedOnboardingServer = ''
         if (mode === 'remote') {
           // Detach only; an independently installed local service keeps running.
           serverModeActive = false
@@ -563,18 +520,6 @@ else {
           await manager?.stop()
           remoteMode = true; remoteURL = serverURL
           await preferences.setRemoteServer(serverURL)
-          if (!alreadyAuthorized) {
-            // A remembered browser session skips password authentication. Restore
-            // its device authorization only on entry, never during detection.
-            try {
-              const current = await inspectServer(serverURL, (...args) => net.fetch(...args))
-              if (current.authenticated && current.user?.role === 'admin') {
-                const cookies = await electronSession.defaultSession.cookies.get({ url: serverURL })
-                await authorizeComputer(serverURL, { origin: serverURL, csrfToken: current.csrfToken,
-                  cookies: cookies.map(cookie => [cookie.name, cookie.value]) })
-              }
-            } catch (error) { hostManager.publish(`电脑授权未恢复：${error.message}`) }
-          }
           const enrolled = await hostManager.read().catch(error => { log(error.message); return undefined })
           if (enrolled && new URL(enrolled.serverURL).origin === new URL(serverURL).origin)
             await hostManager.start().catch(error => hostManager.publish(error.message))
@@ -698,8 +643,6 @@ else {
           click:item=>{void preferences.setStartupChoice(item.checked?'ask':remoteMode?'remote':'local').catch(async error=>{item.checked=preferences.value.startupChoice==='ask';await appDialog({type:'error',message:'无法保存启动偏好',detail:error.message})})}}]},
       {label:'电脑',submenu:[{id:'desktop-host-status',label:'未配置电脑',enabled:false},{type:'separator'},
         {id:'desktop-host-pair',label:'用配对码注册这台电脑…',click:()=>{show();void window.webContents.executeJavaScript("window.dispatchEvent(new CustomEvent('yaoyao:computer-pairing'))")}},
-        {id:'desktop-host-authorize',label:'重新授权…',click:()=>{void openRemoteLogin().catch(error=>log(error.message))}},
-        {id:'desktop-host-import',label:'导入电脑配置…',click:importDesktopHost},
         {id:'desktop-host-reconnect',label:'重新连接',click:()=>hostAction(()=>hostManager.start())},
         {id:'desktop-host-forget',label:'断开并忘记配置',click:()=>hostAction(()=>hostManager.forget())}]},
       { role: 'editMenu', label: '编辑' }, { role: 'viewMenu', label: '显示' }, { role: 'windowMenu', label: '窗口' },

@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { nextTick } from 'vue'
-import SystemManagementDialog from '@/components/app/SystemManagementDialog.vue'
+import { defineComponent, h, nextTick } from 'vue'
+import SystemManagementPanel from '@/components/app/SystemManagementPanel.vue'
 import { getUpstreamConnectionStatus, listUsers } from '@/api/admin'
 import { getPushSystemStatus, saveFCMPushSystemConfig, savePushSystemConfig, type PushSystemStatus } from '@/api/push'
 
@@ -45,13 +45,18 @@ function pushStatus(overrides: Partial<PushSystemStatus> = {}): PushSystemStatus
   }
 }
 
+// The admin console's user, connection and push pages, rendered together.
+const ConsolePanels = defineComponent(() => () => h('div', [
+  h(SystemManagementPanel, { section: 'users' }),
+  h(SystemManagementPanel, { section: 'connection' }),
+  h(SystemManagementPanel, { section: 'push' }),
+]))
+
 async function mountOpen(): Promise<VueWrapper> {
-  const wrapper = mount(SystemManagementDialog, {
+  const wrapper = mount(ConsolePanels, {
     attachTo: document.body,
-    props: { open: false },
     global: { stubs: { AppIcon: true } },
   })
-  await wrapper.setProps({ open: true })
   await flushPromises()
   return wrapper
 }

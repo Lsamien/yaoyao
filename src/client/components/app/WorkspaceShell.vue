@@ -26,7 +26,6 @@ type SettingsPage =
   | 'account-mobile'
   | 'appearance'
   | 'desktop-mode'
-  | 'system-console'
 
 const SIDEBAR_SEARCH_EVENT = 'hermes-yaoyao:sidebar-search'
 const SIDEBAR_SEARCH_CLOSE_EVENT = 'hermes-yaoyao:sidebar-search-close'
@@ -47,7 +46,6 @@ const props = withDefaults(defineProps<{
   sidebarFocusMode?: boolean
   inspectorOpen?: boolean
   inspectorCloseLabel?: string
-  isAdmin?: boolean
   upstreamReady?: boolean
   upstreamError?: string
   identityBusy?: boolean
@@ -69,7 +67,6 @@ const props = withDefaults(defineProps<{
   sidebarFocusMode: false,
   inspectorOpen: false,
   inspectorCloseLabel: '关闭预览',
-  isAdmin: false,
   upstreamReady: false,
   upstreamError: '',
   identityBusy: false,
@@ -326,27 +323,18 @@ function showComputerPairing(){
   settingsMenuOpen.value = false; toolsMenuOpen.value = false; mobileDrawerOpen.value = false
   openSettings('desktop-mode')
 }
-/** Local VM settings moved to the admin console; administrators are pointed there. */
-function showLocalVmSettings(){
-  if(!props.isAdmin)return
-  settingsMenuOpen.value = false; toolsMenuOpen.value = false; mobileDrawerOpen.value = false
-  openSettings('system-console')
-}
 onMounted(() => {
-  window.addEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
   window.addEventListener('yaoyao:computer-pairing',showComputerPairing)
   document.addEventListener('mousedown', closeMenus)
   document.addEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.addEventListener('keydown', workspaceKeydown)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
   window.removeEventListener('yaoyao:computer-pairing',showComputerPairing)
   document.removeEventListener('mousedown', closeMenus)
   document.removeEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.removeEventListener('keydown', workspaceKeydown)
 })
-defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
@@ -479,7 +467,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
 
     <AboutDialog v-if="standalone === 'about'" @close="closeStandalone" />
     <BotPluginsDialog v-if="standalone === 'plugins'" @close="closeStandalone" />
-    <BotSettingsDialog v-if="standalone === 'bot-settings'" :is-admin="isAdmin" :initial-page="botSettingsPage" @close="closeStandalone" @changed="emit('botSettingsChanged')" />
+    <BotSettingsDialog v-if="standalone === 'bot-settings'" :initial-page="botSettingsPage" @close="closeStandalone" @changed="emit('botSettingsChanged')" />
     <SettingsCenterDialog
       :open="settingsOpen"
       :bot-mode="true"
@@ -492,7 +480,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
       :theme="theme"
       :theme-preference="themePreference"
       :insecure-transport="insecureTransport"
-      :is-admin="isAdmin"
+     
       :upstream-ready="upstreamReady"
       :upstream-error="upstreamError"
       :identity-busy="identityBusy"

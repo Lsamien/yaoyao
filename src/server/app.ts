@@ -68,7 +68,7 @@ import { RunnerHub } from './runnerHub.js'
 import { AdminAudit } from './admin/audit.js'
 import { CONSOLE_CSRF_COOKIE, createConsoleApp } from './admin/app.js'
 import { isManagementRoute } from './admin/routes.js'
-import { AdminSessionStore, AdminTwoStepStore } from './admin/sessions.js'
+import { AdminSessionStore } from './admin/sessions.js'
 import { kernelPaths, requireKernel } from './hermes/paths.js'
 import { readReleaseManifest } from './releases.js'
 
@@ -93,7 +93,6 @@ export interface ApplicationOptions {
   openVikingConfiguration?: OpenVikingConfigurationManager
   allowedHostsConfiguration?: AllowedHostsConfigurationManager
   adminSessions?: AdminSessionStore
-  adminTwoStep?: AdminTwoStepStore
   adminCsrfSecret?: Buffer
 }
 
@@ -101,7 +100,6 @@ export interface ApplicationRuntime {
   /** Admin console (separate listener): management and system settings only. */
   adminApp: Koa
   adminSessions: AdminSessionStore
-  adminTwoStep: AdminTwoStepStore
   adminAudit: AdminAudit
   adminCsrf: CsrfProtection
   credentialVault: CredentialVaultCoordinator
@@ -493,13 +491,12 @@ export function createApplication(options: ApplicationOptions = {}): Application
   })
 
   const adminSessions = options.adminSessions ?? new AdminSessionStore(config.home, auth, Boolean(config.tlsCert))
-  const adminTwoStep = options.adminTwoStep ?? new AdminTwoStepStore(config.home)
   const adminAudit = new AdminAudit(config.home)
   const adminCsrf = new CsrfProtection(persistentCsrfSecret(config.home, options.adminCsrfSecret, 'admin-csrf-secret.bin'), Boolean(config.tlsCert), CONSOLE_CSRF_COOKIE)
   let version = 'unknown'
   try { version = readReleaseManifest(join(process.cwd(), 'release.json')).releaseVersion } catch { /* Source checkouts without a manifest. */ }
   const adminApp = createConsoleApp({
-    config, auth, sessions: adminSessions, twoStep: adminTwoStep, audit: adminAudit, csrf: adminCsrf, routes, version,
+    config, auth, sessions: adminSessions, audit: adminAudit, csrf: adminCsrf, routes, version,
     readScope: (user, next) => upstream.withReadScope(`user:${user.id}:${auth.pushAuthorizationVersion(user.id)}`, false, next),
     profiles: async () => {
       const response = await upstreamSession.request('/api/profiles')
@@ -533,7 +530,6 @@ export function createApplication(options: ApplicationOptions = {}): Application
   return {
     adminApp,
     adminSessions,
-    adminTwoStep,
     adminAudit,
     adminCsrf,
     credentialVault,

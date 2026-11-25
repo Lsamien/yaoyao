@@ -6,14 +6,10 @@ import { parse, serialize } from 'cookie'
 import { HttpError } from '../errors.js'
 import type { LocalAuthStore, LocalUser } from '../localAuth.js'
 import { appendSetCookies } from '../security.js'
-import { generateTotpSecret, otpauthURL, verifyTotp } from './totp.js'
 
 export const CONSOLE_IDLE_MS = 30 * 60_000
 export const CONSOLE_MAX_MS = 8 * 60 * 60_000
 export const SUDO_MS = 10 * 60_000
-
-/** `enroll`: signed in, but two-step verification must be set up before anything else. */
-export type ConsoleStage = 'full' | 'enroll'
 
 interface ConsoleSession {
   tokenHash: string
@@ -22,7 +18,6 @@ interface ConsoleSession {
   createdAt: number
   lastSeenAt: number
   sudoUntil: number
-  stage: ConsoleStage
   ip: string
 }
 
@@ -57,11 +52,11 @@ export class AdminSessionStore {
     } catch { /* No sessions yet. */ }
   }
 
-  issue(ctx: Koa.Context, user: LocalUser, authVersion: number, stage: ConsoleStage): ConsoleIdentity {
+  issue(ctx: Koa.Context, user: LocalUser, authVersion: number): ConsoleIdentity {
     this.#prune()
     const token = randomBytes(32).toString('base64url')
     const now = this.now()
-    const session: ConsoleSession = { tokenHash: sha256(token), userID: user.id, authVersion, createdAt: now, lastSeenAt: now, sudoUntil: stage === 'full' ? now + SUDO_MS : 0, stage, ip: ctx.ip }
+    const session: ConsoleSession = { tokenHash: sha256(token), userID: user.id, authVersion, createdAt: now, lastSeenAt: now, sudoUntil: now + SUDO_MS, ip: ctx.ip }
     this.#sessions.set(session.tokenHash, session)
     this.#persist(true)
     appendSetCookies(ctx, [serialize(this.cookieName, token, { httpOnly: true, secure: this.secure, sameSite: 'strict', path: '/', maxAge: CONSOLE_MAX_MS / 1000 })])
@@ -110,14 +105,6 @@ export class AdminSessionStore {
     return until
   }
 
-  complete(ctx: Koa.Context): void {
-    const { session } = this.require(ctx)
-    const stored = this.#sessions.get(session.tokenHash)!
-    stored.stage = 'full'
-    stored.sudoUntil = this.now() + SUDO_MS
-    this.#persist(true)
-  }
-
   logout(ctx: Koa.Context): void {
     const token = parse(ctx.get('cookie') || '')[this.cookieName]
     if (token) this.#sessions.delete(sha256(token))
@@ -143,80 +130,4 @@ export class AdminSessionStore {
     this.#lastPersist = now
     atomicWrite(this.#path, JSON.stringify({ version: 1, sessions: [...this.#sessions.values()] }))
   }
-}
-
-interface TwoStepRecord {
-  secret?: string
-  enabledAt?: number
-  pendingSecret?: string
-  pendingAt?: number
-  recoveryHashes: string[]
-  lastCounter?: number
-}
-
-/** Authenticator-app verification for console logins. Secrets stay in the data directory with mode 0600. */
-export class AdminTwoStepStore {
-  readonly #path: string
-  #records: Record<string, TwoStepRecord>
-
-  constructor(home: string, readonly now = () => Date.now()) {
-    mkdirSync(home, { recursive: true, mode: 0o700 })
-    this.#path = join(home, 'admin-security.json')
-    try { this.#records = (JSON.parse(readFileSync(this.#path, 'utf8')) as { users: Record<string, TwoStepRecord> }).users ?? {} }
-    catch { this.#records = {} }
-  }
-
-  status(userID: string): { enabled: boolean; enabledAt?: number; recoveryCodesLeft: number } {
-    const record = this.#records[userID]
-    return { enabled: Boolean(record?.secret), ...(record?.enabledAt ? { enabledAt: record.enabledAt } : {}), recoveryCodesLeft: record?.recoveryHashes.length ?? 0 }
-  }
-
-  enabled(userID: string): boolean { return Boolean(this.#records[userID]?.secret) }
-
-  begin(userID: string, account: string): { secret: string; otpauth: string } {
-    const record = this.#records[userID] ?? { recoveryHashes: [] }
-    record.pendingSecret = generateTotpSecret()
-    record.pendingAt = this.now()
-    this.#records[userID] = record
-    this.#save()
-    return { secret: record.pendingSecret, otpauth: otpauthURL(record.pendingSecret, account) }
-  }
-
-  /** Confirms the authenticator and returns ten one-time recovery codes (shown once). */
-  confirm(userID: string, code: string): string[] {
-    const record = this.#records[userID]
-    if (!record?.pendingSecret || this.now() - (record.pendingAt ?? 0) > 15 * 60_000) throw new HttpError(409, '绑定已过期，请重新开始。', 'admin_two_step_expired')
-    const counter = verifyTotp(record.pendingSecret, code, this.now())
-    if (counter === undefined) throw new HttpError(400, '验证码不正确，请核对手机上的 6 位数字。', 'admin_two_step_invalid')
-    const codes = Array.from({ length: 10 }, () => randomBytes(5).toString('hex').toUpperCase().replace(/(.{5})/, '$1-'))
-    this.#records[userID] = { secret: record.pendingSecret, enabledAt: this.now(), recoveryHashes: codes.map(value => sha256(value.replace('-', ''))), lastCounter: counter }
-    this.#save()
-    return codes
-  }
-
-  /** Accepts a current authenticator code (each code once) or an unused recovery code. */
-  verify(userID: string, code: string): boolean {
-    const record = this.#records[userID]
-    if (!record?.secret) return false
-    const counter = verifyTotp(record.secret, code, this.now())
-    if (counter !== undefined) {
-      if (record.lastCounter !== undefined && counter <= record.lastCounter) return false
-      record.lastCounter = counter
-      this.#save()
-      return true
-    }
-    const recovery = sha256(code.replace(/[\s-]/g, '').toUpperCase())
-    const index = record.recoveryHashes.indexOf(recovery)
-    if (index < 0) return false
-    record.recoveryHashes.splice(index, 1)
-    this.#save()
-    return true
-  }
-
-  disable(userID: string): void {
-    delete this.#records[userID]
-    this.#save()
-  }
-
-  #save(): void { atomicWrite(this.#path, JSON.stringify({ version: 1, users: this.#records })) }
 }
