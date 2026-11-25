@@ -46,9 +46,6 @@ test('the desktop update icon appears beside the bell only for updates and waits
     await page.locator('#username').fill('fixture')
     await page.locator('#password').fill('fixture-pass')
     await page.locator('#submit').click()
-    // A fresh computer can enter the workspace before pairing with the admin console.
-    await expect(page.locator('#submit')).toHaveText('进入夭夭')
-    await page.locator('#submit').click()
     await page.waitForURL(origin + '/**')
     await page.goto(origin + '/conversations')
     await expect(page.locator('.desktop-sidebar .sidebar-account-switcher__main')).toBeVisible()
