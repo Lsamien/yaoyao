@@ -372,7 +372,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
       const publicPath = ['/api/status', '/api/auth/providers', '/api/auth/me', '/api/profiles', '/api/app/bootstrap', '/api/app/login', '/api/app/logout'].includes(path)
       const accountPath = ['/api/account/credentials', '/api/app/account/credentials', '/api/app/account/avatar'].includes(path)
       const workspacePath = /^\/api\/app\/(?:capabilities|agents|conversations|runs|interactions|events|uploads|files|message-files|computers|bot-tools)(?:\/|$)/.test(path)
-        && path !== '/api/app/agents/remote'
+        && !/^\/api\/app\/agents\/remote\/?$/i.test(path)
       const pushPath = /^\/api\/(?:app\/)?push\/v1\//.test(path)
       const identityRead = path === '/api/app/server-identity' && ['GET', 'HEAD'].includes(ctx.method)
       if (!publicPath && !accountPath && !workspacePath && !isWorkspaceAccountPath(ctx.method, path) && !pushPath && !identityRead)
