@@ -6,13 +6,13 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY release.json ./
-RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
-
-COPY tsconfig.json tsconfig.client.json tsconfig.client.build.json tsconfig.server.json vite.config.ts ./
-COPY index.html ./
-COPY public ./public
 COPY scripts ./scripts
 COPY bin ./bin
+RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
+
+COPY tsconfig.json tsconfig.client.json tsconfig.client.build.json tsconfig.server.json vite.config.ts vite.admin.config.ts ./
+COPY index.html admin.html ./
+COPY public ./public
 COPY deploy ./deploy
 COPY third-party ./third-party
 COPY src ./src
@@ -23,7 +23,8 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 python3-venv python3-dev build-essential \
   && rm -rf /var/lib/apt/lists/* \
   && python3 -m venv /app/.venv \
-  && /app/.venv/bin/pip install --no-cache-dir --require-hashes -r runtime/requirements.lock \
+  && /app/.venv/bin/pip install --no-cache-dir --no-deps --require-hashes -r runtime/requirements.lock \
+  && /app/.venv/bin/pip check \
   && find runtime -name __pycache__ -prune -exec rm -rf {} +
 
 RUN npm run build \
@@ -60,7 +61,7 @@ COPY --chown=node:node --from=builder /app/build-info.json /app/runner-bundle.ta
 
 USER node
 
-EXPOSE 15300
+EXPOSE 15300 15301
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:15300/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

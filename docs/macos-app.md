@@ -21,7 +21,7 @@ App、Web 服务、Vue 界面和 Runner 同仓维护。正式 App 在每个构�
 
 ## 更新与回退
 
-App 新增“检查 App 更新…”窗口，直接从官方 GitHub 检查稳定版本、下载并校验 DMG，由用户手动安装。它不依赖 Web 或 9119 在线，详见 [GitHub 版本升级](github-updates.md)。
+App 新增“检查 App 更新…”窗口，直接从官方 GitHub 检查稳定版本、下载并校验 DMG，由用户手动安装。它不依赖 Web 服务在线，详见 [GitHub 版本升级](github-updates.md)。
 
 正式 App 的同步在安装/更新后的**首次启动**执行；复制 App 文件本身不执行服务操作。详见 [App 与 Web 版本同步](app-web-sync.md)。
 

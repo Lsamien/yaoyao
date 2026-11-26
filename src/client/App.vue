@@ -20,9 +20,14 @@ const route = useRoute()
 const router = useRouter()
 // Bot mode is the only interface for every account.
 const allowedRoute = computed(() => /^\/conversations(?:\/|$)/.test(route.path))
-watch(() => route.path, () => {
+let routerReady = false
+void router.isReady().then(() => {
+  routerReady = true
   if (!allowedRoute.value) void router.replace('/conversations')
-}, { immediate: true, flush: 'sync' })
+})
+watch(() => route.path, () => {
+  if (routerReady && !allowedRoute.value) void router.replace('/conversations')
+}, { flush: 'sync' })
 const agentIdentityFixture = import.meta.env.DEV
   && new URLSearchParams(window.location.search).get('fixture') === 'agent-identity'
 

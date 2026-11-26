@@ -8,8 +8,8 @@ import GrokAuthPanel from './GrokAuthPanel.vue'
 import {type WorkspaceAgent} from '@shared/workspace'
 import type {ComputerFrame} from '@shared/computerControl'
 import {vmIdleStopLabel,type LocalVmInstance,type LocalVmAction} from '@shared/localVm'
-const props=defineProps<{agents:WorkspaceAgent[];isAdmin:boolean;active?:boolean;embedded?:boolean}>()
-const emit=defineEmits<{close:[];changed:[];settings:[];desktop:[agent:WorkspaceAgent,backend?:ComputerBackend,host?:string];workspace:[agent:WorkspaceAgent]}>()
+const props=defineProps<{agents:WorkspaceAgent[];active?:boolean;embedded?:boolean}>()
+const emit=defineEmits<{close:[];changed:[];desktop:[agent:WorkspaceAgent,backend?:ComputerBackend,host?:string];workspace:[agent:WorkspaceAgent]}>()
 const selected=ref(''),state=ref<LocalVmInstance&{enabled:boolean;controlMode?:string}>(),frame=ref<ComputerFrame>(),error=ref(''),busy=ref(false),loading=ref(true)
 const agent=computed(()=>props.agents.find(a=>a.id===selected.value))
 const computers=ref({vm:true,cloud:true,managedBrowser:false})
@@ -144,7 +144,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
      <p>多个机器人共用同一台 Grok Bot 云端虚拟机、工作文件和浏览器登录。基础机器人和聊天记录保持独立。</p>
      <button v-if="cloud?.configured" class="primary" :disabled="busy" @click="openDesktop('cloud')">{{cloud?.mode==='human'?'打开控制中的桌面':'接管云虚拟机'}}</button>
      <button @click="connectionSettings=!connectionSettings">{{cloud?.configured?'云端连接设置':'连接 Grok Bot'}}</button>
-     <p v-if="!isAdmin&&!cloud?.configured" class="hint">请由管理员为当前账号配置 Grok Bot 连接。</p>
+     <p v-if="!cloud?.configured" class="hint">Grok Bot 连接由管理员在管理后台配置。</p>
     </template>
     <template v-if="showVm&&state">
      <strong>本地虚拟机</strong>
@@ -154,7 +154,7 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
       <label>虚拟机镜像<select :value="state.imageKey??''" :disabled="busy||state.inUse||state.container!=='missing'" @change="run(()=>apiRequest(base()+'/image',{method:'PUT',body:{imageKey:($event.target as HTMLSelectElement).value}}))"><option v-if="!state.imageKey" value="" disabled>{{state.image?'当前保留的镜像':'请选择已准备的镜像'}}</option><option v-for="image in state.images" :key="image.key" :value="image.key" :disabled="!image.ready">{{image.name}}{{image.ready?'':' · 未准备'}}</option></select></label>
       <p class="hint">镜像属于本账号的虚拟机，对所有机器人生效。{{state.container!=='missing'?'切换镜像前请先由管理员停止并移除这台虚拟机。':''}}</p>
      </template>
-     <button v-if="!state.image" class="primary" :disabled="!isAdmin" @click="emit('settings')">{{isAdmin?'设置本地虚拟机':'请联系管理员准备虚拟机'}}</button>
+     <p v-if="!state.image" class="hint">本地虚拟机尚未准备，请联系管理员。</p>
      <template v-else-if="state.container==='running'&&state.ready">
       <button class="primary" :disabled="busy" @click="openDesktop('vm')">打开桌面</button>
       <button :disabled="busy" @click="emit('workspace',agent)"><AppIcon name="panel"/>打开双桌面</button>
@@ -163,11 +163,11 @@ onBeforeUnmount(()=>{closed=true;revision++;previewRevision++;clearTimeout(timer
      <button v-else-if="!agent.temporaryGoalId" class="primary" :disabled="busy" @click="action('start')">启动 {{agent.name}} 的桌面</button>
      <div v-if="state.desktop&&!agent.temporaryGoalId" class="vm-actions"><button :disabled="busy||state.inUse||!state.desktop.running" @click="action('stop')">停止桌面</button><button :disabled="busy||state.inUse" @click="action('recreate')">重启桌面</button><button :disabled="busy||state.inUse" @click="action('remove')">移除桌面</button></div>
      <p class="hint">{{state.desktops!==undefined&&state.maxDesktops?`本账号虚拟机已分配 ${state.desktops}/${state.maxDesktops} 个机器人桌面。`:''}}共享工作目录为 /home/cua/workspace。{{vmIdleStopLabel(state.idleStopMinutes)}}。</p>
-     <button v-if="isAdmin" class="settings-link" @click="emit('settings')"><AppIcon name="settings" :size="14"/>本地虚拟机设置</button>
     </template>
     </div>
     <button v-if="!showCloud" class="settings-link" @click="connectionSettings=!connectionSettings"><AppIcon name="globe" :size="14"/>Grok Bot 云端连接</button>
-    <GrokAuthPanel v-if="connectionSettings" :is-admin="isAdmin" @changed="emit('changed');refresh()"/>
+    <!-- Signing in to Grok Bot is done in the admin console; here it only shows status. -->
+    <GrokAuthPanel v-if="connectionSettings" @changed="emit('changed');refresh()"/>
    </template>
   </div>
  </aside>

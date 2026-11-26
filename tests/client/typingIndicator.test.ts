@@ -113,6 +113,16 @@ describe('message timeline typing state', () => {
     wrapper.unmount()
   })
 
+  it('shows compression progress before any body text and removes it when the reply settles', async () => {
+    const message: UiMessage = { id: 'compacting', role: 'assistant', content: '', status: 'streaming', activity: 'compacting' }
+    const wrapper = mountTimeline(WorkspaceMessageTimeline, [user, message], true)
+    expect(wrapper.get('.message__activity').text()).toBe('正在整理历史对话…')
+    expect(wrapper.get('.message__activity').attributes('role')).toBe('status')
+    await wrapper.setProps({ messages: [user, { ...message, status: 'settled', content: '回复完成' }], thinking: false })
+    expect(wrapper.find('.message__activity').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('keeps the workspace header avatar and name in sync with reactive identity props', async () => {
     const wrapper = mount(WorkspaceMessageTimeline, {
       props: {

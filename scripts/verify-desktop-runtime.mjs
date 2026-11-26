@@ -2,6 +2,7 @@ import {execFileSync} from 'node:child_process'
 import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {verifyRuntimePackage} from '../bin/lib/runtime-release.mjs'
+import prepareMacDesktop from './prepare-desktop-macos.mjs'
 
 /** Run before signing: a valid build directory does not prove extraResources
  * retained the Runner's external packages in the actual application. */
@@ -37,6 +38,7 @@ export function verifyDesktopRuntime(runtime,version){
 
 export default async function verifyPackagedDesktop(context){
   if(context.electronPlatformName!=='darwin')return
+  await prepareMacDesktop(context)
   const version=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).dependencies.playwright
   const runtime=join(context.appOutDir,context.packager.appInfo.productFilename+'.app','Contents','Resources','runtime')
   verifyDesktopRuntime(runtime,version)

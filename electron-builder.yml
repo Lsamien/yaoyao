@@ -78,6 +78,7 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   extendInfo:
+    NSLocalNetworkUsageDescription: 夭夭需要连接你指定的局域网服务器，以登录账号、同步消息和使用电脑功能。
     NSMicrophoneUsageDescription: 夭夭使用麦克风接收语音消息。
 dmg:
   title: 夭夭 ${version}

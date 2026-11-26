@@ -5,6 +5,7 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import request from 'supertest'
+import { consoleClient } from './consoleClient.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApplication, type ApplicationRuntime } from '../../src/server/app'
 import { loadServerConfig } from '../../src/server/config'
@@ -60,7 +61,7 @@ describe.skipIf(!kernel)('multiple accounts on the embedded Hermes kernel', () =
     const admin = request.agent(runtime.app.callback()), child = request.agent(runtime.app.callback())
     const boot = await call(admin, 'get', '/api/app/bootstrap').expect(200)
     const adminCSRF = (await call(admin, 'post', '/api/app/setup', boot.body.csrfToken).send({ username: 'owner', password: 'owner-password' }).expect(200)).body.csrfToken
-    const created = await call(admin, 'post', '/api/app/admin/users', adminCSRF).send({ username: 'child', password: 'temporary-password', assignedProfiles: ['allowed'] }).expect(201)
+    const created = await (await consoleClient(runtime, { username: 'owner', password: 'owner-password' })).call('post', '/api/app/admin/users').send({ username: 'child', password: 'temporary-password', assignedProfiles: ['allowed'] }).expect(201)
     const childBoot = await call(child, 'get', '/api/app/bootstrap').expect(200)
     let childCSRF = (await call(child, 'post', '/api/app/login', childBoot.body.csrfToken).send({ username: 'child', password: 'temporary-password' }).expect(200)).body.csrfToken
     childCSRF = (await call(child, 'put', '/api/app/account/credentials', childCSRF).send({ currentPassword: 'temporary-password', newPassword: 'child-password' }).expect(200)).body.csrfToken
@@ -124,8 +125,9 @@ describe.skipIf(!kernel)('multiple accounts on the embedded Hermes kernel', () =
       expect([403, 404]).toContain((await call(client, 'post', '/api/realtime/channels').send({ channel: 'chat' })).status)
     }
     // Hermes data and administration remain denied to the sub-account.
-    for (const path of ['/api/config', '/api/model/options', '/api/app/admin/model-services', '/api/app/admin/upstream-connection',
+    for (const path of ['/api/config', '/api/model/options',
       `/api/files/download?path=${encodeURIComponent(join(home, 'hermes', 'config.yaml'))}`]) expect((await call(child, 'get', path)).status, path).toBe(403)
+    for (const path of ['/api/app/admin/model-services', '/api/app/admin/upstream-connection']) expect((await call(child, 'get', path)).status, path).toBe(410)
     // Profile names are not disclosed to sub-accounts; the administrator sees the embedded Profiles.
     expect((await call(child, 'get', '/api/profiles').expect(200)).body.profiles).toEqual([])
     const names = (await call(admin, 'get', '/api/profiles').expect(200)).body.profiles.map((p: { name: string }) => p.name)

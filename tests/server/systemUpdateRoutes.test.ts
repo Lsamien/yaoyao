@@ -8,6 +8,7 @@ import type { ServerConfig } from '../../src/server/config.js'
 import { systemUpdateRequestAllowed } from '../../src/server/routes.js'
 import { SystemUpdateManager } from '../../src/server/updateManager.js'
 import { createAuthenticatedApplication as createApplication } from './authenticatedApplication.js'
+import { consoleClient } from './consoleClient.js'
 
 const runtimes: ApplicationRuntime[] = []
 const roots: string[] = []
@@ -78,18 +79,10 @@ describe('system update routes', () => {
     }) as typeof fetch
     const runtime = createApplication({ config, fetchImpl, updates })
     runtimes.push(runtime)
-    const bootstrap = await request(runtime.app.callback())
-      .get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
-    const cookie = cookieHeader(bootstrap)
-    const mutation = (path: string) => request(runtime.app.callback())
-      .post(path)
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
-      .set('Cookie', cookie)
-      .set('X-CSRF-Token', bootstrap.body.csrfToken)
+    const admin = await consoleClient(runtime)
+    const mutation = (path: string) => admin.call('post', path)
 
-    const status = await request(runtime.app.callback())
-      .get('/api/app/system/update/status').set('Host', '127.0.0.1:15300').set('Cookie', cookie).expect(200)
+    const status = await admin.call('get', '/api/app/system/update/status').expect(200)
     expect(status.body).toMatchObject({ updateAvailable: false })
     expect(status.body.installedPluginVersion).toBeUndefined()
 
@@ -101,10 +94,7 @@ describe('system update routes', () => {
     expect(launched).toHaveLength(1)
     expect(pluginVersion).toBe('1.7.1')
 
-    const jobResponse = await request(runtime.app.callback())
-      .get(`/api/app/system/update/jobs/${queued.body.id}`)
-      .set('Host', '127.0.0.1:15300').set('Cookie', cookie)
-      .expect(200)
+    const jobResponse = await admin.call('get', `/api/app/system/update/jobs/${queued.body.id}`).expect(200)
     expect(jobResponse.body).toMatchObject({ id: queued.body.id, state: 'queued' })
   })
 })

@@ -391,6 +391,7 @@ export function workspaceMessagesToUi(messages: import('@shared/workspace').Work
     communication: message.communication,
     browserCard: message.browserCard,
     serviceWarnings: message.serviceWarnings,
+    activity: message.activity,
     taskReference: message.taskReference,
     error: message.error, runId: message.runId,
     profile: message.agentId, createdAt: message.createdAt,

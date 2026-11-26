@@ -42,6 +42,8 @@ let rejectedInterrupts: number
 let nativeStillWorking:boolean
 let recoveryHistory: Array<{ role: string; content: string; tool_calls?: unknown }>
 let storedByRuntime: Map<string, string>, recoveryByStored: Map<string, Array<{ role: string; content: string }>>
+let resumeExistingRuntime: boolean, profileMtime: number | undefined
+let modelInfo: Map<string, { model: string; provider: string }>
 const owner = 'first-user',
   other = 'second-user'
 beforeEach(async () => {
@@ -52,6 +54,7 @@ beforeEach(async () => {
   configuredCwds = new Map()
   recoveryHistory = []
   storedByRuntime = new Map(); recoveryByStored = new Map()
+  resumeExistingRuntime = false; profileMtime = 1; modelInfo = new Map()
   rejectPrompt = undefined
   observeGatewayRequest = undefined
   rejectedModelConfig = undefined
@@ -98,12 +101,21 @@ beforeEach(async () => {
       observeGatewayRequest?.(frame)
       const respond = (result: unknown) => socket.send(JSON.stringify({ id: frame.id, result }))
       if (frame.method === 'session.create' || frame.method === 'session.resume') {
-        const runtimeId = randomUUID(), storedId = frame.method === 'session.resume' ? frame.params.session_id : randomUUID()
+        const previousRuntime = resumeExistingRuntime && frame.method === 'session.resume'
+          ? [...storedByRuntime].find(([, stored]) => stored === frame.params.session_id)?.[0] : undefined
+        const runtimeId = previousRuntime ?? randomUUID(), storedId = frame.method === 'session.resume' ? frame.params.session_id : randomUUID()
         storedByRuntime.set(runtimeId, storedId)
-        respond({ session_id: runtimeId, stored_session_id: storedId, running: false, info: { profile_name: frame.params.profile } })
+        respond({ session_id: runtimeId, stored_session_id: storedId, running: false, info: { profile_name: frame.params.profile, ...modelInfo.get(runtimeId) } })
       }
       else if (frame.method === 'session.cwd.set') respond({ cwd: frame.params.cwd })
-      else if (frame.method === 'config.set') respond(rejectedModelConfig ?? { value: frame.params.key === 'model' ? frame.params.value.split(' --provider ')[0] : frame.params.value, scope:'session' })
+      else if (frame.method === 'config.get') respond({ mtime: profileMtime })
+      else if (frame.method === 'config.set') {
+        if (!rejectedModelConfig && frame.params.key === 'model') {
+          const [model, route] = frame.params.value.split(' --provider ')
+          modelInfo.set(frame.params.session_id, { model, provider: route.split(' --session')[0] })
+        }
+        respond(rejectedModelConfig ?? { value: frame.params.key === 'model' ? frame.params.value.split(' --provider ')[0] : frame.params.value, scope:'session' })
+      }
       else if (frame.method === 'prompt.submit') {
         if (rejectPrompt) { socket.send(JSON.stringify({id:frame.id,error:{code:4006,message:rejectPrompt}})); return }
         respond({ status: 'streaming' })
@@ -255,6 +267,49 @@ describe('Web-owned workspace', () => {
     await new Promise(resolve => setTimeout(resolve, 150))
     expect(assistant()?.content).toBe('# 最终正文')
     expect(assistant()?.status).toBe('complete')
+  })
+
+  it.each([false, true])('shows interim text immediately without duplicating streamed text (already_streamed=%s)', async alreadyStreamed => {
+    let upstream!: { socket: WebSocket; params: Record<string, any> }
+    reply = (socket, params) => {
+      upstream = { socket, params }
+      const event = (type: string, payload: Record<string, unknown>) => socket.send(JSON.stringify({ method: 'event', params: { type, session_id: params.session_id, payload } }))
+      if (alreadyStreamed) event('message.delta', { text: '正在检查服务器。' })
+      event('message.interim', { text: '正在检查服务器。', already_streamed: alreadyStreamed })
+    }
+    const bot = agent('进度助手'), conversation = direct(bot.id)
+    const run = runtime.send(owner, conversation.id, { requestId: randomUUID(), content: '检查服务器' })
+    const assistant = () => store.list<WorkspaceMessage>(owner, 'message').find(m => m.runId === run.id && m.role === 'assistant')
+    await vi.waitFor(() => expect(assistant()?.content).toBe('正在检查服务器。\n\n'))
+    expect(assistant()?.status).toBe('streaming')
+    expect(assistant()?.visible).toBe(true)
+    completeReply(upstream.socket, upstream.params, '检查完成。')
+    await finished(run.id)
+    expect(assistant()?.content).toBe('检查完成。')
+  })
+
+  it.each(['status', 'delta', 'complete'])('publishes compression progress separately from text and clears it on %s', async next => {
+    let upstream!: { socket: WebSocket; params: Record<string, any> }
+    reply = (socket, params) => {
+      upstream = { socket, params }
+      socket.send(JSON.stringify({ method: 'event', params: { type: 'status.update', session_id: params.session_id, payload: { kind: 'compacting', text: 'Internal context details' } } }))
+    }
+    const bot = agent('长会话助手'), conversation = direct(bot.id)
+    const run = runtime.send(owner, conversation.id, { requestId: randomUUID(), content: '继续' })
+    const assistant = () => store.list<WorkspaceMessage>(owner, 'message').find(m => m.runId === run.id && m.role === 'assistant')
+    await vi.waitFor(() => expect(assistant()?.activity).toBe('compacting'))
+    expect(assistant()?.content).toBe('')
+    if (next !== 'complete') {
+      upstream.socket.send(JSON.stringify({ method: 'event', params: {
+        type: next === 'status' ? 'status.update' : 'message.delta', session_id: upstream.params.session_id,
+        payload: next === 'status' ? { kind: 'lifecycle', text: 'Done' } : { text: '开始回复' },
+      } }))
+      await vi.waitFor(() => expect(assistant()?.activity).toBeUndefined())
+    }
+    completeReply(upstream.socket, upstream.params, '最终结果')
+    await finished(run.id)
+    expect(assistant()?.activity).toBeUndefined()
+    expect(assistant()?.content).toBe('最终结果')
   })
 
   it('backfills legacy group history into the initial task instead of leaving a new empty task', () => {
@@ -1936,6 +1991,104 @@ function modelBridge() {
     return original(path, options)
   }
 }
+it('reuses only an acknowledged model on a warm unchanged session and still reapplies reasoning and speed', async () => {
+  modelBridge(); resumeExistingRuntime = true
+  const a = agent('连续追问'), c = direct(a.id)
+  store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'auto' } })
+  const record = vi.fn(); runtime.inspector = { record } as any
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+  expect(requests.filter(r => r.method === 'config.set').map(r => r.params.key)).toEqual(['model', 'reasoning', 'fast'])
+  const before = requests.length
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '连续追问' }).id)
+  expect(requests.slice(before).filter(r => r.method === 'config.set').map(r => r.params.key)).toEqual(['reasoning', 'fast'])
+  expect(requests.slice(before).filter(r => r.method === 'prompt.submit')).toHaveLength(1)
+  expect(record.mock.calls.some(([, , e]) => e.method === 'bot.model-settings' && e.data.reusedModel === true && e.data.resolveMs >= 0 && e.data.applyMs >= 0)).toBe(true)
+})
+it.each(['profile-change', 'cold-resume', 'external-switch', 'missing-info', 'unknown-revision'])(
+  'reconfirms the model when reuse is uncertain: %s', async change => {
+    modelBridge(); resumeExistingRuntime = true
+    const a = agent('模型复用边界'), c = direct(a.id)
+    store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'medium', fastMode: 'normal' } })
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+    if (change === 'profile-change') profileMtime = 2
+    if (change === 'cold-resume') resumeExistingRuntime = false
+    if (change === 'external-switch') for (const info of modelInfo.values()) info.model = 'external-model'
+    if (change === 'missing-info') modelInfo.clear()
+    if (change === 'unknown-revision') profileMtime = undefined
+    const before = requests.length
+    await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '核对后续轮次' }).id)
+    expect(requests.slice(before).filter(r => r.method === 'config.set').map(r => r.params.key)).toEqual(['model', 'reasoning', 'fast'])
+  },
+)
+it('discards the confirmed model after a failed setting acknowledgement', async () => {
+  modelBridge(); resumeExistingRuntime = true
+  const a = agent('配置失败后重试'), c = direct(a.id)
+  store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'fast' } })
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+  rejectedModelConfig = { value: 'wrong' }
+  const failed = runtime.send(owner, c.id, { requestId: randomUUID(), content: '失败轮次' })
+  await vi.waitFor(() => expect(store.require<WorkspaceRun>(owner, 'run', failed.id).status).toBe('failed'))
+  expect(store.list<any>(owner, 'binding')[0].confirmedModel).toBeUndefined()
+  expect(requests.filter(r => r.method === 'prompt.submit')).toHaveLength(1)
+  rejectedModelConfig = undefined
+  const before = requests.length
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '重试' }).id)
+  expect(requests.slice(before).filter(r => r.method === 'config.set').map(r => r.params.key)).toEqual(['model', 'reasoning', 'fast'])
+})
+it('uses live session info after tool binding rather than a stale resume snapshot', async () => {
+  modelBridge(); resumeExistingRuntime = true
+  const a = agent('绑定后状态'), c = direct(a.id)
+  store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'fast' } })
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+  observeGatewayRequest = frame => {
+    if (frame.method !== 'config.get') return
+    for (const socket of server.clients) socket.send(JSON.stringify({ method: 'event', params: {
+      type: 'session.info', session_id: frame.params.session_id, payload: { model: 'rebuilt-model', provider: 'openai' },
+    } }))
+  }
+  const before = requests.length
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '重建后继续' }).id)
+  expect(requests.slice(before).filter(r => r.method === 'config.set').map(r => r.params.key)).toEqual(['model', 'reasoning', 'fast'])
+})
+it('prepares the session while read-only model resolution is pending and submits only after confirmation', async () => {
+  modelBridge()
+  const target = nodes.target(owner, 'local'), original = target.session.request.bind(target.session)
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  target.session.request = async (path, options) => {
+    if (path.endsWith('/model-settings/resolve')) await pending
+    return original(path, options)
+  }
+  const a = agent('并行准备'), c = direct(a.id)
+  store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'fast' } })
+  const run = runtime.send(owner, c.id, { requestId: randomUUID(), content: '开始' })
+  await vi.waitFor(() => expect(requests.some(r => r.method === 'session.create')).toBe(true))
+  expect(requests.some(r => r.method === 'prompt.submit' || r.method === 'config.set')).toBe(false)
+  release(); await finished(run.id)
+  expect(requests.filter(r => r.method === 'config.set').map(r => r.params.key)).toEqual(['model', 'reasoning', 'fast'])
+})
+it('cannot restore cached settings or submit after cancellation during model resolution', async () => {
+  modelBridge(); resumeExistingRuntime = true
+  const a = agent('准备阶段取消'), c = direct(a.id)
+  store.updateAgent(owner, a.id, { modelSettings: { provider: 'openai', model: 'model-a', reasoningEffort: 'high', fastMode: 'fast' } })
+  await finished(runtime.send(owner, c.id, { requestId: randomUUID(), content: '第一轮' }).id)
+  const target = nodes.target(owner, 'local'), original = target.session.request.bind(target.session)
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  target.session.request = async (path, options) => {
+    if (path.endsWith('/model-settings/resolve')) await pending
+    return original(path, options)
+  }
+  const before = requests.length
+  const run = runtime.send(owner, c.id, { requestId: randomUUID(), content: '取消这一轮' })
+  await vi.waitFor(() => expect(requests.slice(before).some(r => r.method === 'session.resume')).toBe(true))
+  await runtime.stop(owner, run.id)
+  release()
+  await vi.waitFor(() => expect(store.require<WorkspaceRun>(owner, 'run', run.id).status).toBe('interrupted'))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(requests.slice(before).some(r => r.method === 'config.set' || r.method === 'prompt.submit')).toBe(false)
+  expect(store.list<any>(owner, 'binding')[0]?.confirmedModel).toBeUndefined()
+})
 it.each([{value:'wrong'}, {confirm_required:true,confirm_message:'切换长上下文将增加费用'}])('stops before submission on a failed native model acknowledgement and keeps its confirmation in the profile: %j',async rejection=>{
   modelBridge(); rejectedModelConfig=rejection
   const a=agent('配置失败'),c=direct(a.id)

@@ -217,7 +217,7 @@ async function probe() {
   const value = draft.value
   if (!value) return
   if (value.hasApiKey && !value.apiKeyTouched && !value.clearApiKey) {
-    error.value = '9119 不会向浏览器回传已保存密钥；请重新输入 API Key 后再测试'
+    error.value = '服务端不会向浏览器回传已保存密钥；请重新输入 API Key 后再测试'
     return
   }
   const validationError = validateDraft()
@@ -299,7 +299,7 @@ onMounted(() => { void load() })
 
 <template>
   <section class="management-panel" aria-label="模型服务">
-    <div class="panel-context"><strong>9119 Provider 与模型</strong><span>全部来自当前机器人：<b>{{ profile }}</b></span></div>
+    <div class="panel-context"><strong>Provider 与模型</strong><span>全部来自当前机器人：<b>{{ profile }}</b></span></div>
     <form class="default-model-card" @submit.prevent="saveDefaultModel">
       <label><strong>默认全局模型</strong><small>仅用于之后新建的会话，已有会话保持原模型。</small></label>
       <select v-model="defaultModelKey" aria-label="默认全局模型" :disabled="busy || loading">
@@ -313,26 +313,26 @@ onMounted(() => { void load() })
     <div class="panel-heading"><label class="provider-search"><AppIcon name="search" :size="18" /><input v-model="query" type="search" placeholder="搜索 Provider 或模型" aria-label="搜索 Provider 或模型" /></label><button class="primary-button" type="button" :disabled="busy || loading" @click="beginCreate"><AppIcon name="plus" :size="15" />新增服务</button></div>
     <p v-if="error" class="panel-error" role="alert">{{ error }}</p>
     <p v-else-if="notice" class="panel-notice" role="status">{{ notice }}</p>
-    <p v-if="loading" class="panel-empty">正在读取 9119 Provider 与模型…</p>
+    <p v-if="loading" class="panel-empty">正在读取 Provider 与模型…</p>
     <div v-else-if="filteredProviderGroups.length" class="service-list">
       <article v-for="group in filteredProviderGroups" :key="group.provider.slug" class="service-card">
         <div class="service-main"><div class="service-title"><strong>{{ group.provider.name }}</strong><em v-if="group.provider.isCurrent || group.service?.is_current">当前默认</em><em>{{ group.service ? '可编辑' : '只读' }}</em></div><small>{{ group.provider.slug }}<template v-if="group.service?.base_url"> · {{ group.service.base_url }}</template></small><div class="model-chips"><span v-for="model in group.models" :key="model" :class="{ current: group.provider.isCurrent && model === group.provider.currentModel }">{{ model }}</span></div></div>
         <div v-if="group.service" class="card-actions"><button type="button" :disabled="busy" @click="edit(group.service)">编辑</button><button v-if="group.service.source !== 'legacy' && !group.service.is_current" type="button" :disabled="busy" @click="activate(group.service)">设为默认</button><button v-if="group.service.source !== 'legacy'" class="danger" type="button" :disabled="busy" @click="remove(group.service)">删除</button></div>
       </article>
     </div>
-    <p v-else-if="!loading" class="panel-empty">{{ query.trim() ? '没有匹配的 Provider 或模型。' : '9119 当前没有返回可用 Provider 或模型。' }}</p>
-    <p v-if="!loading" class="catalog-note">完整目录来自 Hermes 9119；仅支持的自定义服务可编辑。</p>
+    <p v-else-if="!loading" class="panel-empty">{{ query.trim() ? '没有匹配的 Provider 或模型。' : '内置 Hermes 当前没有可用 Provider 或模型。' }}</p>
+    <p v-if="!loading" class="catalog-note">完整目录来自内置 Hermes；仅支持的自定义服务可编辑。</p>
 
     <form v-if="draft" class="service-editor" :aria-busy="busy" @submit.prevent="save">
       <header><strong>{{ draft.id ? `编辑 ${draft.id}` : '新增模型服务' }}</strong><button type="button" aria-label="关闭编辑" :disabled="busy" @click="closeEditor"><AppIcon name="close" :size="15" /></button></header>
       <div class="form-grid"><label>名称<input v-model="draft.name" :disabled="busy || draft.source === 'legacy'" maxlength="100" autocomplete="off" /></label><label>Base URL<input v-model="draft.baseUrl" :disabled="busy" placeholder="https://example.com/v1" autocomplete="url" /></label></div>
       <div class="form-grid"><label>默认模型<input v-model="draft.model" :disabled="busy" placeholder="model-id" autocomplete="off" /></label><label>上下文长度（可选）<input v-model="draft.contextLength" :disabled="busy" inputmode="numeric" placeholder="例如 131072" /></label></div>
       <label v-if="draft.canEditApiKey">API Key<input v-model="draft.apiKey" type="password" :disabled="busy" :placeholder="draft.hasApiKey && !draft.clearApiKey ? '已保存；留空保持不变' : '可选'" autocomplete="new-password" @input="draft.apiKeyTouched = Boolean(draft.apiKey.trim()); draft.clearApiKey = false" /></label>
-      <p v-else class="editor-hint">该 Provider 的密钥不由 9119 环境变量管理，因此这里只编辑 URL 和模型。</p>
+      <p v-else class="editor-hint">该 Provider 的密钥不由 Hermes 环境变量管理，因此这里只编辑 URL 和模型。</p>
       <button v-if="draft.canEditApiKey && draft.hasApiKey && !draft.clearApiKey" class="text-button danger" type="button" :disabled="busy" @click="draft.apiKey = ''; draft.apiKeyTouched = false; draft.clearApiKey = true">清除已保存密钥</button><button v-else-if="draft.canEditApiKey && draft.clearApiKey" class="text-button" type="button" :disabled="busy" @click="draft.clearApiKey = false">取消清除密钥</button>
       <label>模型列表（每行一个）<textarea v-model="draft.modelsText" rows="5" :disabled="busy" placeholder="连接测试后自动填充，也可手动输入" /></label>
-      <label class="check-row"><input v-model="draft.discoverModels" type="checkbox" :disabled="busy" />允许 9119 自动发现模型</label><label v-if="draft.source === 'managed'" class="check-row"><input v-model="draft.makeDefault" type="checkbox" :disabled="busy" />保存后设为当前机器人默认服务</label>
-      <small class="editor-hint">{{ draft.source === 'legacy' ? '保存后模型列表按当前内容更新；当前默认 Provider 会同步新的 URL 与默认模型。' : '9119 会保留服务中已有的模型条目；删除整项服务会一并移除它们。' }}</small>
+      <label class="check-row"><input v-model="draft.discoverModels" type="checkbox" :disabled="busy" />允许 Hermes 自动发现模型</label><label v-if="draft.source === 'managed'" class="check-row"><input v-model="draft.makeDefault" type="checkbox" :disabled="busy" />保存后设为当前机器人默认服务</label>
+      <small class="editor-hint">{{ draft.source === 'legacy' ? '保存后模型列表按当前内容更新；当前默认 Provider 会同步新的 URL 与默认模型。' : 'Hermes 会保留服务中已有的模型条目；删除整项服务会一并移除它们。' }}</small>
       <footer><button class="quiet-button" type="button" :disabled="busy" @click="probe">测试连接</button><button class="primary-button" type="submit" :disabled="busy">{{ busy ? '处理中…' : '保存模型服务' }}</button></footer>
     </form>
   </section>

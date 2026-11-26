@@ -13,19 +13,15 @@ function setup(role='admin'){
   return mount(ServerIdentityPanel)
 }
 afterEach(()=>{auth?.$dispose();vi.clearAllMocks()})
-it('saves the server name with the loaded revision',async()=>{
+it.each(['admin','user'])('shows the server name read-only for %s accounts; it is set in the admin console',async role=>{
+  const wrapper=setup(role);await flushPromises()
+  expect(wrapper.text()).toContain('家里');expect(wrapper.text()).toContain('管理后台')
+  expect(wrapper.find('input').exists()).toBe(false);expect(wrapper.find('form').exists()).toBe(false)
+  expect(api.save).not.toHaveBeenCalled();wrapper.unmount()
+})
+it('follows newer names from other clients and ignores older revisions',async()=>{
   const wrapper=setup();await flushPromises()
-  api.save.mockResolvedValue({...initial,name:'办公室',displayName:'办公室',revision:2})
-  await wrapper.get('input').setValue('办公室');await wrapper.get('form').trigger('submit');await flushPromises()
-  expect(api.save).toHaveBeenCalledWith('办公室',1,'server-a');expect(auth.serverIdentity?.displayName).toBe('办公室')
-  wrapper.unmount()
-})
-it('shows the same name read-only for ordinary accounts',async()=>{
-  const wrapper=setup('user');await flushPromises();expect(wrapper.text()).toContain('家里');expect(wrapper.find('input').exists()).toBe(false);wrapper.unmount()
-})
-it('keeps an unsaved draft when another client changes the name and ignores older revisions',async()=>{
-  const wrapper=setup();await flushPromises();await wrapper.get('input').setValue('我的草稿')
   auth.acceptServerIdentity({...initial,name:'其他端',displayName:'其他端',revision:2});await flushPromises()
-  expect(wrapper.get<HTMLInputElement>('input').element.value).toBe('我的草稿')
+  expect(wrapper.text()).toContain('其他端')
   auth.acceptServerIdentity(initial);expect(auth.serverIdentity?.name).toBe('其他端');wrapper.unmount()
 })

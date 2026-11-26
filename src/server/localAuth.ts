@@ -171,6 +171,58 @@ export class LocalAuthStore {
     return this.#issueSession(ctx, user, desktop)
   }
 
+  /** Admin console login: checks credentials without issuing a Web session. */
+  verifyCredentials(usernameValue: string, password: string): { user: LocalUser; authVersion: number } {
+    const normalized = usernameValue.trim().toLocaleLowerCase('en-US')
+    const user = this.#users.find(candidate => candidate.normalizedUsername === normalized)
+    if (!user || !this.#passwordMatches(user, password) || !user.enabled) {
+      throw new HttpError(401, '用户名或密码错误', 'login_failed')
+    }
+    if (user.registrationStatus === 'pending') throw new HttpError(403, '账号尚未开通', 'account_pending_approval')
+    return { user: publicUser(user), authVersion: user.authVersion }
+  }
+
+  /** The admin behind a console session, or undefined once disabled, demoted or its password changed. */
+  consoleAdmin(userID: string, authVersion: number): LocalUser | undefined {
+    const user = this.#users.find(candidate => candidate.id === userID)
+    if (!user || !user.enabled || user.role !== 'admin' || user.authVersion !== authVersion) return undefined
+    return publicUser(user)
+  }
+
+  verifyPassword(userID: string, password: string): boolean {
+    const user = this.#users.find(candidate => candidate.id === userID)
+    return Boolean(user && this.#passwordMatches(user, password))
+  }
+
+  /** Console password change; signs the admin out of every Web and console session. */
+  changePassword(userID: string, currentPassword: string, newPassword: string): { user: LocalUser; authVersion: number } {
+    const user = this.#users.find(candidate => candidate.id === userID)
+    if (!user) throw new HttpError(401, '请重新登录', 'authentication_required')
+    if (!this.#passwordMatches(user, currentPassword)) throw new HttpError(401, '当前密码错误', 'invalid_current_password')
+    this.#setPassword(user, validatePassword(newPassword), false)
+    user.updatedAt = Date.now()
+    this.#saveUsers()
+    this.#revokeUser(user.id)
+    return { user: publicUser(user), authVersion: user.authVersion }
+  }
+
+  /** Console username change for the signed-in admin; existing sessions stay valid. */
+  rename(userID: string, currentPassword: string, newUsername: string): LocalUser {
+    const user = this.#users.find(candidate => candidate.id === userID)
+    if (!user) throw new HttpError(401, '请重新登录', 'authentication_required')
+    if (!this.#passwordMatches(user, currentPassword)) throw new HttpError(401, '当前密码错误', 'invalid_current_password')
+    const username = canonicalUsername(newUsername)
+    const normalized = username.toLocaleLowerCase('en-US')
+    if (this.#users.some(candidate => candidate.id !== user.id && candidate.normalizedUsername === normalized)) {
+      throw new HttpError(409, '用户名已存在', 'username_exists')
+    }
+    user.username = username
+    user.normalizedUsername = normalized
+    user.updatedAt = Date.now()
+    this.#saveUsers()
+    return publicUser(user)
+  }
+
   /** Called only behind the native service capability, never from public auth routes. */
   localDesktopSession(ctx: Koa.Context): LocalUser {
     let admin = this.#users.find(user => user.role === 'admin' && user.enabled)
@@ -233,6 +285,9 @@ export class LocalAuthStore {
   current(ctx: Koa.Context): LocalUser | undefined {
     const injected = ctx.state.localUser as LocalUser | undefined
     if (injected) return injected
+    // The admin console re-resolves its own session; Web cookies never reach it.
+    const resolve = ctx.state.resolveLocalUser as (() => LocalUser | undefined) | undefined
+    if (resolve) return resolve()
     return this.currentFromCookieHeader(ctx.get('cookie'))
   }
 
@@ -389,20 +444,13 @@ export class LocalAuthStore {
     ctx: Koa.Context,
     currentPassword: string,
     newPassword: string,
-    newUsername?: string,
   ): LocalUser {
     const current = this.require(ctx, true)
     const user = this.#users.find(candidate => candidate.id === current.id)!
     if (!current.localDesktop && !this.#passwordMatches(user, currentPassword)) {
       throw new HttpError(401, '当前密码错误', 'invalid_current_password')
     }
-    const username = newUsername === undefined ? user.username : canonicalUsername(newUsername)
-    const normalized = username.toLocaleLowerCase('en-US')
-    if (this.#users.some(candidate => candidate.id !== user.id && candidate.normalizedUsername === normalized)) {
-      throw new HttpError(409, '用户名已存在', 'username_exists')
-    }
-    user.username = username
-    user.normalizedUsername = normalized
+    const username = user.username
     this.#setPassword(user, validatePassword(newPassword), false)
     user.mustChangePassword = false
     user.updatedAt = Date.now()

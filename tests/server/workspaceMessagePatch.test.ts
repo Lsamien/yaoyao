@@ -49,6 +49,19 @@ it('persists compact patches atomically while observers see complete stable mess
   expect(message.revision).toBe(41)
 })
 
+it('replays compression activity as a full snapshot and removes it before resuming text patches', () => {
+  const cursor = store.cursor('owner'), folder = new WorkspaceMessageReconciler()
+  folder.remember(structuredClone(message))
+  message.activity = 'compacting'; store.saveMessage('owner', message)
+  delete message.activity; message.content += '继续'; store.saveMessage('owner', message)
+  append('正文')
+  const events = store.events('owner', cursor).filter(e => e.type.startsWith('message.'))
+  expect(events.map(e => e.type)).toEqual(['message.changed', 'message.changed', 'message.patch'])
+  expect((folder.normalize(events[0]!).data as WorkspaceMessage).activity).toBe('compacting')
+  expect((folder.normalize(events[1]!).data as WorkspaceMessage).activity).toBeUndefined()
+  expect(folder.normalize(events[2]!).data).toEqual(message)
+})
+
 it('uses complete events for tools, rewritten content, visibility and terminal changes', () => {
   append('文字')
   for (const change of [() => { message.tools = [{ id: 'tool', status: 'running' }] },

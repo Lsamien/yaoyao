@@ -27,7 +27,21 @@ export interface FCMProviderConfig {
   packageName: string
 }
 
+/** Separate management listener (the admin console). */
+export interface AdminConsoleConfig {
+  enabled: boolean
+  host: string
+  port: number
+  /** Client IPs/CIDRs allowed on a non-loopback listener; loopback clients are always allowed. */
+  allowIps: string[]
+  /** Explicit opt-out of TLS for a non-loopback listener (Docker port published on 127.0.0.1 only). */
+  insecureHttp: boolean
+  /** Listener is reachable from other machines: an IP allowlist and TLS (or loopback-only publishing) are required. */
+  external: boolean
+}
+
 export interface ServerConfig {
+  admin: AdminConsoleConfig
   credentialVault?: { socket: string; tokenFile: string; hermesUid: number }
   host: string
   port: number
@@ -73,6 +87,27 @@ function parsePort(value: string | undefined): number {
   return port
 }
 
+
+const CIDR = /^(?:(?:\d{1,3}\.){3}\d{1,3}|[0-9a-f:]+)(?:\/\d{1,3})?$/i
+
+/** Admin console listener. A non-loopback listener must name its clients and use TLS (or opt out explicitly). */
+export function loadAdminConsoleConfig(env: NodeJS.ProcessEnv, mainPort: number, tls: boolean): AdminConsoleConfig {
+  const rawPort = env.YAOYAO_ADMIN_PORT?.trim()
+  const enabled = rawPort?.toLowerCase() !== 'off'
+  const port = enabled ? Number(rawPort || '15301') : 0
+  if (enabled && (!Number.isInteger(port) || port < 1 || port > 65_535)) throw new Error('YAOYAO_ADMIN_PORT must be an integer between 1 and 65535, or off')
+  if (enabled && port === mainPort) throw new Error('YAOYAO_ADMIN_PORT must differ from the Web port')
+  const host = env.YAOYAO_ADMIN_HOST?.trim() || '127.0.0.1'
+  const allowIps = (env.YAOYAO_ADMIN_ALLOW_IPS ?? '').split(',').map(item => item.trim()).filter(Boolean)
+  for (const item of allowIps) if (!CIDR.test(item)) throw new Error(`YAOYAO_ADMIN_ALLOW_IPS has an invalid entry: ${item}`)
+  const insecureHttp = flag(env.YAOYAO_ADMIN_INSECURE_HTTP)
+  const external = enabled && !isLoopbackHost(host)
+  if (external) {
+    if (!allowIps.length) throw new Error('A non-loopback YAOYAO_ADMIN_HOST requires YAOYAO_ADMIN_ALLOW_IPS')
+    if (!tls && !insecureHttp) throw new Error('A non-loopback YAOYAO_ADMIN_HOST requires HERMES_YAOYAO_TLS_CERT/KEY, or YAOYAO_ADMIN_INSECURE_HTTP=1 when the port is only published on the host loopback')
+  }
+  return { enabled, host, port, allowIps, insecureHttp, external }
+}
 
 function parseUpstream(value: string | undefined): URL {
   const upstream = new URL(value ?? 'http://127.0.0.1:9119')
@@ -181,6 +216,7 @@ export function loadServerConfig(
   const allowedHostsSettings = loadAllowedHostsConfiguration(home, env)
   const allowedHosts = new Set(allowedHostsSettings.hosts)
   return {
+    admin: loadAdminConsoleConfig(env, port, Boolean(tlsCert)),
     host,
     port,
     upstream,

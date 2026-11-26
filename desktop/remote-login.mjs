@@ -107,16 +107,17 @@ export async function remoteSession(serverURL,{username,password,setup=false},fe
   return {origin:base,user:result.user,csrfToken:String(result.csrfToken??info.csrfToken),cookies:[...jar.cookies.entries()],cookieDetails:[...jar.details.values()]}
 }
 
-export async function enrollDesktopHost(session,{name,installId,previousHostId},fetchImpl=globalThis.fetch){
-  const cookie=session.cookies.map(([key,value])=>`${key}=${value}`).join('; ')
-  const response=await requestServer(fetchImpl,new URL('/api/app/admin/desktop-hosts',session.origin),{
+/** Registers this computer with a one-time code from the admin console; no admin session is needed. */
+export async function enrollDesktopHostWithCode(serverURL,code,{name,installId,previousHostId},fetchImpl=globalThis.fetch){
+  const value=String(code).trim()
+  if(!/^[A-Za-z0-9-]{8,20}$/.test(value))throw new Error('请输入管理后台显示的配对码，例如 ABCD-EFGH')
+  const response=await requestServer(fetchImpl,new URL('/api/desktop-host/v1/enroll',normalizeServerURL(serverURL)),{
     method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
-    headers:{accept:'application/json','content-type':'application/json',cookie,'x-csrf-token':session.csrfToken,origin:session.origin},
-    body:JSON.stringify({name:String(name).slice(0,100),...(installId?{installId}:{}),...(previousHostId?{previousHostId}:{})}),
+    headers:{accept:'application/json','content-type':'application/json'},
+    body:JSON.stringify({code:value,name:String(name).slice(0,100),...(installId?{installId}:{}),...(previousHostId?{previousHostId}:{})}),
   })
-  if(response.status===403)throw new Error('需要管理员账号，才能把这台电脑注册为可远程控制的电脑')
-  if(!response.ok)throw new Error(`注册电脑失败（HTTP ${response.status}）`)
-  const result=await response.json()
+  const result=await response.json().catch(()=>({}))
+  if(!response.ok)throw new Error(result.error||`注册电脑失败（HTTP ${response.status}）`)
   if(typeof result?.token!=='string'||!result?.host?.id)throw new Error('注册电脑响应无效')
   return result
 }

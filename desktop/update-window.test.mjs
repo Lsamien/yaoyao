@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto'
 import { _electron as electron, expect } from '@playwright/test'
 
 const root = resolve(import.meta.dirname, '..')
-test('inline boot updater works without a Web service, verifies a real DMG and denies other renderers', { timeout: 90000 }, async () => {
+test('client boot updater works without a Web service, verifies a real DMG and denies other renderers', { timeout: 90000 }, async () => {
   const home = await mkdtemp(join(tmpdir(), 'yaoyao-update-window-'))
   const blocked = createServer((req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{"ok":true}') })
   await new Promise(done => blocked.listen(0, '127.0.0.1', done))
@@ -25,9 +25,9 @@ test('inline boot updater works without a Web service, verifies a real DMG and d
     const name = `Yaoyao-${version}-arm64.dmg`, sums = `${digest}  ${name}\n`
     app = await electron.launch({ ...(process.env.DESKTOP_TEST_EXECUTABLE ? { executablePath: process.env.DESKTOP_TEST_EXECUTABLE } : {}),
       args: process.env.DESKTOP_TEST_EXECUTABLE ? [] : [root], cwd: root,
-      env: { ...process.env, HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_SYNC: '1', HERMES_YAOYAO_DESKTOP_PORT: String(blocked.address().port), HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:1' } })
+      env: { ...process.env, HERMES_YAOYAO_DESKTOP_CLIENT_ONLY: '1', HERMES_YAOYAO_DESKTOP_TEST_HOME: home, HERMES_YAOYAO_DESKTOP_TEST_SYNC: '1', HERMES_YAOYAO_DESKTOP_PORT: String(blocked.address().port), HERMES_YAOYAO_UPSTREAM: 'http://127.0.0.1:1' } })
     const boot = await app.firstWindow()
-    await expect.poll(() => boot.evaluate(() => window.yaoyaoDesktop.status().then(state => state.phase))).toBe('error')
+    await expect.poll(() => boot.evaluate(() => window.yaoyaoDesktop.status().then(state => state.phase))).toBe('idle')
     await boot.reload()
     assert.equal(await boot.evaluate(() => typeof window.yaoyaoUpdate), 'undefined')
     assert.equal(await boot.evaluate(() => typeof window.yaoyaoDesktop.updateState), 'function')

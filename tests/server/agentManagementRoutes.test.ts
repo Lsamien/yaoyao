@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import request from 'supertest'
+import { consoleClient } from './consoleClient.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ApplicationRuntime } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
@@ -32,7 +33,7 @@ describe('Agent management admin routes', () => {
       .set('Origin', 'http://127.0.0.1:15300')
       .set('X-CSRF-Token', bootstrap.body.csrfToken)
       .send({ provider: 'opencode-free', model: 'free-a' })
-      .expect(403, /子账号只能使用 Bot 模式/)
+      .expect(410, /管理后台/)
   })
 
   it('proxies profile-scoped model services and masked duplex voice settings through 9119', async () => {
@@ -70,27 +71,27 @@ describe('Agent management admin routes', () => {
     }) as typeof fetch
     const runtime = createAuthenticatedApplication({ config, fetchImpl })
     runtimes.push(runtime)
-    const agent = request.agent(runtime.app.callback())
-    const bootstrap = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
+    const admin = await consoleClient(runtime)
+    const agent = admin.agent
     const headers = (value: request.Test) => value
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
-      .set('X-CSRF-Token', bootstrap.body.csrfToken)
+      .set('Host', admin.host)
+      .set('Origin', admin.origin)
+      .set('X-CSRF-Token', admin.csrf())
 
-    await agent.get('/api/app/admin/model-services?profile=worker').set('Host', '127.0.0.1:15300').expect(200)
+    await agent.get('/api/app/admin/model-services?profile=worker').set('Host', admin.host).expect(200)
     await headers(agent.post('/api/app/admin/model-services?profile=worker')).send({ name: 'Local', base_url: 'http://127.0.0.1:9000/v1', model: 'model-a', discover_models: true, make_default: false }).expect(200)
     await headers(agent.post('/api/app/admin/model-services/validate')).send({ name: 'Local', base_url: 'http://127.0.0.1:9000/v1', model: 'model-a', discover_models: true, make_default: false }).expect(200)
     await headers(agent.post('/api/app/admin/model-services/local/activate?profile=worker')).send({}).expect(200)
     await headers(agent.put('/api/app/admin/profiles/worker/model')).send({ provider: 'opencode-free', model: 'free-a' }).expect(200)
     await headers(agent.delete('/api/app/admin/model-services/local?profile=worker')).send({}).expect(200)
-    const legacy = await agent.get('/api/app/admin/legacy-model-services?profile=worker').set('Host', '127.0.0.1:15300').expect(200)
+    const legacy = await agent.get('/api/app/admin/legacy-model-services?profile=worker').set('Host', admin.host).expect(200)
     expect(legacy.body.items[0]).toMatchObject({ id: 'custom:tingly', models: ['omni', 'old'], has_api_key: true, can_edit_api_key: true, is_current: true })
     expect(JSON.stringify(legacy.body)).not.toContain('TINGLY_API_KEY')
     await headers(agent.put('/api/app/admin/legacy-model-services/custom%3Atingly?profile=worker')).send({
       name: 'tingly', base_url: 'http://tingly.test/v2', model: 'omni-2', models: ['omni', 'omni-2'],
       discover_models: false, make_default: false, api_key: 'replacement-secret',
     }).expect(200)
-    const voice = await agent.get('/api/app/admin/duplex-voice').set('Host', '127.0.0.1:15300').expect(200)
+    const voice = await agent.get('/api/app/admin/duplex-voice').set('Host', admin.host).expect(200)
     expect(voice.body).not.toHaveProperty('apiKey')
     await headers(agent.put('/api/app/admin/duplex-voice')).send({ voices: [{ id: 'voice-a', name: '音色 A' }], currentVoiceId: 'voice-a' }).expect(200)
 
@@ -113,7 +114,7 @@ describe('Agent management admin routes', () => {
       .toEqual({ provider: 'opencode-free', model: 'free-a' })
 
     unsupported = true
-    await agent.get('/api/app/admin/model-services?profile=worker').set('Host', '127.0.0.1:15300')
+    await agent.get('/api/app/admin/model-services?profile=worker').set('Host', admin.host)
       .expect(501, /当前上游版本不支持此管理功能/)
   })
 })

@@ -18,6 +18,7 @@ import type { ServerConfig } from './config.js'
 import { isLoopbackHost, isLoopbackUpstream, isPrivateHost } from './config.js'
 import { HttpError } from './errors.js'
 import { kernelPaths, requireKernel } from './hermes/paths.js'
+import { registerHermesAdminRoutes } from './hermesAdminRoutes.js'
 import { compareReleaseVersions } from './releases.js'
 import {
   bearerToken,
@@ -779,8 +780,8 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const currentPassword = typeof request.currentPassword === 'string' ? request.currentPassword : ''
     const newPassword = typeof request.newPassword === 'string' ? request.newPassword : ''
-    const username = typeof request.username === 'string' ? request.username : undefined
-    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword, username)
+    // Usernames are not changed from the Web; administrators rename themselves in the admin console.
+    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword)
     json(ctx, 200, { user, must_change_password: false, server_kind: 'yaoyao-web' })
   })
   router.post('/api/app/account-pairings', (ctx) => {
@@ -950,8 +951,8 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const currentPassword = typeof request.currentPassword === 'string' ? request.currentPassword : ''
     const newPassword = typeof request.newPassword === 'string' ? request.newPassword : ''
-    const username = typeof request.username === 'string' ? request.username : undefined
-    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword, username)
+    // Usernames are not changed from the Web; administrators rename themselves in the admin console.
+    const user = dependencies.auth.changeCredentials(ctx, currentPassword, newPassword)
     json(ctx, 200, { user, mustChangePassword: false, csrfToken: dependencies.csrf.issue(ctx, true) })
   })
   router.put('/api/app/account/avatar', (ctx) => {
@@ -1062,6 +1063,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       method: 'DELETE', search: searchFrom(ctx, ['profile']),
     })
   })
+  registerHermesAdminRoutes(router, dependencies)
   router.get('/api/app/admin/legacy-model-services', async (ctx) => {
     dependencies.auth.requireAdmin(ctx)
     await withJar(ctx, async (jar) => {

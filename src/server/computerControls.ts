@@ -33,7 +33,7 @@ export class ComputerControlService {
     const router=new Router()
     router.get('/api/app/computers',ctx=>{
       const actor=this.auth.require(ctx),agents=this.store.list<WorkspaceAgent>(actor.id,'agent').filter(agent=>!agent.archived)
-      ctx.body={canManageLocalVm:actor.role==='admin',computers:agents.map(agent=>{
+      ctx.body={computers:agents.map(agent=>{
         let available=false,reason='全局设置未开放虚拟环境'
         if(readHostTools(this.store.home).vm)try{this.nodes.requireSource(actor.id,agent);const record=this.hub.computerRunner(actor.id,agent),features=this.hub.summary(record).features;if(features.includes('local-vm-v1')&&!features.includes('image-ready-v1'))throw new Error('请先在应用设置的本地虚拟机页面完成准备');available=true;reason='可以打开电脑面板'}catch(error){reason=error instanceof Error?error.message:'电脑不可用'}
         return {agent,available,reason}

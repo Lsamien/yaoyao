@@ -87,10 +87,7 @@ export class DesktopOnboarding {
       this.state.authenticated = true
       this.state.username = result.username
       this.state.phase = 'ready'
-      if (result.warning) {
-        this.state.error = result.warning
-        this.state.message = '账号已登录，可以继续进入夭夭'
-      } else await this.enter()
+      await this.enter()
     } catch (error) {
       this.state.phase = 'ready'
       this.state.error = error.message || '登录未完成，请重试'

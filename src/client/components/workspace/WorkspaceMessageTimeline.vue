@@ -368,6 +368,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
               <span v-if="message.status && !['settled', 'streaming'].includes(message.status)">{{ { preparing: '准备中', attached: '附件已就绪', pending: '等待回执', accepted: '已接收', streaming: '生成中', settled: '已完成', failed: message.role === 'user' ? '发送失败' : '回复中断', 'unknown-receipt': '回执未知' }[message.status] }}</span>
             </div>
 
+            <p v-if="message.activity === 'compacting' && message.status === 'streaming'" class="message__activity" role="status" aria-live="polite">正在整理历史对话…</p>
             <details v-if="message.reasoning" class="message__reasoning">
               <summary><AppIcon name="brain" :size="13" />思考过程 · {{ message.reasoning.length }} 字</summary>
               <MarkdownContent process-content :content="message.reasoning" :streaming="message.status === 'streaming'" :stream-interval-ms="0" @rendered="onMarkdownRendered" />
@@ -498,6 +499,7 @@ defineExpose({ scrollToMessage, scrollToAnchor, scrollToBottom, isFollowingBotto
 .message--user .message__meta { display: none; }
 .message__delivery { display: flex; min-height: 18px; align-items: center; justify-content: flex-end; gap: 4px; margin: 5px 1px -4px; color: var(--text-muted); font-size: 10px; }.message__delivery--accepted { color: var(--success); }.message__delivery--failed, .message__delivery--unknown-receipt { color: var(--danger); }
 .message--tool-only { margin-block: 4px; }.message--tool-only .message__avatar, .message--tool-only .message__meta, .message--tool-only .message__actions { display: none; }.message--tool-only .message__body { max-width: 100%; }
+.message__activity { margin: 4px 0 10px; color: var(--text-secondary); font-size: 12px; }
 .message--assistant-internal { margin-bottom: 6px; }.message--assistant-internal .message__reasoning { margin-bottom: 4px; padding-bottom: 4px; }.message--assistant-internal .message__tools { margin-top: 4px; }
 .message--assistant-anonymous .message__body { max-width: min(680px, 100%); }
 .message__reasoning { max-width: 420px; margin: 3px 0 10px; padding: 0 0 8px; border: 0; border-bottom: 1px dashed var(--line-strong); color: var(--text-secondary); font-size: 12px; }.message__reasoning summary { display: flex; align-items: center; gap: 5px; list-style: none; color: var(--text-muted); cursor: pointer; font-size: 10px; }.message__reasoning summary::-webkit-details-marker { display: none; }.message__reasoning summary::before { content: '›'; color: var(--text-muted); font-size: 14px; line-height: 1; transition: transform 120ms ease; }.message__reasoning[open] summary::before { transform: rotate(90deg); }.message__reasoning :deep(.markdown) { margin-top: 8px; }

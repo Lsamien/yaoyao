@@ -14,7 +14,6 @@ import YaoYaoSidebarIcon from '@/components/common/YaoYaoSidebarIcon.vue'
 import DesktopUpdateEntry from './DesktopUpdateEntry.vue'
 import { useDesktopUpdate } from '@/composables/useDesktopUpdate'
 const AboutDialog = defineAsyncComponent(() => import('./AboutDialog.vue'))
-const UpdateCheckDialog = defineAsyncComponent(() => import('./UpdateCheckDialog.vue'))
 const BotPluginsDialog = defineAsyncComponent(() => import('@/components/workspace/BotPluginsDialog.vue'))
 const BotSettingsDialog = defineAsyncComponent(() => import('@/components/workspace/BotSettingsDialog.vue'))
 
@@ -26,12 +25,7 @@ type SettingsPage =
   | 'credential-vault'
   | 'account-mobile'
   | 'appearance'
-  | 'system-overview'
-  | 'system-users'
-  | 'system-connection'
-  | 'system-push'
-  | 'system-voice'
-  | 'system-update'
+  | 'desktop-mode'
 
 const SIDEBAR_SEARCH_EVENT = 'hermes-yaoyao:sidebar-search'
 const SIDEBAR_SEARCH_CLOSE_EVENT = 'hermes-yaoyao:sidebar-search-close'
@@ -52,7 +46,6 @@ const props = withDefaults(defineProps<{
   sidebarFocusMode?: boolean
   inspectorOpen?: boolean
   inspectorCloseLabel?: string
-  isAdmin?: boolean
   upstreamReady?: boolean
   upstreamError?: string
   identityBusy?: boolean
@@ -74,7 +67,6 @@ const props = withDefaults(defineProps<{
   sidebarFocusMode: false,
   inspectorOpen: false,
   inspectorCloseLabel: '关闭预览',
-  isAdmin: false,
   upstreamReady: false,
   upstreamError: '',
   identityBusy: false,
@@ -118,7 +110,7 @@ const router = useRouter()
 const mobileDrawerOpen = ref(false)
 const settingsOpen = ref(false)
 const standalone = ref<'plugins' | 'about' | 'update' | 'bot-settings' | null>(null)
-const botSettingsPage = ref<'projects' | 'vm'>('projects')
+const botSettingsPage = ref<'projects'>('projects')
 const standaloneReturnFocus = ref<HTMLElement>()
 const settingsPage = ref<SettingsPage>('agent-identity')
 const settingsReturnFocus = ref<HTMLButtonElement>()
@@ -132,7 +124,8 @@ const createPosition = ref({ left: '8px', top: '58px' })
 const settingsMenuOpen = ref(false)
 const desktopUpdate = useDesktopUpdate()
 const { state: desktopUpdateState, error: desktopUpdateError, pending: desktopUpdatePending, visible: desktopUpdateVisible } = desktopUpdate
-const canCheckUpdates = computed(() => desktopUpdate.supported || Boolean(window.yaoyaoDesktop?.openUpdates) || props.isAdmin)
+// Web updates are applied from the admin console; here only the desktop App checks for its own updates.
+const canCheckUpdates = computed(() => desktopUpdate.supported || Boolean(window.yaoyaoDesktop?.openUpdates))
 const desktopUpdateBusy = computed(() => desktopUpdatePending.value || ['checking', 'downloading', 'verifying', 'preparing', 'installing'].includes(desktopUpdateState.value?.phase ?? ''))
 const desktopUpdateCheckLabel = computed(() => desktopUpdateState.value?.phase === 'checking' ? '正在检测…'
   : desktopUpdateState.value?.phase === 'checked' && !desktopUpdateState.value.available ? '已是最新版本' : '检测更新')
@@ -203,7 +196,7 @@ async function openSettingsMenu(event: MouseEvent) {
   if (settingsMenuOpen.value) { closeSettingsMenu(); return }
   settingsTrigger = event.currentTarget as HTMLButtonElement
   const rect = settingsTrigger.getBoundingClientRect()
-  const height = ((props.isAdmin ? 4 : 3) + Number(canCheckUpdates.value)) * (window.innerWidth < 768 ? 44 : 36) + 18
+  const height = (3 + Number(canCheckUpdates.value)) * (window.innerWidth < 768 ? 44 : 36) + 18
   settingsMenuPosition.value = { left: `${Math.max(8, Math.min(rect.right - 180, window.innerWidth - 188))}px`, top: `${Math.max(8, rect.top - height)}px` }
   createMenuOpen.value = false
   toolsMenuOpen.value = false
@@ -232,11 +225,6 @@ async function checkForUpdates() {
   settingsMenuOpen.value = false
   mobileDrawerOpen.value = false
   standalone.value = 'update'
-}
-function openUpdateSettings() {
-  settingsReturnFocus.value = standaloneReturnFocus.value as HTMLButtonElement | undefined
-  standalone.value = null
-  openSettings('system-update')
 }
 function chooseSettingsAction(action: 'settings' | 'about') {
   settingsMenuOpen.value = false
@@ -330,25 +318,23 @@ function handleSidebarSearchClosed() { sidebarSearchOpen.value = false }
 
 watch(() => route.fullPath, () => { mobileDrawerOpen.value = false; createMenuOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false; standalone.value = null })
 
-function showLocalVmSettings(){
-  if(!props.isAdmin)return
-  standaloneReturnFocus.value = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-  settingsOpen.value = false; settingsMenuOpen.value = false; toolsMenuOpen.value = false; mobileDrawerOpen.value = false
-  botSettingsPage.value = 'vm'; standalone.value = 'bot-settings'
+/** Desktop menu「用配对码注册这台电脑」: the pairing field lives on the run-mode page. */
+function showComputerPairing(){
+  settingsMenuOpen.value = false; toolsMenuOpen.value = false; mobileDrawerOpen.value = false
+  openSettings('desktop-mode')
 }
 onMounted(() => {
-  window.addEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
+  window.addEventListener('yaoyao:computer-pairing',showComputerPairing)
   document.addEventListener('mousedown', closeMenus)
   document.addEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.addEventListener('keydown', workspaceKeydown)
 })
 onBeforeUnmount(() => {
-  window.removeEventListener('yaoyao:local-vm-settings',showLocalVmSettings)
+  window.removeEventListener('yaoyao:computer-pairing',showComputerPairing)
   document.removeEventListener('mousedown', closeMenus)
   document.removeEventListener(SIDEBAR_SEARCH_CLOSE_EVENT, handleSidebarSearchClosed)
   document.removeEventListener('keydown', workspaceKeydown)
 })
-defineExpose({openLocalVm:showLocalVmSettings})
 </script>
 
 <template>
@@ -480,9 +466,8 @@ defineExpose({openLocalVm:showLocalVmSettings})
     </Transition>
 
     <AboutDialog v-if="standalone === 'about'" @close="closeStandalone" />
-    <UpdateCheckDialog v-if="standalone === 'update' && isAdmin" @close="closeStandalone" @manage="openUpdateSettings" />
     <BotPluginsDialog v-if="standalone === 'plugins'" @close="closeStandalone" />
-    <BotSettingsDialog v-if="standalone === 'bot-settings'" :is-admin="isAdmin" :initial-page="botSettingsPage" @close="closeStandalone" @changed="emit('botSettingsChanged')" />
+    <BotSettingsDialog v-if="standalone === 'bot-settings'" :initial-page="botSettingsPage" @close="closeStandalone" @changed="emit('botSettingsChanged')" />
     <SettingsCenterDialog
       :open="settingsOpen"
       :bot-mode="true"
@@ -495,7 +480,7 @@ defineExpose({openLocalVm:showLocalVmSettings})
       :theme="theme"
       :theme-preference="themePreference"
       :insecure-transport="insecureTransport"
-      :is-admin="isAdmin"
+     
       :upstream-ready="upstreamReady"
       :upstream-error="upstreamError"
       :identity-busy="identityBusy"

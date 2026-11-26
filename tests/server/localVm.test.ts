@@ -19,6 +19,7 @@ async function fixture(){
  vi.spyOn(runtime.provider,'stop').mockImplementation(async s=>{running.delete(s.id)})
  vi.spyOn(runtime.provider,'remove').mockImplementation(async s=>{running.delete(s.id)})
  vi.spyOn(runtime.provider,'health').mockResolvedValue({})
+ vi.spyOn(runtime.provider,'inspect').mockImplementation(async s=>running.has(s.id)?{id:s.id,containerId:s.id,workspace:'/fixture',running:true,isolation:'container'}:undefined)
  vi.spyOn(runtime.provider,'capture').mockResolvedValue({data:'fixture',width:1280,height:900,capturedAt:Date.now()})
  vi.spyOn(runtime.provider,'deleteWorkspace').mockResolvedValue()
  // Bot desktops are exercised against real Docker; here they are bookkeeping only.

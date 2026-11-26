@@ -44,7 +44,7 @@ DNS 在虚拟机内映射为临时地址，连接时还原域名；Runner 经同
 
 ### 更新部署
 
-1. 更新 Web、Runner 和 Hermes 工具桥。工具桥改动需要重新加载 Hermes，不能只复制文件。
+1. 更新 Web 和 Runner。Hermes 已内置在 Web 中，随 Web 一起更新，不再单独安装工具桥。
 2. 动态 Docker/Podman：重新准备一次虚拟机镜像，会同时构建 `localhost/yaoyao/network:1`。需容器运行时支持 `/dev/net/tun` 和隔离网关的 `NET_ADMIN`；业务容器不会获得它们。
 3. Docker 版不支持虚拟机，原 Compose 固定桌面已删除。
 4. 在设置页保存代理并测试。旧实例的工作目录保留，网络模式变化由现有资源池在释放后重建容器。

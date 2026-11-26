@@ -19,9 +19,9 @@
 
 ## 运行与切换
 
-macOS arm64 Web 运行包包含 Node，先设置 `HERMES_YAOYAO_HOME` 指向持久目录、`HERMES_YAOYAO_UPSTREAM` 指向现有 Hermes，再执行包内 `./start-web.sh`。入口设置 production 和包内 UI 路径；直接运行 `server.mjs` 时还必须设置 `NODE_ENV=production` 与 `HERMES_YAOYAO_STATIC_DIR` 指向包内 `ui`。npm 分发包需在目标环境安装生产依赖后执行其 CLI，不是 Linux 自包含二进制。
+macOS arm64 Web 运行包包含 Node，先设置 `YAOYAO_HOME`（兼容 `HERMES_YAOYAO_HOME`）指向持久目录，再执行包内 `./start-web.sh`；Hermes 已内置，不再需要 `HERMES_YAOYAO_UPSTREAM`，内核环境在首次启动时自动准备。入口设置 production 和包内 UI 路径；直接运行 `server.mjs` 时还必须设置 `NODE_ENV=production` 与 `HERMES_YAOYAO_STATIC_DIR` 指向包内 `ui`。npm 分发包需在目标环境安装生产依赖后执行其 CLI，不是 Linux 自包含二进制。
 
-独立 Runner 解包后执行 `node runner.mjs --config /私有路径/runner.json`。配置保持私有；`artifactRoots` 留空拒绝文件导出。运行包包含 Worker、工具桥和 Playwright 运行包，不包含 Chromium 二进制、Docker 镜像、模型或用户数据。浏览器和 VM 按 `runner.md`、`managed-browser.md`、`local-vm.md` 在目标环境准备。
+独立 Runner 解包后执行 `node runner.mjs --config /私有路径/runner.json`。配置保持私有；`artifactRoots` 留空拒绝文件导出。运行包包含 Worker 和 Playwright 运行包，不包含 Chromium 二进制、Docker 镜像、模型或用户数据。浏览器和 VM 按 `runner.md`、`managed-browser.md`、`local-vm.md` 在目标环境准备。
 
 生产切换前应确认任务空闲、备份持久数据，升级 Web 和独立 Runner 后再连接客户端，并核对实际进程/容器的版本与产物提交。私有配对配置可保留，不重新创建/撤销凭据或放宽权限。本轮构建没有执行生产切换。
 

@@ -4,7 +4,6 @@ import StandaloneDialog from '@/components/common/StandaloneDialog.vue'
 import AgentAvatar from '@/components/common/AgentAvatar.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import AgentIdentityPanel from '@/components/app/AgentIdentityPanel.vue'
-import ModelServicesPanel from '@/components/app/ModelServicesPanel.vue'
 import BotModelSettingsPanel from './BotModelSettingsPanel.vue'
 import WorkspaceKnowledgePanel from './WorkspaceKnowledgePanel.vue'
 import {apiRequest} from '@/api/client'
@@ -66,7 +65,6 @@ const allPages=computed(()=>[
   {id:'rules' as const,label:'角色与规则',icon:'files' as const},
   {id:'usage' as const,label:'Token 用量',icon:'history' as const},
   {id:'modelSettings' as const,label:'模型设置',icon:'model' as const},
-  ...(props.isAdmin?[{id:'models' as const,label:'模型与 Provider',icon:'model' as const}]:[]),
   ...(props.knowledgeEnabled&&!readOnly.value?[{id:'memory' as const,label:'记忆',icon:'brain' as const}]:[]),
   {id:'permissions' as const,label:'权限',icon:'settings' as const},
 ])
@@ -148,11 +146,6 @@ function submit(){
             <p v-if="readOnly" class="profile-note">该 Bot 的模型设置由远端管理。</p>
             <p v-else-if="sourceChanged" class="profile-note">请先保存基础机器人的变更，再修改模型设置。</p>
             <BotModelSettingsPanel v-else :agent="agent" @dirty-change="modelDirty=$event" @busy-change="modelSaving=$event" @saved="emit('changed')" />
-          </template>
-          <template v-else-if="page==='models' && isAdmin">
-            <p v-if="readOnly||agent.nodeId!=='local'" class="profile-note">模型与 Provider 由远端执行节点管理，请在对应节点配置。</p>
-            <p v-else-if="sourceChanged" class="profile-note">请先保存基础机器人的变更，再配置对应的模型与 Provider。</p>
-            <template v-else><p class="profile-note">配置来自 {{sourceLabel}} / {{agent.profile}}，使用同一 Profile 的 Bot 共用这些模型服务。</p><ModelServicesPanel :profile="agent.profile" @dirty-change="modelDirty=$event"/></template>
           </template>
           <WorkspaceKnowledgePanel v-else-if="page==='memory' && knowledgeEnabled && !readOnly" :key="agent.id" embedded initial-tab="agent" :selected-agent-id="agent.id" hide-agent-controls :agents="agents" :conversations="conversations" :conversation-id="conversationId" @changed="emit('changed')" @dirty-change="memoryDirty=$event"/>
           <template v-else-if="page==='permissions'">

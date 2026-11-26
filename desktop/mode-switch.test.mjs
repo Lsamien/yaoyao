@@ -56,7 +56,7 @@ test('signed-in desktop pages can switch both ways; other windows cannot control
     app=await electron.launch({args:[root],cwd:root,env:{...process.env,HERMES_YAOYAO_DESKTOP_TEST_HOME:home,HERMES_YAOYAO_DESKTOP_PORT:String(local.address().port),HERMES_YAOYAO_DESKTOP_TEST_SYNC:'0'}})
     const page=await app.firstWindow();releaseIdentity();await page.waitForURL(origin+'/**')
     assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.modeState()),{mode:'server',serverURL:origin,switching:false,platform:'darwin',supportedModes:['client','server']})
-    assert.deepEqual(await page.evaluate(()=>window.yaoyaoDesktop.authorizeComputer('csrf-test')),{registered:false})
+    assert.equal(await page.evaluate(()=>'authorizeComputer' in window.yaoyaoDesktop),false)
     assert.equal(await page.evaluate(()=>window.yaoyaoDesktop.switchMode('invalid').then(()=>false,()=>true)),true)
     await page.evaluate(()=>{void window.yaoyaoDesktop.switchMode('client')})
     await page.waitForURL(remoteURL+'/**')

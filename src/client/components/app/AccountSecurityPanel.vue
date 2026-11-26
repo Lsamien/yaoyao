@@ -27,8 +27,6 @@ const emit = defineEmits<{
 }>()
 
 const auth = useAuthStore()
-const initialUsername = ref('')
-const username = ref('')
 const currentPassword = ref('')
 const newPassword = ref('')
 const confirmation = ref('')
@@ -38,31 +36,23 @@ const notice = ref('')
 const avatarInput = ref<HTMLInputElement>()
 const avatarBusy = ref(false)
 
-const isAdmin = computed(() => auth.user?.role === 'admin')
 const isActive = computed(() => props.open ?? props.active)
 const passwordsMatch = computed(() => Boolean(confirmation.value) && newPassword.value === confirmation.value)
 const confirmationState = computed<'empty' | 'match' | 'mismatch'>(() => {
   if (!confirmation.value) return 'empty'
   return passwordsMatch.value ? 'match' : 'mismatch'
 })
-const serverNameDirty = ref(false)
 const dirty = computed(() => (
-  serverNameDirty.value ||
-  (isAdmin.value && username.value.trim() !== initialUsername.value)
-  || Boolean(currentPassword.value || newPassword.value || confirmation.value)
+  Boolean(currentPassword.value || newPassword.value || confirmation.value)
 ))
 const canSave = computed(() => (
   !busy.value
   && Boolean(auth.user?.localDesktop || currentPassword.value)
   && newPassword.value.length >= 8
   && passwordsMatch.value
-  && (!isAdmin.value || Boolean(username.value.trim()))
 ))
 
 function reset() {
-  const currentUsername = auth.user?.username || ''
-  initialUsername.value = currentUsername
-  username.value = currentUsername
   currentPassword.value = ''
   newPassword.value = ''
   confirmation.value = ''
@@ -72,8 +62,6 @@ function reset() {
 }
 
 async function save() {
-  const normalizedUsername = username.value.trim()
-  if (isAdmin.value && !normalizedUsername) { error.value = '管理员用户名不能为空'; return }
   if (!auth.user?.localDesktop && !currentPassword.value) { error.value = '请输入当前密码'; return }
   if (newPassword.value.length < 8) { error.value = '新密码至少需要 8 个字符'; return }
   if (!passwordsMatch.value) { error.value = '两次输入的新密码不一致'; return }
@@ -85,19 +73,15 @@ async function save() {
     await auth.changeCredentials({
       currentPassword: currentPassword.value,
       newPassword: newPassword.value,
-      ...(isAdmin.value ? { username: normalizedUsername } : {}),
     })
-    const nextUsername = isAdmin.value ? normalizedUsername : (auth.user?.username || initialUsername.value)
-    initialUsername.value = nextUsername
-    username.value = nextUsername
     currentPassword.value = ''
     newPassword.value = ''
     confirmation.value = ''
-    notice.value = '账号与密码已更新'
+    notice.value = '密码已更新'
     emit('dirty-change', false)
     emit('saved')
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '修改账号失败'
+    error.value = cause instanceof Error ? cause.message : '修改密码失败'
   } finally {
     busy.value = false
   }
@@ -190,19 +174,12 @@ watch(canSave, value => emit('can-save-change', value), { immediate: true, flush
       <button v-if="auth.user?.avatar" type="button" :disabled="busy || avatarBusy" @click="resetAvatar">使用首字母</button>
       <input ref="avatarInput" class="sr-only" type="file" tabindex="-1" aria-hidden="true" accept="image/png,image/jpeg,image/webp" @change="chooseAvatar" />
     </section>
-    <ServerIdentityPanel v-if="section !== 'security' && auth.serverIdentity" @dirty-change="serverNameDirty = $event" />
+    <ServerIdentityPanel v-if="section !== 'security' && auth.serverIdentity" />
     <p v-if="section === 'profile' && (error || notice)" class="form-message" :class="error ? 'form-message--error' : 'form-message--success'" :role="error ? 'alert' : 'status'">{{error || notice}}</p>
 
     <form v-if="section !== 'profile'" :id="formId" class="security-form" @submit.prevent="save">
-      <h3 v-if="isAdmin" class="security-section-title">账号信息</h3>
-      <label v-if="isAdmin" class="field">
-        <span>管理员用户名</span>
-        <input v-model="username" name="username" autocomplete="username" :disabled="busy" />
-        <small>仅修改当前 15300 Web 管理账号，不会更改 9119 服务账号。</small>
-      </label>
-
       <h3 class="security-section-title security-section-title--password">修改密码</h3>
-      <p v-if="auth.user?.localDesktop" class="muted">本机以管理员身份使用，无需登录。这里设置的密码用于其他设备连接此服务器。</p>
+      <p v-if="auth.user?.localDesktop" class="muted">本机以管理员身份使用，无需登录。这里设置的密码用于其他设备连接此服务器和登录管理后台。</p>
       <label v-if="!auth.user?.localDesktop" class="field">
         <span>当前密码</span>
         <input v-model="currentPassword" name="current-password" type="password" autocomplete="current-password" :disabled="busy" />

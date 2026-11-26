@@ -10,7 +10,9 @@ import { createApplication, type ApplicationRuntime } from '../../src/server/app
 import { loadServerConfig } from '../../src/server/config'
 import { LocalAuthStore } from '../../src/server/localAuth'
 import { RegistrationLimiter } from '../../src/server/subaccountAccess'
+import { consoleClient } from './consoleClient'
 let runtime: ApplicationRuntime, home: string, csrf: string
+let console: Awaited<ReturnType<typeof consoleClient>>
 let admin: ReturnType<typeof request.agent>, child: ReturnType<typeof request.agent>
 const host = '127.0.0.1:15300'
 const call = (agent: typeof admin, method: 'get'|'post'|'patch'|'head', path: string, token = '') => agent[method](path).set('Host', host).set('Origin', `http://${host}`).set('X-CSRF-Token', token)
@@ -26,6 +28,7 @@ afterEach(() => { runtime.close(); rmSync(home, { recursive: true, force: true }
 async function setup() {
   const boot = await call(admin, 'get', '/api/app/bootstrap')
   csrf = (await call(admin, 'post', '/api/app/setup', boot.body.csrfToken).send({ username: 'admin', password: 'admin-password' }).expect(200)).body.csrfToken
+  console = await consoleClient(runtime, { username: 'admin', password: 'admin-password' })
 }
 async function register(username = 'new-child') {
   const boot = await call(child, 'get', '/api/app/bootstrap')
@@ -53,16 +56,16 @@ describe('subaccount registration and approval through real middleware', () => {
     expect((await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'child-password' }).expect(403)).body.code).toBe('account_pending_approval')
     expect((await call(child, 'post', '/auth/password-login').send({ username: 'new-child', password: 'child-password' }).expect(403)).body.code).toBe('account_pending_approval')
     await call(child, 'get', '/api/app/workspace/snapshot').expect(401)
-    const user = (await call(admin, 'get', '/api/app/admin/users')).body.items.find((u: any) => u.username === 'new-child')
+    const user = (await console.call('get', '/api/app/admin/users')).body.items.find((u: any) => u.username === 'new-child')
     expect(user).toMatchObject({ registrationStatus: 'pending', role: 'user', enabled: false, assignedProfiles: [], mustChangePassword: false })
     expect(new LocalAuthStore(home).isUserActive(user.id)).toBe(false)
-    await call(admin, 'patch', `/api/app/admin/users/${user.id}`, csrf).send({ enabled: true, assignedProfiles: ['allowed'] }).expect(409)
-    await call(admin, 'post', `/api/app/admin/users/${user.id}/approve`, csrf).send({ assignedProfiles: [] }).expect(400)
-    await call(admin, 'post', `/api/app/admin/users/${user.id}/approve`, csrf).send({ assignedProfiles: ['missing'] }).expect(409)
-    await call(child, 'post', `/api/app/admin/users/${user.id}/approve`, token).send({ assignedProfiles: ['allowed'] }).expect(401)
-    const approved = await call(admin, 'post', `/api/app/admin/users/${user.id}/approve`, csrf).send({ assignedProfiles: ['allowed'] }).expect(200)
+    await console.call('patch', `/api/app/admin/users/${user.id}`).send({ enabled: true, assignedProfiles: ['allowed'] }).expect(409)
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: [] }).expect(400)
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['missing'] }).expect(409)
+    await call(child, 'post', `/api/app/admin/users/${user.id}/approve`, token).send({ assignedProfiles: ['allowed'] }).expect(410)
+    const approved = await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['allowed'] }).expect(200)
     expect(approved.body).toMatchObject({ enabled: true, registrationStatus: 'approved', assignedProfiles: ['allowed'], mustChangePassword: false })
-    await call(admin, 'post', `/api/app/admin/users/${user.id}/approve`, csrf).send({ assignedProfiles: ['allowed'] }).expect(409)
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['allowed'] }).expect(409)
     const login = await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'child-password' }).expect(200)
     const create = await call(child, 'post', '/api/app/agents', login.body.csrfToken).send({ name: '我的 Bot', profile: 'allowed' }).expect(201)
     const snapshot = (await call(child, 'get', '/api/app/workspace/snapshot').expect(200)).body
@@ -82,8 +85,8 @@ describe('subaccount registration and approval through real middleware', () => {
     await call(child, 'get', '/api/app/workspace/memory-jobs').expect(200)
     await call(child, 'post', '/api/app/workspace/snapshot', login.body.csrfToken).send({}).expect(403)
     await call(child, 'get', '/api/app/workspace/admin').expect(403)
-    await call(child, 'get', '/api/app/admin/users').expect(403)
-    await call(admin, 'patch', `/api/app/admin/users/${user.id}`, csrf).send({ enabled: false }).expect(200)
+    await call(child, 'get', '/api/app/admin/users').expect(410)
+    await console.call('patch', `/api/app/admin/users/${user.id}`).send({ enabled: false }).expect(200)
     await call(child, 'get', '/api/app/workspace/snapshot').expect(401)
   })
   it('bounds registration attempts without changing login or administrator creation', async () => {
@@ -92,7 +95,7 @@ describe('subaccount registration and approval through real middleware', () => {
     for (let i = 0; i < 10; i++) await call(child, 'post', '/api/app/register', token).send({}).expect(400)
     const limited = await call(child, 'post', '/api/app/register', token).send({}).expect(429)
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0)
-    await call(admin, 'post', '/api/app/admin/users', csrf).send({ username: 'managed', password: 'temporary-password' }).expect(201)
+    await console.call('post', '/api/app/admin/users').send({ username: 'managed', password: 'temporary-password' }).expect(201)
     const login = await call(child, 'post', '/api/app/login', token).send({ username: 'managed', password: 'temporary-password' }).expect(200)
     expect(login.body.user.mustChangePassword).toBe(true)
     const limiter = new RegistrationLimiter()
@@ -102,8 +105,8 @@ describe('subaccount registration and approval through real middleware', () => {
   })
   it('authorizes owner-scoped projects, memory, attachments and event replay through the complete middleware', async () => {
     await setup(); const token = await register()
-    const user = (await call(admin, 'get', '/api/app/admin/users')).body.items.find((u: any) => u.username === 'new-child')
-    await call(admin, 'post', `/api/app/admin/users/${user.id}/approve`, csrf).send({ assignedProfiles: ['allowed'] }).expect(200)
+    const user = (await console.call('get', '/api/app/admin/users')).body.items.find((u: any) => u.username === 'new-child')
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['allowed'] }).expect(200)
     const login = await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'child-password' }).expect(200)
     const childCSRF = login.body.csrfToken
     const agent = (await call(child, 'post', '/api/app/agents', childCSRF).send({ name: '知识助手', profile: 'allowed' }).expect(201)).body.agent
@@ -129,7 +132,8 @@ describe('subaccount registration and approval through real middleware', () => {
     expect(events.body.events.some((e: any) => e.type === 'project.changed')).toBe(true)
     const caps = (await call(child, 'get', '/api/app/capabilities')).body.features
     for (const feature of ['voice', 'context', 'nodes']) expect(caps).not.toContain(feature)
-    expect((await call(admin, 'get', '/api/app/capabilities')).body.features).toEqual(expect.arrayContaining(['voice', 'context', 'nodes']))
+    // Administrators get the same Web capabilities: management lives in the admin console.
+    expect((await call(admin, 'get', '/api/app/capabilities')).body.features).toEqual(caps)
     const server = createServer(runtime.app.callback())
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const address = server.address() as { port: number }
@@ -142,7 +146,7 @@ describe('subaccount registration and approval through real middleware', () => {
       const reader = response.body!.getReader(), decoder = new TextDecoder()
       let text = ''
       while (!text.includes('event: ready')) text += decoder.decode((await reader.read()).value)
-      await call(admin, 'patch', `/api/app/admin/users/${user.id}`, csrf).send({ enabled: false }).expect(200)
+      await console.call('patch', `/api/app/admin/users/${user.id}`).send({ enabled: false }).expect(200)
       while (!(await reader.read()).done) { /* Revocation closes the old stream no later than its heartbeat. */ }
       await call(child, 'get', '/api/app/workspace/snapshot').expect(401)
     } finally {

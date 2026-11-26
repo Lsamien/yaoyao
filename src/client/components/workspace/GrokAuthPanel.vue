@@ -4,7 +4,8 @@ import {apiRequest} from '@/api/client'
 import {createUuid} from '@/utils/id'
 import AppIcon from '@/components/common/AppIcon.vue'
 import type {GrokAuthSnapshot} from '@shared/grokAuth'
-const props=defineProps<{isAdmin:boolean}>(),emit=defineEmits<{changed:[]}>()
+/** `manage`: only the admin console signs in or imports; the Web shows status and can disconnect. */
+const props=defineProps<{manage?:boolean}>(),emit=defineEmits<{changed:[]}>()
 const state=ref<GrokAuthSnapshot>(),error=ref(''),loadError=ref(''),busy=ref(false),loading=ref(true),advanced=ref(false)
 const pending=computed(()=>state.value?.attempt?.status==='pending')
 const title=computed(()=>pending.value?'等待浏览器授权':state.value?.status==='reauthorization-required'?'需要重新授权':state.value?.status==='refreshing'?'正在续期':state.value?.status==='connected'?'已授权':'尚未登录')
@@ -39,21 +40,22 @@ onBeforeUnmount(()=>{closed=true;clearTimeout(timer);controller?.abort();documen
  <section class="grok-auth" aria-label="Grok Bot 登录授权">
   <header><span class="account-icon"><AppIcon name="globe" :size="20"/></span><div><strong>Grok Bot</strong><small aria-live="polite">{{loading?'正在检查授权…':title}}</small></div><span v-if="state?.status==='connected'&&!pending" class="connected"><AppIcon name="check" :size="14"/>已连接</span></header>
   <p v-if="state?.account?.email||state?.account?.name" class="account">{{state.account.name}}<span v-if="state.account.email">{{state.account.email}}</span></p>
-  <p v-if="!state?.configured&&!pending" class="hint">使用 Grok Bot 所属的 Cursor 账号，在浏览器完成登录授权。</p>
-  <div v-if="pending" class="pending" role="status"><span class="pulse"/><div><strong>请在浏览器中完成授权</strong><p>完成后返回夭夭，这里会自动更新。授权链接有效期约 10 分钟。</p></div></div>
+  <p v-if="manage&&!state?.configured&&!pending" class="hint">使用 Grok Bot 所属的 Cursor 账号，在浏览器完成登录授权。</p>
+  <div v-if="pending&&manage" class="pending" role="status"><span class="pulse"/><div><strong>请在浏览器中完成授权</strong><p>完成后返回夭夭，这里会自动更新。授权链接有效期约 10 分钟。</p></div></div>
+  <p v-else-if="pending" class="hint" role="status">管理员正在管理后台完成授权，完成后这里会自动更新。</p>
   <p v-if="error||loadError||state?.attempt?.error||state?.error" class="error" role="alert">{{error||loadError||state?.attempt?.error||state?.error}}</p>
-  <template v-if="pending">
+  <template v-if="pending&&manage">
    <a v-if="loginUrl" class="primary" :href="loginUrl" target="_blank" rel="noopener noreferrer"><AppIcon name="external" :size="14"/>在浏览器继续授权</a>
    <div class="actions"><button :disabled="busy" @click="check">我已完成授权</button><button :disabled="busy" @click="cancel">取消授权</button></div>
   </template>
-  <template v-else>
-   <button v-if="isAdmin" class="primary" :disabled="busy||loading" @click="begin"><AppIcon name="external" :size="15"/>{{state?.status==='connected'?'重新授权':'使用 Cursor 账号登录'}}</button>
-   <p v-else-if="!state?.configured" class="hint">请由管理员为当前账号完成云端授权。</p>
-   <p v-if="state?.configured" class="hint">{{state.automaticRefresh?'登录会自动续期，无需重复登录。':'此连接尚未取得自动续期授权，建议重新登录。'}}<span v-if="state.expiresAt&&state.status!=='reauthorization-required'">当前凭据有效期至 {{new Date(state.expiresAt).toLocaleString('zh-CN')}}。</span></p>
+  <template v-else-if="!pending">
+   <button v-if="manage" class="primary" :disabled="busy||loading" @click="begin"><AppIcon name="external" :size="15"/>{{state?.status==='connected'?'重新授权':'使用 Cursor 账号登录'}}</button>
+   <p v-else-if="!state?.configured" class="hint">云端授权由管理员在管理后台完成。</p>
+   <p v-if="state?.configured" class="hint">{{state.automaticRefresh?'登录会自动续期，无需重复登录。':(manage?'此连接尚未取得自动续期授权，建议重新登录。':'此连接尚未取得自动续期授权，可请管理员重新授权。')}}<span v-if="state.expiresAt&&state.status!=='reauthorization-required'">当前凭据有效期至 {{new Date(state.expiresAt).toLocaleString('zh-CN')}}。</span></p>
    <button v-if="state?.configured" class="disconnect" :disabled="busy" @click="disconnect">断开连接</button>
   </template>
   <p class="privacy">登录凭据加密保存在当前服务器，供当前账号的机器人使用。</p>
-  <details v-if="isAdmin&&!pending" :open="advanced" @toggle="advanced=($event.target as HTMLDetailsElement).open"><summary>兼容旧连接</summary><p class="hint">仅用于迁移服务器上已有的 Grok Bot 登录；推荐使用上方浏览器授权。</p><button :disabled="busy" @click="importLocal">导入服务器上的已有登录</button></details>
+  <details v-if="manage&&!pending" :open="advanced" @toggle="advanced=($event.target as HTMLDetailsElement).open"><summary>兼容旧连接</summary><p class="hint">仅用于迁移服务器上已有的 Grok Bot 登录；推荐使用上方浏览器授权。</p><button :disabled="busy" @click="importLocal">导入服务器上的已有登录</button></details>
  </section>
 </template>
 <style scoped>

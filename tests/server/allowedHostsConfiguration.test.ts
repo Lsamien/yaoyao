@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import request from 'supertest'
+import { consoleClient } from './consoleClient.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ApplicationRuntime } from '../../src/server/app.js'
 import type { ServerConfig } from '../../src/server/config.js'
@@ -86,10 +87,9 @@ describe('allowed hosts configuration', () => {
     const agent = request.agent(runtime.app.callback())
     const bootstrap = await agent.get('/api/app/bootstrap').set('Host', '127.0.0.1:15300').expect(200)
 
-    const saved = await agent.put('/api/app/system/allowed-hosts')
-      .set('Host', '127.0.0.1:15300')
-      .set('Origin', 'http://127.0.0.1:15300')
-      .set('X-CSRF-Token', bootstrap.body.csrfToken)
+    expect(bootstrap.body.csrfToken).toBeTruthy()
+    const admin = await consoleClient(runtime)
+    const saved = await admin.call('put', '/api/app/system/allowed-hosts')
       .send({ hosts: ['yaoyao.example.com', '203.0.113.10'] })
       .expect(200)
     expect(saved.body).toMatchObject({
@@ -99,11 +99,12 @@ describe('allowed hosts configuration', () => {
     await agent.get('/healthz').set('Host', 'yaoyao.example.com').expect(200)
     await agent.get('/healthz').set('Host', 'not-allowed.example.com').expect(421)
 
-    const publicBootstrap = await agent.get('/api/app/bootstrap').set('Host', 'yaoyao.example.com').expect(200)
-    const rejected = await agent.put('/api/app/system/allowed-hosts')
-      .set('Host', 'yaoyao.example.com')
-      .set('Origin', 'http://yaoyao.example.com')
-      .set('X-CSRF-Token', publicBootstrap.body.csrfToken)
+    await agent.get('/api/app/bootstrap').set('Host', 'yaoyao.example.com').expect(200)
+    // Removing the host the console is being used through is refused.
+    const rejected = await admin.agent.put('/api/app/system/allowed-hosts')
+      .set('Host', `yaoyao.example.com:${runtime.config.admin.port}`)
+      .set('Origin', `http://yaoyao.example.com:${runtime.config.admin.port}`)
+      .set('X-CSRF-Token', admin.csrf())
       .send({ hosts: ['203.0.113.10'] })
       .expect(409)
     expect(rejected.body.code).toBe('current_host_required')

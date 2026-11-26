@@ -40,6 +40,10 @@ function environment(env = process.env) {
   const allowed = [
     'HERMES_YAOYAO_HOST',
     'HERMES_YAOYAO_PORT',
+    'YAOYAO_ADMIN_HOST',
+    'YAOYAO_ADMIN_PORT',
+    'YAOYAO_ADMIN_ALLOW_IPS',
+    'YAOYAO_ADMIN_INSECURE_HTTP',
     'HERMES_YAOYAO_ALLOWED_HOSTS',
     'HERMES_YAOYAO_HOME',
     'HERMES_YAOYAO_TLS_CERT',
@@ -239,7 +243,12 @@ async function main() {
   if (group === 'uploads' && command === 'prune') return pruneUploads(args)
   if (group === 'setup') { await prepareKernel({ root: serviceRoot, force: command === '--force' }); process.stdout.write('内置 Hermes 内核已就绪\n'); return }
   if (group === 'doctor') { verifyKernel({ root: serviceRoot }); return }
-  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao setup [--force]   准备内置 Hermes 内核\n  yaoyao doctor            检查内置 Hermes 内核\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
+  if (group === 'admin') {
+    const port = process.env.YAOYAO_ADMIN_PORT || '15301'
+    process.stdout.write(`管理后台：http://127.0.0.1:${port}\n只允许管理员账号登录。从其他电脑访问请使用 SSH 隧道：ssh -L ${port}:127.0.0.1:${port} 这台服务器\n`)
+    return
+  }
+  process.stdout.write(`夭夭 AI\n\n用法：\n  yaoyao setup [--force]   准备内置 Hermes 内核\n  yaoyao doctor            检查内置 Hermes 内核\n  yaoyao admin             显示管理后台地址\n  yaoyao service install|start|restart|stop|status|uninstall\n  yaoyao version | --version | -v\n  yaoyao uploads prune --older-than 30 --yes\n`)
 }
 
 export function isMainModule(entry = process.argv[1]) {

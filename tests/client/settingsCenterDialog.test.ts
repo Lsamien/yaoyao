@@ -20,36 +20,19 @@ const ModelServicesPanelStub = defineComponent({
   template: '<div data-testid="model-services" :data-profile="profile"><button data-testid="dirty-model" type="button" @click="$emit(\'dirty-change\', true)">dirty</button></div>',
 })
 
-const DuplexVoicePanelStub = defineComponent({
-  name: 'DuplexVoicePanel',
-  emits: ['dirty-change'],
-  template: '<div data-testid="duplex-voice"><button data-testid="dirty-voice" type="button" @click="$emit(\'dirty-change\', true)">dirty</button></div>',
-})
-
-const SystemUpdatePanelStub = defineComponent({
-  name: 'SystemUpdatePanel',
-  emits: ['lock-change'],
-  template: `
-    <div data-testid="system-update">
-      <button data-testid="lock-update" type="button" @click="$emit('lock-change', true)">lock</button>
-      <button data-testid="unlock-update" type="button" @click="$emit('lock-change', false)">unlock</button>
-    </div>
-  `,
-})
-
 const childStubs = {
   Teleport: true,
   AgentAvatar: true,
   AppIcon: true,
   AgentIdentityPanel: simpleStub('AgentIdentityPanel', 'agent-identity'),
   ModelServicesPanel: ModelServicesPanelStub,
-  AccountSecurityPanel: simpleStub('AccountSecurityPanel', 'account-security'),
+  AccountSecurityPanel: defineComponent({
+    name: 'AccountSecurityPanel',
+    emits: ['dirty-change'],
+    template: '<div data-testid="account-security"><button data-testid="dirty-account" type="button" @click="$emit(\'dirty-change\', true)">dirty</button></div>',
+  }),
   CredentialVaultPanel: simpleStub('CredentialVaultPanel', 'credential-vault'),
   NodePairingPanel: simpleStub('NodePairingPanel', 'node-pairing'),
-  SystemOverviewPanel: simpleStub('SystemOverviewPanel', 'system-overview'),
-  SystemManagementPanel: simpleStub('SystemManagementPanel', 'system-management'),
-  DuplexVoicePanel: DuplexVoicePanelStub,
-  SystemUpdatePanel: SystemUpdatePanelStub,
 }
 
 function mountSettings(overrides: Record<string, unknown> = {}) {
@@ -61,7 +44,6 @@ function mountSettings(overrides: Record<string, unknown> = {}) {
       profiles,
       userName: '管理员',
       pairingUserName: 'owner',
-      isAdmin: true,
       ...overrides,
     } as never,
     global: { stubs: childStubs },
@@ -105,7 +87,7 @@ describe('Settings center dialog', () => {
       switchMode,
       openRemoteLogin: vi.fn(async () => {}),
     } })
-    const wrapper = mountSettings({ isAdmin: false, botMode: true, initialPage: 'desktop-mode' })
+    const wrapper = mountSettings({ botMode: true, initialPage: 'desktop-mode' })
     await flushPromises()
     expect(navigationButton(wrapper, '运行模式').attributes('aria-current')).toBe('page')
     expect(wrapper.text()).toContain('当前：客户端模式')
@@ -140,7 +122,7 @@ describe('Settings center dialog', () => {
   })
   it.each(['agent-identity', 'agent-models'])('keeps %s and the Profile selector out of Bot-mode personal settings', initialPage => {
     const wrapper = mountSettings({ botMode: true, initialPage })
-    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual(['个人', '管理'])
+    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual(['个人'])
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
     expect(wrapper.find('[data-testid="agent-identity"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="model-services"]').exists()).toBe(false)
@@ -153,8 +135,10 @@ describe('Settings center dialog', () => {
     expect(wrapper.findAll('.theme-options img')).toHaveLength(3)
     await wrapper.findAll('[role="radio"]').find(button=>button.text()==='深色')!.trigger('click')
     expect(wrapper.emitted('set-theme')).toEqual([['dark']])
-    await wrapper.get('input[aria-label="搜索设置"]').setValue('Hermes')
-    expect(wrapper.findAll('.settings-sidebar nav button').map(button=>button.text())).toEqual(['Hermes 连接'])
+    await wrapper.get('input[aria-label="搜索设置"]').setValue('模型')
+    expect(wrapper.findAll('.settings-sidebar nav button')).toHaveLength(0)
+    await wrapper.get('input[aria-label="搜索设置"]').setValue('手机')
+    expect(wrapper.findAll('.settings-sidebar nav button').map(button=>button.text())).toEqual(['手机登录'])
     wrapper.unmount()
   })
   it.each([false, true])('keeps independent tools and About outside settings (Bot mode=%s)', botMode => {
@@ -165,77 +149,39 @@ describe('Settings center dialog', () => {
     expect(wrapper.find('.bot-about').exists()).toBe(false)
     wrapper.unmount()
   })
-  it('groups administrator pages and routes account, voice, and system content to the right scope', async () => {
-    const wrapper = mountSettings()
+  it('has no management section for any account; phone login is a personal page', async () => {
+    const wrapper = mountSettings({ initialPage: 'system-console' })
+    const navigation = wrapper.get('.settings-sidebar nav')
 
-    // Bot mode only: base Profile identity and models live in each Bot's profile.
-    expect(wrapper.findAll('.settings-sidebar nav h3').map(heading => heading.text())).toEqual([
-      '个人',
-      '管理',
-    ])
-    expect(wrapper.get('.settings-sidebar nav').text()).not.toContain('模型与 Provider')
-    expect(wrapper.get('.settings-sidebar nav').text()).not.toContain('身份与头像')
+    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['个人'])
+    for (const label of ['管理后台', '模型与 Provider', '身份与头像', '系统概览', '模型服务', '用户与权限', '消息推送', '双流语音', '更新与回滚'])
+      expect(navigation.text()).not.toContain(label)
+    expect(navigation.text()).toContain('手机登录')
+    expect(wrapper.get('.settings-content__header').text()).toContain('账号资料')
 
     await navigationButton(wrapper, '登录与安全').trigger('click')
     expect(wrapper.find('.settings-agent-selector').exists()).toBe(false)
     expect(wrapper.get('.settings-content__header').text()).toContain('当前账号：owner')
-
-    const voiceButton = navigationButton(wrapper, '双流语音')
-    expect(voiceButton.text()).toContain('全局')
-    expect(voiceButton.element.closest('section')?.textContent).toContain('管理')
-    await voiceButton.trigger('click')
-    expect(wrapper.find('[data-testid="duplex-voice"]').exists()).toBe(true)
-    expect(wrapper.get('.settings-content__header').text()).toContain('全局设置 · 仅管理员')
-  })
-
-  it('hides model management and the complete system group from non-admin users', () => {
-    const wrapper = mountSettings({ isAdmin: false, initialPage: 'system-update' })
-    const navigation = wrapper.get('.settings-sidebar nav')
-
-    expect(navigation.findAll('h3').map(heading => heading.text())).toEqual(['个人'])
-    expect(navigation.text()).not.toContain('模型与 Provider')
-    expect(navigation.text()).not.toContain('系统概览')
-    expect(navigation.text()).not.toContain('双流语音')
-    expect(navigation.text()).not.toContain('更新与回滚')
-    expect(wrapper.find('[data-testid="system-update"]').exists()).toBe(false)
-    expect(wrapper.get('.settings-content__header').text()).toContain('账号资料')
-  })
-
-  it('blocks closing and page changes while the update panel reports a lock', async () => {
-    const wrapper = mountSettings({ initialPage: 'system-update' })
-    expect(wrapper.find('[data-testid="system-update"]').exists()).toBe(true)
-
-    await wrapper.get('[data-testid="lock-update"]').trigger('click')
-    expect(wrapper.get<HTMLButtonElement>('.settings-center__close').element.disabled).toBe(true)
-
-    await navigationButton(wrapper, '登录与安全').trigger('click')
-    await wrapper.get('.settings-center-layer').trigger('mousedown')
-    expect(wrapper.emitted('close')).toBeUndefined()
-    expect(wrapper.get('.settings-content__header').text()).toContain('更新与回滚')
-    expect(wrapper.find('[data-testid="account-security"]').exists()).toBe(false)
-
-    await wrapper.get('[data-testid="unlock-update"]').trigger('click')
-    await navigationButton(wrapper, '登录与安全').trigger('click')
-    expect(wrapper.find('[data-testid="account-security"]').exists()).toBe(true)
+    expect(wrapper.get('.settings-content__header').text()).not.toContain('管理员')
   })
 
   it('asks before discarding an edited page and keeps the current page when declined', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
-    const wrapper = mountSettings({ initialPage: 'system-voice' })
-    await wrapper.get('[data-testid="dirty-voice"]').trigger('click')
+    const wrapper = mountSettings({ initialPage: 'account-security' })
+    await wrapper.get('[data-testid="dirty-account"]').trigger('click')
 
-    await navigationButton(wrapper, '登录与安全').trigger('click')
+    await navigationButton(wrapper, '外观').trigger('click')
     expect(confirm).toHaveBeenCalledWith('放弃当前页面未保存的更改？')
-    expect(wrapper.get('.settings-content__header').text()).toContain('双流语音')
+    expect(wrapper.get('.settings-content__header').text()).toContain('登录与安全')
 
-    await navigationButton(wrapper, '登录与安全').trigger('click')
-    expect(wrapper.find('[data-testid="account-security"]').exists()).toBe(true)
+    await navigationButton(wrapper, '外观').trigger('click')
+    expect(wrapper.find('.appearance-panel').exists()).toBe(true)
   })
 
-  it('protects global voice drafts from silent close', async () => {
+  it('protects unsaved drafts from silent close', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const voiceWrapper = mountSettings({ initialPage: 'system-voice' })
-    await voiceWrapper.get('[data-testid="dirty-voice"]').trigger('click')
+    const voiceWrapper = mountSettings({ initialPage: 'account-security' })
+    await voiceWrapper.get('[data-testid="dirty-account"]').trigger('click')
     await voiceWrapper.get('.settings-center__close').trigger('click')
     expect(confirm).toHaveBeenCalledWith('放弃当前页面未保存的更改？')
     expect(voiceWrapper.emitted('close')).toBeUndefined()

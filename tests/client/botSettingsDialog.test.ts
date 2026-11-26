@@ -48,17 +48,10 @@ it('reuses project and user-memory management inline without nesting dialogs',as
   wrapper.unmount()
 })
 
-it('keeps VM management admin-only, including a requested initial VM page',async()=>{
-  const wrapper=mountDialog(false,'vm')
+it('keeps management pages out of Bot settings, even for administrators',async()=>{
+  const wrapper=mountDialog(true)
   await flushPromises()
-  expect(wrapper.get('nav').text()).not.toContain('本地虚拟机')
-  expect(wrapper.find('[data-testid="vm-settings"]').exists()).toBe(false)
-  await wrapper.setProps({isAdmin:true})
-  await wrapper.get('nav').findAll('button').find(b=>b.text()==='本地虚拟机')!.trigger('click')
-  await flushPromises()
-  expect(wrapper.find('[data-testid="vm-settings"]').exists()).toBe(true)
-  await wrapper.setProps({isAdmin:false})
-  await flushPromises()
+  for(const label of ['本地虚拟机','环境与授权','文件访问','Bot 记忆'])expect(wrapper.get('nav').text()).not.toContain(label)
   expect(wrapper.find('[data-testid="vm-settings"]').exists()).toBe(false)
   expect(wrapper.text()).toContain('项目示例')
   wrapper.unmount()

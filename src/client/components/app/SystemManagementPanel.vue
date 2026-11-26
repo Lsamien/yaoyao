@@ -37,6 +37,8 @@ const props = withDefaults(defineProps<{
   active?: boolean
   upstreamReady?: boolean
   upstreamError?: string
+  /** The admin console shows execution nodes and computers on their own page. */
+  hideComputers?: boolean
 }>(), {
   active: true,
   profiles: () => [],
@@ -489,11 +491,11 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
         <span class="wide"><small>最近检查</small><b>{{ verifiedAtLabel }}</b></span>
       </div>
       <p class="network-description">Hermes 已内置在夭夭服务中运行，不再连接 9119，也不需要服务账号或工具桥插件。模型服务、Profile 与会话保存在上述数据目录；首次启动时会只读导入原有 ~/.hermes 数据。</p>
-      <details class="runner-settings" @toggle="runnerSettingsOpen = ($event.target as HTMLDetailsElement).open">
+      <details v-if="!hideComputers" class="runner-settings" @toggle="runnerSettingsOpen = ($event.target as HTMLDetailsElement).open">
         <summary>执行节点</summary>
         <RunnerSettingsPanel v-if="runnerSettingsOpen" />
       </details>
-      <details class="desktop-host-settings" @toggle="desktopHostSettingsOpen = ($event.target as HTMLDetailsElement).open">
+      <details v-if="!hideComputers" class="desktop-host-settings" @toggle="desktopHostSettingsOpen = ($event.target as HTMLDetailsElement).open">
         <summary>电脑</summary>
         <DesktopHostSettingsPanel v-if="desktopHostSettingsOpen" />
       </details>

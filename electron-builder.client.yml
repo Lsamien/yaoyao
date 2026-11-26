@@ -1,5 +1,6 @@
 appId: cn.samien.yaoyao.desktop
 productName: 夭夭
+afterPack: scripts/prepare-desktop-macos.mjs
 directories:
   output: desktop-release-client
   app: .desktop-build-client/shell
@@ -16,9 +17,7 @@ extraResources:
       - github-release.mjs
       - electron-updater.cjs
       - keychain-helper
-      - keychain-helper-dev
       - computer-helper
-      - computer-helper-dev
 asar: true
 npmRebuild: false
 mac:
@@ -34,6 +33,7 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   extendInfo:
+    NSLocalNetworkUsageDescription: 夭夭需要连接你指定的局域网服务器，以登录账号、同步消息和使用电脑功能。
     NSMicrophoneUsageDescription: 夭夭使用麦克风接收语音消息。
 dmg:
   title: 夭夭 ${version}

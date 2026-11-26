@@ -22,6 +22,7 @@ export type UiLocalFileLink = {
 }
 
 export type UiMessage = {
+  activity?: import('@shared/workspace').WorkspaceMessage['activity']
   serviceWarnings?: import('@shared/workspace').WorkspaceMessage['serviceWarnings']
   browserCard?: import('@shared/managedBrowser').ManagedBrowserCard
   communication?: import('@shared/workspace').WorkspaceCommunication

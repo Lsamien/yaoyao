@@ -1,6 +1,6 @@
-# 内置 Hermes 迁移方案（草案，待确认）
+# 内置 Hermes 迁移方案
 
-日期：2026-11-14　状态：**已实施（M0–M5），分支 `claude/zen-wozniak-309vnm`**
+日期：2026-11-14　状态：**已实施（M0–M5），已合并主线**
 
 目标：夭夭不再依赖外部 Hermes Dashboard（9119 HTTP/WebSocket），改为与 yaovi-agent 相同的方式，把 Hermes 源码内置在仓库中，由夭夭服务端直接拉起和管理内核进程。
 
