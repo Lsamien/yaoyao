@@ -91,6 +91,8 @@ export function workspaceRouter(
         ...(auth.require(ctx).role === 'admin' ? ['voice', 'context'] : []),
         ...(auth.require(ctx).role === 'admin' ? ['nodes', 'pairedNodes', 'editableNodeAddress'] : []),
         'events', 'workspace-stream-v1',
+        // Ordinary chat, history and the realtime relay were removed; mobile hides its chat mode.
+        'bot-only-v1',
         ...(store.messagePatchesEnabled ? [WORKSPACE_PATCH_CAPABILITY] : []),
       ],
     }

@@ -241,6 +241,8 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 - 管理员与子账号使用同一套界面：「聊天」里的 Bot 单聊和群聊，以及工具菜单（电脑接管、自动化等）。设置中心默认打开「我的资料」，不再有模式切换。
 - 旧链接 `/`、`/chat/*`、`/history/*`、`/files`、`/artifacts` 及未知路径都跳转到 `/conversations`。
 - 未读只统计 Bot 会话；为兼容旧客户端，接口仍返回 `chat` 字段，固定为 0。
+- 升级时没有导入旧 `~/.hermes`（例如 Docker 未叠加 `compose.hermes-import.yaml`、旧数据不在默认目录或导入失败）时，已有 Bot 对话绑定的 Hermes 会话在本机不存在：Bot 会自动新建会话，并把夭夭保存的近期聊天记录作为上下文补给新会话，不再每次报「会话不存在」。
+- `/api/app/capabilities` 的 `features` 新增 `bot-only-v1`。yaoyao-mobile 看到该标记后强制进入 Bot 模式、隐藏「聊天模式」切换、不再加载普通聊天运行时，并拒绝打开普通聊天与旧群组通知；未带该标记的旧服务端保持原有行为。
 - 账号扫码登录保留；设备配对（`/api/app/pairings*`、`/api/app/paired-devices*`、`/api/pair/v1/*`）删除。远程 Bot 已在此前停用，因此已有节点记录只能查看和删除，新的子节点配对会因对端没有配对接口而失败。
 - 不再写入 `chat-cache.sqlite3` 和 `realtime-receipts.sqlite3`；已有文件保留在数据目录中，可手动删除。`HERMES_YAOYAO_CHAT_CACHE_MODE` 已停用。
 
