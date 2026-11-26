@@ -39,6 +39,8 @@ interface StoredUser {
   normalizedUsername: string
   role: LocalRole
   assignedProfiles?: string[]
+  /** Per-account virtual machine license. Administrators are always licensed. */
+  vmLicensed?: boolean
   enabled: boolean
   mustChangePassword: boolean
   salt: string
@@ -67,6 +69,7 @@ export interface LocalUser {
   avatar?: string
   role: LocalRole
   assignedProfiles?: string[]
+  vmLicensed?: boolean
   enabled: boolean
   mustChangePassword: boolean
   createdAt: number
@@ -104,6 +107,7 @@ function publicUser(user: StoredUser): LocalUser {
     role: user.role,
     registrationStatus: user.registrationStatus ?? 'approved',
     assignedProfiles: [...(user.assignedProfiles ?? [])],
+    vmLicensed: user.role === 'admin' || user.vmLicensed === true,
     enabled: user.enabled,
     mustChangePassword: user.mustChangePassword,
     createdAt: user.createdAt,
@@ -285,6 +289,12 @@ export class LocalAuthStore {
     return Boolean(user && (user.role === 'admin' || (nodeId === 'local' && user.assignedProfiles?.includes(profile))))
   }
 
+  /** Virtual machines are off for every sub-account until an administrator licenses it. */
+  canUseVm(userID: string): boolean {
+    const user = this.#users.find(candidate => candidate.id === userID && candidate.enabled && candidate.registrationStatus !== 'pending')
+    return Boolean(user && (user.role === 'admin' || user.vmLicensed === true))
+  }
+
   isAdminActive(userID:string):boolean {return this.#users.some(user=>user.id===userID&&user.enabled&&user.role==='admin')}
 
   isUserActive(userID: string): boolean {
@@ -301,7 +311,7 @@ export class LocalAuthStore {
     return this.#users.map(publicUser).sort((a, b) => a.createdAt - b.createdAt)
   }
 
-  create(admin: LocalUser, usernameValue: string, passwordValue: string, assignedProfiles: unknown = []): LocalUser {
+  create(admin: LocalUser, usernameValue: string, passwordValue: string, assignedProfiles: unknown = [], vmLicensed = false): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const username = canonicalUsername(usernameValue)
     const normalizedUsername = username.toLocaleLowerCase('en-US')
@@ -312,6 +322,7 @@ export class LocalAuthStore {
     const now = Date.now()
     const user = this.#newUser(username, password, 'user', true, now)
     user.assignedProfiles = this.validateAssignedProfiles(assignedProfiles)
+    if (vmLicensed === true) user.vmLicensed = true
     this.#users.push(user)
     this.#saveUsers()
     return publicUser(user)
@@ -343,7 +354,7 @@ export class LocalAuthStore {
     return publicUser(user)
   }
 
-  updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string; assignedProfiles?: unknown }): LocalUser {
+  updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string; assignedProfiles?: unknown; vmLicensed?: boolean }): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const user = this.#users.find(candidate => candidate.id === userID)
     if (!user) throw new HttpError(404, '用户不存在', 'user_not_found')
@@ -353,6 +364,7 @@ export class LocalAuthStore {
     if (input.password !== undefined) validatePassword(input.password)
     if (assigned !== undefined) user.assignedProfiles = assigned
     if (typeof input.enabled === 'boolean') user.enabled = input.enabled
+    if (typeof input.vmLicensed === 'boolean') { if (input.vmLicensed) user.vmLicensed = true; else delete user.vmLicensed }
     if (input.password !== undefined) {
       this.#setPassword(user, validatePassword(input.password), true)
     } else {

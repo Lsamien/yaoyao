@@ -67,8 +67,6 @@ for name in ['google-chrome', 'xfce4-terminal', 'thunar']:
     spawn(['/usr/local/libexec/openmausbot/cua-driver', 'serve', '--socket', '/run/user/1000/openmausbot-cua.sock', '--permission-mode', 'standard'])
     # A visible browser gives this minimal desktop a usable initial surface.
     spawn(['/usr/local/bin/yaoyao-browser', 'about:blank'], required=False)
-    if os.environ.get('YAOYAO_COMPOSE_DESKTOP_ID'):
-        spawn(['python3', '/usr/local/libexec/yaoyao/compose_bridge.py'], user=False)
     while not stopping:
         if any(p.poll() is not None for p in critical):
             raise RuntimeError('桌面进程已退出，等待重新启动')

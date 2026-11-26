@@ -11,95 +11,134 @@ import {WorkspaceStore} from '../../src/server/workspaceStore'
 import {LocalVmService} from '../../src/server/localVm'
 import {SharedComputers} from '../../src/server/sharedComputers'
 import {HttpError} from '../../src/server/errors'
-import {loadServerConfig} from '../../src/server/config'
+import {saveHostTools} from '../../src/server/hostToolSettings'
 
-it('protects preparation, removes the old catalog API and scopes sharing to the account and profile',async()=>{
+function fixture(options:{docker?:boolean;licensed?:string[]}={}){
  const home=mkdtempSync(join(tmpdir(),'local-vm-routes-')),store=new WorkspaceStore(home)
- let version=1,active=true
- const auth:any={require:(ctx:any)=>({id:ctx.get('x-owner')||'alice'}),requireAdmin:(ctx:any)=>{if(ctx.get('x-admin')!=='yes'||!active)throw new HttpError(403,'需要管理员权限','admin_required');return {id:'alice'}},isAdminActive:()=>active,pushAuthorizationVersion:()=>version}
+ let version=1
+ const licensed=new Set(options.licensed??['alice','carol'])
+ const auth:any={
+  require:(ctx:any)=>({id:ctx.get('x-owner')||'alice'}),
+  requireAdmin:(ctx:any)=>{if(ctx.get('x-admin')!=='yes')throw new HttpError(403,'需要管理员权限','admin_required');return {id:'alice'}},
+  isAdminActive:(owner:string)=>owner==='alice',isUserActive:()=>true,pushAuthorizationVersion:()=>version,
+  canUseVm:(owner:string)=>licensed.has(owner),
+ }
  const runner={id:randomUUID(),enabled:true,sourceNodeId:'local',sourceOwner:'_system'}
  const nodes:any={requireSource:vi.fn()}
- const hub:any={records:()=>[runner],summary:()=>({online:true,features:['local-vm-v1']}),localVm:vi.fn(async()=>({configured:true,daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false})),computer:vi.fn(async()=>({container:'running',ready:true}))}
- const shared=new SharedComputers(store,auth,nodes,hub),service=new LocalVmService(store,auth,nodes,hub,shared,{home} as any),app=new Koa()
- app.use(async(ctx,next)=>{try{await next()}catch(e){ctx.status=(e as any).status||500;ctx.body={error:String(e)}}});app.use(bodyParser());app.use(service.router().routes())
+ const hub:any={records:()=>[runner],summary:()=>({online:true,features:['local-vm-v1','bot-desktops-v1']}),
+  localVm:vi.fn(async()=>({configured:true,daemonUp:true,image:true,mode:'shared',maxInstances:2,maxDesktops:4,busy:false})),
+  systemLocalVm:vi.fn(async(_owner:string,_runner:string,payload:any)=>payload.op==='adopt'?{adopted:payload.sources.map((s:any)=>s.environmentId)}:{ok:true}),
+  computer:vi.fn(async()=>({container:'running',ready:true}))}
+ const shared=new SharedComputers(store,auth,nodes,hub)
+ const create=()=>new LocalVmService(store,auth,nodes,hub,shared,{home,...(options.docker?{deployment:'docker'}:{})} as any)
+ const mount=(service:LocalVmService)=>{const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(e){ctx.status=(e as any).status||500;ctx.body={error:String(e),code:(e as any).code}}});app.use(bodyParser());app.use(service.router().routes());app.use(shared.router().routes());return app.callback()}
+ return {home,store,auth,hub,runner,licensed,create,mount,bump(){version++},close(){store.close();rmSync(home,{recursive:true,force:true})}}
+}
+
+it('protects administration, licenses each account and gives every account one computer with a desktop per Bot',async()=>{
+ const f=fixture(),service=f.create(),app=f.mount(service),base='/api/app/admin/local-vm'
  try{
-  const first=store.createAgent('alice',{name:'甲',profile:'default',execution:'computer'}),second=store.createAgent('alice',{name:'乙',profile:'default',execution:'computer'})
-  const chatting=store.createAgent('alice',{name:'普通聊天成员',profile:'server'})
-  store.put('alice','turn','ordinary-chat',{agentId:chatting.id,status:'running'})
-  const other=store.createAgent('bob',{name:'其他账号',profile:'default',execution:'computer'})
-  const id=randomUUID(),base='/api/app/admin/local-vm'
-  await request(app.callback()).put(base+'/idle-policy').send({requestId:randomUUID(),idleStopMinutes:0}).expect(403)
-  for(const minutes of [-1,0.5,10081,null])await request(app.callback()).put(base+'/idle-policy').set('x-admin','yes').send({requestId:randomUUID(),idleStopMinutes:minutes}).expect(400)
-  await request(app.callback()).put(base+'/idle-policy').set('x-admin','yes').send({requestId:randomUUID(),idleStopMinutes:0}).expect(200)
-  expect(hub.localVm).toHaveBeenLastCalledWith('alice',runner.id,expect.objectContaining({op:'idle-policy',idleStopMinutes:0}))
-  await request(app.callback()).post(base+'/prepare').send({requestId:id}).expect(403)
-  await request(app.callback()).post(base+'/prepare').set('x-admin','yes').send({requestId:id,imageId:'arbitrary'}).expect(400)
-  await request(app.callback()).post(base+'/prepare').set('x-admin','yes').send({requestId:id}).expect(200)
-  await request(app.callback()).post(base+'/prepare').set('x-admin','yes').send({requestId:randomUUID(),imageKey:'cursor'}).expect(200)
-  expect(hub.localVm).toHaveBeenLastCalledWith('alice',runner.id,expect.objectContaining({op:'prepare',imageKey:'cursor'}))
-  await request(app.callback()).put(`/api/app/agents/${first.id}/local-vm/image`).send({imageKey:'cursor'}).expect(200)
-  expect(hub.computer).toHaveBeenLastCalledWith('alice',expect.objectContaining({id:first.id}),'image',{imageKey:'cursor'},expect.any(Function))
-  await request(app.callback()).put(`/api/app/agents/${first.id}/local-vm/image`).send({imageKey:'arbitrary'}).expect(400)
-  await request(app.callback()).put(`/api/app/agents/${first.id}/local-vm/image`).set('x-owner','bob').send({imageKey:'cursor'}).expect(404)
-  expect(service.allowed(id,runner.id)).toBe(true);expect(service.allowed(id,randomUUID())).toBe(false)
-  version++;expect(service.allowed(id,runner.id)).toBe(false);version--
-  await request(app.callback()).get(`/api/app/admin/runners/${runner.id}/images`).set('x-admin','yes').expect(404)
-  await request(app.callback()).get(`/api/app/agents/${first.id}/local-vm`).set('x-owner','bob').expect(404)
-  await request(app.callback()).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),mode:'shared',maxInstances:2}).expect(409)
-  store.remove('alice','turn','ordinary-chat')
-  await request(app.callback()).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),mode:'shared',maxInstances:2}).expect(200)
-  const a=store.require<any>('alice','agent',first.id),b=store.require<any>('alice','agent',second.id)
-  expect(a.computerEnvironmentId).toBeTruthy();expect(b.computerEnvironmentId).toBe(a.computerEnvironmentId)
-  // Switching isolation stops the per-bot desktops these members no longer use,
-  // so they cannot occupy the concurrency quota and block the shared desktop.
-  expect(hub.localVm).toHaveBeenCalledWith('alice',runner.id,expect.objectContaining({op:'instance',environmentId:first.id,action:'stop'}))
-  expect(hub.localVm).toHaveBeenCalledWith('alice',runner.id,expect.objectContaining({op:'instance',environmentId:second.id,action:'stop'}))
-  await request(app.callback()).put(`/api/app/agents/${second.id}/local-vm/image`).send({imageKey:'standard'}).expect(200)
-  expect(hub.computer).toHaveBeenLastCalledWith('alice',expect.objectContaining({computerEnvironmentId:a.computerEnvironmentId}),'image',{imageKey:'standard'},expect.any(Function))
-  expect(store.require<any>('alice','agent',chatting.id).computerEnvironmentId).toBe(a.computerEnvironmentId)
-  const later=store.createAgent('alice',{name:'后加入成员',profile:'default',execution:'computer'})
-  expect(later.computerEnvironmentId).toBe(a.computerEnvironmentId)
-  const disabled=await request(app.callback()).put(`/api/app/agents/${later.id}/local-vm`).send({enabled:false}).expect(200)
-  expect(disabled.body.agent.execution).toBe('profile');expect(disabled.body.agent.computerEnvironmentId).toBeUndefined()
-  expect(store.require<any>('alice','agent',first.id).computerEnvironmentId).toBe(a.computerEnvironmentId)
-  expect(store.require<any>('bob','agent',other.id).computerEnvironmentId).toBeUndefined()
-  await request(app.callback()).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),mode:'per-bot',maxInstances:2}).expect(200)
-  expect(store.require<any>('alice','agent',first.id).computerEnvironmentId).toBeUndefined()
-  expect(hub.localVm).toHaveBeenCalledWith('alice',runner.id,expect.objectContaining({op:'instance',environmentId:a.computerEnvironmentId,action:'stop'}))
-  expect(store.require<any>('alice','agent',chatting.id).computerEnvironmentId).toBeUndefined()
-  store.put('alice','turn','active-vm',{agentId:first.id,status:'uncertain'})
-  hub.localVm.mockClear()
-  const blocked=await request(app.callback()).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),mode:'shared',maxInstances:2}).expect(409)
-  expect(blocked.body.error).toContain('请先停止「甲」')
-  expect(hub.localVm).not.toHaveBeenCalled()
-  store.remove('alice','turn','active-vm')
-  const helper=store.createAgent('alice',{name:'临时任务助手',profile:'default',execution:'computer'},{createdByAgentId:first.id,createdFromRunId:randomUUID(),temporaryGoalId:randomUUID()})
-  await request(app.callback()).post(`/api/app/agents/${helper.id}/local-vm/create`).send({}).expect(409)
-  active=false;expect(service.allowed(id,runner.id)).toBe(false)
- }finally{store.close();rmSync(home,{recursive:true,force:true})}
+  // Administration stays administrator-only and validated.
+  await request(app).put(base+'/idle-policy').send({requestId:randomUUID(),idleStopMinutes:0}).expect(403)
+  for(const minutes of [-1,0.5,10081,null])await request(app).put(base+'/idle-policy').set('x-admin','yes').send({requestId:randomUUID(),idleStopMinutes:minutes}).expect(400)
+  await request(app).put(base+'/idle-policy').set('x-admin','yes').send({requestId:randomUUID(),idleStopMinutes:0}).expect(200)
+  const id=randomUUID()
+  await request(app).post(base+'/prepare').send({requestId:id}).expect(403)
+  await request(app).post(base+'/prepare').set('x-admin','yes').send({requestId:id,imageId:'arbitrary'}).expect(400)
+  await request(app).post(base+'/prepare').set('x-admin','yes').send({requestId:id,imageKey:'cursor'}).expect(200)
+  expect(f.hub.localVm).toHaveBeenLastCalledWith('alice',f.runner.id,expect.objectContaining({op:'prepare',imageKey:'cursor'}))
+  expect(service.allowed(id,f.runner.id)).toBe(true);expect(service.allowed(id,randomUUID())).toBe(false)
+  f.bump();expect(service.allowed(id,f.runner.id)).toBe(false)
+  // The sharing mode is gone; only capacity can be set.
+  await request(app).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),mode:'per-bot',maxInstances:2}).expect(400)
+  await request(app).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),maxInstances:3,maxDesktops:9}).expect(400)
+  await request(app).put(base+'/policy').set('x-admin','yes').send({requestId:randomUUID(),maxInstances:3,maxDesktops:5}).expect(200)
+  expect(f.hub.localVm).toHaveBeenCalledWith('alice',f.runner.id,expect.objectContaining({op:'policy',maxInstances:3,maxDesktops:5}))
+
+  // An unlicensed sub-account sees no VM and cannot enable or start one.
+  const bobBot=f.store.createAgent('bob',{name:'未开通',profile:'default'})
+  expect((await request(app).get(`/api/app/agents/${bobBot.id}/local-vm`).set('x-owner','bob').expect(200)).body).toMatchObject({enabled:false,licensed:false,supported:true})
+  expect((await request(app).put(`/api/app/agents/${bobBot.id}/local-vm`).set('x-owner','bob').send({enabled:true}).expect(403)).body.code).toBe('local_vm_unlicensed')
+  expect((await request(app).post(`/api/app/agents/${bobBot.id}/local-vm/start`).set('x-owner','bob').send({}).expect(403)).body.code).toBe('local_vm_unlicensed')
+  expect(f.hub.computer).not.toHaveBeenCalled()
+
+  // A licensed account: every Bot joins the same account computer.
+  const one=f.store.createAgent('carol',{name:'甲',profile:'default'}),two=f.store.createAgent('carol',{name:'乙',profile:'default'})
+  await request(app).put(`/api/app/agents/${one.id}/local-vm`).set('x-owner','carol').send({enabled:true}).expect(200)
+  await request(app).put(`/api/app/agents/${two.id}/local-vm`).set('x-owner','carol').send({enabled:true}).expect(200)
+  const a=f.store.require<any>('carol','agent',one.id),b=f.store.require<any>('carol','agent',two.id)
+  expect(a.execution).toBe('computer');expect(a.computerEnvironmentId).toBeTruthy()
+  expect(b.computerEnvironmentId).toBe(a.computerEnvironmentId)
+  expect(a.computerEnvironmentId).not.toBe(f.store.list<any>('alice','shared-computer')[0]?.id)
+  // Panel actions touch only the Bot's own desktop, so another Bot's running task does not block them.
+  f.store.put('carol','turn','busy',{agentId:two.id,status:'running'})
+  await request(app).post(`/api/app/agents/${one.id}/local-vm/start`).set('x-owner','carol').send({}).expect(200)
+  expect(f.hub.computer).toHaveBeenLastCalledWith('carol',expect.objectContaining({id:one.id,computerEnvironmentId:a.computerEnvironmentId}),'lifecycle',{action:'start'},expect.any(Function))
+  await request(app).post(`/api/app/agents/${two.id}/local-vm/stop`).set('x-owner','carol').send({}).expect(409)
+  // The image belongs to the whole account computer.
+  await request(app).put(`/api/app/agents/${one.id}/local-vm/image`).set('x-owner','carol').send({imageKey:'standard'}).expect(409)
+  f.store.remove('carol','turn','busy')
+  await request(app).put(`/api/app/agents/${one.id}/local-vm/image`).set('x-owner','carol').send({imageKey:'standard'}).expect(200)
+  await request(app).get(`/api/app/agents/${one.id}/local-vm`).set('x-owner','bob').expect(404)
+  // Hand-made shared computers are retired.
+  await request(app).post('/api/app/computers/shared').set('x-owner','carol').send({}).expect(410)
+  // Turning the VM off frees only this Bot's desktop.
+  await request(app).put(`/api/app/agents/${two.id}/local-vm`).set('x-owner','carol').send({enabled:false}).expect(200)
+  expect(f.hub.computer).toHaveBeenLastCalledWith('carol',expect.objectContaining({id:two.id}),'lifecycle',{action:'remove'},expect.any(Function))
+  expect(f.store.require<any>('carol','agent',two.id).computer).toBe('off')
+
+  // Revoking the license stops the account computer with a server grant, not an admin grant.
+  f.licensed.delete('carol')
+  await service.revokeUser('carol')
+  const stop=f.hub.systemLocalVm.mock.calls.find((c:any[])=>c[0]==='carol'&&c[2].op==='instance'&&c[2].environmentId===a.computerEnvironmentId)
+  expect(stop?.[2]).toMatchObject({action:'stop'})
+  expect(service.allowed(stop![2].id,f.runner.id)).toBe(true)
+  await request(app).post(`/api/app/agents/${one.id}/local-vm/start`).set('x-owner','carol').send({}).expect(403)
+  // The global switch closes VMs for everyone, administrators included.
+  saveHostTools(f.home,{vm:false})
+  expect((await request(app).post(`/api/app/agents/${one.id}/local-vm/start`).send({}).expect(409)).body.code).toBe('local_vm_disabled')
+ }finally{await service.close();f.close()}
 })
-it('uses the external Runner in Docker and reports missing, offline and incompatible nodes without probing the Web container',async()=>{
- const home=mkdtempSync(join(tmpdir(),'local-vm-docker-')),store=new WorkspaceStore(home)
- let records:any[]=[],online=false,features:string[]=[]
- const auth:any={requireAdmin:()=>({id:'alice'})},nodes:any={open:vi.fn(),requireSource:vi.fn()}
- const hub:any={records:()=>records,summary:()=>({online,features}),localVm:vi.fn(async()=>({configured:true,runtime:'docker',daemonUp:true,image:true,mode:'per-bot',maxInstances:2,busy:false})),enroll:vi.fn()}
- const config=loadServerConfig({HERMES_YAOYAO_HOME:home,HERMES_YAOYAO_LOCAL_VM_HOST:'runner'})
- const shared=new SharedComputers(store,auth,nodes,hub),service=new LocalVmService(store,auth,nodes,hub,shared,config)
- const discover=vi.spyOn(service as any,'discover')
- const app=new Koa();app.use(async(ctx,next)=>{try{await next()}catch(e){ctx.status=(e as any).status||500;ctx.body={code:(e as any).code}}});app.use(bodyParser());app.use(service.router().routes())
+
+it('never offers virtual machines in a Docker deployment',async()=>{
+ const f=fixture({docker:true}),service=f.create(),app=f.mount(service)
  try{
-  expect((await service.status('alice'))).toMatchObject({configured:false,executionHost:'runner',setupRequired:'runner'})
-  await request(app.callback()).post('/api/app/admin/local-vm/prepare').send({requestId:randomUUID()}).expect(409,{code:'local_vm_runner_required'})
-  expect(hub.enroll).not.toHaveBeenCalled()
-  records=[{id:randomUUID(),name:'Hermes 所在电脑',enabled:true,sourceNodeId:'local',sourceOwner:'_system'}]
-  expect(await service.status('alice')).toMatchObject({setupRequired:'runner',runnerName:'Hermes 所在电脑'})
-  online=true
-  expect(await service.status('alice')).toMatchObject({setupRequired:'worker'})
-  features=['local-vm-v1']
-  expect(await service.status('alice')).toMatchObject({executionHost:'runner',image:true,daemonUp:true})
-  // Migrated desktop state must not launch a host-specific Python path in Docker.
-  store.put('_system','local-vm-managed','local',{sealed:'unusable-desktop-config'})
-  await service.start('http://127.0.0.1:15300')
-  expect(nodes.open).not.toHaveBeenCalled();expect(discover).not.toHaveBeenCalled()
- }finally{await service.close();store.close();rmSync(home,{recursive:true,force:true})}
+  expect(await service.status('alice')).toMatchObject({supported:false,configured:false})
+  expect((await request(app).post('/api/app/admin/local-vm/prepare').set('x-admin','yes').send({requestId:randomUUID()}).expect(409)).body.code).toBe('local_vm_docker_unsupported')
+  expect((await request(app).put('/api/app/admin/local-vm/policy').set('x-admin','yes').send({requestId:randomUUID(),maxInstances:2}).expect(409)).body.code).toBe('local_vm_docker_unsupported')
+  const bot=f.store.createAgent('alice',{name:'Docker',profile:'default'})
+  expect((await request(app).get(`/api/app/agents/${bot.id}/local-vm`).expect(200)).body).toMatchObject({enabled:false,supported:false})
+  await request(app).put(`/api/app/agents/${bot.id}/local-vm`).send({enabled:true}).expect(409)
+  expect(f.hub.localVm).not.toHaveBeenCalled();expect(f.hub.computer).not.toHaveBeenCalled()
+ }finally{await service.close();f.close()}
+})
+
+it('moves per-Bot and hand-made shared computers into the account computer once, copying their data',async()=>{
+ const f=fixture()
+ try{
+  // Bots from the old per-Bot mode (no account computer yet) and an old hand-made shared computer.
+  const solo=f.store.createAgent('alice',{name:'独立',profile:'default',execution:'computer'})
+  const x=f.store.createAgent('alice',{name:'共享甲',profile:'default',execution:'computer'}),y=f.store.createAgent('alice',{name:'共享乙',profile:'default',execution:'computer'})
+  const old={id:randomUUID(),name:'旧共享电脑',memberIds:[x.id,y.id],nodeId:'local',profile:'*',runnerId:f.runner.id,archived:false,createdAt:1}
+  f.store.put('alice','shared-computer',old.id,old)
+  for(const bot of [x,y])f.store.put('alice','agent',bot.id,{...f.store.require<any>('alice','agent',bot.id),computerEnvironmentId:old.id})
+  const service=f.create()
+  try{
+   await service.status('alice');await (service as any).migrating.get('alice')
+   const target=f.store.require<any>('alice','agent',solo.id).computerEnvironmentId
+   expect(target).toBeTruthy()
+   for(const bot of [x,y])expect(f.store.require<any>('alice','agent',bot.id).computerEnvironmentId).toBe(target)
+   const adopt=f.hub.systemLocalVm.mock.calls.find((c:any[])=>c[2].op==='adopt')!
+   expect(adopt[2]).toMatchObject({environmentId:target})
+   expect(adopt[2].sources).toEqual(expect.arrayContaining([{environmentId:solo.id,agentId:solo.id},{environmentId:old.id,agentId:x.id}]))
+   expect(adopt[2].sources).toHaveLength(2)
+   expect(f.store.get<any>('_system','local-vm-migration','alice')).toMatchObject({done:true})
+   // Once is enough.
+   await service.status('alice');await (service as any).migrating.get('alice')
+   expect(f.hub.systemLocalVm.mock.calls.filter((c:any[])=>c[2].op==='adopt')).toHaveLength(1)
+   // Bots created later join the account computer directly.
+   const later=f.store.createAgent('alice',{name:'后加入',profile:'default'})
+   expect(f.store.require<any>('alice','agent',later.id).computerEnvironmentId).toBe(target)
+  }finally{await service.close()}
+ }finally{f.close()}
 })

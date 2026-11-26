@@ -14,14 +14,14 @@ RUN set -eux; \
     usermod -l cua -d /home/cua box; groupmod -n cua box; \
     install -d -o cua -g cua -m 0700 /home/cua /home/cua/workspace /run/user/1000; \
     install -d -m 0755 /run/yaoyao-private
-COPY compose_bridge.py /usr/local/libexec/yaoyao/compose_bridge.py
+COPY yaoyao-desktop.py /usr/local/bin/yaoyao-desktop
 COPY skill_bundle.py /usr/local/libexec/yaoyao/skill_bundle.py
 COPY cursor-desktop.py /usr/local/libexec/yaoyao/cursor-desktop.py
 COPY cursor-browser.sh /usr/local/bin/yaoyao-browser
-RUN chmod 0755 /usr/local/bin/yaoyao-browser; \
+RUN chmod 0755 /usr/local/bin/yaoyao-browser /usr/local/bin/yaoyao-desktop; \
     sed -i 's|^Exec=.*|Exec=/usr/local/bin/yaoyao-browser %U|' /usr/share/applications/google-chrome.desktop /usr/share/applications/com.google.Chrome.desktop
 ENV HOME=/home/cua USER=cua DISPLAY=:1 XDG_RUNTIME_DIR=/run/user/1000 BROWSER=/usr/local/bin/yaoyao-browser CUA_DRIVER_INSTALL_CHANNEL=python_package CUA_DRIVER_RS_TELEMETRY_ENABLED=0
 LABEL com.openmausbot.local-vm="1" com.openmausbot.cua-driver="0.20.0" com.openmausbot.image-layer="5" \
-      cn.samien.yaoyao.computer-image="1" cn.samien.yaoyao.compose-desktop="1" cn.samien.yaoyao.image-key="cursor"
+      cn.samien.yaoyao.computer-image="1" cn.samien.yaoyao.desktops="multi-v1" cn.samien.yaoyao.image-key="cursor"
 # Start only the desktop and Yaoyao bridge; the upstream cloud services are not needed.
 ENTRYPOINT ["python3", "/usr/local/libexec/yaoyao/cursor-desktop.py"]

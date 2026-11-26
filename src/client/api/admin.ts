@@ -7,6 +7,8 @@ export interface ManagedUser {
   role: 'admin' | 'user'
   registrationStatus?: 'pending' | 'approved'
   assignedProfiles?: string[]
+  /** Virtual machine license; administrators are always licensed. */
+  vmLicensed?: boolean
   enabled: boolean
   mustChangePassword: boolean
   createdAt: number
@@ -24,7 +26,7 @@ export async function createUser(username: string, password: string, assignedPro
   })
 }
 
-export async function updateUser(id: string, input: { enabled?: boolean; password?: string; assignedProfiles?: string[] }): Promise<ManagedUser> {
+export async function updateUser(id: string, input: { enabled?: boolean; password?: string; assignedProfiles?: string[]; vmLicensed?: boolean }): Promise<ManagedUser> {
   return apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}`, {
     method: 'PATCH', body: input as unknown as JsonValue,
   })

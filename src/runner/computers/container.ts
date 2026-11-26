@@ -51,7 +51,7 @@ export interface ComputerProvider {
   ensure(spec:ComputerSpecification,authorize:()=>void):Promise<ComputerState>
   stop(spec:ComputerSpecification):Promise<void>
   remove(spec:ComputerSpecification):Promise<void>
-  execute(spec:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:ComputerLane;mayFence?():boolean;user?:ComputerUser}):Promise<CommandResult>
+  execute(spec:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:ComputerLane;mayFence?():boolean;user?:ComputerUser;display?:number}):Promise<CommandResult>
   health(spec:ComputerSpecification,authorize:()=>void):Promise<unknown>
 }
 class Semaphore {
@@ -71,6 +71,12 @@ class Lane {
   private readonly queue:Array<{writer:boolean;admit:()=>void}>=[]
   readonly exec=new Semaphore(8)
   readonly gui=new Semaphore(1)
+  private readonly displays=new Map<number,Semaphore>()
+  /** Each Bot desktop has its own input queue; Bots never wait on each other's screen. */
+  guiFor(display?:number):Semaphore{
+    if(display===undefined||display===1)return this.gui
+    let slot=this.displays.get(display);if(!slot){slot=new Semaphore(1);this.displays.set(display,slot)}return slot
+  }
   async read<T>(action:()=>Promise<T>,slot:Semaphore=this.exec):Promise<T> {
     await this.enter(false)
     const releaseSlot=await slot.acquire()
@@ -107,7 +113,6 @@ const capabilities=(values:unknown)=>Array.isArray(values)?values.map(value=>Str
  * process execution fall back to the host. Remote hosts run their own Runner. */
 export class ContainerComputerProvider implements ComputerProvider {
   readonly userData:ComputerUserData
-  readonly fixedCapacity:boolean=false
   private lanes=new Map<string,Lane>()
   readonly capabilities={isolation:'container',shell:true,desktop:true,persistentWorkspace:true,sharedDesktop:false,snapshots:false,network:'none'} as const
   constructor(readonly runtime:'docker'|'podman',readonly runnerId:string,readonly home:string,readonly run:ContainerCommand=command,readonly environment:NodeJS.ProcessEnv=process.env) {
@@ -348,7 +353,8 @@ export class ContainerComputerProvider implements ComputerProvider {
       }
     }
   }
-  async execute(value:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:ComputerLane;mayFence?():boolean;user?:ComputerUser}):Promise<CommandResult> {
+  async execute(value:ComputerSpecification,argv:string[],options:{authorize():void;signal?:AbortSignal;timeout?:number;input?:Buffer;lane?:ComputerLane;mayFence?():boolean;user?:ComputerUser;display?:number}):Promise<CommandResult> {
+    if(options.display!==undefined&&(!Number.isInteger(options.display)||options.display<1||options.display>64))throw new ComputerError('computer_command_invalid','桌面编号无效')
     const spec=this.validateSpecification(value)
     if(!argv.length||argv.length>64||argv.some(arg=>typeof arg!=='string'||arg.includes('\0'))||argv.join('').length>65536)throw new ComputerError('computer_command_invalid','电脑命令无效或过长')
     return this.lane(spec.id).read(async()=>{
@@ -356,7 +362,7 @@ export class ContainerComputerProvider implements ComputerProvider {
       const state=await this.inspect(spec)
       if(!state?.running)throw new ComputerError('computer_not_running','电脑环境尚未运行')
       options.authorize()
-      if(argv[0]===CUA_DRIVER)await this.waitForDesktop(state,options.authorize,options.signal)
+      if(argv[0]===CUA_DRIVER&&options.display===undefined)await this.waitForDesktop(state,options.authorize,options.signal)
       if(options.signal?.aborted)throw new ComputerError('computer_cancelled','操作已停止')
       const operationId=randomUUID(),timeout=Math.min(60000,Math.max(1000,options.timeout??30000))
       let cancellation:Promise<void>|undefined
@@ -376,7 +382,7 @@ export class ContainerComputerProvider implements ComputerProvider {
       try {
         if(options.signal?.aborted){await cancel();throw new ComputerError('computer_cancelled','操作已停止')}
         const user=options.user??'cua',home=user==='root'?'/root':'/home/cua'
-        const result=await this.run(this.runtime,['exec',...(options.input?['-i']:[]),'--user','0:0','--env',`HOME=${home}`,'--env',`USER=${user}`,'--workdir',spec.cwd,'--',state.containerId,'python3','-u','-c',GUEST_COMMAND,'run',COMMAND_ROOT,operationId,user,String(timeout/1000),...argv],{timeout:timeout+5000,signal:options.signal,input:options.input})
+        const result=await this.run(this.runtime,['exec',...(options.input?['-i']:[]),'--user','0:0','--env',`HOME=${home}`,'--env',`USER=${user}`,...(options.display!==undefined?['--env',`DISPLAY=:${options.display}`]:[]),'--workdir',spec.cwd,'--',state.containerId,'python3','-u','-c',GUEST_COMMAND,'run',COMMAND_ROOT,operationId,user,String(timeout/1000),...argv],{timeout:timeout+5000,signal:options.signal,input:options.input})
         if(options.signal?.aborted){await cancel();throw new ComputerError('computer_cancelled','操作已停止')}
         options.authorize();return result
       }catch(error){
@@ -388,7 +394,7 @@ export class ContainerComputerProvider implements ComputerProvider {
         }
         throw error
       }finally{options.signal?.removeEventListener('abort',abort)}
-    },options.lane==='gui'?this.lane(spec.id).gui:undefined)
+    },options.lane==='gui'?this.lane(spec.id).guiFor(options.display):undefined)
   }
   /** Escalates to the lifecycle lane so the stop never runs under live operations. */
   private fence(spec:Spec,id:string){void this.lane(spec.id).write(async()=>{await this.stopOwned(spec,id,false).catch(()=>{})}).catch(()=>{})}
@@ -403,21 +409,53 @@ export class ContainerComputerProvider implements ComputerProvider {
       options.authorize();return JSON.parse(result.stdout)
     })
   }
-  async capture(value:ComputerSpecification,authorize:()=>void):Promise<{data:string;width:number;height:number;capturedAt:number}> {
+  async capture(value:ComputerSpecification,authorize:()=>void,desktop?:{display:number;socket:string}):Promise<{data:string;width:number;height:number;capturedAt:number}> {
     const spec=this.validateSpecification(value)
     return this.lane(spec.id).read(async()=>{
       const state=await this.inspect(spec)
       authorize();if(!state?.running)throw new ComputerError('computer_not_running','电脑尚未运行')
-      await this.waitForDesktop(state,authorize)
+      if(!desktop)await this.waitForDesktop(state,authorize)
       const file=`/tmp/yaoyao-view-${randomBytes(12).toString('hex')}.png`
       const exec=(args:string[])=>this.run(this.runtime,['exec','--user','1000:1000','--',state.containerId,...args],{timeout:10000})
       try{
-        await exec([CUA_DRIVER,'call','get_desktop_state','{}','--socket',CUA_SOCKET,'--screenshot-out-file',file]);authorize()
+        await exec([CUA_DRIVER,'call','get_desktop_state','{}','--socket',desktop?.socket??CUA_SOCKET,'--screenshot-out-file',file]);authorize()
         const data=(await exec(['base64','-w0',file])).stdout.trim(),bytes=Buffer.from(data,'base64')
         if(bytes.length<24||bytes.subarray(1,4).toString()!=='PNG')throw new ComputerError('computer_frame_invalid','电脑画面无效')
         authorize();return {data,width:bytes.readUInt32BE(16),height:bytes.readUInt32BE(20),capturedAt:Date.now()}
       }finally{await exec(['rm','-f','--',file]).catch(()=>{})}
-    },this.lane(spec.id).gui)
+    },this.lane(spec.id).guiFor(desktop?.display))
+  }
+  /** Copies a retired per-Bot computer into the account computer: its files under
+   * workspace/migrated/<Bot> and its browser profiles into that Bot's desktop HOME.
+   * Runs in a throwaway, networkless container as the guest user; the source is
+   * mounted read-only and never changed. Existing destination files win. */
+  async adoptLegacy(value:ComputerSpecification,source:{environmentId:string;agentId:string}):Promise<boolean>{
+    const spec=this.validateSpecification(value)
+    z.string().uuid().parse(source.environmentId);z.string().uuid().parse(source.agentId)
+    const base=await realpath(resolve(this.home,'computer-workspaces')).catch(()=>undefined)
+    const from=base?join(base,source.environmentId):undefined
+    if(!from||!(await lstat(from).then(info=>info.isDirectory()&&!info.isSymbolicLink(),()=>false)))return false
+    return this.lane(spec.id).write(async()=>{
+      if((await this.inspect(spec))?.running)throw new ComputerError('computer_busy','迁移旧虚拟机前需要先停止账号虚拟机')
+      const workspace=await this.workspace(spec),userData=await this.userData.existing(spec)
+      if(!userData)throw new ComputerError('computer_data_missing','账号虚拟机尚未创建用户资料')
+      const script=[
+        'set -eu','a="$1"','w="/dst/workspace/migrated/$a"','mkdir -p "$w"',
+        'find /src -mindepth 1 -maxdepth 1 ! -name .browser-profiles -exec cp -a -n -t "$w" {} +',
+        'h="/dst/home/desktops/$a"','mkdir -p "$h/.config" "$h/browser-profiles"','chmod 700 "$h"',
+        'for b in google-chrome chromium; do if [ -d "/src/.browser-profiles/$b" ] && [ ! -e "$h/.config/$b" ]; then cp -a "/src/.browser-profiles/$b" "$h/.config/$b"; ln -sfn "../.config/$b" "$h/browser-profiles/$b"; fi; done',
+        'if [ -d /src/.browser-profiles/firefox ] && [ ! -e "$h/.mozilla" ]; then cp -a /src/.browser-profiles/firefox "$h/.mozilla"; fi',
+        'find "$h" \\( -name SingletonLock -o -name SingletonSocket -o -name SingletonCookie -o -name .parentlock -o -name parent.lock -o -name lock \\) -delete',
+      ].join('\n')
+      const relabel=this.runtime==='podman'?',relabel=private':''
+      await this.run(this.runtime,['run','--rm','--network','none','--cap-drop','ALL','--security-opt','no-new-privileges',
+        ...(this.runtime==='podman'?['--userns','keep-id:uid=1000,gid=1000']:[]),'--user','1000:1000','--entrypoint','/bin/sh',
+        '--mount',`type=bind,source=${from},target=/src,readonly${relabel}`,
+        '--mount',`type=bind,source=${workspace},target=/dst/workspace${relabel}`,
+        '--mount',`type=bind,source=${join(userData,'home')},target=/dst/home${relabel}`,
+        spec.imageId,'-c',script,'adopt',source.agentId],{timeout:600000})
+      return true
+    })
   }
   async deleteWorkspace(value:ComputerSpecification):Promise<void>{
     const spec=this.validateSpecification(value)

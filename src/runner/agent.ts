@@ -53,7 +53,7 @@ export class RunnerAgent {
     this.target={url:hermes,client,session:new UpstreamServiceSession(client,()=>config.hermesCredentials)}
     this.db=new DatabaseSync(join(home,'runner-commands.sqlite3'))
     this.db.exec('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,state TEXT NOT NULL,result TEXT,created INTEGER NOT NULL)')
-    if(config.computers){this.computers=new ComputerRuntime(this.db,config,home,undefined,(id,operation,body)=>this.api('desktop',{id,operation,...body}),this.target);this.localVm=new LocalVmImages(this.computers,this.db)}
+    if(config.computers){this.computers=new ComputerRuntime(this.db,config,home,undefined,this.target);this.localVm=new LocalVmImages(this.computers,this.db)}
     // Embedded runners can load pre-browser sealed configs without the CLI parser.
     // Only an explicit opt-out disables setup; it never changes VM isolation.
     const browser={...config.browser,enabled:config.browser?.enabled!==false}
@@ -68,12 +68,11 @@ export class RunnerAgent {
     const toolId=body&&typeof body==='object'&&'toolId' in body?body.toolId:undefined
     const response=await (isLocalAuthorizationTarget(url)&&this.fetchImpl===fetch?this.controlTransport.fetch.bind(this.controlTransport):this.fetchImpl)(url,{
       method:body===undefined?'GET':'POST',redirect:'error',signal:AbortSignal.any([this.controlAbort.signal,AbortSignal.timeout(path==='desktop'?75000:path==='tool'&&typeof toolId==='string'&&(toolId.startsWith('managed_browser_')||toolId.startsWith('credential_'))?600000:25000)]),
-      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':(this.computers?'execution-context-v1,vm-egress-v1,workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+(this.computers.provider.fixedCapacity?',compose-desktops-v1':',helper-retirement-v1,image-options-v1')+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'execution-context-v1,workspace-memory-bind-v1')+(this.browsers?',managed-browser-setup-v1,managed-browser-retention-v1':',managed-browser-disabled-v1')+(this.browsers?.available?',managed-browser-v1':'')+',credential-ref-v1',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
+      headers:{Authorization:`Bearer ${this.config.token}`,'x-runner-instance':this.instance,'x-runner-protocol':'1','x-runner-features':(this.computers?'execution-context-v1,vm-egress-v1,workspace-memory-bind-v1,hermes-computer-v2,profile-computer-v1,host-computer-tools-v1,file-transfer-v1,idle-stop-policy-v1,computer-worker-v1,artifact-chunks-v1,computer-control-v1,shared-computer-v1,local-vm-v1'+',helper-retirement-v1,image-options-v1,bot-desktops-v1'+(this.computers.config.imageId!==UNCONFIGURED_COMPUTER_IMAGE?',image-ready-v1':''):'execution-context-v1,workspace-memory-bind-v1')+(this.browsers?',managed-browser-setup-v1,managed-browser-retention-v1':',managed-browser-disabled-v1')+(this.browsers?.available?',managed-browser-v1':'')+',credential-ref-v1',...(this.serverEpoch?{'x-runner-epoch':this.serverEpoch}:{}),'Content-Type':'application/json',...(path==='poll'&&!this.connected?{'x-runner-reset':'1'}:{})},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     })
     if(!response.ok){
       const error=await response.json().catch(()=>({})) as {error?:string;code?:string}
-      if(path==='desktop')throw new HttpError(response.status,error.error?.slice(0,300)||'Compose 桌面连接失败',error.code||'compose_desktop_error')
       // Surface the server's real tool/desktop error (e.g. path out of range) instead of a generic "connection refused".
       throw new HttpError(response.status,error.error?.slice(0,300)||`执行节点请求失败（HTTP ${response.status}）`,error.code||(response.status===403?'runner_unauthorized':'runner_request_failed'))
     }
@@ -121,7 +120,7 @@ export class RunnerAgent {
     }
     if(command.kind==='local-vm.manage'){
       if(!this.localVm)throw new HttpError(409,'本地虚拟机尚未配置','computer_unavailable')
-      const input=z.object({owner:z.string().regex(/^[a-f0-9]{64}$/),op:z.enum(['status','prepare','policy','idle-policy','instance']),idleStopMinutes:z.number().int().min(0).max(MAX_VM_IDLE_STOP_MINUTES).optional(),id:z.string().uuid().optional(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),mode:z.enum(['shared','per-bot']).optional(),maxInstances:z.number().int().min(1).max(4).optional(),environmentId:z.string().uuid().optional(),action:z.enum(['stop','remove']).optional()}).strict().parse(p)
+      const input=z.object({owner:z.string().regex(/^[a-f0-9]{64}$/),op:z.enum(['status','prepare','policy','idle-policy','instance','adopt']),idleStopMinutes:z.number().int().min(0).max(MAX_VM_IDLE_STOP_MINUTES).optional(),id:z.string().uuid().optional(),imageKey:z.enum(LOCAL_VM_IMAGE_KEYS).optional(),maxDesktops:z.number().int().min(1).max(8).optional(),maxInstances:z.number().int().min(1).max(8).optional(),environmentId:z.string().uuid().optional(),action:z.enum(['stop','remove']).optional(),sources:z.array(z.object({environmentId:z.string().uuid(),agentId:z.string().uuid()}).strict()).max(200).optional()}).strict().parse(p)
       const check=async()=>{if(!this.connected||!this.active||(await this.api('local-vm-check',{id:input.id})).allowed!==true)throw new ComputerError('local_vm_authorization_revoked','本地虚拟机配置授权已失效')}
       if(input.op==='status')return this.localVm.status(input.owner)
       if(input.op==='instance'){
@@ -130,9 +129,13 @@ export class RunnerAgent {
         if(spec)await this.computers!.pool.desktop(spec,input.action!,()=>{if(!this.active||!this.connected)throw new Error('节点已断开')})
         await check();return {ok:true}
       }
+      if(input.op==='adopt'){
+        await check();await this.localVm.ready
+        return this.computers!.adoptLegacy(input.owner,input.environmentId!,input.sources??[],()=>{if(!this.active||!this.connected)throw new Error('节点已断开')})
+      }
       if(input.op==='prepare')return this.localVm.prepare(input.id!,check,input.imageKey)
       await check();if(input.op==='idle-policy')return this.localVm.idlePolicy(input.idleStopMinutes!)
-      return this.localVm.policy(input.mode!,input.maxInstances!)
+      return this.localVm.policy(input.maxInstances!,input.maxDesktops)
     }
     if(command.kind==='computer.control'){
       if(!this.computers)throw new HttpError(409,'电脑服务未配置','computer_unavailable')
@@ -149,15 +152,20 @@ export class RunnerAgent {
         return {ok:true}
       }
       if(input.op==='detail'){
-        const vm=await this.localVm!.status(),spec=this.computers.pool.definition(input.target.ownerKey,input.target.environmentId)??(this.computers.provider.fixedCapacity?{id:input.target.environmentId,ownerKey:input.target.ownerKey,imageId:this.computers.config.imageId}:undefined)
+        const vm=await this.localVm!.status(),spec=this.computers.pool.definition(input.target.ownerKey,input.target.environmentId)
         const state=await this.computers.controls.status(input.target)
         const actual=spec?await this.computers.provider.inspect(spec):undefined
         let ready=false
         if(actual?.running)try{await this.computers.provider.health(spec!,authorize);ready=true}catch{}
+        // `ready` means this Bot's own desktop is up, not merely the account computer.
+        const desktop=this.computers.desktops.current(input.target.ownerKey,input.target.environmentId,input.target.agentId)
+        let desktopRunning=false
+        if(ready&&desktop)try{desktopRunning=(await this.computers.desktops.inspect(spec!,desktop.display,authorize)).running}catch{}
         const imageId=this.computers.imageFor(input.target),option=vm.images?.find(image=>image.imageId===imageId)
         let image=!!option?.ready
-        if(!image&&!vm.fixedCapacity&&imageId!==UNCONFIGURED_COMPUTER_IMAGE)try{await this.localVm!.images.inspect(imageId);image=true}catch{}
-        return {...state,container:actual?.running?'running':spec?'stopped':'missing',ready,inUse:['agent','pausing','human','resuming'].includes(state.mode),mode:vm.mode,maxInstances:vm.maxInstances,idleStopMinutes:vm.idleStopMinutes,image:vm.fixedCapacity?vm.image:image,imageId,images:vm.images,imageKey:option?.key,controlMode:state.mode,fixedCapacity:vm.fixedCapacity}
+        if(!image&&imageId!==UNCONFIGURED_COMPUTER_IMAGE)try{await this.localVm!.images.inspect(imageId);image=true}catch{}
+        const desktops=this.computers.desktops.list(input.target.ownerKey,input.target.environmentId).length
+        return {...state,container:actual?.running?'running':spec?'stopped':'missing',ready:desktopRunning,computerReady:ready,desktop:desktop?{display:desktop.display,running:desktopRunning}:undefined,desktops,maxDesktops:vm.maxDesktops,inUse:['agent','pausing','human','resuming'].includes(state.mode),mode:'shared',maxInstances:vm.maxInstances,idleStopMinutes:vm.idleStopMinutes,image,imageId,images:vm.images,imageKey:option?.key,controlMode:state.mode}
       }
       if(input.op==='image')return this.localVm!.select(input.target,z.enum(LOCAL_VM_IMAGE_KEYS).parse(input.imageKey),authorize)
       if(input.op==='lifecycle'){

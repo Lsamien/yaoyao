@@ -345,8 +345,8 @@ test('Agent computer appears as a right panel and opens an interactive desktop',
  const settings=page.getByRole('dialog',{name:'Bot 设置'})
  await settings.getByRole('button',{name:'准备所选镜像',exact:true}).click()
  await settings.getByRole('button',{name:'关闭Bot 设置',exact:true}).click()
- await expect(dock.getByRole('button',{name:/创建.*的虚拟机/})).toBeVisible({timeout:12000})
- await dock.getByRole('button',{name:/创建.*的虚拟机/}).click()
+ await expect(dock.getByRole('button',{name:/启动.*的桌面/})).toBeVisible({timeout:12000})
+ await dock.getByRole('button',{name:/启动.*的桌面/}).click()
  await expect(dock.getByRole('img')).toBeVisible()
  const bounds=await dock.boundingBox();expect(bounds!.x).toBeGreaterThan(500)
  await page.screenshot({path:testInfo.outputPath('agent-local-vm-panel.png')})
@@ -361,8 +361,8 @@ test('Agent computer appears as a right panel and opens an interactive desktop',
  await viewer.getByRole('img').dblclick()
  await expect.poll(async()=>(await(await page.request.get('/__test/computer')).json()).actions.filter((a:any)=>a.kind==='click')).toMatchObject([{kind:'click',button:'left',count:2}])
  await viewer.getByRole('button',{name:'交还并关闭',exact:true}).click()
- await dock.getByRole('button',{name:'停止虚拟机',exact:true}).click()
- await expect(dock.getByRole('button',{name:'启动虚拟机',exact:true})).toBeVisible()
+ await dock.getByRole('button',{name:'停止桌面',exact:true}).click()
+ await expect(dock.getByRole('button',{name:/启动.*的桌面/})).toBeVisible()
 })
 
 test('two desktops are watch-only on opening and release before changing the controlled pane',async({page},testInfo)=>{

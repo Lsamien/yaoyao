@@ -19,7 +19,8 @@ function fixture(){
   const home=mkdtempSync(join(tmpdir(),'yaoyao-vm-startup-')),store=new WorkspaceStore(home)
   saveHostTools(home,{vm:true})
   const record={id:randomUUID(),enabled:true,sourceNodeId:'local',sourceOwner:'_system'}
-  const auth={isUserActive:(owner:string)=>owner==='alice'} as any
+  // dave is active but has no VM license.
+  const auth={isUserActive:(owner:string)=>owner==='alice'||owner==='dave',canUseVm:(owner:string)=>owner==='alice'} as any
   const nodes={open:()=>({runnerId:record.id}),requireSource:vi.fn((_owner:string,agent:any)=>{if(agent.profile==='denied')throw new Error('unauthorized')})} as any
   const hub={records:()=>[record],computerRunner:()=>record,computer:vi.fn(async(_owner:string,_agent:any,_op:string,_data:any,authorize:()=>void)=>{authorize();return {ok:true}})} as any
   const shared={reconcileLocalVmGroups:vi.fn(),attachLocalVm:vi.fn()} as any
@@ -35,14 +36,14 @@ function fixture(){
   }
 }
 
-it('starts authorized configured desktops once per service start and deduplicates shared members',async()=>{
+it('starts licensed, authorized desktops once per service start and deduplicates shared members',async()=>{
   const f=fixture()
   try{
     const group=randomUUID(),first=f.add('alice',{computerEnvironmentId:group})
     f.add('alice',{computerEnvironmentId:group});const own=f.add()
     f.add('alice',{archived:true});f.add('alice',{temporaryGoalId:randomUUID()})
     f.add('alice',{remoteAgentId:randomUUID()});f.add('alice',{nodeId:'remote'})
-    f.add('alice',{profile:'denied'});f.add('bob')
+    f.add('alice',{profile:'denied'});f.add('bob');f.add('dave')
     await f.service.start('http://127.0.0.1:15300');await f.settled()
     expect(f.hub.computer.mock.calls.map((c:any[])=>(c[1].computerEnvironmentId??c[1].id)).sort()).toEqual([group,own.id].sort())
     expect(f.hub.computer).toHaveBeenCalledWith('alice',expect.objectContaining({computerEnvironmentId:first.computerEnvironmentId}),'autostart',{},expect.any(Function))

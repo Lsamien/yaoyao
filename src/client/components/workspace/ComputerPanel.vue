@@ -301,7 +301,7 @@ defineExpose({take,close,releaseControl:async()=>{if(preparing.value){preparatio
       <footer v-if="controlsOpen||(!embedded&&!ticket)">
         <p v-if="state.backend==='grok'">多个机器人共享同一台 Grok Bot 云端电脑、工作文件与浏览器资料。</p>
         <p v-else-if="state.backend==='local'">当前显示{{state.hostName||'所选电脑'}}的桌面，点击、输入、按键和滚动都会发送到这台电脑。</p>
-        <p v-if="backend==='vm'&&selectedAgent?.computerEnvironmentId">共享电脑：{{ selectedAgent.computerEnvironmentName }}。成员共用工作文件和浏览器资料，可同时执行命令与文件操作，桌面操作交替进行；人工接管时机器人暂停等待。</p>
+        <p v-if="backend==='vm'&&selectedAgent?.computerEnvironmentId">本账号的虚拟机：所有机器人共用工作文件，每个机器人有自己的桌面和浏览器资料；接管这个桌面时只暂停这个机器人。</p>
         <p v-if="state.backend==='managed-browser'">当前是托管浏览器，与电脑桌面和虚拟机分别管理；网页操作无需启动虚拟机。</p>
         <details v-if="managedBrowser?.downloads.length" class="browser-downloads"><summary>浏览器下载（{{managedBrowser.downloads.length}}）</summary><ul><li v-for="file in managedBrowser.downloads" :key="file.id"><span>{{file.name}}</span><small>{{(file.size/1024).toFixed(1)}} KiB</small></li></ul></details>
         <p v-if="!ticket">查看不会输入任何内容。接管后机器人会暂停，已有操作结束后才允许人工操作。</p>

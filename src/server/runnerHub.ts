@@ -12,8 +12,7 @@ import type { GatewayFrame, GatewayTarget } from './workspaceGateway.js'
 import type { UpstreamRequestOptions, UpstreamResponse } from './upstream.js'
 import type { LeaseInput, WorkspaceToolLease } from './workspaceToolLease.js'
 import { RUNNER_PROTOCOL, type RunnerCommand, type RunnerRecord } from '../shared/runner.js'
-import {ComposeDesktops} from './composeDesktops.js'
-import {readHostTools} from './hostToolSettings.js'
+import {readHostTools,vmSupported} from './hostToolSettings.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const runnerBundle=()=>[resolve(dirname(fileURLToPath(import.meta.url)),'runner-bundle.tar.gz'),resolve(dirname(fileURLToPath(import.meta.url)),'../../runner-bundle.tar.gz')].find(existsSync)
@@ -46,7 +45,6 @@ export class RunnerHub {
     try{const result=await this.request(r.id,'network.configure',{});this.networkApplied.set(r.id,{revision:result.revision})}catch(error){this.networkApplied.set(r.id,{revision:-1,error:networkFailure(error,'网络配置未生效，请检查执行节点后重试保存')})}
   }))}
   async testNetworks(){const nodes=this.records().filter(r=>r.enabled&&this.summary(r).online&&this.summary(r).features.includes('vm-egress-v1'));if(!nodes.length)throw new HttpError(409,'没有支持代理的在线执行节点','proxy_node_unavailable');return {nodes:await Promise.all(nodes.map(async r=>{try{await this.request(r.id,'network.test',{});return {id:r.id,name:r.name,ok:true}}catch(error){return {id:r.id,name:r.name,ok:false,error:networkFailure(error,'代理连接失败，请核对地址、认证和执行节点网络')}}}))}}
-  composeDesktops=new ComposeDesktops([])
   get idleForUpdate(): boolean { return this.localVmActivity.size === 0 && [...this.pending.values()].every(commands => commands.size === 0) && [...this.artifacts.values()].every(upload => upload.result !== undefined) }
   private localVmActivity = new Map<string, { owner: string; runnerId: string }>()
   private localVmChecks = new Set<string>()
@@ -94,6 +92,16 @@ export class RunnerHub {
     if (payload.op === 'status' && result.busy === false && this.localVmActivity.get(key) === activity) this.localVmActivity.delete(key)
     else if (payload.op === 'status' && result.busy === true && !activity) this.localVmActivity.set(key, { owner, runnerId: id })
     return result
+  }
+  /** Server-initiated work on one account's computer (license revocation, migration of
+   * old per-Bot computers). Not an administrator action, so it carries no admin check;
+   * only the server creates these requests and their grants. */
+  async systemLocalVm(owner:string,id:string,payload:Record<string,unknown>){
+    const record=this.store.require<RunnerRecord>('_system','runner',id)
+    if(!record.enabled||!this.online.get(id)?.features.includes('local-vm-v1'))throw new HttpError(409,'本地虚拟机执行环境离线或版本过旧，请重新连接或更新','local_vm_unavailable')
+    if(payload.op==='adopt'&&!this.online.get(id)?.features.includes('bot-desktops-v1'))throw new HttpError(409,'执行节点版本不支持机器人独立桌面，请更新 Runner','local_vm_runner_upgrade_required')
+    const valid=()=>this.store.get<RunnerRecord>('_system','runner',id)?.enabled===true
+    return this.request(id,'local-vm.manage',{...payload,owner:hash(owner)},valid)
   }
   records():RunnerRecord[] {return this.store.list('_system','runner')}
   credentialBinding(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent,location:'node'|'server'='node') {
@@ -165,11 +173,6 @@ export class RunnerHub {
     const requireComputer=()=>{
       if(computer?.profileSession&&!this.online.get(record.id)?.features.includes('profile-computer-v1'))throw new HttpError(409,'执行节点尚不支持本机协作模式，请更新配套 Runner','computer_profile_unavailable')
       if(computer?.hostAccess&&!this.online.get(record.id)?.features.includes('host-computer-tools-v1'))throw new HttpError(409,'执行节点版本不支持同时使用本机和虚拟机，请更新 Runner','computer_host_tools_unavailable')
-      if(computer&&this.composeDesktops.desktops.length){
-        if(!this.online.get(record.id)?.features.includes('compose-desktops-v1'))throw new HttpError(409,'当前部署需要 Compose 桌面执行节点','compose_runner_required')
-        const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',computer.environmentId)
-        if(!this.composeDesktops.desktops.some(d=>d.id===computer.environmentId)||claim?.owner!==owner||claim.runnerId!==record.id)throw new HttpError(409,'请先为机器人选择已有 Compose 共享桌面','compose_desktop_required')
-      }
       if(computer&&!this.online.get(record.id)?.features.includes('computer-worker-v1'))throw new HttpError(409,'执行节点未提供隔离 Worker 能力，请检查配置或更新 Runner','computer_unavailable')
       if(computer&&!this.online.get(record.id)?.features.includes('hermes-computer-v2'))throw new HttpError(409,'请更新配套 Runner，虚拟机 Bot 需要 Hermes 托管会话能力。','computer_runner_upgrade_required')
       if(computer&&computer.environmentId!==computer.agentId&&!this.online.get(record.id)?.features.includes('shared-computer-v1'))throw new HttpError(409,'执行节点不支持共享电脑，请更新 Runner','shared_computer_unavailable')
@@ -249,12 +252,13 @@ export class RunnerHub {
       }}
   }
   computerRunner(owner:string,agent:import('../shared/workspace.js').WorkspaceAgent){
+    if(!readHostTools(this.store.home).vm)throw new HttpError(409,vmSupported(this.store.home)?'管理员已关闭虚拟机功能':'Docker 版不支持虚拟机','local_vm_disabled')
+    if(!this.auth.canUseVm(owner))throw new HttpError(403,'当前账号未开通虚拟机，请联系管理员','local_vm_unlicensed')
     const record=this.records().find(record=>record.enabled&&record.sourceNodeId===agent.nodeId&&(record.sourceOwner==='_system'||record.sourceOwner===owner))
     if(!record)throw new HttpError(409,'本地虚拟机执行节点尚未启用，请在本地虚拟机设置中完成配置','computer_control_unavailable')
     const online=this.online.get(record.id)
     if(!online)throw new HttpError(503,'本地虚拟机执行节点未连接，请检查 Runner 是否运行','runner_offline')
     if(!online.features.includes('computer-control-v1'))throw new HttpError(409,'本地虚拟机执行节点不支持电脑查看与控制，请启用隔离电脑 Worker 或更新 Runner','computer_control_unavailable')
-    if(this.composeDesktops.desktops.length&&!this.online.get(record.id)?.features.includes('compose-desktops-v1'))throw new HttpError(409,'当前部署需要 Compose 桌面执行节点','compose_runner_required')
     if(!record.allowedProfiles.includes(agent.profile)||!this.auth.canUseSource(owner,agent.nodeId,agent.profile))throw new HttpError(403,'电脑 Profile 未授权','computer_profile_forbidden')
     return record
   }
@@ -300,7 +304,7 @@ export class RunnerHub {
   }
   adminRouter():Router {
     const router=new Router()
-    router.get('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body={protocol:RUNNER_PROTOCOL,hermesUpstream:this.hermesUpstream,fixedDesktops:this.composeDesktops.desktops.length>0,bundleAvailable:!!runnerBundle(),runners:this.records().map(r=>this.summary(r)),sources:[{id:'local',name:'本地来源'},...this.store.list<import('./workspaceGateway.js').WorkspaceNode>(actor.id,'node').filter(n=>n.transport!=='paired-web').map(n=>({id:n.id,name:n.name}))]}})
+    router.get('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body={protocol:RUNNER_PROTOCOL,hermesUpstream:this.hermesUpstream,bundleAvailable:!!runnerBundle(),runners:this.records().map(r=>this.summary(r)),sources:[{id:'local',name:'本地来源'},...this.store.list<import('./workspaceGateway.js').WorkspaceNode>(actor.id,'node').filter(n=>n.transport!=='paired-web').map(n=>({id:n.id,name:n.name}))]}})
     router.get('/api/app/admin/runners/bundle',ctx=>{this.auth.requireAdmin(ctx);const path=runnerBundle();if(!path)throw new HttpError(404,'当前服务未打包执行节点程序，请使用配套 App 或从源码构建 Runner','runner_bundle_missing');ctx.set('Cache-Control','no-store');ctx.attachment('yaoyao-runner.tar.gz');ctx.type='application/gzip';ctx.body=createReadStream(path)})
     router.post('/api/app/admin/runners',ctx=>{const actor=this.auth.requireAdmin(ctx);ctx.body=this.enroll(actor.id,(ctx.request as any).body);ctx.status=201})
     router.delete('/api/app/admin/runners/:id',ctx=>{this.auth.requireAdmin(ctx);this.remove(ctx.params.id);ctx.body={ok:true}})
@@ -325,7 +329,7 @@ export class RunnerHub {
         retired.add(previous.instance);this.retired.set(record.id,retired);this.disconnect(record.id);previous=undefined
       }
       if(match[2]!=='poll'&&ctx.get('x-runner-epoch')!==previous?.epoch)throw new HttpError(409,'执行连接代次已改变','runner_epoch_changed')
-      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['execution-context-v1','vm-egress-v1','workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','compose-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1','credential-ref-v1'].includes(value));this.online.set(record.id,state)
+      const state=this.online.get(record.id)??{instance,seen:Date.now(),features:[],epoch:`${this.epoch}:${randomUUID()}`};state.seen=Date.now();if(ctx.get('x-runner-features'))state.features=ctx.get('x-runner-features').split(',').filter(value=>['execution-context-v1','vm-egress-v1','workspace-memory-bind-v1','hermes-computer-v2','profile-computer-v1','host-computer-tools-v1','file-transfer-v1','idle-stop-policy-v1','computer-worker-v1','artifact-chunks-v1','helper-retirement-v1','computer-control-v1','shared-computer-v1','local-vm-v1','image-options-v1','image-ready-v1','bot-desktops-v1','managed-browser-v1','managed-browser-setup-v1','managed-browser-disabled-v1','managed-browser-retention-v1','credential-ref-v1'].includes(value));this.online.set(record.id,state)
       ctx.set('Cache-Control','no-store')
       if(match[2]==='poll') {
         if(ctx.method!=='GET')throw new HttpError(405,'仅允许 GET','method_not_allowed')
@@ -348,20 +352,6 @@ export class RunnerHub {
       if(!body||typeof body!=='object'||Array.isArray(body))throw new HttpError(400,'请求必须是对象','invalid_json')
       if(match[2]==='network-settings'){if(Number.isInteger(body.appliedRevision)&&body.appliedRevision===this.executionSettings?.proxy().revision)this.networkApplied.set(record.id,{revision:body.appliedRevision});ctx.set('Cache-Control','no-store');ctx.body={proxy:this.executionSettings?.proxy()};return}
       if(match[2]==='execution-context'){const connection=this.connections.get(String(body.connectionId));if(!connection?.computer||connection.runnerId!==record.id||!connection.valid())throw new HttpError(403,'任务环境授权已结束','execution_grant_revoked');ctx.set('Cache-Control','no-store');ctx.body={environment:connection.taskEnvironment?.()};return}
-      if(match[2]==='desktop'){
-        if(record.sourceNodeId!=='local'||record.sourceOwner!=='_system'||!state.features.includes('compose-desktops-v1'))throw new HttpError(403,'该节点不能访问 Compose 桌面','compose_desktop_forbidden')
-        const {id,operation,ownerKey,...payload}=parse(z.object({id:z.string(),operation:z.enum(['list','health','frame','acquire','renew','release','execute','cancel','skills-install','network-open','network-exchange','network-close','network-health']),ownerKey:z.string().optional()}).passthrough(),body)
-        if(operation==='list'){ctx.body=await this.composeDesktops.status();return}
-        if(operation==='network-health'){ctx.body=await this.composeDesktops.call(id,operation);return}
-        const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',id)
-        if(!claim||claim.runnerId!==record.id||hash(claim.owner)!==ownerKey)throw new HttpError(403,'没有该共享桌面的使用权限','compose_desktop_forbidden')
-        const valid=()=>this.auth.isUserActive(claim.owner)&&this.store.list<import('../shared/workspace.js').WorkspaceAgent>(claim.owner,'agent').some(a=>!a.archived&&a.computerEnvironmentId===id&&this.auth.canUseSource(claim.owner,a.nodeId,a.profile))
-        const active=()=>[...this.connections.values()].some(c=>c.runnerId===record.id&&c.computer?.environmentId===id&&c.computer.ownerKey===ownerKey&&c.valid())||this.store.list<any>('_system','computer-control').some(g=>g.owner===claim.owner&&g.runnerId===record.id&&g.environmentId===id&&this.controlAllowed(g.id,record.id))
-        if(!['release','cancel','network-close'].includes(operation)&&(!valid()||(!['health','frame'].includes(operation)&&!active())))throw new HttpError(403,'桌面操作缺少当前任务或接管授权','compose_desktop_forbidden')
-        const result=await this.composeDesktops.call(id,operation,{...payload,owner:ownerKey})
-        if(operation==='acquire'&&(!valid()||!active())){await this.composeDesktops.call(id,'release',{...result,cancel:true}).catch(()=>{});throw new HttpError(410,'桌面操作已取消','computer_control_expired')}
-        ctx.body=result;return
-      }
       if(match[2]==='browser-check'){ctx.body={allowed:state.features.some(feature=>['managed-browser-v1','managed-browser-setup-v1'].includes(feature))&&this.browserAllowed(record.id,body.scope,typeof body.grantId==='string'?body.grantId:undefined)};return}
       if(match[2]==='local-vm-check'){ctx.body={allowed:typeof body.id==='string'&&this.localVmAllowed(body.id,record.id)};return}
       if(match[2]==='control-check'){ctx.body={allowed:this.networkSupported(record.id)&&typeof body.controlId==='string'&&this.controlAllowed(body.controlId,record.id)};return}

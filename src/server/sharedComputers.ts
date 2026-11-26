@@ -8,21 +8,22 @@ import {HttpError} from './errors.js'
 import type {WorkspaceNodes} from './workspaceGateway.js'
 import type {RunnerHub} from './runnerHub.js'
 import type {LocalAuthStore} from './localAuth.js'
-export interface SharedComputer {managedCompose?:boolean;managedLocalVm?:boolean;id:string;name:string;memberIds:string[];nodeId:string;profile:string;runnerId:string;archived:boolean;createdAt:number}
+export interface SharedComputer {managedLocalVm?:boolean;id:string;name:string;memberIds:string[];nodeId:string;profile:string;runnerId:string;archived:boolean;createdAt:number}
 export function requireSharedComputer(store:WorkspaceStore,owner:string,agent:{id?:string;nodeId:string;profile:string;computerEnvironmentId?:string}){
   if(!agent.computerEnvironmentId)return
   const shared=store.require<SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId)
-  if(shared.archived||!agent.id||!shared.memberIds.includes(agent.id)||shared.nodeId!==agent.nodeId||(!shared.managedCompose&&!shared.managedLocalVm&&shared.profile!=='*'&&shared.profile!==agent.profile))throw new HttpError(403,'当前成员没有这台共享电脑的授权','shared_computer_forbidden')
+  if(shared.archived||!agent.id||!shared.memberIds.includes(agent.id)||shared.nodeId!==agent.nodeId||(!shared.managedLocalVm&&shared.profile!=='*'&&shared.profile!==agent.profile))throw new HttpError(403,'当前成员没有这台共享电脑的授权','shared_computer_forbidden')
 }
 export class SharedComputers {
   constructor(readonly store:WorkspaceStore,readonly auth:LocalAuthStore,readonly nodes:WorkspaceNodes,readonly hub:RunnerHub){}
-  private idle(owner:string,ids:string[],environmentId?:string){
+  /** `bots` checks only these Bots (their own desktops); otherwise their whole computers. */
+  private idle(owner:string,ids:string[],environmentId?:string,bots=false){
     const busy=new Set(this.store.list<{agentId:string;status:string}>(owner,'turn').filter(work=>ids.includes(work.agentId)&&['queued','running','waiting','uncertain','cancelling'].includes(work.status)).map(work=>work.agentId))
     if(busy.size){
       const names=[...busy].slice(0,5).map(id=>`「${this.store.get<WorkspaceAgent>(owner,'agent',id)?.name??'未知成员'}」`).join('、')
       throw new HttpError(409,`请先停止${names}${busy.size>5?'等成员':''}的当前任务，再修改电脑共享`,'shared_computer_busy')
     }
-    const environments=new Set(ids.map(id=>this.store.get<WorkspaceAgent>(owner,'agent',id)?.computerEnvironmentId??id))
+    const environments=new Set(bots?[]:ids.map(id=>this.store.get<WorkspaceAgent>(owner,'agent',id)?.computerEnvironmentId??id))
     if(environmentId)environments.add(environmentId)
     if(this.store.list<{owner:string;agentId:string;environmentId?:string;expiresAt:number}>('_system','computer-control').some(grant=>grant.owner===owner&&grant.expiresAt>Date.now()&&(ids.includes(grant.agentId)||(grant.environmentId&&environments.has(grant.environmentId)))))throw new HttpError(409,'请先交还电脑控制权，再修改共享','shared_computer_busy')
   }
@@ -50,24 +51,12 @@ export class SharedComputers {
     this.store.put(owner,'shared-computer',canonical.id,canonical)
     return canonical
   }
-  assertLocalVmIdle(owner:string,ids?:string[]){this.idle(owner,ids??this.localVmAgents(owner).map(a=>a.id))}
-  bindCompose(owner:string,agent:WorkspaceAgent,desktop:{id:string;name:string},runnerId:string,persist=true){
-    this.idle(owner,[agent.id])
-    const claim=this.store.get<{owner:string;runnerId:string}>('_system','compose-desktop-owner',desktop.id)
-    if(claim&&(claim.owner!==owner||claim.runnerId!==runnerId))throw new HttpError(403,'这台共享桌面已分配给其他账号或执行节点','compose_desktop_forbidden')
-    if(agent.computerEnvironmentId&&agent.computerEnvironmentId!==desktop.id)this.detachLocalVm(owner,agent)
-    const group=this.store.get<SharedComputer>(owner,'shared-computer',desktop.id)??{id:desktop.id,name:desktop.name,nodeId:'local',profile:'*',runnerId,memberIds:[],archived:false,createdAt:Date.now(),managedCompose:true}
-    group.archived=false;if(!group.memberIds.includes(agent.id))group.memberIds.push(agent.id)
-    this.store.put('_system','compose-desktop-owner',desktop.id,{owner,runnerId})
-    this.store.put(owner,'shared-computer',group.id,group)
-    agent.execution='computer';agent.computer='vm';agent.computerEnvironmentId=desktop.id;agent.computerEnvironmentName=desktop.name
-    if(persist){agent.revision++;agent.updatedAt=Date.now();this.store.put(owner,'agent',agent.id,agent);this.store.event(owner,'agent.changed',agent)}
-  }
+  assertLocalVmIdle(owner:string,ids?:string[]){this.idle(owner,ids??this.localVmAgents(owner).map(a=>a.id),undefined,!!ids&&ids.length===1)}
   attachLocalVm(owner:string,agent:WorkspaceAgent,runnerId:string){
     if(agent.nodeId!=='local'||agent.temporaryGoalId||agent.remoteAgentId||agent.computerEnvironmentId)return
     this.nodes.requireSource(owner,agent)
     const group=this.reconcileLocalVmGroups(owner,runnerId)
-      ??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
+      ??{id:randomUUID(),name:'本账号的虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
     if(!group.memberIds.includes(agent.id))group.memberIds.push(agent.id)
     this.store.put(owner,'shared-computer',group.id,group)
     agent.computerEnvironmentId=group.id;agent.computerEnvironmentName=group.name
@@ -83,7 +72,7 @@ export class SharedComputers {
   /** Returns the desktop environments this switch orphaned, so the caller can
    * stop them on the runner; a leftover per-bot desktop would otherwise keep
    * consuming the concurrency quota and block the shared desktop's members. */
-  setLocalVmMode(owner:string,mode:'shared'|'per-bot',runnerId:string):{retiredEnvironmentIds:string[]}{
+  setLocalVmMode(owner:string,mode:'shared',runnerId:string):{retiredEnvironmentIds:string[]}{
     this.assertLocalVmIdle(owner)
     return this.store.atomic(()=>{
       const agents=this.localVmAgents(owner)
@@ -97,7 +86,7 @@ export class SharedComputers {
         const members=agents.filter(a=>!a.computerEnvironmentId)
         if(members.length){
           const group=[...groups.filter(g=>g.managedLocalVm)].sort((a,b)=>b.memberIds.length-a.memberIds.length)[0]
-            ??{id:randomUUID(),name:'共享本地虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
+            ??{id:randomUUID(),name:'本账号的虚拟机',memberIds:[],nodeId:'local',profile:'*',runnerId,archived:false,createdAt:Date.now(),managedLocalVm:true}
           group.profile='*';group.archived=false;group.managedLocalVm=true;group.runnerId=runnerId;group.memberIds=members.map(a=>a.id);this.store.put(owner,'shared-computer',group.id,group)
           for(const agent of members){agent.computerEnvironmentId=group.id;agent.computerEnvironmentName=group.name}
         }
@@ -145,7 +134,8 @@ export class SharedComputers {
   router(){
     const router=new Router()
     router.get('/api/app/computers/shared',ctx=>{const owner=this.auth.require(ctx).id;ctx.body={computers:this.store.list<SharedComputer>(owner,'shared-computer').filter(value=>!value.archived)}})
-    router.post('/api/app/computers/shared',ctx=>{ctx.body={computer:this.create(this.auth.require(ctx).id,(ctx.request as any).body)};ctx.status=201})
+    // Every account now has exactly one computer shared by its Bots.
+    router.post('/api/app/computers/shared',ctx=>{this.auth.require(ctx);throw new HttpError(410,'每个账号只有一台虚拟机，所有机器人自动共用，无需再创建共享电脑','shared_computer_retired')})
     router.delete('/api/app/computers/shared/:id',ctx=>{this.remove(this.auth.require(ctx).id,ctx.params.id);ctx.body={ok:true}})
     return router
   }

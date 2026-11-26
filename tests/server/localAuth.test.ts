@@ -44,6 +44,30 @@ describe('15300 local users', () => {
     expect(restarted.require(context(issuedCookie(setup))).username).toBe('owner')
   })
 
+  it('keeps virtual machines off for sub-accounts until licensed, and always on for administrators', () => {
+    const home = mkdtempSync(join(tmpdir(), 'yaoyao-local-auth-'))
+    homes.push(home)
+    const store = new LocalAuthStore(home)
+    const admin = store.setupAdmin(context(), 'owner', 'new-password')
+    expect(admin.vmLicensed).toBe(true)
+    expect(store.canUseVm(admin.id)).toBe(true)
+    const user = store.create(admin, 'child', 'temporary-password')
+    expect(user.vmLicensed).toBe(false)
+    expect(store.canUseVm(user.id)).toBe(false)
+    const version = store.pushAuthorizationVersion(user.id)
+    expect(store.updateUser(admin, user.id, { vmLicensed: true }).vmLicensed).toBe(true)
+    expect(store.canUseVm(user.id)).toBe(true)
+    // A license change invalidates the account's in-flight authorizations.
+    expect(store.pushAuthorizationVersion(user.id)).not.toBe(version)
+    expect(new LocalAuthStore(home).canUseVm(user.id)).toBe(true)
+    store.updateUser(admin, user.id, { enabled: false })
+    expect(store.canUseVm(user.id)).toBe(false)
+    store.updateUser(admin, user.id, { enabled: true, vmLicensed: false })
+    expect(store.canUseVm(user.id)).toBe(false)
+    expect(store.create(admin, 'licensed', 'temporary-password', [], true).vmLicensed).toBe(true)
+    expect(() => store.updateUser(user, user.id, { vmLicensed: true })).toThrow(/管理员/)
+  })
+
   it('lets the administrator create, reset, disable and delete ordinary users', () => {
     const home = mkdtempSync(join(tmpdir(), 'yaoyao-local-auth-'))
     homes.push(home)

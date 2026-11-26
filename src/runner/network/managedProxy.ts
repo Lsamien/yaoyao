@@ -1,7 +1,6 @@
 import type {ChildProcessWithoutNullStreams} from 'node:child_process'
 import type {VmProxySettings} from '../../shared/executionEnvironment.js'
 import type {ContainerComputerProvider,ComputerSpecification} from '../computers/container.js'
-import {ComposeComputerProvider} from '../computers/compose.js'
 import {PublicSocketBroker,type NetworkFrame} from './socketBroker.js'
 import {publicDestination} from './publicDestination.js'
 import {proxyLookup,proxySocket} from './upstreamProxy.js'
@@ -24,11 +23,6 @@ export class ManagedProxy {
   static async start(provider:ContainerComputerProvider,spec:ComputerSpecification,proxy:VmProxySettings,authorize:()=>void,onClose:()=>void=()=>{}){
     const result=new ManagedProxy(provider,spec,proxy,authorize,onClose)
     try{
-      if(provider instanceof ComposeComputerProvider){
-        const opened=await provider.relay(spec.id,'network-open',{ownerKey:spec.ownerKey})
-        authorize();result.token=opened.token
-        result.loop=(async()=>{while(!result.stopped){authorize();const value=await provider.relay(spec.id,'network-exchange',{ownerKey:spec.ownerKey,token:result.token,frames:result.outgoing.splice(0,32)});await Promise.all(value.frames.map((frame:NetworkFrame)=>result.broker.receive(frame)))}})().catch(()=>result.close())
-      }else{
         const child=await provider.openNetworkPipe(spec,authorize);result.child=child
         child.stderr.resume();child.stdin.on('error',()=>{void result.close()});child.once('exit',()=>{void result.close()});child.once('error',()=>{void result.close()})
         await new Promise<void>((resolve,reject)=>{
@@ -37,9 +31,8 @@ export class ManagedProxy {
           child.once('exit',()=>{clearTimeout(timer);if(!ready)reject(new Error('统一网络出口已退出'))})
           child.stdout.on('data',chunk=>{buffer+=chunk;if(buffer.length>1024*1024){void result.close();return}for(;;){const at=buffer.indexOf('\n');if(at<0)break;const line=buffer.slice(0,at);buffer=buffer.slice(at+1);try{const frame=JSON.parse(line);if(frame.op==='ready'){ready=true;clearTimeout(timer);resolve()}else void result.broker.receive(frame).catch(()=>result.close())}catch{void result.close()}}})
         })
-      }
       authorize();return result
     }catch(error){await result.close();throw error}
   }
-  async close(){if(this.stopped)return;this.stopped=true;this.onClose();this.broker.close();this.outgoing=[];this.child?.stdin.end();this.child?.kill('SIGTERM');if(this.token&&this.provider instanceof ComposeComputerProvider)await this.provider.relay(this.spec.id,'network-close',{ownerKey:this.spec.ownerKey,token:this.token}).catch(()=>{})}
+  async close(){if(this.stopped)return;this.stopped=true;this.onClose();this.broker.close();this.outgoing=[];this.child?.stdin.end();this.child?.kill('SIGTERM')}
 }

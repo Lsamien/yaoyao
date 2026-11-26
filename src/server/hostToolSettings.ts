@@ -43,7 +43,17 @@ export function parseHostTools(value: unknown): HostToolSettings {
   }
 }
 
+const vmUnsupported = new Set<string>()
+/** Docker deployments never run virtual machines, whatever the saved switch says. */
+export function markVmUnsupported(home: string): void { vmUnsupported.add(home) }
+export function vmSupported(home: string): boolean { return !vmUnsupported.has(home) }
+
 export function readHostTools(home: string): HostToolSettings {
+  const settings = readStoredHostTools(home)
+  return vmUnsupported.has(home) ? { ...settings, vm: false } : settings
+}
+
+function readStoredHostTools(home: string): HostToolSettings {
   const path = settingsPath(home)
   if (!existsSync(path)) return { denyServerTools: false, approvalPolicy: 'ask', ...COMPUTERS_ON, managedBrowser: false, fileTransferMaxMiB: FILE_TRANSFER_DEFAULT_MIB }
   try { return parseHostTools(JSON.parse(readFileSync(path, 'utf8'))) }
@@ -57,12 +67,12 @@ export function readHostTools(home: string): HostToolSettings {
 export function deniedHostToolsets(_home: string): string[] { return [] }
 
 export function saveHostTools(home: string, value: unknown): HostToolSettings {
-  const previous = (() => { try { return readHostTools(home) } catch { return {} } })()
+  const previous = (() => { try { return readStoredHostTools(home) } catch { return {} } })()
   const settings = parseHostTools(value && typeof value === 'object' && !Array.isArray(value) ? {...previous,...value} : value)
   mkdirSync(home, { recursive: true, mode: 0o700 })
   const path = settingsPath(home)
   const temporary = path + '.' + randomUUID()
   writeFileSync(temporary, JSON.stringify(settings, null, 2) + '\n', { mode: 0o600 })
   renameSync(temporary, path)
-  return settings
+  return readHostTools(home)
 }

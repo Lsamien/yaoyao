@@ -55,7 +55,7 @@ await owner.loadURL(${JSON.stringify(origin+'/conversations')});});`)
    if(!path.startsWith(`/api/app/agents/${seed.agentId}/`))return route.continue()
    if(path.endsWith('/desktop-environment'))return route.fulfill({json:{hosts,online:true,local:permission}})
    if(path.endsWith('/cloud-computer')||path.endsWith('/cloud-computer/open'))return route.fulfill({json:{configured:true,running:true,connected:true}})
-   if(path.endsWith('/local-vm'))return route.fulfill({json:{enabled:true,image:true,container:'running',ready:true,mode:'per-bot',fixedCapacity:true}})
+   if(path.endsWith('/local-vm'))return route.fulfill({json:{enabled:true,image:true,container:'running',ready:true,mode:'shared',desktop:{display:2,running:true}}})
    if(path.endsWith('/managed-browser'))return route.fulfill({json:{enabled:true,available:true,open:true,generation:1,profile:'temporary',tabs:[{id:'tab',title:'托管网页',url:'https://example.com/',active:true}],downloads:[]}})
    if(path.endsWith('/managed-browser/action')){calls.push({op:'browser-action',key:'managed-browser',body:route.request().postDataJSON()});return route.fulfill({json:{ok:true}})}
    if(!path.includes('/computer'))return route.continue()

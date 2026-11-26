@@ -46,7 +46,7 @@ DNS 在虚拟机内映射为临时地址，连接时还原域名；Runner 经同
 
 1. 更新 Web、Runner 和 Hermes 工具桥。工具桥改动需要重新加载 Hermes，不能只复制文件。
 2. 动态 Docker/Podman：重新准备一次虚拟机镜像，会同时构建 `localhost/yaoyao/network:1`。需容器运行时支持 `/dev/net/tun` 和隔离网关的 `NET_ADMIN`；业务容器不会获得它们。
-3. Compose：使用重新生成的 `compose.desktops.yaml` 或 `compose.desktops.cursor.yaml` 构建并更新部署。每个桌面新增一个网络网关和独立 IPC 卷，Web 只读挂载该卷；桌面不挂载网关 IPC。自定义清单须增加 `networkSocketPath`，缺失时明确拒绝启用。
+3. Docker 版不支持虚拟机，原 Compose 固定桌面已删除。
 4. 在设置页保存代理并测试。旧实例的工作目录保留，网络模式变化由现有资源池在释放后重建容器。
 
 网关基于 [tun2socks 官方 Linux 配置](https://github.com/xjasonlyu/tun2socks/wiki/Examples)，固定使用 v2.6.0 源码构建；与示例不同，本实现没有备用直连网卡。

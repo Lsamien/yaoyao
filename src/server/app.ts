@@ -36,7 +36,7 @@ import {
 } from './security.js'
 import { UpstreamHttpError, UpstreamClient } from './upstream.js'
 import { createEmbeddedHermes, type EmbeddedHermes } from './hermes/embedded.js'
-import { readHostTools } from './hostToolSettings.js'
+import { markVmUnsupported, readHostTools } from './hostToolSettings.js'
 import { UploadStore } from './uploads.js'
 import { WorkspaceStore } from './workspaceStore.js'
 import { WorkspaceNodes } from './workspaceGateway.js'
@@ -153,6 +153,7 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const config = options.config ?? loadServerConfig()
   const runtimeAllowedHosts = new Set(config.allowedHosts)
   config.allowedHosts = runtimeAllowedHosts
+  if (config.deployment === 'docker') markVmUnsupported(config.home)
   const app = new Koa()
   app.proxy = false
   const csrf = new CsrfProtection(persistentCsrfSecret(config.home, options.csrfSecret), Boolean(config.tlsCert))
@@ -233,11 +234,11 @@ export function createApplication(options: ApplicationOptions = {}): Application
   workspaceNodes.sourceAllowed = (owner, nodeId, profile) => auth.canUseSource(owner, nodeId, profile)
   const runners=new RunnerHub(workspace,auth,workspaceNodes.local)
   runners.hermesUpstream=config.upstream.origin
-  runners.composeDesktops.desktops.push(...(config.composeDesktops??[]))
   const sharedComputers=new SharedComputers(workspace,auth,workspaceNodes,runners)
   const computerControls=new ComputerControlService(workspace,auth,workspaceNodes,runners)
   const localVm=new LocalVmService(workspace,auth,workspaceNodes,runners,sharedComputers,config)
   runners.localVmAllowed=(id,runnerId)=>localVm.allowed(id,runnerId)
+  workspaceNodes.computerEnvironment=(owner,agentId)=>localVm.environmentFor(owner,agentId)
   runners.controlAllowed=(id,runnerId)=>computerControls.allowed(id,runnerId)
   workspaceNodes.runnerTarget=(owner,nodeId,computer)=>runners.target(owner,nodeId,computer)
   const executionSettings=new ExecutionSettings(workspace,workspaceNodes,auth)
@@ -436,6 +437,8 @@ export function createApplication(options: ApplicationOptions = {}): Application
   const router = createApiRouter({
     onUserAccessChanged: async owner => {
       for (const c of workspace.list<{ id: string }>(owner, 'conversation')) await workspaceRuntime.stopConversation(owner, c.id)
+      // A revoked VM license stops the account's computer; its files stay for a later license.
+      if (!auth.canUseVm(owner)) await localVm.revokeUser(owner).catch(() => {})
     },
     workspace,
     config,

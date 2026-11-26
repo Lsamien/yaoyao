@@ -25,6 +25,7 @@ class Auth extends LocalAuthStore {
   override isUserActive(){return true}
   override pushAuthorizationVersion(){return this.version}
   override canUseSource(){return this.allowed}
+  override canUseVm(){return true}
 }
 let home:string,store:WorkspaceStore,auth:Auth,hub:RunnerHub,runner:RunnerAgent,config:RunnerConfiguration
 let web:Server,hermes:Server,ws:WebSocketServer,controller:AbortController,running:Promise<void>
@@ -161,15 +162,16 @@ it('rejects Profile collaboration on a Runner that does not advertise the execut
  const id=randomUUID()
  expect(()=>hub.target('owner','local',{environmentId:id,agentId:id,ownerKey:'owner',hostAccess:true,profileSession:true})).toThrow('不支持本机协作模式')
 })
-it.each([false,true])('admits Profile collaboration after an actual computer Runner handshake (Compose: %s)',async compose=>{
+it('admits Profile collaboration after an actual computer Runner handshake',async()=>{
  controller.abort();await running
- config.computers={runtime:'docker',imageId:'sha256:'+'0'.repeat(64),python:'/fixture/python',hermesSource:home,hermesHome:home,...(compose?{managedBy:'compose' as const}:{})}
+ config.computers={runtime:'docker',imageId:'sha256:'+'0'.repeat(64),python:'/fixture/python',hermesSource:home,hermesHome:home}
  runner=new RunnerAgent(config,home);controller=new AbortController();running=runner.run(controller.signal);void running.catch(()=>{})
  await vi.waitFor(()=>expect((runner as any).serverEpoch).toBeTruthy())
  const features=hub.summary(hub.records()[0]!).features
  expect(features).toContain('profile-computer-v1')
  expect(features).toEqual(expect.arrayContaining(['host-computer-tools-v1','computer-worker-v1','computer-control-v1']))
- if(compose)expect(features).toContain('compose-desktops-v1')
+ expect(features).toContain('bot-desktops-v1')
+ expect(features).not.toContain('compose-desktops-v1')
  const agent=store.createAgent('owner',{name:'协作握手',profile:'default',computer:'vm',execution:'computer',vmExecution:'profile'})
  expect(()=>hub.target('owner','local',{agentId:agent.id,environmentId:agent.id,ownerKey:'owner',hostAccess:true,profileSession:true})).not.toThrow()
 })

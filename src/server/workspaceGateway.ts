@@ -47,6 +47,8 @@ export interface GatewayFrame {
 export class WorkspaceNodes {
   runnerTarget?: (owner:string,nodeId:string,computer?:{environmentId:string;ownerKey:string;agentId:string})=>GatewayTarget|undefined
   sourceAllowed: (owner: string, nodeId: string, profile: string) => boolean = () => true
+  /** The account computer a Bot belongs to (assigned on first use). */
+  computerEnvironment?:(owner:string,agentId:string)=>string|undefined
   requireSource(owner: string, agent: { id?:string;nodeId: string; profile: string;computerEnvironmentId?:string }): void {
     requireSharedComputer(this.store,owner,agent)
     if (!this.sourceAllowed(owner, agent.nodeId, agent.profile)) throw new HttpError(403, '基础机器人未分配给当前账号', 'agent_source_forbidden')
@@ -101,7 +103,9 @@ export class WorkspaceNodes {
   targetForAgent(owner: string, agent: { id?:string;nodeId: string; remoteAgentId?: string;execution?:string;computer?:WorkspaceAgent['computer'];allowHostEnvironment?:boolean;vmExecution?:WorkspaceAgent['vmExecution'];temporaryGoalId?:string;helperRunnerId?:string;computerEnvironmentId?:string }): GatewayTarget {
     if(agent.execution==='computer'){
       if(!agent.id||agent.remoteAgentId)throw new HttpError(409,'隔离电脑需要当前服务器管理的机器人','computer_agent_required')
-      const target=this.runnerTarget?.(owner,agent.nodeId,{environmentId:agent.computerEnvironmentId??agent.id,agentId:agent.id,ownerKey:createHash('sha256').update(owner).digest('hex')})
+      // Persistent Bots always run in their account computer, never a computer of their own.
+      const environmentId=agent.computerEnvironmentId??(agent.temporaryGoalId?undefined:this.computerEnvironment?.(owner,agent.id))??agent.id
+      const target=this.runnerTarget?.(owner,agent.nodeId,{environmentId,agentId:agent.id,ownerKey:createHash('sha256').update(owner).digest('hex')})
       if(agent.computerEnvironmentId&&this.store.require<import('./sharedComputers.js').SharedComputer>(owner,'shared-computer',agent.computerEnvironmentId).runnerId!==target?.runner?.id)throw new HttpError(409,'共享电脑的原执行节点已变化，请先恢复原节点','shared_runner_changed')
       if(agent.helperRunnerId&&target?.runner?.id!==agent.helperRunnerId)throw new HttpError(409,'临时助手的原执行节点已变化，请创建新助手','helper_runner_changed')
       if(!target)throw new HttpError(409,'隔离电脑需要连接执行节点','computer_runner_required')

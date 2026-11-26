@@ -257,3 +257,28 @@ yaovi-agent 在内置 Hermes 的同时还做了很多产品层改动，本方案
 - 内置内核多账号测试改为断言普通聊天接口对所有账号返回 403/404。
 - 用构建产物启动服务并在浏览器中创建管理员：旧链接全部跳转到 `/conversations`，页面无控制台错误，也没有 4xx 请求。
 - 剩余 Playwright 套件仍依赖旧的假 9119 夹具，本次只做了能被 `--list` 解析的修改，未实际运行。
+
+
+## 14. 虚拟机重新设计（2026-11-26，`only-0.1` 分支）
+
+用户要求：Docker 版不支持虚拟机；虚拟机按用户单独许可、默认关闭（管理员默认可用）；单个用户一台虚拟机，不同 Bot 共享这台虚拟机但分配不同桌面；参考 yaovi-agent。确认的选择：改造现有 XFCE/Cursor 镜像（保留 arm64），同一账号共用工作目录，旧虚拟机自动迁移。
+
+### 实现
+
+- **Docker 版**：`YAOYAO_DEPLOYMENT=docker`（或旧的 `HERMES_YAOYAO_LOCAL_VM_HOST=runner`）时 `readHostTools().vm` 恒为 false，所有虚拟机接口返回 `local_vm_docker_unsupported`。删除 Compose 固定桌面：`compose.desktops*.yaml`、`deploy/compose-desktops*.json`、`compose_bridge.py`、生成脚本、服务端 `composeDesktops.ts`、Runner `compose.ts` 及托管网络中的 Compose 中继。
+- **许可**：账号增加 `vmLicensed`，`LocalAuthStore.canUseVm()` 对管理员恒为真；`runnerHub.computerRunner()` 统一检查总开关和许可。改许可会提升账号授权版本，进行中的虚拟机请求立即失效；`onUserAccessChanged` 在撤销时用服务端授权停止该账号的虚拟机。用户管理每行增加“虚拟机”开关。
+- **一个账号一台虚拟机**：所有本地 Bot 加入账号唯一的托管共享组（`managedLocalVm`）；`WorkspaceNodes.computerEnvironment` 保证持久 Bot 在执行时总是进入账号虚拟机。取消“每个 Bot 独立/共享桌面”模式和手动共享电脑。
+- **每个 Bot 一个桌面**：镜像新增 `/usr/local/bin/yaoyao-desktop`（标签 `cn.samien.yaoyao.desktops=multi-v1`），为显示编号 2–64 各启动独立 X 服务器（标准镜像 Xtigervnc，Cursor 镜像 Xvfb）、窗口会话、私有 D-Bus、HOME 和 CUA 驱动套接字。Runner 新增 `BotDesktops`：在 Runner 私有数据库中预留编号和令牌（参考 yaovi-agent `sharedBox/assignments.ts`），容器重启后 Bot 回到同一编号。桌面工具、截图、人工接管按桌面使用独立的输入队列；接管只暂停对应 Bot。面板操作只作用于 Bot 自己的桌面。容量：同时运行的账号虚拟机 1–8，每台虚拟机的机器人桌面 1–8（默认 4）。
+- **镜像升级**：旧镜像不再算“已就绪”；已有虚拟机在下次启动桌面时自动移除旧实例（保留数据）并换用新准备的同类镜像。
+- **迁移**：Runner 新增 `adopt` 操作。旧独立虚拟机的工作目录复制到 `workspace/migrated/<Bot>/`，浏览器资料复制到该 Bot 桌面的 HOME；在只读挂载源目录、无网络、uid 1000 的一次性容器中执行，不删除原数据。服务端记录 `local-vm-migration`，条件不满足时自动重试。
+- 托管 Runner 不再要求宿主机安装 `~/.hermes`：虚拟机工作目录固定为 `/home/cua/workspace`，配置中的 Python 路径改用内置内核。
+
+### 验证
+
+- `npm run typecheck`、`npm run build` 通过。
+- 真实 Docker（本机构建的标准镜像）：一个容器内两个 Bot 桌面互不干扰（截图、点击、`DISPLAY` 指向各自桌面），容量上限生效，释放后编号复用，容器重启后编号与 HOME 保留，旧虚拟机的文件和 Chrome 资料迁入后原目录不变；桌面启动约 1 秒。
+- 新增或改写测试：`botDesktops.test.ts`、`localVmRoutes.test.ts`（许可、单账号单虚拟机、Docker、撤销、迁移）、`localVm.test.ts`、`localAuth.test.ts`、`localVmImages.test.ts`、`localVmStartup.test.ts`、`runner.test.ts` 等。
+- `npm test`：除原有 28 个环境相关失败外，`managedBrowsers` 中一个 512 KiB 文件复制用例在本机约 6 秒、超过 5 秒默认超时；该用例在上一个提交上同样失败。
+- 桌面测试与原来一致（93 通过 / 25 失败）。Playwright 的电脑面板用例在上一个提交上已经无法打开会话（夹具仍基于旧架构），未作为验收依据。
+- 未在 macOS（Apple 芯片）和 Podman 上实际运行；Cursor 镜像的多桌面只按脚本路径实现，未实机验证。
+

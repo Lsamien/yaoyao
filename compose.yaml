@@ -25,8 +25,7 @@ services:
       # container's fixed 15300 port; configured public host names remain opt-in.
       HERMES_YAOYAO_ALLOWED_HOSTS: "localhost,127.0.0.1,${HERMES_YAOYAO_ALLOWED_HOSTS:-}"
       HERMES_YAOYAO_ALLOW_INSECURE_LAN: "1"
-      HERMES_YAOYAO_LOCAL_VM_HOST: "runner"
-      HERMES_YAOYAO_CHAT_CACHE_MODE: "${HERMES_YAOYAO_CHAT_CACHE_MODE:-prefer-local}"
+      YAOYAO_DEPLOYMENT: "docker"
       HERMES_YAOYAO_RELEASE_SOURCE: "${HERMES_YAOYAO_RELEASE_SOURCE:-https://github.com/Lsamien/yaoyao.git}"
       HERMES_YAOYAO_HOME: /home/node/.yaoyao
       HERMES_YAOYAO_APNS_KEY_FILE: "${HERMES_YAOYAO_APNS_KEY_FILE:-}"

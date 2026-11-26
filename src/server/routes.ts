@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { RegistrationLimiter } from './subaccountAccess.js'
 import { readServerIdentity, updateServerIdentity } from './serverIdentity.js'
 import { authorizeFileRead, fileAccessWorkingDirectory, readFileAccess, saveFileAccess } from './fileAccess.js'
-import { readHostTools, saveHostTools } from './hostToolSettings.js'
+import { readHostTools, saveHostTools, vmSupported } from './hostToolSettings.js'
 import type { ServerIdentity } from '../shared/serverIdentity.js'
 import type Koa from 'koa'
 import type { WorkspaceStore } from './workspaceStore.js'
@@ -589,8 +589,10 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     json(ctx, 200, saveFileAccess(dependencies.config.home, body(ctx)))
   })
   router.get('/api/app/settings/host-tools', ctx => {
-    dependencies.auth.require(ctx)
-    json(ctx, 200, readHostTools(dependencies.config.home))
+    const user = dependencies.auth.require(ctx), settings = readHostTools(dependencies.config.home)
+    const supported = vmSupported(dependencies.config.home), licensed = dependencies.auth.canUseVm(user.id)
+    // Administrators see the global switch; everyone else sees whether they may use a VM.
+    json(ctx, 200, { ...settings, vm: user.role === 'admin' ? settings.vm : settings.vm && licensed, vmSupported: supported, vmLicensed: licensed })
   })
   router.put('/api/app/settings/host-tools', ctx => {
     dependencies.auth.requireAdmin(ctx)
@@ -966,7 +968,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const username = typeof request.username === 'string' ? request.username : ''
     const password = typeof request.password === 'string' ? request.password : ''
-    json(ctx, 201, dependencies.auth.create(admin, username, password, request.assignedProfiles))
+    json(ctx, 201, dependencies.auth.create(admin, username, password, request.assignedProfiles, request.vmLicensed === true))
   })
   router.post('/api/app/admin/users/:userID/approve', async ctx => {
     dependencies.auth.requireAdmin(ctx)
@@ -990,6 +992,7 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
       assignedProfiles: request.assignedProfiles,
       enabled: typeof request.enabled === 'boolean' ? request.enabled : undefined,
       password: typeof request.password === 'string' ? request.password : undefined,
+      vmLicensed: typeof request.vmLicensed === 'boolean' ? request.vmLicensed : undefined,
     })
     await dependencies.onUserAccessChanged?.(userID)
     if (request.enabled === false || typeof request.password === 'string' || request.assignedProfiles !== undefined) {

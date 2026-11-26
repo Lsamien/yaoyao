@@ -165,5 +165,8 @@ describe('server security boundary', () => {
 it('ignores retired mounted-Hermes bridge settings',()=>{
   const mapped=loadServerConfig(isolatedEnv({HERMES_YAOYAO_LOCAL_VM_HOST:'runner',HERMES_YAOYAO_BRIDGE_MOUNTED:'1',HERMES_YAOYAO_BRIDGE_HOME:'/hermes'}))
   expect(mapped).not.toHaveProperty('hermesBridgeMount')
-  expect(mapped.localVmHost).toBe('runner')
+  // The old Docker marker still identifies a Docker deployment, which has no virtual machines.
+  expect(mapped.deployment).toBe('docker')
+  expect(loadServerConfig(isolatedEnv({YAOYAO_DEPLOYMENT:'docker'})).deployment).toBe('docker')
+  expect(loadServerConfig(isolatedEnv({})).deployment).toBe('native')
 })

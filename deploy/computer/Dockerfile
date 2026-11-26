@@ -95,7 +95,8 @@ COPY prepare-firefox.sh /usr/local/bin/prepare-yaoyao-firefox.sh
 RUN chmod 0755 /usr/local/bin/prepare-yaoyao-firefox.sh \
     && sed -i '2i /usr/local/bin/prepare-yaoyao-firefox.sh || exit 1' /usr/local/bin/start-openmausbot-cua-driver.sh
 
-COPY compose_bridge.py /usr/local/libexec/yaoyao/compose_bridge.py
 COPY skill_bundle.py /usr/local/libexec/yaoyao/skill_bundle.py
-RUN printf '\n[program:yaoyao-compose-desktop]\ncommand=python3 /usr/local/libexec/yaoyao/compose_bridge.py\nuser=root\nautorestart=unexpected\nexitcodes=0\nstartsecs=0\nstdout_logfile=/var/log/supervisor/yaoyao-compose.log\nstderr_logfile=/var/log/supervisor/yaoyao-compose.error.log\npriority=40\n' >> /etc/supervisor/supervisord.conf
-LABEL cn.samien.yaoyao.compose-desktop="1"
+COPY yaoyao-desktop.py /usr/local/bin/yaoyao-desktop
+RUN chmod 0755 /usr/local/bin/yaoyao-desktop
+# Per-Bot desktops (displays 2..64) inside one account container.
+LABEL cn.samien.yaoyao.desktops="multi-v1"

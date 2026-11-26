@@ -98,7 +98,7 @@ docker compose --env-file docker.env up -d --build
 
 宿主机连接、局域网访问、验证及升级步骤见 [Docker 部署说明](docs/docker-install.md)。
 
-需要随 Docker Web 部署电脑环境，可使用 `compose.desktops.yaml`（两台标准桌面）或 `compose.desktops.cursor.yaml`（一台 Cursor Universal 开发桌面）。Cursor 方案基于 `public.ecr.aws/k0i0n2g5/cursorenvironments/universal:sand-box-latest` 加入夭夭桌面桥接层，配置与启动命令见 [Cursor 桌面部署](docs/docker-install.md#cursor-universal-可选配置)。
+Docker 版不支持虚拟机；需要虚拟机时请使用 macOS App 或 npm 安装，见 [本地虚拟机](docs/local-vm.md)。
 
 ## iOS
 

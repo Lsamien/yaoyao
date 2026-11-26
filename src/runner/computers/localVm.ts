@@ -4,13 +4,12 @@ import type { DatabaseSync } from 'node:sqlite'
 import { ComputerImages } from './images.js'
 import { ComputerError } from './container.js'
 import { UNCONFIGURED_COMPUTER_IMAGE } from '../../shared/runner.js'
-import type { LocalVmMode, LocalVmStatus } from '../../shared/localVm.js'
+import type { LocalVmStatus } from '../../shared/localVm.js'
 import {LOCAL_VM_IMAGES, DEFAULT_VM_IDLE_STOP_MINUTES, MAX_VM_IDLE_STOP_MINUTES, type LocalVmImageKey, type LocalVmImageOption} from '../../shared/localVm.js'
 import type { ComputerRuntime, ComputerTarget } from '../worker/gateway.js'
-import {ComposeComputerProvider} from './compose.js'
-import {COMPOSE_DESKTOP_IMAGE} from '../../shared/composeDesktops.js'
+import {DEFAULT_DESKTOPS_PER_COMPUTER,MAX_DESKTOPS_PER_COMPUTER} from './desktops.js'
 
-type State = { imageId: string; images?: Partial<Record<LocalVmImageKey,string>>; mode: LocalVmMode; maxInstances: number; idleStopMinutes?: number; job?: LocalVmStatus['job'] }
+type State = { imageId: string; images?: Partial<Record<LocalVmImageKey,string>>; maxInstances: number; maxDesktops?: number; idleStopMinutes?: number; job?: LocalVmStatus['job'] }
 
 /** Settings prepares trusted recipes; each desktop keeps one immutable image. */
 export class LocalVmImages {
@@ -24,16 +23,20 @@ export class LocalVmImages {
     this.images = new ComputerImages(runtime.config.runtime)
     db.exec('CREATE TABLE IF NOT EXISTS local_vm_runtime(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL)')
     const row = db.prepare('SELECT value FROM local_vm_runtime WHERE id=1').get() as {value:string}|undefined
-    this.state = row ? JSON.parse(row.value) : {imageId:runtime.config.imageId,mode:'per-bot',maxInstances:runtime.config.maxConcurrent ?? 2}
-    if(runtime.provider.fixedCapacity)this.state={imageId:COMPOSE_DESKTOP_IMAGE,mode:'shared',maxInstances:2}
+    // One computer per account; `maxInstances` caps how many accounts' computers run at once.
+    const saved = row ? JSON.parse(row.value) : {imageId:runtime.config.imageId,maxInstances:runtime.config.maxConcurrent ?? 2}
+    delete saved.mode
+    this.state = saved
     // Preserve an already selected image when migrating; old archives and workspaces are untouched.
-    if (!runtime.provider.fixedCapacity && !row && db.prepare("SELECT name FROM sqlite_master WHERE name='managed_image_selection'").get()) {
+    if (!row && db.prepare("SELECT name FROM sqlite_master WHERE name='managed_image_selection'").get()) {
       const old = db.prepare('SELECT value FROM managed_image_selection WHERE id=1').get() as {value:string}|undefined
       if (old) this.state.imageId = JSON.parse(old.value).active ?? this.state.imageId
     }
     runtime.config.imageId = this.state.imageId
     this.state.images??={standard:this.state.imageId}
     runtime.pool.limits.concurrent = this.state.maxInstances
+    runtime.desktops.limit = () => this.state.maxDesktops ?? DEFAULT_DESKTOPS_PER_COMPUTER
+    runtime.imageUpgrade = imageId => this.upgradeFor(imageId)
     runtime.pool.idleStopMinutes = this.state.idleStopMinutes ?? DEFAULT_VM_IDLE_STOP_MINUTES
     runtime.retainDesktops = true
     this.releaseMaintenance = runtime.pool.holdMaintenance()
@@ -59,12 +62,11 @@ export class LocalVmImages {
     return Promise.all(LOCAL_VM_IMAGES.map(async option=>{
       const imageId=this.state.images?.[option.key]
       let ready=false
-      if(imageId&&imageId!==UNCONFIGURED_COMPUTER_IMAGE)try{const image=await this.images.inspect(imageId);ready=(image.imageKey??'standard')===option.key}catch{}
+      if(imageId&&imageId!==UNCONFIGURED_COMPUTER_IMAGE)try{const image=await this.images.inspect(imageId);ready=(image.imageKey??'standard')===option.key&&image.desktops==='multi-v1'}catch{}
       return {...option,ready,...(ready?{imageId}:{})}
     }))
   }
   async select(meta:ComputerTarget,key:LocalVmImageKey,authorize:()=>void) {
-    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面镜像由 Compose 配置')
     await this.ready;authorize();this.runtime.assertTarget(meta)
     const release=this.runtime.pool.beginMaintenance({allowIdle:true})
     try {
@@ -79,11 +81,6 @@ export class LocalVmImages {
   }
   async status(owner?:string): Promise<LocalVmStatus> {
     await this.ready
-    if(this.runtime.provider instanceof ComposeComputerProvider){
-      const desktops=await this.runtime.provider.inventory()
-      this.runtime.pool.limits.concurrent=Math.max(1,desktops.length)
-      return {configured:true,executionHost:'runner',fixedCapacity:true,desktops,daemonUp:true,image:desktops.some((d:any)=>d.ready),imageId:COMPOSE_DESKTOP_IMAGE,mode:'shared',maxInstances:desktops.length,busy:false}
-    }
     if(this.releaseMaintenance&&!this.pending&&this.state.job?.state==='failed') {
       try{await this.cleanup(this.state.job.id);this.releaseMaintenance();this.releaseMaintenance=undefined}catch{}
     }
@@ -94,28 +91,25 @@ export class LocalVmImages {
       try { await this.images.inspect(this.state.imageId);image=true } catch { problem='本地虚拟机镜像尚未就绪，请重新准备' }
     }
     return {configured:true,runtime:this.runtime.config.runtime,daemonUp,image,imageId:image?this.state.imageId:undefined,images:await this.options(),
-      mode:this.state.mode,maxInstances:this.state.maxInstances,idleStopMinutes:this.runtime.pool.idleStopMinutes,busy:!!this.pending||!!this.releaseMaintenance,problem,job:this.state.job,
-      instances:owner?this.runtime.pool.status(owner).map(row=>({id:row.environmentId,status:row.status})):[]}
+      mode:'shared',maxInstances:this.state.maxInstances,maxDesktops:this.state.maxDesktops??DEFAULT_DESKTOPS_PER_COMPUTER,idleStopMinutes:this.runtime.pool.idleStopMinutes,busy:!!this.pending||!!this.releaseMaintenance,problem,job:this.state.job,
+      instances:owner?this.runtime.pool.status(owner).map(row=>({id:row.environmentId,status:row.status,desktops:this.runtime.desktops.list(owner,row.environmentId).length})):[]}
   }
   async idlePolicy(minutes:number) {
-    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面的停止策略由 Compose 管理')
     if(!Number.isSafeInteger(minutes)||minutes<0||minutes>MAX_VM_IDLE_STOP_MINUTES)throw new ComputerError('local_vm_idle_policy_invalid','请选择有效的空闲停止时间')
     await this.ready
     this.state.idleStopMinutes=minutes;this.runtime.pool.idleStopMinutes=minutes;this.save()
     return this.status()
   }
-  async policy(mode:LocalVmMode,maxInstances:number) {
-    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面数量与共享方式由 Compose 固定，不能在界面修改')
+  async policy(maxInstances:number,maxDesktops?:number) {
+    if(maxDesktops!==undefined&&(!Number.isInteger(maxDesktops)||maxDesktops<1||maxDesktops>MAX_DESKTOPS_PER_COMPUTER))throw new ComputerError('local_vm_policy_invalid','每台虚拟机的桌面数量无效')
     await this.ready
-    // Sharing changes future Agent bindings; an idle desktop can keep running.
-    // Image preparation still requires every desktop to be stopped.
+    // Limits apply to new computers and new Bot desktops; running ones keep going.
     const release=this.runtime.pool.beginMaintenance({allowIdle:true})
-    try { this.state.mode=mode;this.state.maxInstances=maxInstances;this.runtime.pool.limits.concurrent=maxInstances;this.save() }
+    try { this.state.maxInstances=maxInstances;if(maxDesktops!==undefined)this.state.maxDesktops=maxDesktops;this.runtime.pool.limits.concurrent=maxInstances;this.save() }
     finally { release() }
     return this.status()
   }
   async prepare(id:string,check:()=>Promise<void>,key:LocalVmImageKey='standard') {
-    if(this.runtime.provider.fixedCapacity)throw new ComputerError('compose_desktop_managed','桌面镜像由 Compose 配置，无需在界面准备')
     await this.ready;await check()
     if(this.state.job?.id===id){if((this.state.job.imageKey??'standard')!==key)throw new ComputerError('idempotency_conflict','请求编号已用于其他镜像');return this.status()}
     if(this.pending||this.closed)throw new ComputerError('local_vm_busy','本地虚拟机正在准备，请稍后查看')
@@ -137,7 +131,8 @@ export class LocalVmImages {
         this.images.verify=verify
         const ids=(await this.images.run(this.images.runtime,['image','ls','--no-trunc','--quiet','--filter','label=cn.samien.yaoyao.computer-image=1'])).trim().split(/\s+/).filter(Boolean)
         let image
-        for(const value of [this.state.images?.[key],...ids].filter((id):id is string=>!!id&&id!==UNCONFIGURED_COMPUTER_IMAGE)) { try{const candidate=await this.images.inspect(value);if((candidate.imageKey??'standard')===key){image=candidate;break}}catch{} }
+        // Images from before per-Bot desktops are rebuilt; their containers upgrade on next start.
+        for(const value of [this.state.images?.[key],...ids].filter((id):id is string=>!!id&&id!==UNCONFIGURED_COMPUTER_IMAGE)) { try{const candidate=await this.images.inspect(value);if((candidate.imageKey??'standard')===key&&candidate.desktops==='multi-v1'){image=candidate;break}}catch{} }
         const recipe=[join(dirname(this.runtime.script),'computer-image'),join(dirname(this.runtime.script),'../computers/computer-image'),resolve('deploy/computer')].find(p=>existsSync(join(p,'Dockerfile')))
         if(!recipe)throw new Error('缺少本地虚拟机资源，请重新安装 App')
         if(image){progress('正在准备虚拟机网络网关');await this.images.prepareNetwork(recipe);await check();await verify(image)}
@@ -148,7 +143,7 @@ export class LocalVmImages {
         await check();const previous=this.state.images![key];this.state.images![key]=image.imageId
         // Preparing a second image must not change an existing desktop's choice.
         if(this.state.imageId===UNCONFIGURED_COMPUTER_IMAGE||this.state.imageId===previous){this.state.imageId=image.imageId;this.runtime.config.imageId=image.imageId}
-        this.state.job={id,state:'complete',imageKey:key,message:'镜像已就绪，可在机器人的电脑面板中选择并创建桌面'};this.save()
+        this.state.job={id,state:'complete',imageKey:key,message:'镜像已就绪，已开通的账号可在机器人的电脑面板中启动自己的桌面'};this.save()
       } catch(error) {
         this.state.job={id,state:'failed',imageKey:key,message:error instanceof Error?error.message.slice(0,240):'本地虚拟机准备失败'};this.save()
       } finally {
@@ -158,6 +153,16 @@ export class LocalVmImages {
       }
     })()
     return this.status()
+  }
+  /** The prepared per-Bot-desktop image replacing an older image of the same kind, if any. */
+  async upgradeFor(imageId:string):Promise<string|undefined>{
+    await this.ready
+    let current
+    try{current=await this.images.inspect(imageId)}catch{return undefined}
+    if(current.desktops==='multi-v1')return undefined
+    const next=this.state.images?.[current.imageKey??'standard']
+    if(!next||next===imageId||next===UNCONFIGURED_COMPUTER_IMAGE)return undefined
+    try{return (await this.images.inspect(next)).desktops==='multi-v1'?next:undefined}catch{return undefined}
   }
   async close() { this.closed=true;await this.ready;await this.pending }
 }

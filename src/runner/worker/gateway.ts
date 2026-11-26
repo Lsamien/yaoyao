@@ -13,11 +13,10 @@ import type {GatewayFrame,GatewayTarget} from '../../server/workspaceGateway.js'
 import {ProfileComputerSession} from './profileSession.js'
 import {UNCONFIGURED_COMPUTER_IMAGE} from '../../shared/runner.js'
 import type {RunnerConfiguration} from '../../shared/runner.js'
-import {ContainerComputerProvider,ComputerError,COMPUTER_WORKSPACE,CUA_DRIVER,CUA_SOCKET,type ComputerSpecification} from '../computers/container.js'
+import {ContainerComputerProvider,ComputerError,COMPUTER_WORKSPACE,CUA_DRIVER,type ComputerSpecification} from '../computers/container.js'
 import {ComputerPool,type ComputerLease} from '../computers/pool.js'
 import {needsVmLease,softComputerFailure} from '../computers/computerFailures.js'
-import {ComposeComputerProvider} from '../computers/compose.js'
-import {COMPOSE_DESKTOP_IMAGE,type DesktopRelay} from '../../shared/composeDesktops.js'
+import {BotDesktops,type BotDesktop} from '../computers/desktops.js'
 import {ComputerControls} from './control.js'
 import {ComputerPublicProxy} from '../network/computerProxy.js'
 import {HermesWorkerProcess,type WorkerModel,type WorkerProxyEnvironment,type WorkerContextConfiguration,type WorkerTool,type WorkerFrame} from './process.js'
@@ -30,7 +29,7 @@ import {copyBetweenEndpoints} from '../../server/fileTransfer.js'
 
 export interface ComputerTarget {environmentId:string;ownerKey:string;agentId:string;hostAccess?:boolean;profileSession?:boolean;hermesRuntime?:boolean;fileTransferMaxBytes?:number}
 export interface WorkerSession {agentId?:string;id:string;profile:string;ownerKey:string;environmentId:string;cwd:string;configuredCwd:string;history:any[];outcome?:'complete'|'failed'|'uncertain';vmExecution?:'profile';profileSessionId?:string;hermesRuntime?:boolean;stopPending?:boolean}
-interface Live {toolsOnly?:boolean;workMarker?:string;paused?:boolean;desktop?:{width:number;height:number};pauseJob?:Promise<void>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxyHandle?:ProxyHandle;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease?:ComputerLease;acquiring?:Promise<ComputerLease>;leaseController?:AbortController;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
+interface Live {botDesktop?:BotDesktop;toolsOnly?:boolean;workMarker?:string;paused?:boolean;desktop?:{width:number;height:number};pauseJob?:Promise<void>;segment?:number;toolCalls:Set<Promise<unknown>>;journal:Map<string,{name:string;result:unknown}>;proxyHandle?:ProxyHandle;session:WorkerSession;model:WorkerModel;contextConfig?:WorkerContextConfiguration;proxyEnv?:WorkerProxyEnvironment;lease?:ComputerLease;acquiring?:Promise<ComputerLease>;leaseController?:AbortController;controller:AbortController;worker?:HermesWorkerProcess;finishing?:Promise<void>;stopping?:Promise<void>;releasing?:Promise<void>;images:any[];running:boolean;received:boolean}
 const object=(properties:Record<string,unknown>,required:string[])=>({type:'object',properties,required,additionalProperties:false})
 const text={type:'string'}
 const TOOLS:WorkerTool[]=[
@@ -84,8 +83,11 @@ export class ComputerRuntime {
   assertNetworkReady(){if(this.proxyUpdating||this.proxySettings&&this.proxyPreparedRevision!==this.proxySettings.revision)throw new HttpError(409,'虚拟机代理正在更新或尚未就绪，请重试','computer_network_unavailable')}
   get network(){return this.proxySettings?.enabled?'managed-proxy' as const:this.config.network??'none'}
   retainDesktops=false
+  /** Set by the local VM settings: the replacement for an image without per-Bot desktops. */
+  imageUpgrade?:(imageId:string)=>Promise<string|undefined>
   readonly controls:ComputerControls
   readonly provider:ContainerComputerProvider
+  readonly desktops:BotDesktops
   readonly pool:ComputerPool
   readonly ready:Promise<void>
   readonly config:NonNullable<RunnerConfiguration['computers']>
@@ -94,16 +96,13 @@ export class ComputerRuntime {
   readonly script:string
   readonly proxyScript:string
   private proxyShares=new Map<string,{started:Promise<ComputerPublicProxy|ManagedProxy>;users:number}>()
-  constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,relay?:DesktopRelay,readonly hermesTarget?:GatewayTarget){
+  constructor(readonly db:DatabaseSync,config:RunnerConfiguration,readonly home:string,script?:string,readonly hermesTarget?:GatewayTarget){
     if(!config.computers)throw new HttpError(409,'执行节点尚未配置隔离电脑','computer_unavailable')
     this.config=config.computers
     this.script=script??join(dirname(fileURLToPath(import.meta.url)),'hermes_worker.py')
     this.proxyScript=existsSync(join(dirname(this.script),'guest_proxy.py'))?join(dirname(this.script),'guest_proxy.py'):join(dirname(this.script),'../network/guest_proxy.py')
-    if(this.config.managedBy==='compose'){
-      if(!relay)throw new HttpError(409,'缺少 Compose 桌面连接','compose_desktop_unavailable')
-      this.config.imageId=COMPOSE_DESKTOP_IMAGE;this.config.network='none'
-      this.provider=new ComposeComputerProvider(config.runnerId,home,relay)
-    }else this.provider=new ContainerComputerProvider(this.config.runtime,config.runnerId,home)
+    this.provider=new ContainerComputerProvider(this.config.runtime,config.runnerId,home)
+    this.desktops=new BotDesktops(db,this.provider)
     this.pool=new ComputerPool(db,this.provider,{concurrent:this.config.maxConcurrent??2,environments:32,ttlMs:30000})
     db.exec('CREATE TABLE IF NOT EXISTS retired_computers(id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,spec TEXT)')
     db.exec('CREATE TABLE IF NOT EXISTS computer_sessions(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
@@ -160,6 +159,7 @@ export class ComputerRuntime {
     spec??=this.pool.definition(meta.ownerKey,meta.environmentId)
     if(spec)this.db.prepare('UPDATE retired_computers SET spec=? WHERE id=?').run(JSON.stringify(spec),meta.environmentId)
     await this.pool.retire(meta.ownerKey,meta.environmentId)
+    this.desktops.forget(meta.ownerKey,meta.environmentId)
     if(spec)await this.provider.deleteWorkspace(spec)
     const sessions=(this.db.prepare('SELECT id,value FROM computer_sessions').all() as {id:string;value:string}[]).filter(row=>{const session=JSON.parse(row.value);return session.environmentId===meta.environmentId&&session.ownerKey===meta.ownerKey})
     for(const row of sessions){if(!/^[0-9a-f-]{36}$/.test(row.id))throw new Error('电脑会话编号无效');await rm(join(this.home,'workers',row.id),{recursive:true,force:true});this.db.prepare('DELETE FROM computer_sessions WHERE id=?').run(row.id)}
@@ -177,10 +177,10 @@ export class ComputerRuntime {
     if(this.hermesTarget)throw new HttpError(409,'模型配置由 Hermes 会话管理','computer_hermes_owned')
     return this.resolveProfile(profile,'resolve',signal)
   }
-  async resolveWorkspace(profile:string,signal?:AbortSignal){
-    // VM paths belong to the VM. A Profile's host cwd is resolved by Hermes.
-    if(this.hermesTarget)return {type:'resolved',cwd:COMPUTER_WORKSPACE,configuredCwd:'.'}
-    return this.resolveProfile(profile,'resolve-workspace',signal)
+  async resolveWorkspace(_profile:string,_signal?:AbortSignal){
+    // VM paths belong to the VM: every Bot of an account works in the shared
+    // /home/cua/workspace. No host Hermes installation is consulted.
+    return {type:'resolved',cwd:COMPUTER_WORKSPACE,configuredCwd:'.'}
   }
   async extractMemory(profile: string, prompt: string, signal?: AbortSignal): Promise<string> {
     if(this.hermesTarget){
@@ -211,27 +211,80 @@ export class ComputerRuntime {
   private async resolveProfile(profile:string,mode:'resolve'|'resolve-workspace',signal?:AbortSignal){
     const resolver=new HermesWorkerProcess(this.config.python,this.script,{mode,profile,defaultCwd:COMPUTER_WORKSPACE,hermesSource:this.config.hermesSource,hermesHome:this.config.hermesHome})
     const abort=()=>{void resolver.close()};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort()
-    try{const result=await resolver.wait('resolved');return this.provider.fixedCapacity?{...result,cwd:COMPUTER_WORKSPACE}:result}finally{signal?.removeEventListener('abort',abort);await resolver.close()}
+    try{return await resolver.wait('resolved')}finally{signal?.removeEventListener('abort',abort);await resolver.close()}
   }
   async restoreDesktop(meta:ComputerTarget,authorize:()=>void){
-    if(this.provider.fixedCapacity)return
     this.assertTarget(meta);authorize();this.assertNetworkReady()
     const spec=this.pool.definition(meta.ownerKey,meta.environmentId)
-    if(spec)await this.pool.desktop({...spec,network:this.network},'restore',authorize)
+    if(!spec)return
+    await this.pool.desktop({...spec,network:this.network},'restore',authorize)
+    // Bring back every Bot desktop this computer had, each on its own display.
+    for(const desktop of this.desktops.list(meta.ownerKey,meta.environmentId))await this.desktops.ensure({...spec,network:this.network},desktop.agentId,authorize).catch(()=>{})
   }
-  async desktop(meta:ComputerTarget,profile:string,action:'create'|'start'|'stop'|'recreate'|'remove',authorize:()=>void){
-    if(this.provider.fixedCapacity)throw new HttpError(409,'桌面由 Compose 创建和管理，不能在界面增删或重建','compose_desktop_managed')
+  /** The account computer this Bot's desktop lives in. */
+  computerSpec(meta:ComputerTarget):ComputerSpecification{
+    return {id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.imageFor(meta),cwd:this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE,network:this.network}
+  }
+  /** A Bot's panel manages that Bot's own desktop. The account computer itself
+   * starts on demand and stops by the idle policy, an administrator or a revoked license. */
+  async desktop(meta:ComputerTarget,_profile:string,action:'create'|'start'|'stop'|'recreate'|'remove',authorize:()=>void){
     this.assertTarget(meta);authorize()
-    // Stopping/removing an existing desktop must remain possible even when
-    // its Profile or model was removed or is temporarily misconfigured.
+    // Stopping/removing a desktop must remain possible even when its Profile or model is misconfigured.
     if(action==='stop'||action==='remove'){
       const spec=this.pool.definition(meta.ownerKey,meta.environmentId)
-      if(spec)await this.pool.desktop(spec,action,authorize)
+      if(!spec)return
+      if(action==='stop')await this.desktops.stop(spec,meta.agentId,authorize)
+      else await this.desktops.release(spec,meta.agentId,authorize)
       return
     }
     this.assertNetworkReady()
-    const resolved=await this.resolveWorkspace(profile);authorize();this.assertNetworkReady()
-    await this.pool.desktop({id:meta.environmentId,ownerKey:meta.ownerKey,imageId:this.imageFor(meta),cwd:meta.environmentId!==meta.agentId?(this.pool.definition(meta.ownerKey,meta.environmentId)?.cwd??COMPUTER_WORKSPACE):resolved.cwd,network:this.network},action,authorize)
+    let spec=this.computerSpec(meta)
+    // A computer from before per-Bot desktops moves to the newly prepared image;
+    // removing the instance keeps its workspace and user data.
+    const upgrade=await this.imageUpgrade?.(spec.imageId)
+    if(upgrade){
+      const existing=this.pool.definition(meta.ownerKey,meta.environmentId)
+      if(existing)await this.pool.desktop(existing,'remove',authorize)
+      this.db.prepare('INSERT INTO computer_image_bindings VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET image_id=excluded.image_id').run(meta.environmentId,meta.ownerKey,upgrade)
+      spec={...spec,imageId:upgrade}
+    }
+    const running=await this.provider.inspect(spec)
+    if(!running?.running)await this.pool.desktop(spec,this.pool.definition(meta.ownerKey,meta.environmentId)?'start':'create',authorize)
+    authorize()
+    if(action==='recreate')await this.desktops.stop(spec,meta.agentId,authorize)
+    await this.desktops.ensure(spec,meta.agentId,authorize)
+  }
+  /** Moves retired per-Bot computers into the account computer once. Old data is
+   * copied, never deleted: files go to workspace/migrated/<Bot>, browser profiles
+   * to that Bot's own desktop. Busy or not-yet-prepared computers are retried later. */
+  async adoptLegacy(ownerKey:string,environmentId:string,sources:{environmentId:string;agentId:string}[],authorize:()=>void){
+    this.db.exec('CREATE TABLE IF NOT EXISTS legacy_adoptions(source TEXT PRIMARY KEY,owner_key TEXT NOT NULL,target TEXT NOT NULL,adopted INTEGER NOT NULL)')
+    const done=(id:string)=>!!this.db.prepare('SELECT 1 FROM legacy_adoptions WHERE source=? AND owner_key=?').get(id,ownerKey)
+    const pending=sources.filter(source=>source.environmentId!==environmentId&&!done(source.environmentId))
+    const adopted:string[]=[]
+    if(!pending.length)return {adopted}
+    authorize();this.assertNetworkReady()
+    let spec=this.computerSpec({environmentId,ownerKey,agentId:environmentId})
+    const upgrade=await this.imageUpgrade?.(spec.imageId);if(upgrade&&!this.pool.definition(ownerKey,environmentId)){this.db.prepare('INSERT INTO computer_image_bindings VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET image_id=excluded.image_id').run(environmentId,ownerKey,upgrade);spec={...spec,imageId:upgrade}}
+    // The account computer needs its user data before profiles can move in; it stays stopped afterwards.
+    if(!this.pool.definition(ownerKey,environmentId))await this.pool.desktop(spec,'create',authorize)
+    const current=this.pool.definition(ownerKey,environmentId)!
+    if((await this.provider.inspect(current))?.running)await this.pool.desktop(current,'stop',authorize)
+    for(const source of pending){
+      authorize()
+      let old
+      try{old=this.pool.definition(ownerKey,source.environmentId)}catch{continue}
+      if(old)await this.pool.desktop(old,'remove',authorize)
+      const copied=await this.provider.adoptLegacy({...current,imageId:spec.imageId},source)
+      this.db.prepare('INSERT OR REPLACE INTO legacy_adoptions VALUES(?,?,?,?)').run(source.environmentId,ownerKey,environmentId,copied?1:0)
+      adopted.push(source.environmentId)
+    }
+    return {adopted}
+  }
+  /** Account computers are stopped as a whole (administrator, revoked license). */
+  async stopComputer(ownerKey:string,environmentId:string,action:'stop'|'remove',authorize:()=>void){
+    const spec=this.pool.definition(ownerKey,environmentId)
+    if(spec)await this.pool.desktop(spec,action,authorize)
   }
 }
 export class ComputerGateway {
@@ -266,7 +319,7 @@ export class ComputerGateway {
   }
   taskEnvironment?:()=>Promise<import('../../shared/executionEnvironment.js').TaskEnvironment|undefined>
   private get hermesManaged(){return this.meta.hermesRuntime===true}
-  private get rules(){const sharing=this.meta.environmentId!==this.meta.agentId?'多个机器人共用这台虚拟机：命令和文件操作并行执行，桌面操作交替进行；动手前注意其他机器人可能正在使用同一桌面，避免覆盖彼此的工作。':'';if(this.meta.profileSession)return `${sharing}${PROFILE_COMPUTER_RULES}\n${this.hermesManaged?HERMES_COMPUTER_RULES:SKILL_RULES}`;return `${sharing}${ISOLATED_COMPUTER_RULES}\n${this.hermesManaged?ISOLATED_HERMES_RULES:SKILL_RULES}`}
+  private get rules(){const sharing='同一账号的机器人共用这台虚拟机的文件和工作目录（/home/cua/workspace），但每个机器人有自己的桌面和浏览器资料：computer_desktop_state 和 computer_action 只操作你自己的桌面，computer_shell 打开的图形程序也显示在你的桌面上。修改共享文件前注意其他机器人可能正在使用。';if(this.meta.profileSession)return `${sharing}${PROFILE_COMPUTER_RULES}\n${this.hermesManaged?HERMES_COMPUTER_RULES:SKILL_RULES}`;return `${sharing}${ISOLATED_COMPUTER_RULES}\n${this.hermesManaged?ISOLATED_HERMES_RULES:SKILL_RULES}`}
   private team?:{id:string;catalog:WorkerTool[];call(name:string,args:Record<string,unknown>,callId:string):Promise<unknown>;workspaceMemory:boolean}
   constructor(readonly runtime:ComputerRuntime,readonly meta:ComputerTarget,readonly workId:string,readonly check:()=>Promise<void>,readonly publish:(body:Record<string,unknown>)=>Promise<any>,readonly profileTarget?:GatewayTarget){ }
   async connect(){this.runtime.assertTarget(this.meta);await this.runtime.ready;await this.authorized();if(this.hermesManaged&&!this.profileTarget)throw new HttpError(409,'缺少 Hermes 会话连接，不能回退到独立 Worker。','computer_profile_unavailable')}
@@ -508,7 +561,9 @@ export class ComputerGateway {
       }
       if(!lease)throw new HttpError(409,'电脑环境尚未就绪','computer_unavailable')
       return await this.runtime.pool.use(lease,async context=>{
-        const execute=(argv:string[],input?:Buffer,lane?:'exec'|'gui',user?:'cua'|'root')=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input,...(lane?{lane}:{}),...(user?{user}:{})})
+        const execute=(argv:string[],input?:Buffer,lane?:'exec'|'gui',user?:'cua'|'root',display?:number)=>this.runtime.provider.execute(this.spec(live.session),argv,{...context,input,...(lane?{lane}:{}),...(user?{user}:{}),...(display!==undefined?{display}:{})})
+        // This Bot's own desktop inside the account computer, started on first use.
+        const desktop=async():Promise<BotDesktop>=>live.botDesktop??=await this.runtime.desktops.ensure(this.spec(live.session),this.meta.agentId,context.authorize)
         if(name==='computer_export'){
           const body=z.object({path:pathField,name:z.string().min(1).max(240).optional()}).strict().parse(args)
           const snapshot=`/tmp/yaoyao-export-${randomUUID()}`
@@ -527,7 +582,8 @@ export class ComputerGateway {
         if(name==='computer_shell'){
           const body=z.object({command:z.string().min(1).max(65536),user:z.enum(['cua','root']).default('cua')}).strict().parse(args)
           const environment=await this.taskEnvironment?.()
-          try{const result=environment?await execute(['python3','-c',TASK_COMMAND],Buffer.from(JSON.stringify({command:body.command,environment})),undefined,body.user):await execute(['/bin/bash','-lc',body.command],undefined,undefined,body.user);await this.authorized();return redactTaskOutput({exitCode:0,...result},environment)}catch(error){if(typeof(error as any).code==='number')return redactTaskOutput({exitCode:(error as any).code,stdout:String((error as any).stdout??''),stderr:String((error as any).stderr??'')},environment);throw error}
+          const display=this.runtime.desktops.current(this.meta.ownerKey,this.meta.environmentId,this.meta.agentId)?.display
+          try{const result=environment?await execute(['python3','-c',TASK_COMMAND],Buffer.from(JSON.stringify({command:body.command,environment})),undefined,body.user,display):await execute(['/bin/bash','-lc',body.command],undefined,undefined,body.user,display);await this.authorized();return redactTaskOutput({exitCode:0,...result},environment)}catch(error){if(typeof(error as any).code==='number')return redactTaskOutput({exitCode:(error as any).code,stdout:String((error as any).stdout??''),stderr:String((error as any).stderr??'')},environment);throw error}
         }
         if(name==='computer_read_file'){
           const body=z.object({path:pathField}).strict().parse(args)
@@ -539,7 +595,7 @@ export class ComputerGateway {
         }
         if(name==='computer_action'){
           if(!live.desktop)throw new HttpError(409,'请先查看虚拟环境桌面','computer_frame_stale')
-          const frame=live.desktop,action=desktopAction.parse(args),common={scope:'desktop',session:`yaoyao-vm-${live.session.id}`}
+          const frame=live.desktop,action=desktopAction.parse(args),common={scope:'desktop',session:`yaoyao-vm-${live.session.id}`},own=await desktop()
           let tool:string,toolArgs:Record<string,unknown>,argv:string[]|undefined
           if(action.kind==='click'){
             if(action.x>=frame.width||action.y>=frame.height)throw new HttpError(400,'点击位置超出画面','computer_point_invalid')
@@ -547,14 +603,14 @@ export class ComputerGateway {
           }else if(action.kind==='drag'){
             if(action.fromX>=frame.width||action.toX>=frame.width||action.fromY>=frame.height||action.toY>=frame.height)throw new HttpError(400,'拖动位置超出画面','computer_point_invalid')
             tool='drag';toolArgs={}
-            argv=['env','DISPLAY=:1','xdotool','mousemove','--sync',String(action.fromX),String(action.fromY),'mousedown','1','mousemove','--sync',String(action.toX),String(action.toY),'mouseup','1']
+            argv=['env',`DISPLAY=:${own.display}`,'xdotool','mousemove','--sync',String(action.fromX),String(action.fromY),'mousedown','1','mousemove','--sync',String(action.toX),String(action.toY),'mouseup','1']
           }else if(action.kind==='text'){tool='type_text';toolArgs={...common,text:action.text}}
           else if(action.kind==='key'){
             const key=({Return:'enter',BackSpace:'backspace',Escape:'esc'} as Record<string,string>)[action.key]??action.key.toLowerCase()
             tool=action.modifiers.length?'hotkey':'press_key';toolArgs=action.modifiers.length?{...common,keys:[...action.modifiers,key]}:{...common,key}
           }else{tool='scroll';toolArgs={...common,x:Math.floor(frame.width/2),y:Math.floor(frame.height/2),by:'line',direction:action.direction,amount:action.amount}}
           live.desktop=undefined
-          const response=await execute(argv??[CUA_DRIVER,'call',tool!,JSON.stringify(toolArgs!),'--socket',CUA_SOCKET],undefined,'gui')
+          const response=await execute(argv??[CUA_DRIVER,'call',tool!,JSON.stringify(toolArgs!),'--socket',own.socket],undefined,'gui',undefined,own.display)
           let parsed:any;try{parsed=JSON.parse(response.stdout)}catch{}
           if(parsed?.code||parsed?.error||parsed?.isError)throw new HttpError(502,'电脑未接受这次输入，请刷新画面后重试','computer_action_failed')
           return {ok:true}
@@ -562,7 +618,8 @@ export class ComputerGateway {
         if(name==='computer_desktop_state'){
           z.object({}).strict().parse(args)
           const path=`/tmp/yaoyao-frame-${randomUUID()}.png`
-          const state=await execute([CUA_DRIVER,'call','get_desktop_state','{}','--socket',CUA_SOCKET,'--screenshot-out-file',path],undefined,'gui')
+          const own=await desktop()
+          const state=await execute([CUA_DRIVER,'call','get_desktop_state','{}','--socket',own.socket,'--screenshot-out-file',path],undefined,'gui',undefined,own.display)
           const data=(await execute(['base64','-w0',path])).stdout.trim()
           const header=Buffer.from(data.slice(0,32),'base64'),width=header.length>=24?header.readUInt32BE(16):0,height=header.length>=24?header.readUInt32BE(20):0
           if(width<1||height<1)throw new HttpError(502,'虚拟环境画面无效','computer_frame_failed')

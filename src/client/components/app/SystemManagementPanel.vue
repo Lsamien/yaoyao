@@ -301,6 +301,11 @@ function approve(user: ManagedUser) {
   void run(async () => { await approveUser(user.id, userAssignments.value[user.id] ?? []) })
 }
 
+function toggleVm(user: ManagedUser) {
+  if (user.vmLicensed && !window.confirm(`关闭“${user.username}”的虚拟机？正在运行的虚拟机会停止，工作文件和浏览器资料会保留。`)) return
+  void run(async () => { await updateUser(user.id, { vmLicensed: !user.vmLicensed }) })
+}
+
 function toggle(user: ManagedUser) {
   void run(async () => { await updateUser(user.id, { enabled: !user.enabled }) })
 }
@@ -450,7 +455,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
       <div v-for="user in users" :key="user.id" class="user">
         <span>
           <b>{{ user.username }}</b>
-          <small>{{ user.role === 'admin' ? '管理员' : user.registrationStatus === 'pending' ? '待管理员开通' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
+          <small>{{ user.role === 'admin' ? '管理员 · 可使用虚拟机' : user.registrationStatus === 'pending' ? '待管理员开通' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
         </span>
         <template v-if="user.role !== 'admin'">
           <label class="user-assignment">基础机器人
@@ -462,6 +467,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
           <button type="button" :aria-label="`为用户 ${user.username} 重置密码`" :disabled="busy" @click="reset(user)">重置密码</button>
           <button v-if="user.registrationStatus === 'pending'" type="button" :disabled="busy || !userAssignments[user.id]?.length" @click="approve(user)">分配并开通</button>
           <button v-else type="button" :aria-label="`${user.enabled ? '禁用' : '启用'}用户 ${user.username}`" :disabled="busy" @click="toggle(user)">{{ user.enabled ? '禁用' : '启用' }}</button>
+          <label v-if="user.registrationStatus !== 'pending'" class="user-vm"><input type="checkbox" role="switch" :checked="user.vmLicensed === true" :disabled="busy" :aria-label="`允许 ${user.username} 使用虚拟机`" @change="toggleVm(user)" />虚拟机</label>
           <button class="danger" type="button" :aria-label="`删除用户 ${user.username}`" :disabled="busy" @click="remove(user)">删除</button>
         </template>
       </div>
@@ -647,6 +653,8 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
 .user { display: flex; flex-wrap: wrap; padding: 12px 0; min-height: 58px; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
 .user > span { flex-basis: 100%; }
 .user-assignment { display: grid; flex: 1; min-width: 150px; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.user-vm { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 13px; color: var(--text-secondary); }
+.user-vm input { width: 18px; height: 18px; accent-color: var(--accent); }
 .user-assignment select, .create-assignment select { width: 100%; min-height: 76px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--text-primary); font: inherit; }
 .create-assignment { grid-column: 1 / -1; }
 .user span { display: flex; min-width: 0; flex: 1; flex-direction: column; }

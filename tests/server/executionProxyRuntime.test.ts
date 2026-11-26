@@ -67,6 +67,7 @@ it('uses the same proxy for human takeover and ends old control leases when the 
   vi.spyOn(runtime.provider,'verifyNetwork').mockResolvedValue()
   vi.spyOn(runtime,'resolveWorkspace').mockResolvedValue({type:'resolved',cwd:'/workspace',configuredCwd:'/workspace'})
   const ensure=vi.spyOn(runtime.provider,'ensure').mockResolvedValue({id:'fixture',containerId:'fixture',running:true,workspace:home,isolation:'container'})
+  const fakeDesktop={display:2,socket:'/run/user/1000/yaoyao-cua-2.sock',token:'fixture-token'};vi.spyOn(runtime.desktops,'ensure').mockImplementation(async(_spec,agentId)=>({...fakeDesktop,agentId}));vi.spyOn(runtime.desktops,'current').mockImplementation((_owner,_environment,agentId)=>({...fakeDesktop,agentId}))
   vi.spyOn(runtime.provider,'stop').mockResolvedValue();vi.spyOn(runtime.provider,'remove').mockResolvedValue()
   const close=vi.fn(async()=>{})
   vi.spyOn(ManagedProxy,'start').mockResolvedValue({close} as unknown as ManagedProxy)

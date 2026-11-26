@@ -11,8 +11,6 @@ import {
   loadAllowedHostsConfiguration,
   type AllowedHostsConfigurationSnapshot,
 } from './allowedHostsConfiguration.js'
-import {parseComposeDesktops} from './composeDesktops.js'
-import type {ComposeDesktop} from '../shared/composeDesktops.js'
 export { DEFAULT_APNS_TOPIC } from './apnsConfiguration.js'
 
 export interface APNsProviderConfig {
@@ -45,8 +43,8 @@ export interface ServerConfig {
   allowInsecureLan: boolean
   insecureLan: boolean
   production: boolean
-  localVmHost?: 'server' | 'runner'
-  composeDesktops?: ComposeDesktop[]
+  /** Docker deployments never run virtual machines. */
+  deployment?: 'native' | 'docker'
   releaseSource?: string
   releaseRoot?: string
   allowRemoteUpdate?: boolean
@@ -160,8 +158,8 @@ export function loadServerConfig(
   }
   const allowInsecureLan = flag(env.HERMES_YAOYAO_ALLOW_INSECURE_LAN)
   const production = env.NODE_ENV === 'production'
-  const localVmHost = env.HERMES_YAOYAO_LOCAL_VM_HOST?.trim() || 'server'
-  if(localVmHost!=='server'&&localVmHost!=='runner')throw new Error('HERMES_YAOYAO_LOCAL_VM_HOST must be server or runner')
+  // HERMES_YAOYAO_LOCAL_VM_HOST=runner was the marker of older Docker images.
+  const deployment = env.YAOYAO_DEPLOYMENT?.trim() === 'docker' || env.HERMES_YAOYAO_LOCAL_VM_HOST?.trim() === 'runner' ? 'docker' : 'native'
   const releaseSource = parseReleaseSource(env.HERMES_YAOYAO_RELEASE_SOURCE)
   const releaseRoot = resolve(env.HERMES_YAOYAO_RELEASE_ROOT?.trim() || `${homedir()}/.local/share/hermes-yaoyao`)
   const allowRemoteUpdate = flag(env.HERMES_YAOYAO_ALLOW_REMOTE_UPDATE)
@@ -201,8 +199,7 @@ export function loadServerConfig(
     allowInsecureLan,
     insecureLan,
     production,
-    localVmHost,
-    composeDesktops:parseComposeDesktops(env.HERMES_YAOYAO_COMPOSE_DESKTOPS),
+    deployment,
     releaseSource,
     releaseRoot,
     allowRemoteUpdate,

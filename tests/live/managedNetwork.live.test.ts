@@ -6,13 +6,12 @@ import {createServer} from 'node:net'
 import {randomUUID} from 'node:crypto'
 import {ManagedProxy} from '../../src/runner/network/managedProxy'
 import {ContainerComputerProvider} from '../../src/runner/computers/container'
-import {ComposeComputerProvider} from '../../src/runner/computers/compose'
 import {mkdtemp,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 const exec=promisify(execFile)
 const enabled=process.env.HERMES_YAOYAO_LIVE_TEST==='1'
-it.skipIf(!enabled).each(['pipe','compose'] as const)('routes all programs through %s transport and cannot connect directly after proxy failure',async transport=>{
+it.skipIf(!enabled).each(['pipe'] as const)('routes all programs through %s transport and cannot connect directly after proxy failure',async transport=>{
   const desktopId=randomUUID(),name='yaoyao-network-test-'+desktopId,connections:string[]=[]
   let reject=false,proxy:ManagedProxy|undefined
   const upstream=createServer(socket=>{
@@ -29,12 +28,7 @@ it.skipIf(!enabled).each(['pipe','compose'] as const)('routes all programs throu
   try{
     await exec('docker',['run','-d','--name',name,'--network','none','--dns','198.18.0.1','--cap-drop','ALL','--cap-add','NET_ADMIN','--device','/dev/net/tun','--env','YAOYAO_COMPOSE_DESKTOP_ID='+desktopId,'localhost/yaoyao/network:1','--init',...(transport==='compose'?['--socket']:[])])
     await exec('docker',['exec',name,'sh','-c','i=0; until ip link show tun0 >/dev/null 2>&1; do i=$((i+1)); test "$i" -lt 50 || exit 1; sleep .1; done'])
-    const relay=async(_id:string,operation:string,body:Record<string,unknown>)=>{
-      const code="import socket,http.client,json,sys\np=json.load(sys.stdin)\nc=http.client.HTTPConnection('localhost',timeout=5)\ns=socket.socket(socket.AF_UNIX);s.connect('/run/yaoyao-network/gateway.sock');c.sock=s\nc.request('POST','/'+p['operation'],body=json.dumps(p['body']),headers={'Content-Type':'application/json'})\nr=c.getresponse();data=r.read();assert r.status==200,data;print(data.decode())"
-      return await new Promise<any>((resolve,reject)=>{const child=spawn('docker',['exec','-i',name,'python3','-c',code],{stdio:'pipe'});let out='',err='';child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);child.once('error',reject);child.once('close',status=>{try{if(status)throw new Error(err);resolve(JSON.parse(out))}catch(error){reject(error)}});child.stdin.end(JSON.stringify({operation,body:{...body,desktopId}}))})
-    }
-    if(transport==='compose')await exec('docker',['exec',name,'sh','-c','i=0; until test -S /run/yaoyao-network/gateway.sock; do i=$((i+1)); test "$i" -lt 50 || exit 1; sleep .1; done'])
-    const provider=transport==='compose'?new ComposeComputerProvider(randomUUID(),'/tmp',relay):{openNetworkPipe:async()=>spawn('docker',['exec','-i',name,'python3','/usr/local/libexec/yaoyao/network_gateway.py'],{stdio:'pipe'})} as any
+    const provider={openNetworkPipe:async()=>spawn('docker',['exec','-i',name,'python3','/usr/local/libexec/yaoyao/network_gateway.py'],{stdio:'pipe'})} as any
     proxy=await ManagedProxy.start(provider,{id:randomUUID(),ownerKey:'fixture',imageId:'sha256:'+'a'.repeat(64)}, {enabled:true,protocol:'http',host:'127.0.0.1',port,username:'',revision:1},()=>{})
     expect((await guest(request)).stdout).toContain('through-proxy')
     expect(connections).toEqual(['CONNECT 1.1.1.1:80 HTTP/1.1'])

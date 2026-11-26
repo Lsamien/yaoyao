@@ -63,6 +63,8 @@ async function fixture(hermesManaged=false,bridgeVersion=2){
   const resolver=vi.spyOn(runtime,'resolve').mockRejectedValue(new Error('isolated Worker must not be used'))
   vi.spyOn(runtime,'resolveWorkspace').mockResolvedValue({type:'resolved',cwd:'/home/cua/workspace',configuredCwd:home})
   vi.spyOn(runtime.provider,'ensure').mockResolvedValue({id:'vm',containerId:'vm',running:true,workspace:'/home/cua/workspace',isolation:'container'})
+  // Bot desktops are verified live; here they are fixtures.
+  const fakeDesktop={display:2,socket:'/run/user/1000/yaoyao-cua-2.sock',token:'fixture-token'};vi.spyOn(runtime.desktops,'ensure').mockImplementation(async(_spec,agentId)=>({...fakeDesktop,agentId}));vi.spyOn(runtime.desktops,'current').mockImplementation((_owner,_environment,agentId)=>({...fakeDesktop,agentId}))
   vi.spyOn(runtime.provider,'inspect').mockResolvedValue({id:'vm',containerId:'vm',running:true,workspace:'/home/cua/workspace',isolation:'container'})
   vi.spyOn(runtime.provider,'stop').mockResolvedValue();vi.spyOn(runtime.provider,'remove').mockResolvedValue()
   vi.spyOn(runtime.provider,'capture').mockResolvedValue({data:'image',width:100,height:80,capturedAt:Date.now()})

@@ -11,7 +11,6 @@ import {ComputerRuntime} from '../../src/runner/worker/gateway'
 import {LocalVmImages} from '../../src/runner/computers/localVm'
 import {CUA_DRIVER,CUA_SOCKET} from '../../src/runner/computers/container'
 // @ts-expect-error Standalone deployment script.
-import {generateDesktopCompose} from '../../scripts/generate-desktop-compose.mjs'
 const exec=promisify(execFile)
 const enabled=!!process.env.YAOYAO_TEST_STANDARD_IMAGE&&!!process.env.YAOYAO_TEST_CURSOR_IMAGE
 const docker=(args:string[])=>exec('docker',args,{timeout:90000,maxBuffer:8*1024*1024})
@@ -67,31 +66,3 @@ it.skipIf(!enabled)('runs both images independently, preserves a selection and w
  }
 },240000)
 
-it.skipIf(!enabled)('runs mixed Compose desktops with isolated volumes and the same private bridge protocol',async()=>{
- const root=await mkdtemp(join(tmpdir(),'yaoyao-compose-images-')),project='yaoyao-image-test-'+randomUUID().slice(0,8)
- const entries=[{id:randomUUID(),service:'desktop-1',name:'Standard'},{id:randomUUID(),service:'desktop-2',name:'Cursor',imageKey:'cursor'}]
- let yaml=generateDesktopCompose(await readFile('compose.yaml','utf8'),entries)
- yaml=yaml.replace('${YAOYAO_DESKTOP_IMAGE:-hermes-yaoyao-desktop:0.4.0}',process.env.YAOYAO_TEST_STANDARD_IMAGE!).replace('${YAOYAO_CURSOR_DESKTOP_IMAGE:-yaoyao-desktop:cursor}',process.env.YAOYAO_TEST_CURSOR_IMAGE!)
- const config=join(root,'compose.yaml');await writeFile(config,yaml)
- const compose=['compose','--project-name',project,'--project-directory',process.cwd(),'-f',config]
- try{
-  await docker([...compose,'up','-d','--no-build','desktop-1','desktop-2'])
-  for(const [index,entry] of entries.entries()){
-   const id=(await docker([...compose,'ps','-q',entry.service])).stdout.trim()
-   const call=async(op:string,body={})=>{
-    const script="import http.client,socket,sys; c=http.client.HTTPConnection('localhost'); c.sock=socket.socket(socket.AF_UNIX); c.sock.connect('/run/desktop/desktop.sock'); c.request('POST',sys.argv[1],sys.argv[2]); r=c.getresponse(); print(r.read().decode())"
-    // Match Web's uid and read-only IPC mount, outside the desktop's private parent.
-    return JSON.parse((await docker(['run','--rm','--network','none','--cap-drop','ALL','--user','1000:1000','--mount',`type=volume,src=${project}_${entry.service}-ipc,dst=/run/desktop,readonly`,'--entrypoint','python3',process.env.YAOYAO_TEST_CURSOR_IMAGE!,'-c',script,'/'+op,JSON.stringify({...body,desktopId:entry.id})])).stdout)
-   }
-   await vi.waitFor(async()=>expect((await call('health')).ready).toBe(true),{timeout:65000,interval:1000})
-   const lease=await call('acquire',{requestId:randomUUID(),owner:'fixture'})
-   const state=JSON.parse((await docker(['inspect',id])).stdout)[0]
-   expect(state.HostConfig.NetworkMode).toBe('none')
-   expect(Object.keys(state.HostConfig.PortBindings??{})).toHaveLength(0)
-   const output=await docker(['exec','--user','1000:1000',id,'sh','-c',`printf compose-${index} > /home/cua/workspace/proof-${index}; test ! -e /home/cua/workspace/proof-${1-index}`])
-   expect(output.stderr).toBe('')
-   expect((await call('frame',lease)).data).toBeTruthy()
-   await call('release',{...lease,cancel:false})
-  }
- }finally{await docker([...compose,'down','--volumes']);await rm(root,{recursive:true,force:true})}
-},180000)
