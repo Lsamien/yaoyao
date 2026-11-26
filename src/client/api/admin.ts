@@ -6,7 +6,6 @@ export interface ManagedUser {
   username: string
   role: 'admin' | 'user'
   registrationStatus?: 'pending' | 'approved'
-  assignedProfiles?: string[]
   /** Virtual machine license; administrators are always licensed. */
   vmLicensed?: boolean
   enabled: boolean
@@ -20,13 +19,13 @@ export async function listUsers(): Promise<ManagedUser[]> {
   return response.items
 }
 
-export async function createUser(username: string, password: string, assignedProfiles: string[] = []): Promise<ManagedUser> {
+export async function createUser(username: string, password: string): Promise<ManagedUser> {
   return apiRequest('/api/app/admin/users', {
-    method: 'POST', body: { username, password, assignedProfiles } as unknown as JsonValue,
+    method: 'POST', body: { username, password } as unknown as JsonValue,
   })
 }
 
-export async function updateUser(id: string, input: { enabled?: boolean; password?: string; assignedProfiles?: string[]; vmLicensed?: boolean }): Promise<ManagedUser> {
+export async function updateUser(id: string, input: { enabled?: boolean; password?: string; vmLicensed?: boolean }): Promise<ManagedUser> {
   return apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}`, {
     method: 'PATCH', body: input as unknown as JsonValue,
   })
@@ -88,6 +87,6 @@ export function saveOpenVikingSettings(input: Omit<OpenVikingSettings, 'keyConfi
   return apiRequest('/api/app/admin/openviking', { method: 'PUT', body: input as unknown as JsonValue })
 }
 
-export function approveUser(id: string, assignedProfiles: string[]): Promise<ManagedUser> {
-  return apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { assignedProfiles } })
+export function approveUser(id: string): Promise<ManagedUser> {
+  return apiRequest(`/api/app/admin/users/${encodeURIComponent(id)}/approve`, { method: 'POST', body: {} })
 }

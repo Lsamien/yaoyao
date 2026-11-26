@@ -123,7 +123,7 @@ export class RunnerHub {
   }
   enroll(owner:string,value:unknown) {
     const body=parse(input,value)
-    body.allowedProfiles=this.auth.validateAssignedProfiles(body.allowedProfiles)
+    body.allowedProfiles=this.auth.validateProfileNames(body.allowedProfiles)
     if(body.sourceNodeId!=='local'&&this.store.require<import('./workspaceGateway.js').WorkspaceNode>(owner,'node',body.sourceNodeId).transport==='paired-web')throw new HttpError(409,'配对 Web 节点应在它自己的服务中注册 Runner','runner_source_invalid')
     const sourceOwner=body.sourceNodeId==='local'?'_system':owner
     if(this.records().some(r=>r.enabled&&r.sourceOwner===sourceOwner&&r.sourceNodeId===body.sourceNodeId))

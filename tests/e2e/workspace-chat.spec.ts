@@ -589,9 +589,9 @@ test('subaccount allocation and Bot-only navigation work through the browser', a
   const username = `child-${Date.now()}`
   await settings.locator('input[name=managed-username]').fill(username)
   await settings.locator('input[name=managed-temporary-password]').fill('temporary-pass')
-  await settings.getByRole('listbox', { name: '新子账号的基础机器人' }).selectOption('default')
   await settings.getByRole('button', { name: '创建用户', exact: true }).click()
-  await expect(settings.getByRole('listbox', { name: `分配给 ${username} 的基础机器人`, exact: true })).toHaveValues(['default'])
+  await expect(settings.locator('.user').filter({ hasText: username })).toBeVisible()
+  await expect(settings.getByRole('listbox')).toHaveCount(0)
   await page.screenshot({ path: testInfo.outputPath('admin-agent-allocation.png'), fullPage: true })
 
   const childContext = await browser.newContext({ viewport: { width: 1280, height: 800 } })
@@ -840,9 +840,8 @@ test('self-registered subaccount approval supports Bot replies, reload and isola
     await settings.getByRole('button', { name: '用户与权限', exact: true }).click()
     const row = settings.locator('.user').filter({ hasText: username })
     await expect(row).toContainText('待管理员开通')
-    await expect(row.getByRole('button', { name: '分配并开通' })).toBeDisabled()
-    await row.getByRole('listbox').selectOption('default')
-    await row.getByRole('button', { name: '分配并开通' }).click()
+    await expect(row.getByRole('listbox')).toHaveCount(0)
+    await row.getByRole('button', { name: '开通', exact: true }).click()
     await expect(row).toContainText('普通用户')
     await child.getByLabel('密码', { exact: true }).fill('child-password')
     await child.getByRole('button', { name: '登录', exact: true }).click()

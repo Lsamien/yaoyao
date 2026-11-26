@@ -50,8 +50,6 @@ const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
 const runnerSettingsOpen = ref(false)
 const desktopHostSettingsOpen = ref(false)
-const assignedProfiles = ref<string[]>([])
-const userAssignments = ref<Record<string, string[]>>({})
 const users = ref<ManagedUser[]>([])
 const username = ref('')
 const password = ref('')
@@ -203,7 +201,6 @@ async function refresh() {
   error.value = ''
   if (props.section === 'users') {
     users.value = await listUsers()
-    userAssignments.value = Object.fromEntries(users.value.map(user => [user.id, [...(user.assignedProfiles ?? [])]]))
     return
   }
   if (props.section === 'memory') {
@@ -288,19 +285,14 @@ async function run(action: () => Promise<void>, refreshAfter = true) {
 
 function add() {
   void run(async () => {
-    await createUser(username.value.trim(), password.value, assignedProfiles.value)
-    assignedProfiles.value = []
+    await createUser(username.value.trim(), password.value)
     username.value = ''
     password.value = ''
   })
 }
 
-function saveAssignments(user: ManagedUser) {
-  void run(async () => { await updateUser(user.id, { assignedProfiles: userAssignments.value[user.id] ?? [] }) })
-}
-
 function approve(user: ManagedUser) {
-  void run(async () => { await approveUser(user.id, userAssignments.value[user.id] ?? []) })
+  void run(async () => { await approveUser(user.id) })
 }
 
 function toggleVm(user: ManagedUser) {
@@ -460,14 +452,8 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
           <small>{{ user.role === 'admin' ? '管理员 · 可使用虚拟机' : user.registrationStatus === 'pending' ? '待管理员开通' : user.enabled ? (user.mustChangePassword ? '等待修改临时密码' : '普通用户') : '已禁用' }}</small>
         </span>
         <template v-if="user.role !== 'admin'">
-          <label class="user-assignment">基础机器人
-            <select v-model="userAssignments[user.id]" multiple :disabled="busy" :aria-label="`分配给 ${user.username} 的基础机器人`">
-              <option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option>
-            </select>
-          </label>
-          <button v-if="user.registrationStatus !== 'pending'" type="button" :disabled="busy" @click="saveAssignments(user)">保存分配</button>
           <button type="button" :aria-label="`为用户 ${user.username} 重置密码`" :disabled="busy" @click="reset(user)">重置密码</button>
-          <button v-if="user.registrationStatus === 'pending'" type="button" :disabled="busy || !userAssignments[user.id]?.length" @click="approve(user)">分配并开通</button>
+          <button v-if="user.registrationStatus === 'pending'" type="button" :disabled="busy" @click="approve(user)">开通</button>
           <button v-else type="button" :aria-label="`${user.enabled ? '禁用' : '启用'}用户 ${user.username}`" :disabled="busy" @click="toggle(user)">{{ user.enabled ? '禁用' : '启用' }}</button>
           <label v-if="user.registrationStatus !== 'pending'" class="user-vm"><input type="checkbox" role="switch" :checked="user.vmLicensed === true" :disabled="busy" :aria-label="`允许 ${user.username} 使用虚拟机`" @change="toggleVm(user)" />虚拟机</label>
           <button class="danger" type="button" :aria-label="`删除用户 ${user.username}`" :disabled="busy" @click="remove(user)">删除</button>
@@ -476,7 +462,7 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
       <form class="user-create-form" aria-label="创建用户" @submit.prevent="add">
         <label><span>新用户名</span><input v-model="username" name="managed-username" autocomplete="off" :disabled="busy" /></label>
         <label><span>临时密码</span><input v-model="password" name="managed-temporary-password" type="password" autocomplete="new-password" :disabled="busy" /><small>至少 8 位</small></label>
-        <label class="create-assignment"><span>分配基础机器人</span><select v-model="assignedProfiles" multiple :disabled="busy" aria-label="新子账号的基础机器人"><option v-for="profile in profiles" :key="profile.name" :value="profile.name">{{ profile.agentName || profile.displayName || profile.name }}</option></select><small>子账号仅可使用 Bot 模式，基于分配的机器人创建自己的机器人；未分配时不可创建。保存权限后需重新登录。</small></label>
+        <p class="create-note">子账号仅可使用 Bot 模式，自动使用本服务器的 Hermes 创建自己的机器人。</p>
         <button class="solid-button" :disabled="busy || !username.trim() || password.length < 8">创建用户</button>
       </form>
     </div>
@@ -654,11 +640,9 @@ watch(() => [props.active, props.section] as const, ([active, section]) => {
 .push-config-form footer { display: flex; justify-content: flex-end; }
 .user { display: flex; flex-wrap: wrap; padding: 12px 0; min-height: 58px; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
 .user > span { flex-basis: 100%; }
-.user-assignment { display: grid; flex: 1; min-width: 150px; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .user-vm { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 13px; color: var(--text-secondary); }
 .user-vm input { width: 18px; height: 18px; accent-color: var(--accent); }
-.user-assignment select, .create-assignment select { width: 100%; min-height: 76px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); color: var(--text-primary); font: inherit; }
-.create-assignment { grid-column: 1 / -1; }
+.create-note { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--text-secondary); }
 .user span { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .user b { font-size: 14px; }
 .user small { color: var(--text-muted); font-size: 12px; }

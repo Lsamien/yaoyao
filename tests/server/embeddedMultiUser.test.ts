@@ -61,7 +61,7 @@ describe.skipIf(!kernel)('multiple accounts on the embedded Hermes kernel', () =
     const admin = request.agent(runtime.app.callback()), child = request.agent(runtime.app.callback())
     const boot = await call(admin, 'get', '/api/app/bootstrap').expect(200)
     const adminCSRF = (await call(admin, 'post', '/api/app/setup', boot.body.csrfToken).send({ username: 'owner', password: 'owner-password' }).expect(200)).body.csrfToken
-    const created = await (await consoleClient(runtime, { username: 'owner', password: 'owner-password' })).call('post', '/api/app/admin/users').send({ username: 'child', password: 'temporary-password', assignedProfiles: ['allowed'] }).expect(201)
+    const created = await (await consoleClient(runtime, { username: 'owner', password: 'owner-password' })).call('post', '/api/app/admin/users').send({ username: 'child', password: 'temporary-password' }).expect(201)
     const childBoot = await call(child, 'get', '/api/app/bootstrap').expect(200)
     let childCSRF = (await call(child, 'post', '/api/app/login', childBoot.body.csrfToken).send({ username: 'child', password: 'temporary-password' }).expect(200)).body.csrfToken
     childCSRF = (await call(child, 'put', '/api/app/account/credentials', childCSRF).send({ currentPassword: 'temporary-password', newPassword: 'child-password' }).expect(200)).body.csrfToken

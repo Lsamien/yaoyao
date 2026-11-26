@@ -30,7 +30,7 @@ beforeEach(async () => {
     const path = new URL(String(input)).pathname; upstreamPaths.push(path)
     if (path === '/api/status') return Response.json({ auth_required: true })
     if (path === '/api/auth/me') return Response.json({ user_id: 'service' })
-    if (path === '/api/profiles') return Response.json({ profiles: [{ name: 'allowed' }, { name: 'private' }] })
+    if (path === '/api/profiles') return Response.json({ profiles: [{ name: 'allowed' }] })
     return Response.json({ ok: true })
   }) as typeof fetch })
   vi.spyOn(runtime.workspaceRuntime, 'wake').mockImplementation(() => {})
@@ -39,7 +39,7 @@ beforeEach(async () => {
   const setup = await call(admin, 'post', '/api/app/setup', boot.body.csrfToken).send({ username: 'owner', password: 'owner-password' }).expect(200)
   adminCSRF = setup.body.csrfToken
   console = await consoleClient(runtime, { username: 'owner', password: 'owner-password' })
-  const created = await console.call('post', '/api/app/admin/users').send({ username: 'child', password: 'temporary-password', assignedProfiles: ['allowed'] }).expect(201)
+  const created = await console.call('post', '/api/app/admin/users').send({ username: 'child', password: 'temporary-password' }).expect(201)
   childID = created.body.id
   await signInChild('temporary-password')
   const changed = await call(child, 'put', '/api/app/account/credentials', childCSRF).send({ currentPassword: 'temporary-password', newPassword: 'child-password' }).expect(200)
@@ -77,32 +77,32 @@ describe('subaccount Bot-only security boundary with real login sessions', () =>
     expect((await call(admin, 'get', '/api/app/agents').expect(200)).body.agents).toEqual([])
   })
 
-  it('rejects unassigned sources and revokes a subaccount Bot creation grant after reassignment', async () => {
+  it('rejects remote-node spoofing and revokes a subaccount Bot creation grant when the account is disabled', async () => {
     const { work } = await startBotTurn()
     const tools = runtime.workspaceRuntime.teamTools
-    for (const source of [{ profile: 'private' }, { profile: 'allowed', nodeId: randomUUID() }]) {
+    for (const source of [{ profile: 'allowed', nodeId: randomUUID() }]) {
       await expect(tools.call(childID, work.id, 'workspace_create_agent', {
         requestId: randomUUID(), name: '越权助手', ...source,
       })).rejects.toMatchObject({ status: 403, code: 'agent_source_forbidden' })
     }
-    await console.call('patch', `/api/app/admin/users/${childID}`).send({ assignedProfiles: [] }).expect(200)
+    await console.call('patch', `/api/app/admin/users/${childID}`).send({ enabled: false }).expect(200)
     await expect(tools.call(childID, work.id, 'workspace_create_agent', {
       requestId: randomUUID(), name: '撤权后助手', profile: 'allowed',
     })).rejects.toMatchObject({ status: 403 })
     expect(runtime.workspace.list(childID, 'agent')).toHaveLength(1)
   })
 
-  it('persists assignment, filters sources, hides native profiles and rejects unassigned/local-node spoofing', async () => {
+  it('gives approved subaccounts the local Hermes profile without assignment, hides native profiles and rejects node spoofing', async () => {
     expect((await call(child, 'get', '/api/app/bootstrap')).body.profiles).toEqual([])
     expect((await call(child, 'get', '/api/profiles')).body.profiles).toEqual([])
     const sources = await call(child, 'get', '/api/app/agents/sources').expect(200)
     expect(sources.body.sources.map((s: any) => s.profile)).toEqual(['allowed'])
     expect(new LocalAuthStore(home).canUseSource(childID, 'local', 'allowed')).toBe(true)
-    expect(new LocalAuthStore(home).canUseSource(childID, 'local', 'private')).toBe(false)
+    expect(new LocalAuthStore(home).canUseSource(childID, randomUUID(), 'allowed')).toBe(false)
     const caps = await call(child, 'get', '/api/app/capabilities').expect(200)
     expect(caps.body.features).not.toContain('nodes')
     await call(child, 'post', '/api/app/agents', childCSRF).send({ name: 'mine', profile: 'allowed' }).expect(201)
-    for (const input of [{ profile: 'private' }, { profile: 'allowed', nodeId: randomUUID() }, { profile: 'ALLOWED' }]) {
+    for (const input of [{ profile: 'allowed', nodeId: randomUUID() }]) {
       await call(child, 'post', '/api/app/agents', childCSRF).send({ name: 'forbidden', ...input }).expect(403)
     }
   })
@@ -128,7 +128,7 @@ describe('subaccount Bot-only security boundary with real login sessions', () =>
   })
 
   it('keeps agents, conversations, files, runs and interactions isolated by owner', async () => {
-    const a = await call(admin, 'post', '/api/app/agents', adminCSRF).send({ name: 'admin bot', profile: 'private' }).expect(201)
+    const a = await call(admin, 'post', '/api/app/agents', adminCSRF).send({ name: 'admin bot', profile: 'allowed' }).expect(201)
     const c = (await call(admin, 'get', '/api/app/conversations')).body.conversations[0]
     expect((await call(child, 'get', '/api/app/agents')).body.agents).toEqual([])
     expect((await call(child, 'get', '/api/app/conversations')).body.conversations).toEqual([])
@@ -139,18 +139,15 @@ describe('subaccount Bot-only security boundary with real login sessions', () =>
     await call(child, 'post', `/api/app/interactions/${randomUUID()}/respond`, childCSRF).send({ answer: 'approve' }).expect(404)
   })
 
-  it('invalidates sessions and stops existing work when assignment is revoked, including old agent references', async () => {
+  it('invalidates sessions and stops existing work when the account is disabled', async () => {
     const a = (await call(child, 'post', '/api/app/agents', childCSRF).send({ name: 'mine', profile: 'allowed' }).expect(201)).body.agent
     const c = (await call(child, 'get', '/api/app/conversations')).body.conversations[0]
     await call(child, 'post', `/api/app/conversations/${c.id}/messages`, childCSRF).send({ requestId: randomUUID(), content: 'allowed' }).expect(202)
     const stop = vi.spyOn(runtime.workspaceRuntime, 'stopConversation')
-    await console.call('patch', `/api/app/admin/users/${childID}`).send({ assignedProfiles: [] }).expect(200)
+    await console.call('patch', `/api/app/admin/users/${childID}`).send({ enabled: false }).expect(200)
     expect(stop).toHaveBeenCalledWith(childID, c.id)
     await call(child, 'get', '/api/app/agents').expect(401)
-    await signInChild()
-    expect((await call(child, 'get', '/api/app/agents/sources')).body.sources).toEqual([])
-    await call(child, 'post', `/api/app/conversations/${c.id}/messages`, childCSRF).send({ requestId: randomUUID(), content: 'revoked' }).expect(403)
-    await call(child, 'patch', `/api/app/agents/${a.id}`, childCSRF).send({ name: 'revoked' }).expect(403)
-    await call(child, 'post', '/api/app/conversations', childCSRF).send({ name: 'bypass', memberIds: [a.id], administratorId: a.id }).expect(403)
+    await call(child, 'patch', `/api/app/agents/${a.id}`, childCSRF).send({ name: 'revoked' }).expect(401)
+    expect(new LocalAuthStore(home).canUseSource(childID, 'local', 'allowed')).toBe(false)
   })
 })

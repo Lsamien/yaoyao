@@ -969,34 +969,26 @@ export function createApiRouter(dependencies: RouteDependencies): Router {
     const request = body(ctx)
     const username = typeof request.username === 'string' ? request.username : ''
     const password = typeof request.password === 'string' ? request.password : ''
-    json(ctx, 201, dependencies.auth.create(admin, username, password, request.assignedProfiles, request.vmLicensed === true))
+    json(ctx, 201, dependencies.auth.create(admin, username, password, request.vmLicensed === true))
   })
-  router.post('/api/app/admin/users/:userID/approve', async ctx => {
-    dependencies.auth.requireAdmin(ctx)
-    const userID = canonicalUUID(ctx.params.userID, 'user ID'), request = body(ctx)
-    if (Object.keys(request).some(key => key !== 'assignedProfiles')) throw new HttpError(400, '开通参数无效', 'invalid_approval')
-    const profiles = dependencies.auth.validateAssignedProfiles(request.assignedProfiles)
-    if (!profiles.length) throw new HttpError(400, '开通时必须分配至少一个基础机器人', 'assignment_required')
-    const response = await dependencies.upstreamSession.request('/api/profiles', { cache: 'reload' })
-    const available = new Set(normalizedProfiles(requireSuccess(response)).map(value => typeof value === 'string' ? value : (value as JsonObject).name))
-    if (profiles.some(profile => !available.has(profile))) throw new HttpError(409, '所选基础机器人当前不可用，请刷新后重新选择。', 'source_unavailable')
-    // Revalidate the administrator after the asynchronous catalogue lookup.
-    delete ctx.state.localUser
+  router.post('/api/app/admin/users/:userID/approve', ctx => {
     const admin = dependencies.auth.requireAdmin(ctx)
-    json(ctx, 200, dependencies.auth.approve(admin, userID, profiles))
+    const userID = canonicalUUID(ctx.params.userID, 'user ID'), request = body(ctx)
+    // Older clients still send a profile list; there is a single Hermes profile, so it is ignored.
+    if (Object.keys(request).some(key => key !== 'assignedProfiles')) throw new HttpError(400, '开通参数无效', 'invalid_approval')
+    json(ctx, 200, dependencies.auth.approve(admin, userID))
   })
   router.patch('/api/app/admin/users/:userID', async (ctx) => {
     const admin = dependencies.auth.requireAdmin(ctx)
     const request = body(ctx)
     const userID = canonicalUUID(ctx.params.userID, 'user ID')
     const updated = dependencies.auth.updateUser(admin, userID, {
-      assignedProfiles: request.assignedProfiles,
       enabled: typeof request.enabled === 'boolean' ? request.enabled : undefined,
       password: typeof request.password === 'string' ? request.password : undefined,
       vmLicensed: typeof request.vmLicensed === 'boolean' ? request.vmLicensed : undefined,
     })
     await dependencies.onUserAccessChanged?.(userID)
-    if (request.enabled === false || typeof request.password === 'string' || request.assignedProfiles !== undefined) {
+    if (request.enabled === false || typeof request.password === 'string') {
       bestEffortRemoveUserPush(ctx, dependencies, userID)
     }
     json(ctx, 200, updated)

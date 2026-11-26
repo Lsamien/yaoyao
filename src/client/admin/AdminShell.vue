@@ -10,7 +10,7 @@ type PageId = 'overview' | 'users' | 'models' | 'execution' | 'devices' | 'vm' |
 interface NavItem { id: PageId; label: string; hint: string }
 const groups: Array<{ label: string; items: NavItem[] }> = [
   { label: '', items: [{ id: 'overview', label: '概览', hint: '服务状态与待处理事项' }] },
-  { label: '账号', items: [{ id: 'users', label: '用户与权限', hint: '建号、审核注册、分配基础机器人' }] },
+  { label: '账号', items: [{ id: 'users', label: '用户与权限', hint: '建号、审核注册、虚拟机许可' }] },
   { label: '模型与 Bot', items: [
     { id: 'models', label: '模型服务', hint: '供应商、账号登录、API Key、辅助模型' },
     { id: 'execution', label: '执行与权限', hint: '执行位置、命令审批、本机工具、文件访问' },

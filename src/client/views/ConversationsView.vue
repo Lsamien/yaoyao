@@ -1097,7 +1097,7 @@ onBeforeUnmount(() => {
               {{ s.name }} · {{ s.nodeId === 'local' ? '当前服务' : s.nodeId }}
             </option></select
           ><small v-if="!sources.length"
-            >{{ auth.isBotOnly ? '暂无可用的已分配机器人，请联系管理员分配或检查连接。' : '没有可用的基础机器人，请检查 Web 的 Hermes 连接。' }}</small
+            >{{ auth.isBotOnly ? '暂无可用的基础机器人，请联系管理员检查 Hermes 连接。' : '没有可用的基础机器人，请检查 Web 的 Hermes 连接。' }}</small
           ></label
         ><label v-if="isAgentDialog"
           >角色提示词与规则<textarea

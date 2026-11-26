@@ -38,6 +38,7 @@ interface StoredUser {
   avatar?: string
   normalizedUsername: string
   role: LocalRole
+  /** Legacy per-account Hermes profile assignment; ignored since Yaoyao runs a single Hermes profile. */
   assignedProfiles?: string[]
   /** Per-account virtual machine license. Administrators are always licensed. */
   vmLicensed?: boolean
@@ -68,7 +69,6 @@ export interface LocalUser {
   username: string
   avatar?: string
   role: LocalRole
-  assignedProfiles?: string[]
   vmLicensed?: boolean
   enabled: boolean
   mustChangePassword: boolean
@@ -106,7 +106,6 @@ function publicUser(user: StoredUser): LocalUser {
     ...(validAvatarImage(user.avatar) ? { avatar: user.avatar } : {}),
     role: user.role,
     registrationStatus: user.registrationStatus ?? 'approved',
-    assignedProfiles: [...(user.assignedProfiles ?? [])],
     vmLicensed: user.role === 'admin' || user.vmLicensed === true,
     enabled: user.enabled,
     mustChangePassword: user.mustChangePassword,
@@ -332,16 +331,17 @@ export class LocalAuthStore {
     return user
   }
 
-  validateAssignedProfiles(value: unknown): string[] {
+  validateProfileNames(value: unknown): string[] {
     if (!Array.isArray(value) || value.length > 256 || value.some(p => typeof p !== 'string' || !p.trim() || p.length > 256 || /[\/\\\u0000-\u001f]/.test(p))) {
-      throw new HttpError(400, '分配的基础机器人无效', 'invalid_assigned_profiles')
+      throw new HttpError(400, 'Profile 名称无效', 'invalid_profiles')
     }
     return [...new Set(value.map(p => p.trim()))]
   }
 
   canUseSource(userID: string, nodeId: string, profile: string): boolean {
     const user = this.#users.find(candidate => candidate.id === userID && candidate.enabled && candidate.registrationStatus !== 'pending')
-    return Boolean(user && (user.role === 'admin' || (nodeId === 'local' && user.assignedProfiles?.includes(profile))))
+    // Yaoyao runs one embedded Hermes profile: every approved account may use it, no per-account assignment.
+    return Boolean(user && profile && (user.role === 'admin' || nodeId === 'local'))
   }
 
   /** Virtual machines are off for every sub-account until an administrator licenses it. */
@@ -366,7 +366,7 @@ export class LocalAuthStore {
     return this.#users.map(publicUser).sort((a, b) => a.createdAt - b.createdAt)
   }
 
-  create(admin: LocalUser, usernameValue: string, passwordValue: string, assignedProfiles: unknown = [], vmLicensed = false): LocalUser {
+  create(admin: LocalUser, usernameValue: string, passwordValue: string, vmLicensed = false): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const username = canonicalUsername(usernameValue)
     const normalizedUsername = username.toLocaleLowerCase('en-US')
@@ -376,7 +376,6 @@ export class LocalAuthStore {
     const password = validatePassword(passwordValue)
     const now = Date.now()
     const user = this.#newUser(username, password, 'user', true, now)
-    user.assignedProfiles = this.validateAssignedProfiles(assignedProfiles)
     if (vmLicensed === true) user.vmLicensed = true
     this.#users.push(user)
     this.#saveUsers()
@@ -392,32 +391,28 @@ export class LocalAuthStore {
     const user = this.#newUser(username, validatePassword(passwordValue), 'user', false, Date.now())
     user.registrationStatus = 'pending'
     user.enabled = false
-    user.assignedProfiles = []
     this.#users.push(user)
     this.#saveUsers()
   }
 
-  approve(admin: LocalUser, userID: string, profiles: string[]): LocalUser {
+  approve(admin: LocalUser, userID: string): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const user = this.#users.find(candidate => candidate.id === userID)
     if (!user) throw new HttpError(404, '用户不存在', 'user_not_found')
     if (user.role !== 'user' || user.registrationStatus !== 'pending') throw new HttpError(409, '该账号不在待开通状态，请刷新列表。', 'approval_not_pending')
-    const assigned = this.validateAssignedProfiles(profiles)
-    if (!assigned.length) throw new HttpError(400, '开通时必须分配至少一个基础机器人', 'assignment_required')
-    Object.assign(user, { assignedProfiles: assigned, registrationStatus: 'approved', enabled: true, updatedAt: Date.now(), authVersion: user.authVersion + 1 })
+    delete user.assignedProfiles
+    Object.assign(user, { registrationStatus: 'approved', enabled: true, updatedAt: Date.now(), authVersion: user.authVersion + 1 })
     this.#saveUsers()
     return publicUser(user)
   }
 
-  updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string; assignedProfiles?: unknown; vmLicensed?: boolean }): LocalUser {
+  updateUser(admin: LocalUser, userID: string, input: { enabled?: boolean; password?: string; vmLicensed?: boolean }): LocalUser {
     if (admin.role !== 'admin') throw new HttpError(403, '需要管理员权限', 'admin_required')
     const user = this.#users.find(candidate => candidate.id === userID)
     if (!user) throw new HttpError(404, '用户不存在', 'user_not_found')
     if (user.role === 'admin') throw new HttpError(409, '管理员账号请在账号设置中修改', 'admin_account_protected')
     if (user.registrationStatus === 'pending' && input.enabled === true) throw new HttpError(409, '请使用“分配并开通”审核此账号', 'approval_required')
-    const assigned = input.assignedProfiles === undefined ? undefined : this.validateAssignedProfiles(input.assignedProfiles)
     if (input.password !== undefined) validatePassword(input.password)
-    if (assigned !== undefined) user.assignedProfiles = assigned
     if (typeof input.enabled === 'boolean') user.enabled = input.enabled
     if (typeof input.vmLicensed === 'boolean') { if (input.vmLicensed) user.vmLicensed = true; else delete user.vmLicensed }
     if (input.password !== undefined) {

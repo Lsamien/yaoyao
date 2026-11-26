@@ -51,7 +51,7 @@ export class WorkspaceNodes {
   computerEnvironment?:(owner:string,agentId:string)=>string|undefined
   requireSource(owner: string, agent: { id?:string;nodeId: string; profile: string;computerEnvironmentId?:string }): void {
     requireSharedComputer(this.store,owner,agent)
-    if (!this.sourceAllowed(owner, agent.nodeId, agent.profile)) throw new HttpError(403, '基础机器人未分配给当前账号', 'agent_source_forbidden')
+    if (!this.sourceAllowed(owner, agent.nodeId, agent.profile)) throw new HttpError(403, '当前账号不能使用该基础机器人', 'agent_source_forbidden')
   }
   private readonly key: Buffer
   private targets = new Map<string, GatewayTarget>()

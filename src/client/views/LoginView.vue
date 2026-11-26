@@ -68,7 +68,7 @@ async function login() {
         <p v-if="auth.setupRequired">首次启动请设置 15300 管理账号，不会创建固定默认密码。</p>
       </div>
       <p v-if="notice" role="status" class="registration-note">{{ notice }}</p>
-      <p v-if="registering" class="registration-note">子账号仅可使用 Bot 模式，注册后需要本服务器管理员分配机器人并开通。</p>
+      <p v-if="registering" class="registration-note">子账号仅可使用 Bot 模式，注册后需要本服务器管理员开通。</p>
       <form @submit.prevent="login">
         <label><span>账号</span><input v-model="username" name="username" autocomplete="username" autofocus required placeholder="用户名" /></label>
         <label><span>密码</span><input id="password" v-model="password" name="password" type="password" :autocomplete="needsConfirmation ? 'new-password' : 'current-password'" required placeholder="密码" /></label>

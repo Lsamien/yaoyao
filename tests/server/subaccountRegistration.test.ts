@@ -50,22 +50,22 @@ describe('subaccount registration and approval through real middleware', () => {
     await register()
     await call(child, 'post', '/api/app/register', boot.body.csrfToken).send({ username: 'NEW-CHILD', password: 'child-password' }).expect(409)
   })
-  it('requires valid assigned profiles to approve; preserves pending status across restart and blocks enable bypass', async () => {
+  it('approves without choosing a profile; preserves pending status across restart and blocks enable bypass', async () => {
     await setup(); const token = await register()
     await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'wrong' }).expect(401)
     expect((await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'child-password' }).expect(403)).body.code).toBe('account_pending_approval')
     expect((await call(child, 'post', '/auth/password-login').send({ username: 'new-child', password: 'child-password' }).expect(403)).body.code).toBe('account_pending_approval')
     await call(child, 'get', '/api/app/workspace/snapshot').expect(401)
     const user = (await console.call('get', '/api/app/admin/users')).body.items.find((u: any) => u.username === 'new-child')
-    expect(user).toMatchObject({ registrationStatus: 'pending', role: 'user', enabled: false, assignedProfiles: [], mustChangePassword: false })
+    expect(user).toMatchObject({ registrationStatus: 'pending', role: 'user', enabled: false, mustChangePassword: false })
+    expect(user).not.toHaveProperty('assignedProfiles')
     expect(new LocalAuthStore(home).isUserActive(user.id)).toBe(false)
-    await console.call('patch', `/api/app/admin/users/${user.id}`).send({ enabled: true, assignedProfiles: ['allowed'] }).expect(409)
-    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: [] }).expect(400)
-    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['missing'] }).expect(409)
-    await call(child, 'post', `/api/app/admin/users/${user.id}/approve`, token).send({ assignedProfiles: ['allowed'] }).expect(410)
-    const approved = await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['allowed'] }).expect(200)
-    expect(approved.body).toMatchObject({ enabled: true, registrationStatus: 'approved', assignedProfiles: ['allowed'], mustChangePassword: false })
-    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['allowed'] }).expect(409)
+    await console.call('patch', `/api/app/admin/users/${user.id}`).send({ enabled: true }).expect(409)
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ role: 'admin' }).expect(400)
+    await call(child, 'post', `/api/app/admin/users/${user.id}/approve`, token).send({}).expect(410)
+    const approved = await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({}).expect(200)
+    expect(approved.body).toMatchObject({ enabled: true, registrationStatus: 'approved', mustChangePassword: false })
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({}).expect(409)
     const login = await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'child-password' }).expect(200)
     const create = await call(child, 'post', '/api/app/agents', login.body.csrfToken).send({ name: '我的 Bot', profile: 'allowed' }).expect(201)
     const snapshot = (await call(child, 'get', '/api/app/workspace/snapshot').expect(200)).body
@@ -106,7 +106,7 @@ describe('subaccount registration and approval through real middleware', () => {
   it('authorizes owner-scoped projects, memory, attachments and event replay through the complete middleware', async () => {
     await setup(); const token = await register()
     const user = (await console.call('get', '/api/app/admin/users')).body.items.find((u: any) => u.username === 'new-child')
-    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({ assignedProfiles: ['allowed'] }).expect(200)
+    await console.call('post', `/api/app/admin/users/${user.id}/approve`).send({}).expect(200)
     const login = await call(child, 'post', '/api/app/login', token).send({ username: 'new-child', password: 'child-password' }).expect(200)
     const childCSRF = login.body.csrfToken
     const agent = (await call(child, 'post', '/api/app/agents', childCSRF).send({ name: '知识助手', profile: 'allowed' }).expect(201)).body.agent

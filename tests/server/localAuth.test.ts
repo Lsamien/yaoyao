@@ -64,7 +64,7 @@ describe('15300 local users', () => {
     expect(store.canUseVm(user.id)).toBe(false)
     store.updateUser(admin, user.id, { enabled: true, vmLicensed: false })
     expect(store.canUseVm(user.id)).toBe(false)
-    expect(store.create(admin, 'licensed', 'temporary-password', [], true).vmLicensed).toBe(true)
+    expect(store.create(admin, 'licensed', 'temporary-password', true).vmLicensed).toBe(true)
     expect(() => store.updateUser(user, user.id, { vmLicensed: true })).toThrow(/管理员/)
   })
 
